@@ -129,6 +129,23 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
   `docs/development/PARENT_ISSUE_CLOSURE.md`. `supporting_issues` preserves the non-governing
   evidence set, but only its `closing_issues` subset grants closure; `Refs` never do.
 
+### Current SHA truth and scope drift
+
+Before publication, merge, or terminal closure, authenticate the current lifecycle owner and session,
+sole writable worktree, branch and base, unpublished candidate head (or `none`), current changed-file
+set, current validation, current review/receipt evidence, and exactly one next authorized action. When
+an owner replacement occurred, require a durable `lifecycle_handoff_receipt.v1` plus the named
+successor's acknowledgment after live Issue/claim, worktree registration, branch/PR head, and
+review/receipt readback. A former lifecycle owner is read-only after that acknowledgment and cannot
+publish, merge, close, or mutate labels on the transferred work.
+
+Compare evidence by the head or observed-time binding it declares. Newer blocking review evidence
+supersedes an older green receipt, publish recommendation, or closure verdict even when the candidate
+SHA itself did not change. Conflicting lifecycle owners or writable worktrees, an omitted or
+contradictory unpublished candidate head, an unacknowledged successor, or contradictory current
+review/receipt evidence fail closed. Do not merge or close; route reconciliation to the current owner
+or the normal issue-maintenance/owner-authority path, then re-run the affected current-head gates.
+
 ## Direct Repair PRs
 
 - For issue-backed PRs, close the exact closing issues and update the governing issue; these are the
@@ -518,14 +535,14 @@ same exact head back to the ordinary verified-merge sequence below.
     the exact target PR/repository/merge identity
 11. if issue-backed, complete or release each applicable closing-issue dispatcher task
 12. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
-   labels from a distinct governing parent unless its own lifecycle contract is complete
+    labels from a distinct governing parent unless its own lifecycle contract is complete
 13. if optional Project repair is explicitly in scope, set every closing Issue and the PR Project
     Status to `Done` when automation has not already projected it; never project an unclosed governing parent `Done`
 14. if issue-backed, update spec files named by each closing issue's `Source Anchors` from stale
-   `State: Not yet implemented` to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
-   Record child-delivery validation evidence on any distinct open governing parent; for an epic /
-   parent feature issue, refresh its structured child ledger per
-   `## Parent Issue Closure :: Structured child ledger (epic delivery ledger v1)`
+    `State: Not yet implemented` to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
+    Record child-delivery validation evidence on any distinct open governing parent; for an epic /
+    parent feature issue, refresh its structured child ledger per
+    `## Parent Issue Closure :: Structured child ledger (epic delivery ledger v1)`
 15. verify final state, including restored body authority and the absence of unauthorized closures
 16. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, write the same PR-specific
     result on every exact closed issue and also on a distinct open governing parent; for issue-free
