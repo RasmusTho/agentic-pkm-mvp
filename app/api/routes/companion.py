@@ -177,21 +177,24 @@ class VaultIdentityState(BaseModel):
 
 
 class IngestBindingResponse(BaseModel):
-    """Whether the watcher/worker are actually bound to the selected vault (#3119).
+    """Whether the watcher/worker are actually bound to the selected vault (#4969).
 
-    Vault *selection* (this API process's in-process ``VaultManager`` state)
-    and vault *ingest binding* (the watcher/worker's own boot-time
-    ``WATCHER_VAULT_PATH``) are independent by design (#2476). This surfaces
-    that divergence instead of leaving it silent: ``state`` is one of
-    ``"bound"`` (watcher confirmed on the same vault), ``"diverged"`` (watcher
-    alive but bound elsewhere), ``"unbound"`` (no fresh watcher heartbeat), or
-    ``"unknown"`` (no vault selected yet to compare against).
+    The watcher is separately deployed, but its compatibility binding now
+    follows the durable SETTINGS-05C prepare/commit/resume transaction. The
+    rebind fields expose that protected phase and revision alongside the
+    heartbeat comparison; display fields never choose a binding.
     """
 
     state: str
     bound: bool
     detail: str
     watcher_vault_path: str | None = None
+    rebind_schema: str | None = None
+    rebind_phase: str | None = None
+    rebind_desired_revision: int | None = None
+    rebind_applied_revision: int | None = None
+    rebind_lifecycle_posture: str | None = None
+    rebind_failure_posture: str | None = None
 
 
 class CompanionTTSRequest(BaseModel):
@@ -1990,6 +1993,12 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
         bound=status.is_bound,
         detail=status.detail,
         watcher_vault_path=status.watcher_vault_path,
+        rebind_schema=status.rebind_schema,
+        rebind_phase=status.rebind_phase,
+        rebind_desired_revision=status.rebind_desired_revision,
+        rebind_applied_revision=status.rebind_applied_revision,
+        rebind_lifecycle_posture=status.rebind_lifecycle_posture,
+        rebind_failure_posture=status.rebind_failure_posture,
     )
 
 

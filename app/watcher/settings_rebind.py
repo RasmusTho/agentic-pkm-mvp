@@ -23,7 +23,11 @@ from app.instance.filesystem_identity import (
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
-from app.instance.settings_rebind import SettingsRebindRecord, SettingsRebindStore
+from app.instance.settings_rebind import (
+    SettingsRebindRecord,
+    SettingsRebindStore,
+    validate_settings_rebind_candidate_root,
+)
 from app.instance.vault_registry import RegistrySnapshot, VaultRegistryStore
 
 if TYPE_CHECKING:
@@ -335,6 +339,11 @@ class DormantSettingsRebindReconciler:
         self._store = SettingsRebindStore(self._registry)
         self.state_dir = state_dir
 
+    def current_record(self) -> SettingsRebindRecord:
+        """Read the current durable rebind authority for loop reconciliation."""
+
+        return self._store.read()
+
     @classmethod
     def from_config(
         cls,
@@ -371,9 +380,9 @@ class DormantSettingsRebindReconciler:
                 receipt=None,
             )
         self._validate_record_bindings(record)
-        self._validate_old_root(snapshot, record, cfg)
-        receipt = self._load_matching_receipt(record)
         if record.phase == "prepared":
+            self._validate_old_root(snapshot, record, cfg)
+            receipt = self._load_matching_receipt(record)
             if receipt is not None and receipt.stage != "acknowledged":
                 raise RegistryError(
                     "prepared settings rebind has an invalid watcher receipt stage"
@@ -381,10 +390,17 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="prepared", receipt=receipt)
         if record.phase != "committed":
             raise RegistryError("settings rebind watcher phase is unsupported")
+        receipt = self._load_matching_receipt(record)
         if receipt is None:
             raise RegistryError(
                 "committed settings rebind has no durable watcher acknowledgement"
             )
+        if receipt.stage == "completed":
+            # The foreground loop updates cfg.vault_path to the candidate after
+            # completing a transition.  A completed receipt is stable state,
+            # not another old-root transition to validate on the next tick.
+            return RebindCycle(record=record, mode="stable", receipt=receipt)
+        self._validate_old_root(snapshot, record, cfg)
         _rebind_fault_point("commit")
         return RebindCycle(record=record, mode="committed", receipt=receipt)
 
@@ -398,6 +414,10 @@ class DormantSettingsRebindReconciler:
         if cycle.mode not in {"prepared", "committed"}:
             return cycle.receipt
         self._assert_scan_success(summaries)
+        # Validate policy before acknowledging or completing the handoff. A
+        # completed receipt is an API-visible resume authority, so it must not
+        # be written for a candidate the watcher is forbidden to adopt.
+        self.candidate_vault_path(cycle.record)
         observations = self._observations(
             summaries,
             states=states,
@@ -480,6 +500,20 @@ class DormantSettingsRebindReconciler:
         )
         _write_receipt(self._receipt_path(cycle.record), completed)
         return completed
+
+    def candidate_vault_path(self, record: SettingsRebindRecord) -> Path:
+        """Resolve the committed candidate for the next watcher tick."""
+
+        candidate = self._required_binding(
+            record.candidate_binding_id,
+            name="candidate",
+        )
+        registration = self._registry.load().registrations.get(candidate)
+        if registration is None:
+            raise RegistryError("settings rebind candidate watcher binding is missing")
+        # Registration proves identity, not watcher permission. Revalidate the
+        # candidate at the adoption seam immediately before changing roots.
+        return validate_settings_rebind_candidate_root(Path(registration.path))
 
     def _receipt_path(self, record: SettingsRebindRecord) -> Path:
         return settings_rebind_watcher_receipt_path(

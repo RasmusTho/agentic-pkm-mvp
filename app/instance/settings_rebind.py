@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from app.instance._storage_boundary import (
     RegistryError,
@@ -11,7 +14,7 @@ from app.instance._storage_boundary import (
 )
 
 if TYPE_CHECKING:
-    from app.instance.vault_registry import VaultRegistryStore
+    from app.instance.vault_registry import KnownVaultRef, VaultRegistryStore
 
 
 SETTINGS_REBIND_SCHEMA = "settings_rebind.v1"
@@ -28,8 +31,10 @@ _FIELDS = {
     "lifecyclePosture",
     "priorBindingId",
     "candidateBindingId",
+    "reloadRevision",
     "checksum",
 }
+_LEGACY_FIELDS = _FIELDS - {"reloadRevision"}
 _PHASE_POSTURES = {
     "dormant": "dormant",
     "prepared": "watcher",
@@ -71,6 +76,7 @@ class SettingsRebindRecord:
     lifecycle_posture: str = "dormant"
     prior_binding_id: str | None = None
     candidate_binding_id: str | None = None
+    reload_revision: int | None = 0
 
     @classmethod
     def dormant(cls, *, binding_id: str | None = None) -> SettingsRebindRecord:
@@ -86,13 +92,14 @@ class SettingsRebindRecord:
             "lifecyclePosture": self.lifecycle_posture,
             "priorBindingId": self.prior_binding_id,
             "candidateBindingId": self.candidate_binding_id,
+            "reloadRevision": 0 if self.reload_revision is None else self.reload_revision,
         }
         payload["checksum"] = _checksum(payload)
         return payload
 
     @classmethod
     def from_payload(cls, value: object) -> SettingsRebindRecord:
-        if not isinstance(value, dict) or set(value) != _FIELDS:
+        if not isinstance(value, dict) or set(value) not in (_FIELDS, _LEGACY_FIELDS):
             raise RegistryError("settings rebind record has an invalid shape")
         if value.get("schema") != SETTINGS_REBIND_SCHEMA:
             raise RegistryError("settings rebind record has an invalid schema")
@@ -117,6 +124,14 @@ class SettingsRebindRecord:
             raise RegistryError("completed settings rebind revisions must match")
         prior = _binding(value.get("priorBindingId"), name="prior binding")
         candidate = _binding(value.get("candidateBindingId"), name="candidate binding")
+        if "reloadRevision" not in value:
+            # Records written before reload completion became durable are
+            # intentionally treated as unknown and replayed once on retry.
+            reload_revision = None
+        else:
+            reload_revision = _revision(value.get("reloadRevision"), name="reload revision")
+            if reload_revision > applied:
+                raise RegistryError("settings rebind reload revision exceeds applied revision")
         supplied_checksum = value.get("checksum")
         if (
             not isinstance(supplied_checksum, str)
@@ -132,6 +147,7 @@ class SettingsRebindRecord:
             lifecycle_posture=posture,
             prior_binding_id=prior,
             candidate_binding_id=candidate,
+            reload_revision=reload_revision,
         )
 
 
@@ -160,11 +176,12 @@ def provisional_binding_id(value: object) -> str | None:
 
 
 class SettingsRebindStore:
-    """Narrow facade for the durable dormant SETTINGS-05 record.
+    """Narrow facade for the durable SETTINGS-05 compatibility record.
 
-    SETTINGS-05B may only consume an existing revision or acknowledge that no
-    watcher lifecycle exists.  It cannot prepare a revision, choose a binding,
-    or commit a candidate binding.
+    The watcher owns acknowledgement/drain.  The foreground activation owner
+    owns prepare and the one locked selection+binding commit.  Keeping those
+    operations here prevents a caller from composing two independent registry
+    writes and accidentally exposing a new selection before its rebind phase.
     """
 
     def __init__(self, registry: VaultRegistryStore) -> None:
@@ -175,6 +192,67 @@ class SettingsRebindStore:
         if value is None:
             raise RegistryError("settings rebind record is not installed")
         return SettingsRebindRecord.from_payload(value)
+
+    def prepare(self, *, candidate_binding_id: str | None) -> SettingsRebindRecord:
+        """Prepare the next monotonic compatibility revision.
+
+        The current candidate is the only durable prior binding.  A prepared
+        or committed revision cannot be replaced underneath its watcher; the
+        caller must wait for that revision to finish and retry from its durable
+        result.
+        """
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        snapshot = self._registry.load()
+        current = self.read()
+        if current.phase == "prepared":
+            if current.candidate_binding_id == candidate_binding_id:
+                return current
+            raise RegistryError("settings rebind already has a prepared revision")
+        if current.phase == "committed":
+            if current.reload_revision != current.desired_revision:
+                raise RegistryError(
+                    "settings rebind committed revision is awaiting reload completion"
+                )
+            # The activation owner checks the watcher receipt before starting
+            # the next transition. Once the foreground reload marker is
+            # durable, a later selection may prepare the next revision.
+        prior = current.candidate_binding_id
+        if prior == candidate_binding_id:
+            return current
+        prepared = SettingsRebindRecord(
+            desired_revision=max(current.desired_revision, current.applied_revision) + 1,
+            applied_revision=current.applied_revision,
+            phase="prepared",
+            lifecycle_posture="watcher",
+            prior_binding_id=prior,
+            candidate_binding_id=candidate_binding_id,
+            reload_revision=0,
+        )
+        updated = self._registry.set_settings_rebind_state(
+            prepared.as_payload(),
+            expected_revision=snapshot.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        return SettingsRebindRecord.from_payload(updated.settings_rebind)
+
+    def commit_selection(
+        self,
+        *,
+        desired_revision: int,
+        selection: KnownVaultRef,
+    ) -> SettingsRebindRecord:
+        """Atomically commit the prepared binding and compatibility selection."""
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        snapshot = self._registry.commit_settings_rebind_selection(
+            desired_revision=desired_revision,
+            selection=selection,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        return SettingsRebindRecord.from_payload(snapshot.settings_rebind)
 
     def acknowledge_no_lifecycle(
         self,
@@ -212,6 +290,23 @@ class SettingsRebindStore:
         )
         return SettingsRebindRecord.from_payload(updated.settings_rebind)
 
+    def reload_once(
+        self,
+        *,
+        desired_revision: int,
+        reload_callback: Callable[[], object],
+    ) -> SettingsRebindRecord:
+        """Run and durably record one SETTINGS-01 reload under the store lock."""
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        stored = self._registry.complete_settings_rebind_reload(
+            desired_revision=desired_revision,
+            reload_callback=reload_callback,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+        return SettingsRebindRecord.from_payload(stored.settings_rebind)
+
     def reconcile_no_lifecycle(self) -> SettingsRebindRecord:
         """Converge an absent watcher without preparing or committing a revision."""
 
@@ -225,6 +320,259 @@ class SettingsRebindStore:
         raise RegistryError(
             "absent watcher cannot reconcile a committed settings rebind revision"
         )
+
+
+def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
+    """Validate the candidate vault before any watcher adoption receipt."""
+
+    from app.vault.manager import VaultManager
+
+    manager = VaultManager()
+    context = manager.validate_vault(candidate_root)
+    if context.status != "selected":
+        raise RegistryError(
+            "settings rebind candidate watcher root is not a selected vault"
+        )
+    if not manager.permissions_for_context(context).enable_vault_watcher:
+        raise RegistryError(
+            "settings rebind candidate watcher root is disabled by local settings"
+        )
+    return candidate_root
+
+
+def _activation_fault_point(stage: str) -> None:
+    """Test seam for foreground crash recovery; production is a no-op."""
+
+    del stage
+
+
+class SettingsRebindActivation:
+    """Production choose/open transaction for the compatibility binding.
+
+    The API never calls the watcher helper directly.  It records ``prepared``
+    and waits for the separately running watcher to publish its durable
+    acknowledgement.  The watcher-disabled posture is explicit
+    ``no_lifecycle``.  After the locked selection commit, the API waits for a
+    completed watcher receipt when a watcher exists, then reloads through the
+    existing SETTINGS-01 ingestion entrypoint.
+    """
+
+    def __init__(
+        self,
+        registry: VaultRegistryStore,
+        *,
+        watcher_state_dir: Path | None = None,
+        watcher_enabled: bool | None = None,
+        watcher_requested: bool | None = None,
+        wait_timeout_seconds: float | None = None,
+        poll_seconds: float = 0.05,
+    ) -> None:
+        self.store = SettingsRebindStore(registry)
+        self._watcher_state_dir = watcher_state_dir
+        self._watcher_enabled_override = watcher_enabled
+        self._watcher_requested_override = watcher_requested
+        self._wait_timeout_seconds = (
+            wait_timeout_seconds
+            if wait_timeout_seconds is not None
+            else float(os.getenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "5"))
+        )
+        self._poll_seconds = max(poll_seconds, 0.01)
+
+    @classmethod
+    def from_environment(cls, registry: VaultRegistryStore) -> "SettingsRebindActivation":
+        state_dir_raw = os.getenv("WATCHER_STATE_DIR", "").strip()
+        state_dir = Path(state_dir_raw).expanduser() if state_dir_raw else None
+        enabled_raw = os.getenv("WATCHER_ENABLE", "").strip().lower()
+        watcher_path = os.getenv("WATCHER_VAULT_PATH", "").strip()
+        requested = enabled_raw in {"1", "true", "yes", "on"}
+        enabled = requested and bool(watcher_path)
+        return cls(
+            registry,
+            watcher_state_dir=state_dir,
+            watcher_enabled=enabled,
+            watcher_requested=requested,
+        )
+
+    def activate(
+        self,
+        *,
+        selection: KnownVaultRef,
+        candidate_binding_id: str,
+        candidate_root: Path,
+    ) -> SettingsRebindRecord:
+        current = self.store.read()
+        if current.candidate_binding_id == candidate_binding_id:
+            if current.phase in {"dormant", "no_lifecycle"}:
+                if current.phase == "no_lifecycle":
+                    return self._reload_if_needed(current, candidate_root)
+                return current
+            if current.phase == "committed":
+                self._wait_for_completed_if_enabled(current)
+                return self._reload_if_needed(current, candidate_root)
+
+        if current.phase == "committed":
+            # A completed committed record is the normal steady state while the
+            # watcher remains deployed. Quiesce that prior transition before
+            # allowing a new candidate to replace it.
+            self._wait_for_completed_if_enabled(current)
+
+        _activation_fault_point("prepare")
+        try:
+            prepared = self.store.prepare(candidate_binding_id=candidate_binding_id)
+        except RegistryError:
+            # Another foreground request may have committed this exact target
+            # between the read above and prepare.  Its durable commit is the
+            # only success receipt the losing request may return.
+            observed = self.store.read()
+            if (
+                observed.phase in {"prepared", "committed"}
+                and observed.candidate_binding_id == candidate_binding_id
+            ):
+                if observed.phase == "committed":
+                    self._wait_for_completed_if_enabled(observed)
+                    return self._reload_if_needed(observed, candidate_root)
+                prepared = observed
+            else:
+                raise
+        if prepared.phase != "prepared":
+            return prepared
+
+        if self.watcher_enabled:
+            _activation_fault_point("acknowledge")
+            self._wait_for_stage(prepared, required_stage="acknowledged")
+        else:
+            if self.watcher_requested:
+                validate_settings_rebind_candidate_root(candidate_root)
+            _activation_fault_point("acknowledge")
+            prepared = self.store.acknowledge_no_lifecycle(
+                desired_revision=prepared.desired_revision
+            )
+
+        try:
+            committed = self.store.commit_selection(
+                desired_revision=prepared.desired_revision,
+                selection=selection,
+            )
+        except RegistryError:
+            # A same-target request can win the lock after both callers have
+            # observed the prepared revision.  Do not report API success until
+            # that winner's commit and watcher resume are durable.
+            observed = self.store.read()
+            if (
+                observed.phase == "committed"
+                and observed.candidate_binding_id == candidate_binding_id
+                and observed.desired_revision == prepared.desired_revision
+            ):
+                self._wait_for_completed_if_enabled(observed)
+                return self._reload_if_needed(observed, candidate_root)
+            raise
+        # A commit fault is post-commit: recovery must observe the durable B
+        # binding and roll forward, matching the watcher transaction seam.
+        _activation_fault_point("commit")
+
+        self._wait_for_completed_if_enabled(committed)
+        committed = self._reload_if_needed(committed, candidate_root)
+        return committed
+
+    def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
+        if self.watcher_enabled:
+            _activation_fault_point("resume")
+            self._wait_for_stage(record, required_stage="completed")
+
+    def _reload_if_needed(
+        self,
+        record: SettingsRebindRecord,
+        candidate_root: Path,
+    ) -> SettingsRebindRecord:
+        # Re-read after any watcher wait or commit race.  A concurrent winner
+        # may have completed the reload while this caller was waiting.
+        current = self.store.read()
+        if (
+            current.desired_revision == record.desired_revision
+            and current.candidate_binding_id == record.candidate_binding_id
+        ):
+            record = current
+        if record.reload_revision == record.desired_revision:
+            return record
+        # This is deliberately the existing production SETTINGS-01 call site,
+        # not a second settings loader.  The registry lock serializes this
+        # side effect with same-target callers and records completion durably.
+        from app.settings.ingestion import STATE_OK, ingest_settings
+
+        def reload_selected_settings() -> None:
+            state = ingest_settings(
+                reason="vault_selection_rebind",
+                vault_root=candidate_root,
+                publish_signal=False,
+            )
+            if state.state != STATE_OK:
+                raise RegistryError(
+                    "SETTINGS-01 reload did not complete successfully: "
+                    f"state={state.state} error={state.error or 'unknown'}"
+                )
+
+        _activation_fault_point("reload")
+        completed = self.store.reload_once(
+            desired_revision=record.desired_revision,
+            reload_callback=reload_selected_settings,
+        )
+        _activation_fault_point("reload_complete")
+        return completed
+
+    @property
+    def watcher_enabled(self) -> bool:
+        if self._watcher_enabled_override is not None:
+            return self._watcher_enabled_override
+        return bool(os.getenv("WATCHER_VAULT_PATH", "").strip())
+
+    @property
+    def watcher_requested(self) -> bool:
+        if self._watcher_requested_override is not None:
+            return self._watcher_requested_override
+        return self.watcher_enabled
+
+    def _wait_for_stage(
+        self,
+        record: SettingsRebindRecord,
+        *,
+        required_stage: str,
+    ) -> None:
+        if self._watcher_state_dir is None:
+            raise RegistryError("enabled settings rebind watcher has no state directory")
+        from app.watcher.settings_rebind import (
+            load_settings_rebind_watcher_receipt,
+            settings_rebind_watcher_receipt_path,
+        )
+
+        receipt_path = settings_rebind_watcher_receipt_path(
+            self._watcher_state_dir,
+            record.desired_revision,
+        )
+        deadline = time.monotonic() + max(self._wait_timeout_seconds, 0.0)
+        while True:
+            try:
+                receipt = load_settings_rebind_watcher_receipt(receipt_path)
+            except FileNotFoundError:
+                receipt = None
+            if receipt is not None:
+                if (
+                    receipt.desired_revision != record.desired_revision
+                    or receipt.prior_binding_id != record.prior_binding_id
+                    or receipt.candidate_binding_id != record.candidate_binding_id
+                ):
+                    raise RegistryError(
+                        "settings rebind watcher receipt does not match durable authority"
+                    )
+                if required_stage == "acknowledged" or receipt.stage == "completed":
+                    return
+                if receipt.stage in {"acknowledged", "drained"} and required_stage == "completed":
+                    pass
+            if time.monotonic() >= deadline:
+                raise RegistryError(
+                    "settings rebind watcher did not reach "
+                    f"{required_stage} for revision {record.desired_revision}"
+                )
+            time.sleep(self._poll_seconds)
 
 
 def _install_dormant_settings_rebind(

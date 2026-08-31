@@ -9,6 +9,7 @@ from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime
 from app.instance.settings_rebind import (
     SettingsRebindRecord,
+    _checksum,
     _install_dormant_settings_rebind,
 )
 from app.instance.vault_registry import VaultRegistration
@@ -135,3 +136,24 @@ def test_delayed_writer_cannot_regress_durable_rebind_revision(tmp_path: Path) -
             _capability=STORAGE_MUTATION_CAPABILITY,
         )
     assert store.read() == committed
+
+
+def test_markerless_legacy_record_normalizes_reload_revision_before_write() -> None:
+    legacy = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="no_lifecycle",
+        lifecycle_posture="no_lifecycle",
+        prior_binding_id="binding-a",
+        candidate_binding_id="binding-b",
+    ).as_payload()
+    legacy.pop("reloadRevision")
+    legacy.pop("checksum")
+    legacy["checksum"] = _checksum(legacy)
+
+    parsed = SettingsRebindRecord.from_payload(legacy)
+
+    assert parsed.reload_revision is None
+    normalized = parsed.as_payload()
+    assert normalized["reloadRevision"] == 0
+    assert SettingsRebindRecord.from_payload(normalized).reload_revision == 0
