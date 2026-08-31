@@ -206,8 +206,20 @@ For Codex, use `.codex/agents/issue-local-helper.toml`; its read-only sandbox is
 mutation boundary. Do not substitute a general workspace-write agent for this helper role.
 
 Resume an agent only for this same Issue while its current authority remains valid. Before replacing
-it, produce a durable compact handoff with current SHA, changed files, validation/review evidence,
-budget state, blockers, residual risk, and the next authorized action.
+it, write a durable `lifecycle_handoff_receipt.v1` on the governing Issue or PR. The receipt names the
+current lifecycle owner and session, named successor, branch and base, sole writable worktree,
+unpublished candidate head (or `none`), changed files, current validation, current review/receipt
+evidence bound to an observed time or head, budget state, blockers, residual risk, and exactly one
+next authorized action.
+
+The successor must re-read and authenticate the live Issue labels and claim receipt, worktree
+registration, branch/PR head, unpublished candidate head, and current review/receipt evidence before
+posting its acknowledgment. Only that acknowledgment transfers authority. The former lifecycle
+owner is then read-only and must not edit, push, publish, merge, close, or mutate lifecycle state.
+Conflicting owners or writable worktrees, an omitted or contradictory candidate head, or newer
+blocking review evidence fail closed: no replacement, publication, merge, or closure may proceed
+until the current owner or the normal issue-maintenance/owner-authority path reconciles one owner,
+one current candidate head, and one next authorized action.
 
 ## Lifecycle rules during execution
 
