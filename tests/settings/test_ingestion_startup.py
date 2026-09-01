@@ -480,6 +480,9 @@ def test_registry_watcher_retries_source_changed_during_coalesced_reload(
     )
     legacy_source = sandbox_sources / "global.md"
     legacy_source.write_text(_source_md("DEBUG"), encoding="utf-8")
+    snapshot_mtime = 50.0
+    for source_path in (vault_root / "settings" / "global.md", legacy_source):
+        os.utime(source_path, (snapshot_mtime, snapshot_mtime))
     (vault_root / "Notes").mkdir()
     config_path = tmp_path / "watchers.yaml"
     config_path.write_text(
@@ -513,7 +516,7 @@ def test_registry_watcher_retries_source_changed_during_coalesced_reload(
                 else legacy_source
             )
             changed_source.write_text(_source_md("WARNING"), encoding="utf-8")
-            os.utime(changed_source, (150.0, 150.0))
+            os.utime(changed_source, (snapshot_mtime, snapshot_mtime))
             nonlocal changed_rel
             changed_rel = changed_source.relative_to(sandbox_sources.parent)
         return SettingsSourceDeltaResult(is_source=True, reloaded=True)

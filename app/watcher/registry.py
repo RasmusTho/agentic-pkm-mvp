@@ -1501,6 +1501,47 @@ def _next_incremental_markdown(
     return None, True
 
 
+def _capture_settings_source_snapshot(
+    *,
+    vault_root: Path,
+    scan_roots: Iterable[Path],
+    state: WatcherState,
+) -> dict[str, tuple[float, str] | None]:
+    """Capture every physical settings source before a shared bundle reload."""
+
+    snapshot: dict[str, tuple[float, str] | None] = {}
+    source_root_names = {SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name}
+    for scan_root in scan_roots:
+        try:
+            root_rel = scan_root.relative_to(vault_root)
+        except ValueError:
+            continue
+        if len(root_rel.parts) != 1 or root_rel.parts[0] not in source_root_names:
+            continue
+        if not scan_root.exists():
+            continue
+        for path in sorted(scan_root.rglob("*.md"), key=str):
+            try:
+                rel = path.relative_to(vault_root)
+                if not is_settings_source_path(rel):
+                    continue
+                mtime = path.stat().st_mtime
+                hashed = _hash_file(path)
+            except (OSError, ValueError):
+                continue
+            if hashed is not None:
+                snapshot[str(rel)] = (mtime, hashed[0])
+
+    # A source already known to the watcher may be absent at snapshot time. Keep
+    # that absence distinguishable from a path that could not be snapshotted so
+    # a deletion observed after reload start remains retryable.
+    for rel_str in state.file_paths():
+        rel = Path(rel_str)
+        if is_settings_source_path(rel):
+            snapshot.setdefault(rel_str, None)
+    return snapshot
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -1510,7 +1551,7 @@ def _collect_changed_entries(
     scan_roots: Iterable[Path],
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
-    settings_source_reload_results: dict[str, bool | float] | None = None,
+    settings_source_reload_results: dict[str, object] | None = None,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -1629,17 +1670,28 @@ def _collect_changed_entries(
             # physical path is observed; on failure none are advanced, keeping
             # every source retryable on the next scan generation.
             if "full_bundle" in settings_source_reload_results:
-                reload_started_at = settings_source_reload_results.get(
-                    "full_bundle_started_at"
+                source_snapshot = settings_source_reload_results.get(
+                    "full_bundle_snapshot"
+                )
+                expected_observation = (
+                    source_snapshot.get(rel_str)
+                    if isinstance(source_snapshot, dict)
+                    else None
                 )
                 if (
                     settings_source_reload_results["full_bundle"] is True
-                    and isinstance(reload_started_at, float)
-                    and mtime <= reload_started_at
+                    and isinstance(expected_observation, tuple)
+                    and expected_observation == (mtime, digest)
                 ):
                     state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
                 continue
-            settings_source_reload_results["full_bundle_started_at"] = time.time()
+            settings_source_reload_results["full_bundle_snapshot"] = (
+                _capture_settings_source_snapshot(
+                    vault_root=cfg.vault_path,
+                    scan_roots=roots,
+                    state=state,
+                )
+            )
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
                 vault_root=cfg.vault_path,
@@ -1968,7 +2020,7 @@ def _run_spec_tick(
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
     handled_settings_sources: set[Path] | None = None,
-    settings_source_reload_results: dict[str, bool | float] | None = None,
+    settings_source_reload_results: dict[str, object] | None = None,
     retain_unemitted_observations: int | None = None,
 ) -> dict[str, object]:
     tick_start = now
@@ -2164,8 +2216,14 @@ def _run_spec_tick(
             removed_settings_sources
         )
         if "full_bundle" not in settings_source_reload_results:
-            if handled_settings_sources is not None:
-                handled_settings_sources.add(removed_settings_sources[0])
+            if "full_bundle_snapshot" not in settings_source_reload_results:
+                settings_source_reload_results["full_bundle_snapshot"] = (
+                    _capture_settings_source_snapshot(
+                        vault_root=cfg.vault_path,
+                        scan_roots=scan_roots,
+                        state=state,
+                    )
+                )
             removed_delta = handle_settings_source_delta(
                 rel_path=removed_settings_sources[0],
                 vault_root=cfg.vault_path,
@@ -2181,9 +2239,19 @@ def _run_spec_tick(
                 summary["settings_source_errors_in_tick"] = len(
                     removed_delta.errors
                 )
-                pending_settings_source_deletions.add(
-                    str(removed_settings_sources[0])
-                )
+        else:
+            source_reload_succeeded = settings_source_reload_results["full_bundle"] is True
+
+        source_snapshot = settings_source_reload_results.get("full_bundle_snapshot")
+        for removed_source in removed_settings_sources:
+            rel_str = str(removed_source)
+            snapshot_includes_absence = (
+                isinstance(source_snapshot, dict)
+                and rel_str in source_snapshot
+                and source_snapshot[rel_str] is None
+            )
+            if not source_reload_succeeded or not snapshot_includes_absence:
+                pending_settings_source_deletions.add(rel_str)
 
     if scan_completed and state.scan_scope_matched_files == 0:
         # The scope glob's directory exists, but the tick matched zero
@@ -2423,7 +2491,7 @@ def run_registry_once(
     }
     now = time.time()
     handled_settings_sources: set[Path] = set()
-    settings_source_reload_results: dict[str, bool | float] = {}
+    settings_source_reload_results: dict[str, object] = {}
     summaries = {
         spec.name: _run_spec_tick(
             cfg,
@@ -2519,7 +2587,7 @@ def run_registry_forever(
         )
         now = time.time()
         handled_settings_sources: set[Path] = set()
-        settings_source_reload_results: dict[str, bool | float] = {}
+        settings_source_reload_results: dict[str, object] = {}
         summaries = {
             spec.name: _run_spec_tick(
                 cfg,
