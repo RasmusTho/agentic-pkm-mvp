@@ -7,7 +7,7 @@ not govern Product/Runtime agents; their semantics live in `docs/AGENTS.md` and 
 
 1. Read this compact file completely.
 2. Read `.codex/skills/README.md :: Skill routing`, then load the narrowest matching `SKILL.md`.
-3. Grep (never read whole) `docs/DOCS_INDEX.md` for the work area and read the owner document.
+3. For structural work, follow `.codex/skills/README.md :: Structural-work design packet route` before grepping (never read whole) `docs/DOCS_INDEX.md` for the work area and reading the owner document.
 4. Before validation, read `docs/development/DEV_WORKFLOW.md :: Validation baseline`.
 5. For instruction changes, read `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md :: Maintenance
    rules` and `:: Canonical entrypoints`. Outside `issue-to-code`, also read the required sections of

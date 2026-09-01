@@ -31,6 +31,8 @@ This is a decision/routing skill. It does not replace `docs-authoring`, `docs-to
 - `docs/architecture/SBS_OPERATING_MODEL.md`
 - `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` when Product/Runtime ownership or interface
   ownership is relevant
+- For structural Builder changes, follow `.codex/skills/README.md :: Structural-work design packet
+  route` before structural guidance; the packet does not replace Product/Runtime owner documents.
 - The most local current-state owner doc, spec directory, proposal, or audit named by the request
 - The narrower skill selected by the decision below
 

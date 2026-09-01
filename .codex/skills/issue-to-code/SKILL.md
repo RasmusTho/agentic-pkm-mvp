@@ -443,7 +443,9 @@ When continuing through anchor drift:
 5. Run the BuilderOps routing checkpoint and create any needed operational record before the context
    becomes hidden local memory.
 6. Restate the bounded outcome from the Issue.
-7. Read source-anchored docs and owning code paths.
+7. For structural changes, follow `.codex/skills/README.md :: Structural-work design packet route`
+   before reading source-anchored docs and owning code paths; a refusal preserves the explicit
+   owner-document route and all mandatory workflow reads.
 8. If anchor drift exists, resolve it using the rules above before coding.
 9. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
 10. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test). For enforcement ACs, keep `.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule` in view: when the AC is about runtime wiring, config, schema, ports, compose/install behavior, or service integration, the verification must reach the real production path or an integration-equivalent path, not only a stubbed dependency. If a stub is still needed for isolation, add at least one real-path assertion that proves the path under test.

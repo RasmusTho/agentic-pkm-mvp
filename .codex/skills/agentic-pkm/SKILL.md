@@ -12,6 +12,8 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 
 - Always read `AGENTS.md` first. It is the canonical repo builder-agent policy.
 - Follow `AGENTS.md :: Reading order` for the order in which to load context; do not restate that sequence here.
+- For structural changes, follow `.codex/skills/README.md :: Structural-work design packet route`
+  before structural guidance; keep Product/Runtime authority in its owner documents.
 - Prefer SoT docs over README. The README may be stale.
 - Use `docs/DOCS_INDEX.md` and `docs/PROJECT_KERNEL.md` as the entry points for current documentation.
 
