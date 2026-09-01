@@ -2268,6 +2268,34 @@
       "why_load_bearing": "The architecture owner document records the designated remote Ollama provider and the separate Linux runtime-host boundary.",
       "disposition": "stay",
       "issue": "#2892"
+    },
+    {
+      "artifact": "app/ops/product_tars_channel_topology.py",
+      "category": "iii",
+      "why_load_bearing": "The pure qualification validator names the personal control/client boundary only to reject it as Product Runtime placement evidence.",
+      "disposition": "stay",
+      "issue": "#5237"
+    },
+    {
+      "artifact": "docs/deployment/PRODUCT_TARS_CHANNEL_ISSUE_MIGRATION_MAP.md",
+      "category": "iii",
+      "why_load_bearing": "The migration map names personal host/client terms to reconcile their Issue context without treating them as Product Runtime placement proof.",
+      "disposition": "stay",
+      "issue": "#5237"
+    },
+    {
+      "artifact": "docs/deployment/profiles/TARS_PROXMOX.md",
+      "category": "iii",
+      "why_load_bearing": "The TARS profile names the personal control/client boundary to keep it separate from Product Runtime channel placement.",
+      "disposition": "stay",
+      "issue": "#5237"
+    },
+    {
+      "artifact": "tests/governance/test_product_tars_channel_topology_contract.py",
+      "category": "iii",
+      "why_load_bearing": "Governance tests assert that personal host/client references remain separated from the TARS Product Runtime contract.",
+      "disposition": "stay",
+      "issue": "#5237"
     }
   ]
 }

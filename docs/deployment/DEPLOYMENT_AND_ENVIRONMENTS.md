@@ -5,11 +5,13 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-31
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`
 
 ## Why this document exists
+
+Deployment follows the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts remain continuity authority; machine mirrors and deployment projections are rebuildable; diagnostic dumps and optional backups are evidence/ergonomics only, never semantic authority or a mandatory restore proof. Deployment journals, leases, ownership records, and fences are operational safety state. Missing lineage requires a new inactive fenced bootstrap and owner-native/external readback before activation; this document does not claim shipped total-loss recovery.
 
 ## BuilderOps local rebuildable deployment contract
 
@@ -57,10 +59,29 @@ The first inventory receipt is produced and validated only through the linked ow
 [`devsystem_vm102_component_inventory.v1` executable boundary](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract);
 this deployment contract does not collect host evidence or duplicate its schema.
 
+## Product Runtime channel placement
+
+The intended Product Runtime placement for all three channels (`dev`, `test`, and `prod`) is the
+TARS-hosted Linux VM topology selected by the TARS deployment profile. This is a placement contract,
+not a live residency or deployment claim. The exact channel VM, Docker engine, source/image, ingress,
+health/version, data, backup, and rollback identities must come from a fresh,
+redaction-safe `product_tars_channel_topology.v1` qualification input; unknown values remain explicit
+gaps and do not authorize a channel operation.
+
+Demerzel/Mac mini is a control, development, client, and operator computer only for Product Runtime
+placement purposes. It is not the `dev`, `test`, or `prod` Product Runtime host; local Compose/Colima
+is an explicitly non-authoritative development fallback. VM 102 (`builder-system`) is the separate
+complete Builder System / Dev System target and must not be used as a Product Runtime channel VM or
+engine. BuilderOps and Product Runtime placement therefore remain separate authority boundaries.
+
+Provider and model selection is resolved by capability configuration. Neither this placement profile
+nor the topology qualification input encodes a provider, model, or Codex-only runtime architecture.
+
 ## Current live runtime posture
 
-The intended live split is now: a dedicated Ollama host for Ollama only, and the product runtime on isolated Linux
-hosts reached through Tailscale. On 2026-08-22, `ygg-dev` served API `:18001` and UI `:8111`,
+The intended live split is now: a dedicated Ollama host for Ollama only, and the Product Runtime
+channels on the TARS-hosted isolated Linux VM topology reached through private ingress. On 2026-08-22,
+`ygg-dev` served API `:18001` and UI `:8111`,
 `ygg-prod` served API liveness on `:18000` while its UI `:8113` was unavailable, and no `ygg-test`
 host or endpoint was available. Dev and prod both reported `git_sha=unknown`; prod functional health
 was failing because the watcher was stale/paused and the worker had no heartbeat. These observations
@@ -108,13 +129,13 @@ for the environment-selection contract these values implement.
 | Shared renderer | `render_index_html` | `render_index_html` | `render_index_html` |
 | Vault mount → container `/app/vault` | none (no-vault posture) | Bifröst | Midgård |
 | Runtime env / deploy-pin source | `config/deploy/dev.env` + compose env | `config/deploy/test.env` + compose env | generated `tmp/runtime.env` + `config/deploy/prod.env` placeholder pin |
-| Container app code source | baked local image `pkm-app:dev-local` | `workspace-app` with shared host checkout bind-mounted at `/app` | `workspace-app` with shared host checkout bind-mounted at `/app` |
+| Container app code source | baked local image `pkm-app:dev-local` (app bind overlay opt-in) | pinned image (app bind overlay opt-in) | pinned image (app bind overlay opt-in) |
 | Startup wrappers | `make dev-up` / `make dev-ui` (`scripts/dev/start_niflheim_ui.sh`) | `make test-up` / `make test-ui` (`scripts/test/start_bifrost_ui.sh`) | `make prod-up` / `make prod-ui` (`scripts/prod/start_midgard_ui.sh`) |
 
 Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`; the 2026-07-06 host recon recorded in #3124 / `docs/deployment/PINNED_IMAGE_CUTOVER/README.md`; gateway ports `_DEFAULT_PORT = 8111` (`serve_dev_page.py`) and `_PRODUCTION_PORT = 8113` (`serve_production_page.py`, with test 8112 set via the `PORT` env); vault names per `reference_three_vaults` (names are operator-owned and **never hardcoded**).
 
 Notes on the current model:
-- `test` and `prod` still bind-mount the **same host checkout** at `/app`. That repo bind-mount is what removes code isolation: a `git checkout` in the one host tree changes the code under both channels' containers at once. `dev` differs only by running the baked local `pkm-app:dev-local` image, not by running a promoted GHCR SHA pin.
+- The repo app bind mount is opt-in through `docker-compose.app-bind.yml`; the standard dev, test, and prod Compose/deploy paths omit it. When explicitly enabled for a local hot-reload or exact-worktree UAT session, it mounts the selected checkout at `/app` and therefore is not code-isolated from changes in that checkout. `dev` otherwise runs the baked local `pkm-app:dev-local` image, while test and prod use their channel image pins.
 - Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
 - Production Compose fixes Companion's publish to `127.0.0.1:8113` and passes the matching explicit
   declaration `COMPANION_UI_BIND_HOST=127.0.0.1` into the gateway as one canonical producer pair;

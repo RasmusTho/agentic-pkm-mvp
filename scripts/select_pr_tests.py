@@ -232,6 +232,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/builderops/",
             "app/dispatcher/",
+            # The design-packet resolver is Builder System/CES projection
+            # machinery. Keep this ownership exact: sibling app/governance
+            # modules are Product GOV runtime boundaries with different tests.
+            "app/governance/design_packet_resolver.py",
+            # The design-boundary doctor is Builder System/CES report machinery;
+            # keep its ownership explicit so the governance tests cannot be
+            # filtered out as an unowned app module.
+            "app/governance/design_boundary_doctor.py",
             # The TARS inventory boundary is Builder System/CES machinery.
             # It carries an inventory-only PVE token and its direct proof
             # lives in tests/proxmox; leaving this new app prefix unowned
@@ -493,6 +501,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/stores/",
             "app/ingest/",
+            "app/rebuildability/",
             # The object-store facade writes canonical objects through the
             # store provider seam and emits ingest lifecycle events. Keep this
             # shared producer on the established store/ingest contracts
@@ -500,12 +509,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/objects/__init__.py",
             "tests/stores/",
             "tests/ingest/",
+            "tests/integration/test_product_total_loss.py",
+            "tests/integration/test_projection_rebuild.py",
             "docs/DB_SCHEMA.md",
             "docs/RUNTIME_CORRECTNESS_KERNEL/",
         ),
         (
             "tests/stores",
             "tests/ingest",
+            "tests/integration/test_product_total_loss.py",
+            "tests/integration/test_projection_rebuild.py",
             "tests/architecture",
             "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event",
         ),

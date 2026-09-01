@@ -7,7 +7,7 @@ not govern Product/Runtime agents; their semantics live in `docs/AGENTS.md` and 
 
 1. Read this compact file completely.
 2. Read `.codex/skills/README.md :: Skill routing`, then load the narrowest matching `SKILL.md`.
-3. Grep (never read whole) `docs/DOCS_INDEX.md` for the work area and read the owner document.
+3. For structural work, follow `.codex/skills/README.md :: Structural-work design packet route` before grepping (never read whole) `docs/DOCS_INDEX.md` for the work area and reading the owner document.
 4. Before validation, read `docs/development/DEV_WORKFLOW.md :: Validation baseline`.
 5. For instruction changes, read `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md :: Maintenance
    rules` and `:: Canonical entrypoints`. Outside `issue-to-code`, also read the required sections of
@@ -71,7 +71,7 @@ is not an owner decision; only its explicit authority categories may create `age
   evidence instead of re-implementing.
 - Use subagents only when independent bounded work lowers TCD. The owning agent retains scope,
   writes, lifecycle, and receipt authority.
-- Run host-global suites through `scripts/run_with_host_lease.py`; Chat reservations and process census are advisory only; do not busy-poll shared resources.
+- Run host-global suites through `scripts/run_with_host_lease.py`; the lease is the only coordination authority. Chat reservations and process census are advisory diagnostics; before attributing or interrupting another task's process, require cwd or parent/lease readback—command text, PID, census, or a quiet period alone is insufficient; do not busy-poll shared resources.
 
 Cleanup, lifecycle, lease, and CI-wait mechanics live in their owning skills/shared contracts.
 

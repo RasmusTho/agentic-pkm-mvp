@@ -256,6 +256,12 @@ The bridge must pin served roots with `Keep Downloaded`, refuse placeholder/part
 
 The bridge cannot guarantee that an offline iPad has no unseen edit. Therefore the truthful model is eventual convergence plus detectable conflicts, not global serializability. Post-sync iCloud conflict copies and base mismatches must be quarantined and surfaced for resolution.
 
+#### Read-only bridge qualification (Issue #5253)
+
+The repository now carries `scripts/mac_vault_bridge_probe.py`, a standalone qualification adapter for one explicitly supplied root and a bounded set of normalized relative paths. It performs read/stat/identity observations only and emits versioned JSON with digest-only filesystem/content evidence, vault-marker status, bounded-read status, and explicit unknown reasons. The adapter is deliberately outside runtime selection, registry/settings/queue/watcher state, and any production bridge registration; it does not persist the supplied root or modify the target vault.
+
+This probe does not establish iCloud or File Provider hydration, placeholder completeness, atomic replacement, global serializability, or conflict-free convergence. A successful local read remains only a local observation. Before a write bridge decision, a live Mac-side qualification must still observe the relevant File Provider hydration/placeholder state, atomic replacement behavior, post-sync conflict behavior, and convergence across the external devices and the selected root. Those live observations are optional evidence for this slice and are not repository-test prerequisites. A Mac daemon/service, HTTP/RPC bridge, write queue, CAS writeback, merge engine, watcher rebind, and production registration remain explicit non-goals.
+
 ### 5.4 Backup authority
 
 iCloud is synchronization, not backup. Obsidian explicitly distinguishes the two. Choose one fully hydrated Mac as the vault backup source and create a one-way, versioned backup to storage outside the Proxmox SSD and outside the live iCloud root.

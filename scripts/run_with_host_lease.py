@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Run one host-global command while holding an atomic repo-common lease."""
+"""Run one host-global command while holding an atomic repo-common lease.
+
+Host-global suite coordination:
+the repo-common lock is the lease and mutual-exclusion authority. Chat
+reservations, process census, command text, and quiet-period observations are
+advisory diagnostics, not evidence for attributing or interrupting another
+task's process. The supervisor only recovers its own child process group.
+"""
 
 from __future__ import annotations
 

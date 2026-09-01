@@ -1,12 +1,12 @@
-State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now. Updated 2026-06-29 (#2516): ExecutionRequest-authorization rule promoted to a CI-visible CAO/agent side-effect routing rail.
+State: Initial target SBS fitness rule set; most rules are manual review now and candidates for OEF/CI enforcement later. Updated 2026-06-24 (#2481): interaction-layer import-direction rule promoted to blocking CI check (ADR-0013 flip); deprecated-store-caller guard added as CI check now. Updated 2026-06-29 (#2516): ExecutionRequest-authorization rule promoted to a CI-visible CAO/agent side-effect routing rail. Updated 2026-09-01 (#5275): owned-effect declaration rail added for bounded durable/external capability boundaries.
 Doc role: Fitness rule catalog
 Authority: Owns target SBS architecture fitness rules, enforcement posture, and failure-mode detection.
 Owner: OEF / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-24
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/CODE_INVENTORY.md, docs/adr/ADR-0013-code-dependency-direction.md
+Last reviewed: 2026-09-01
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/CODE_INVENTORY.md, docs/adr/ADR-0013-code-dependency-direction.md, docs/contracts/STORE_PORT.md, docs/contracts/EXECUTION_REQUEST.md
 
 # SBS Fitness Rules
 
@@ -19,10 +19,17 @@ These rules make the target SBS inspectable without claiming current implementat
 - CI check now: should be enforced by current checks if a matching test/lint exists.
 - Blocking invariant: violation should block merge or require a new ADR.
 
+For design-principle routing, this catalog uses the `blocking`, `advisory`, and `manual-review`
+postures defined in `docs/testing/invariant-tests.md :: Design principle routing`. The canonical IDs
+and routing metadata remain owned by `docs/DESIGN_PRINCIPLES.md :: System Design Principles`; this
+fitness catalog does not duplicate them.
+
 ## Seed Rules
 
 | Rule | Classification | Detection | Response |
 |---|---|---|---|
+| Canonical design-principle routing metadata and projection pointers resolve. | CI check now for metadata integrity; substantive enforcement remains blocking, advisory, or manual review as declared by the canonical principle. | `tests/architecture/test_design_principle_routing.py::test_canonical_principles_have_unique_resolvable_routing_metadata` and `tests/architecture/test_design_principle_routing.py::test_principle_projections_reference_canonical_ids_without_redefining_them`. | Repair the canonical metadata or compact projection pointer; do not copy principle prose or create another registry. |
+| Design-boundary metadata drift is visible before repair or acceptance. | CI check now for the bounded doctor/report contract; the report remains advisory. | `tests/governance/test_design_boundary_doctor.py` exercises `scripts/design_boundary_doctor.py` over healthy and drifted fixture snapshots. | Inspect the named evidence and route repair through the owning document, issue, or normal delivery path; the doctor never repairs or accepts the change. |
 | No global `activeVault` as architecture contract outside WSP/EBF/HIX adapters. | CI check now for target SBS contract stubs; manual review elsewhere | `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` scans target public SBS contracts outside WSP for active-vault/vault-path/root contract terms. | Replace with ActiveContextSet and source binding. |
 | No backward import from non-interaction `app.*` module into the interaction layer (`app.api`, `app.chat`, `app.cli`, `app.web`). | **Blocking invariant — CI blocking now** | `.github/workflows/import-linter.yaml` (blocking, no `continue-on-error`) runs `lint-imports --config importlinter.ini` on PRs that change the import graph or its contract. All known violations resolved before flip; no allowlist. Governed by ADR-0013. | Extract shared helpers to `app.text` or another Foundation package; remove the backward import. |
 | No new callers of deprecated `app.store` or `app.stores` packages. | **CI check now (blocking)** | `tests/architecture/test_deprecated_store_callers.py::test_no_new_store_callers` walks `app/**/*.py`, detects imports of `app.store`/`app.stores`, and fails if any importer outside the documented allowlist appears. | Migrate to `app.objects` (for `DomainObject`/`ObjectStore` types) or to service+outbox boundaries. See `docs/CODE_INVENTORY.md` §Cleanup follow-ups. |
@@ -33,6 +40,7 @@ These rules make the target SBS inspectable without claiming current implementat
 | No direct tool side effects from CAO without GOV/EXE. | Blocking invariant target; CI check now for CAO/agent direct side-effect growth | `tests/architecture/test_exe_side_effect_routing.py::test_no_direct_tool_side_effects_from_cao` scans `app/agents/**` direct side-effect call sites and fails on any new site outside the documented transitional allowlist. | Issue ExecutionRequest through EXE with DecisionToken. |
 | No provider-specific fields in HKA/SIP/GOV public contracts. | Manual review now; CI check later | Public core contract contains vendor/model/tool-specific field where a stable concept is needed. | Normalize at EBF/DRI/RCA/EXE boundary. |
 | No PDM bypass for platform persistence/store resolution. | Manual review now; CI check later | New subsystem constructs DSNs, migrations, or persistent stores directly. | Use StorePort and PDM-owned resolution. |
+| Effectful capabilities declare an owned boundary. | **CI check now for declared capabilities**; manual review for unregistered historical code | A capability classified as authority-bearing durable, mechanical durable, derived/rebuildable, or external omits its owner contract or port, or declares a direct effect outside the owner port. Pure `none` capabilities remain valid without a wrapper. | Classify the effect explicitly and route it through the named owner contract/port; use the existing StorePort, GovernedWriteProtocol, or ExecutionRequest seam as applicable. |
 | No DRI record that is non-rebuildable unless reclassified. | Manual review now | Derived record is the only source of human meaning or accountability. | Reclassify to HKA, GOV, or MEM. |
 | No SFC semantic conflict resolution without GOV policy. | Blocking invariant target | Sync transport applies semantic conflict winner without policy class. | Stage conflict and route authority-bearing resolution through GOV/HIX. |
 | No OEF automatic control loop that mutates policy, memory, retrieval, knowledge, or execution. | Blocking invariant target | Metrics/evals/traces directly alter runtime behavior outside governed remediation. | OEF reports/proposes; GOV/EXE/HIX or normal development applies changes. |
@@ -88,6 +96,7 @@ These target rules govern the post-MVP CKM public read and measurement surface s
 - **Shipped import-direction blocking gate (#2481):** `.github/workflows/import-linter.yaml` now runs blocking (no `continue-on-error`). Any backward import from non-interaction into interaction layer fails the PR. Governed by ADR-0013.
 - **Shipped deprecated-store-caller guard (#2481):** `tests/architecture/test_deprecated_store_callers.py::test_no_new_store_callers` prevents new callers of `app.store`/`app.stores`; allowlist documents the 31 known callers to migrate.
 - **Shipped ExecutionRequest side-effect routing rail (#2516):** `tests/architecture/test_exe_side_effect_routing.py::test_no_direct_tool_side_effects_from_cao` inventories current direct CAO/agent side-effect call sites under `app/agents/**` and fails if new sites appear outside the documented transitional allowlist. This contains D6 growth without claiming broad runtime `ExecutionRequest` retrofit is complete.
+- **Shipped owned-effect declaration rail (#5275):** `tests/architecture/test_owned_effect_boundaries.py::test_durable_and_external_effects_require_named_owner_ports` validates the explicit effect-class/owner-contract/port declaration seam and rejects a hidden direct effect; `test_pure_internal_functions_do_not_require_generic_wrappers` keeps pure internal computation exempt. This is a bounded declaration check, not a universal port framework or a retrofit of historical modules.
 - Contract tests for authority-bearing write paths once DecisionToken and AuthorityReceipt exist in code.
 - Dependency checks that prevent RCA/MEM/CAO/EXE direct HKA writes once those subsystems have stable physical modules (a literal dependency/import-direction check; the contract-doc rail above is the interim enforcement).
 - Provider-field checks for HKA/SIP/GOV contract files.

@@ -64,6 +64,37 @@ def _heartbeat(path: Path, vault: Path) -> None:
     )
 
 
+def test_from_environment_preserves_deliberate_unset_distinction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_a = tmp_path / "vault-a"
+    vault_b = tmp_path / "vault-b"
+    initialize_test_vault(vault_a)
+    initialize_test_vault(vault_b)
+    registry = _registry(tmp_path, vault_a, vault_b)
+    monkeypatch.delenv("WATCHER_ENABLE", raising=False)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_a))
+
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    activation = SettingsRebindActivation.from_environment(registry)
+
+    assert activation.watcher_requested is False
+    assert activation.watcher_enabled is False
+
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    enabled_activation = SettingsRebindActivation.from_environment(registry)
+
+    assert enabled_activation.watcher_requested is True
+    assert enabled_activation.watcher_enabled is True
+
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    idle_activation = SettingsRebindActivation.from_environment(registry)
+
+    assert idle_activation.watcher_requested is True
+    assert idle_activation.watcher_enabled is False
+
+
 def test_selection_rebinds_ingest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault_a = tmp_path / "vault-a"
     vault_b = tmp_path / "vault-b"

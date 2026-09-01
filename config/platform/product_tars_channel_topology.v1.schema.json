@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "product_tars_channel_topology.v1",
+  "title": "Product TARS Channel Topology Qualification Input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observed_at", "source_ref", "channels"],
+  "properties": {
+    "schema_version": {"const": "product_tars_channel_topology.v1"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source_ref": {
+      "type": "string",
+      "pattern": "^(?:repo|qualification):[A-Za-z0-9._/#-]+$",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "channels": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "channel",
+          "vm_identity",
+          "engine_identity",
+          "source_image_identity",
+          "ingress_auth_class",
+          "health_version",
+          "data_backup_rollback_boundary",
+          "gaps",
+          "refusals"
+        ],
+        "properties": {
+          "channel": {"enum": ["dev", "test", "prod"]},
+          "vm_identity": {
+            "type": "string",
+            "pattern": "^(?:unknown|tars-vm:[a-z0-9][a-z0-9._-]{0,63})$",
+            "maxLength": 72
+          },
+          "engine_identity": {
+            "type": "string",
+            "pattern": "^(?:unknown|docker-engine:[a-z0-9][a-z0-9._-]{0,63})$",
+            "maxLength": 80
+          },
+          "source_image_identity": {
+            "type": "string",
+            "pattern": "^(?:unknown|image:[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64})$",
+            "maxLength": 256
+          },
+          "ingress_auth_class": {
+            "enum": ["unknown", "private-tailscale", "private-managed-ingress"]
+          },
+          "health_version": {
+            "type": "string",
+            "pattern": "^(?:unknown|version:[A-Za-z0-9._+-]+)$",
+            "maxLength": 96
+          },
+          "data_backup_rollback_boundary": {
+            "enum": ["explicit-gap", "qualified"]
+          },
+          "gaps": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$",
+              "maxLength": 64
+            }
+          },
+          "refusals": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{1,63}$",
+              "maxLength": 64
+            }
+          }
+        }
+      }
+    }
+  }
+}

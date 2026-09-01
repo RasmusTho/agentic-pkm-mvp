@@ -1,0 +1,19 @@
+{
+  "contract": "owned_effect_boundaries.v1",
+  "declarations": [
+    {
+      "name": "StorePort durable capability",
+      "effect_class": "mechanical durable",
+      "owner_contract": "docs/contracts/STORE_PORT.md :: StorePort",
+      "port": "StorePort",
+      "direct_effects": []
+    },
+    {
+      "name": "ExecutionRequest external capability",
+      "effect_class": "external",
+      "owner_contract": "docs/contracts/EXECUTION_REQUEST.md :: ExecutionRequest",
+      "port": "ExecutionRequest",
+      "direct_effects": []
+    }
+  ]
+}
