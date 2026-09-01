@@ -24,7 +24,7 @@ from app.settings.ingestion import (
     reset_settings_ingestion_state,
 )
 from app.settings.reload_signal import publish_reload_signal
-from app.watcher.settings_delta import handle_settings_source_delta
+from app.watcher.settings_delta import SettingsSourceDeltaResult, handle_settings_source_delta
 from app.watcher.state import WatcherState
 import app.watcher.registry as registry
 from tests.helpers.vault_settings import initialize_test_vault
@@ -409,3 +409,60 @@ def test_registry_watcher_does_not_emit_settings_sources_as_vault_content(
     assert summary.get("settings_source_reloads_in_tick") == 1
     assert summary["changed_in_tick"] == 0
     assert summary["emitted_in_tick"] == 0
+
+
+def test_registry_watcher_coalesces_canonical_and_legacy_source_reload(
+    sandbox_sources: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One bundle reload observes both source roots and preserves retry on failure."""
+    vault_root = sandbox_sources.parent
+    initialize_test_vault(vault_root)
+    (vault_root / "settings" / "global.md").write_text(
+        _source_md("ERROR"), encoding="utf-8"
+    )
+    (sandbox_sources / "global.md").write_text(_source_md("DEBUG"), encoding="utf-8")
+    (vault_root / "Notes").mkdir()
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text(
+        "watchers:\n  - name: panel\n    scope_glob: 'Notes/**'\n    emit_event: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "Notes/**")
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "watcher-state"))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    cfg = registry.load_registry_config(config_path)
+    state = WatcherState()
+    attempted_paths: list[Path] = []
+
+    def reload_settings(
+        *, rel_path: Path, vault_root: Path | None = None
+    ) -> SettingsSourceDeltaResult:
+        assert vault_root == sandbox_sources.parent
+        attempted_paths.append(rel_path)
+        if len(attempted_paths) == 1:
+            return SettingsSourceDeltaResult(
+                is_source=True,
+                reloaded=False,
+                errors=("temporary settings ingest failure",),
+            )
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(registry, "handle_settings_source_delta", reload_settings)
+
+    failed = registry._run_spec_tick(cfg, cfg.specs[0], state, now=time.time())
+
+    assert len(attempted_paths) == 1
+    assert failed.get("settings_source_reloads_in_tick") is None
+    assert state.file_entry("settings/global.md") is None
+    assert state.file_entry("@Settings/global.md") is None
+
+    recovered = registry._run_spec_tick(cfg, cfg.specs[0], state, now=time.time())
+
+    assert len(attempted_paths) == 2
+    assert recovered.get("settings_source_reloads_in_tick") == 1
+    assert state.file_entry("settings/global.md") is not None
+    assert state.file_entry("@Settings/global.md") is not None

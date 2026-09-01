@@ -1510,10 +1510,16 @@ def _collect_changed_entries(
     scan_roots: Iterable[Path],
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
+    settings_source_reload_results: dict[str, bool] | None = None,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
     errors_before_root_normalization = state.errors
+    settings_source_reload_results = (
+        settings_source_reload_results
+        if settings_source_reload_results is not None
+        else {}
+    )
     roots = _normalized_scan_roots(cfg.vault_path, scan_roots, state=state)
     preflight_generation_error = state.errors > errors_before_root_normalization
     _begin_or_resume_scan(
@@ -1617,17 +1623,21 @@ def _collect_changed_entries(
             continue
         if is_settings_source_path(rel):
             # Settings markdown is runtime control input, never ordinary vault
-            # content. Reload it only once per registry tick, and advance each
-            # spec's observation only after that reload succeeds. A failed
-            # reload must remain retryable on the next scan generation.
-            if handled_settings_sources is not None and rel in handled_settings_sources:
-                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            # content. Every source path maps to one full effective bundle, so
+            # a tick attempts that reload at most once even when canonical and
+            # legacy roots both contain source markdown. On success each
+            # physical path is observed; on failure none are advanced, keeping
+            # every source retryable on the next scan generation.
+            if "full_bundle" in settings_source_reload_results:
+                if settings_source_reload_results["full_bundle"]:
+                    state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
                 continue
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
                 vault_root=cfg.vault_path,
             )
             source_reload_succeeded = source_delta.reloaded and not source_delta.errors
+            settings_source_reload_results["full_bundle"] = source_reload_succeeded
             if source_reload_succeeded:
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
@@ -1950,10 +1960,16 @@ def _run_spec_tick(
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
     handled_settings_sources: set[Path] | None = None,
+    settings_source_reload_results: dict[str, bool] | None = None,
     retain_unemitted_observations: int | None = None,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
+    settings_source_reload_results = (
+        settings_source_reload_results
+        if settings_source_reload_results is not None
+        else {}
+    )
     state.ticks_run += 1
     errors_before = state.errors
 
@@ -2051,6 +2067,7 @@ def _run_spec_tick(
         scan_roots=scan_roots,
         states=active_states,
         handled_settings_sources=handled_settings_sources,
+        settings_source_reload_results=settings_source_reload_results,
     )
     if state.scan_generation_had_error:
         _mark_scan_incomplete(summary, reason="scan")
@@ -2138,14 +2155,16 @@ def _run_spec_tick(
         summary["settings_source_deletions_in_tick"] = len(
             removed_settings_sources
         )
-        if not handled_settings_sources:
+        if "full_bundle" not in settings_source_reload_results:
             if handled_settings_sources is not None:
                 handled_settings_sources.add(removed_settings_sources[0])
             removed_delta = handle_settings_source_delta(
                 rel_path=removed_settings_sources[0],
                 vault_root=cfg.vault_path,
             )
-            if removed_delta.reloaded:
+            source_reload_succeeded = removed_delta.reloaded and not removed_delta.errors
+            settings_source_reload_results["full_bundle"] = source_reload_succeeded
+            if source_reload_succeeded:
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
                 )
@@ -2396,6 +2415,7 @@ def run_registry_once(
     }
     now = time.time()
     handled_settings_sources: set[Path] = set()
+    settings_source_reload_results: dict[str, bool] = {}
     summaries = {
         spec.name: _run_spec_tick(
             cfg,
@@ -2405,6 +2425,7 @@ def run_registry_once(
             states=states,
             process_panel_notes_inline=True,
             handled_settings_sources=handled_settings_sources,
+            settings_source_reload_results=settings_source_reload_results,
             retain_unemitted_observations=rebind_observation_revision,
         )
         for spec in cfg.specs
@@ -2490,6 +2511,7 @@ def run_registry_forever(
         )
         now = time.time()
         handled_settings_sources: set[Path] = set()
+        settings_source_reload_results: dict[str, bool] = {}
         summaries = {
             spec.name: _run_spec_tick(
                 cfg,
@@ -2498,6 +2520,7 @@ def run_registry_forever(
                 now=now,
                 states=states,
                 handled_settings_sources=handled_settings_sources,
+                settings_source_reload_results=settings_source_reload_results,
                 retain_unemitted_observations=rebind_observation_revision,
             )
             for spec in cfg.specs
