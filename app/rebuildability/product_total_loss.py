@@ -101,6 +101,12 @@ def _canonical_source_text(raw_text: str) -> str:
     return strip_ai_status_block(strip_ai_panels(body)).strip()
 
 
+def canonical_product_source_text(raw_text: str) -> str:
+    """Return the canonical meaning-bearing text used by Product replay."""
+
+    return _canonical_source_text(raw_text)
+
+
 def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
     """Parse one note using the same bounded frontmatter shape as ingest."""
 
@@ -253,6 +259,7 @@ __all__ = [
     "ProductReadiness",
     "ProductReplayRefusal",
     "ProductReplayTuple",
+    "canonical_product_source_text",
     "evaluate_product_store_readiness",
     "product_replay_provenance",
 ]

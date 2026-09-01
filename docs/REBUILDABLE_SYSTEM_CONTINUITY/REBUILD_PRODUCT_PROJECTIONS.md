@@ -2,7 +2,7 @@
 name: Rebuild Product Projections
 description: Reconstruct object, vector, relation, and queue projections from declared retained sources with replay safety.
 task_id: RSC-03
-github_issue:
+github_issue: 5284
 source_anchor: "docs/EVENTS.md :: Outbox consumer contract"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-02]
@@ -19,9 +19,11 @@ queued-work composition rather than one store in isolation.
 
 ## What This Task Does
 
-Use owner-native store and event contracts to rebuild objects, embeddings/vector entries, relation
-projections, and reconstructable pending work. Each record binds its replay tuple; replay is
-idempotent; diagnostic JSONL is never treated as a canonical worker queue.
+Use the retained vault files and owner-native store/event contracts to rebuild objects,
+regenerated embeddings/vector entries, relation projections, and reconstructable pending work.
+Each record binds its replay tuple; replay is idempotent; only undelivered rows from the selected
+DB-outbox binding with their complete envelope are admitted; diagnostic JSONL is never treated as a
+canonical worker queue.
 
 ## Concretely
 
