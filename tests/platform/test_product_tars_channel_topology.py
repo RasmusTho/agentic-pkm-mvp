@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,16 @@ FIXTURE = ROOT / "tests/fixtures/product_tars_channel_topology/valid.json"
 
 
 def _fixture() -> dict[str, object]:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload["observed_at"] = datetime.now(timezone.utc).isoformat()
+    return payload
 
 
-def test_contract_binds_all_channels_to_explicit_identity_evidence_and_gaps() -> None:
-    validated = load_and_validate_product_tars_channel_topology(FIXTURE)
+def test_contract_binds_all_channels_to_explicit_identity_evidence_and_gaps(tmp_path: Path) -> None:
+    candidate = _fixture()
+    fixture_copy = tmp_path / "valid-test-copy.json"
+    fixture_copy.write_text(json.dumps(candidate), encoding="utf-8")
+    validated = load_and_validate_product_tars_channel_topology(fixture_copy)
 
     assert validated["schema_version"] == "product_tars_channel_topology.v1"
     assert {entry["channel"] for entry in validated["channels"]} == {"dev", "test", "prod"}
@@ -57,10 +63,6 @@ def test_contract_rejects_secret_local_and_cross_boundary_evidence() -> None:
     workstation["channels"][0]["ingress_auth_class"] = "loopback"
     cases.append(workstation)
 
-    vm102 = _fixture()
-    vm102["channels"][0]["vm_identity"] = "tars-vm:vm-102"
-    cases.append(vm102)
-
     missing_channel = _fixture()
     missing_channel["channels"] = missing_channel["channels"][:2]
     cases.append(missing_channel)
@@ -72,6 +74,41 @@ def test_contract_rejects_secret_local_and_cross_boundary_evidence() -> None:
     for candidate in cases:
         with pytest.raises(ProductTarsChannelTopologyError):
             validate_product_tars_channel_topology(candidate)
+
+
+def test_contract_rejects_builder_system_vm102_identity() -> None:
+    for field in ("vm_identity", "engine_identity"):
+        candidate = _fixture()
+        candidate["channels"][0][field] = "tars-vm:102" if field == "vm_identity" else "docker-engine:builder-system"
+        with pytest.raises(ProductTarsChannelTopologyError, match="Builder System"):
+            validate_product_tars_channel_topology(candidate)
+
+
+def test_contract_rejects_stale_or_future_observed_at() -> None:
+    stale = _fixture()
+    stale["observed_at"] = "2020-01-01T00:00:00Z"
+    with pytest.raises(ProductTarsChannelTopologyError, match="stale"):
+        validate_product_tars_channel_topology(stale)
+
+    future = _fixture()
+    future["observed_at"] = "2999-01-01T00:00:00Z"
+    with pytest.raises(ProductTarsChannelTopologyError, match="future"):
+        validate_product_tars_channel_topology(future)
+
+    bounded_skew = _fixture()
+    bounded_skew["observed_at"] = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    assert validate_product_tars_channel_topology(bounded_skew)["observed_at"]
+
+
+def test_contract_rejects_duplicate_channel_vm_identity() -> None:
+    duplicate = _fixture()
+    duplicate["channels"][1]["vm_identity"] = duplicate["channels"][0]["vm_identity"] = "tars-vm:shared"
+    with pytest.raises(ProductTarsChannelTopologyError, match="distinct VM identities"):
+        validate_product_tars_channel_topology(duplicate)
+
+    unknowns = _fixture()
+    unknowns["channels"][0]["vm_identity"] = unknowns["channels"][1]["vm_identity"] = "unknown"
+    assert validate_product_tars_channel_topology(unknowns)["channels"][0]["vm_identity"] == "unknown"
 
 
 def test_contract_rejects_unresolved_evidence_without_gap_or_refusal() -> None:
