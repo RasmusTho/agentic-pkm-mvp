@@ -86,6 +86,28 @@ The routing posture is intentionally separate from the invariant enforcement cat
 The static routing test is blocking for metadata integrity and projection drift. It verifies that a
 posture is declared and resolvable; it does not upgrade a principle's substantive enforcement.
 
+### design_boundary_drift_report
+
+- **Purpose:** Make stale principle references, duplicate routing ownership, packet drift, and
+  unclassified effect declarations visible in one deterministic read-only report.
+- **Protected principle:** boundary-first design, explicit mutation authority, and the OEF rule that
+  observability reports evidence without becoming policy or repair authority.
+- **Affected boundaries:** Architecture / CES practice, OEF, GOV, and the Builder System boundary.
+- **Required fixture / data:** canonical principle routing metadata, fitness/invariant registrations,
+  the owned-effect declaration document, and an optional `design_packet.v1` snapshot.
+- **Expected failure mode:** the doctor returns a stable typed state — `healthy`,
+  `stale-reference`, `duplicate-authority`, `packet-drift`, or `unclassified-effect` — and refuses
+  invalid metadata without a partial report.
+- **Current enforcement:** `static_test` — the bounded command is exercised over healthy and
+  intentionally drifted Git fixtures and its output is compared byte-for-byte.
+- **Test path:** `tests/governance/test_design_boundary_doctor.py::test_doctor_reports_typed_boundary_drift`;
+  `tests/governance/test_design_boundary_doctor.py::test_doctor_is_read_only`;
+  `tests/governance/test_design_boundary_doctor.py::test_doctor_output_is_evidence_not_authority`.
+- **Related docs / contracts / ADRs:** `docs/architecture/SBS_FITNESS_RULES.md`;
+  `docs/DESIGN_PRINCIPLES.md`; `docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/REPORT_DESIGN_BOUNDARY_DRIFT.md`;
+  `docs/architecture/owned-effect-boundaries.json`.
+- **Related issues:** #5277; #5258 remains the parent epic.
+
 ## Registry
 
 ### one_vault_settings_location
@@ -1141,6 +1163,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | authority_transition_required_for_durable_mutation | #9,#15 | GOV/HKA | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
 | execution_cannot_authorize_itself | #10 | CAO/GOV/EXE | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
 | owned_effect_boundaries | #9,#10,#12 | PDM/GOV/EBF/EXE/OEF | static | `tests/architecture/test_owned_effect_boundaries.py` |
+| design_boundary_drift_report | #1,#4,#9,#13 | Architecture/CES/OEF/GOV/Builder System | static | `tests/governance/test_design_boundary_doctor.py` |
 | parent_aggregation_not_sibling_sharing | #11 | SFC/WSP | doc + static + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
 | sync_preserves_boundaries | #14 | SFC/WSP/GOV | schema + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
 | observability_not_policy | #13 | OEF/GOV | doc + xfail | `tests/invariants/test_projection_not_evidence.py` (xfail) |
