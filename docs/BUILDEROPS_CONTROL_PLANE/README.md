@@ -17,6 +17,8 @@ BCP task names and historical file paths remain for traceability.
 This specification does not transfer product or delivery authority. GitHub Issues, PR head SHA,
 required CI, review gates, repository protection, and GitHub merge results remain authoritative.
 
+The BuilderOps specification follows the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts and document-backed governance receipts remain authority, BuilderOps machine state is rebuildable operational state, and its journals/leases/fences protect effects rather than human meaning. Missing lineage uses an inactive new fenced bootstrap and GitHub readback. Diagnostic dumps and optional backups are evidence/ergonomics only, never semantic authority or a mandatory restore proof. The historical restore-first/WAL proposal is superseded and not an active capability; deployment and total-loss recovery remain target-state unless their own receipts exist.
+
 ## Delivery status
 
 BCP-01 is implemented in the development baseline by #3792/PR #3852 with the independent

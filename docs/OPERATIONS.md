@@ -172,6 +172,15 @@ created at runtime by the legacy bootstrap SQL, deleted by #4560) and changes it
 - JSONL outbox (`INDEX_OUTBOX_PATH`) is audit/diagnostic only and must not be used as the worker queue.
 - Registry watcher is the single runtime watcher (`configs/watchers.yaml` + `python -m app.cli watcher run`). Legacy snapshot watchers are dev-only.
 
+The operations playbook follows the [RSC-01 continuity classification](REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification).
+Retained human artifacts, companions, and document-backed governance receipts remain continuity
+authority; machine mirrors are rebuildable; operational journals, leases, ownership records, and
+fences are safety state. Diagnostic JSONL/dumps and optional backups are evidence/ergonomics only:
+they are never the worker queue, readiness, semantic authority, or a mandatory restore proof. If
+operational lineage is missing, the supported target posture is a new fenced bootstrap epoch with
+writers inactive until owner-native readback and convergence. Total-loss recovery is not claimed as
+shipped runtime capability here.
+
 ## Environment posture
 
 This document is primarily the `prod` operator entrypoint.
@@ -777,6 +786,10 @@ Quick issue routing:
 The vault (Obsidian iCloud) is the durable system-of-record; the database is a disposable projection.
 These Makefile targets are for bug-reproduction and incident investigation only.
 Do not use them as a prod DR restore path.
+
+Snapshots and dumps are evidence/ergonomics only: they are never semantic authority and never a
+mandatory restore proof. They cannot establish readiness, replace the DB outbox worker queue, or
+restore lost operational ownership/lineage. See the [RSC-01 continuity classification](REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification).
 
 Three targets are available:
 

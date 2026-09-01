@@ -22,6 +22,24 @@ receipts, and activate only after convergence. The system never pretends that a 
 old ownership, and it never replays an effect solely because the lost local database cannot prove
 whether that effect happened.
 
+## RSC-01 continuity classification
+
+This is the shared classification for continuity and recovery owner docs:
+
+- Retained human artifacts, companions, and document-backed governance receipts are continuity
+  authority within their owner scope.
+- Machine mirrors and coordination projections are rebuildable from declared sources and recipes;
+  they never become semantic, governance, or action authority because they were retained.
+- Retained diagnostics, JSONL/dumps, and optional backups are evidence/ergonomics only. They are
+  never a worker queue, readiness gate, semantic authority, or a mandatory restore proof.
+- Journals, leases, ownership records, recovery fences, and epochs are operational safety state.
+  Missing lineage starts a new fenced bootstrap epoch, with writers inactive until owner-native or
+  external authority readback and convergence.
+
+Historical restore-first, WAL, and generalized backup proposals remain historical, superseded, or
+blocked unless a current owner contract explicitly promotes a bounded capability. This document
+does not claim that total-loss recovery or a generalized restore program is shipped.
+
 ## Cross-Task Invariants / Partial Failure Safety
 
 1. **Retained authority survives mirror loss.** Loss of a machine representation cannot alter
