@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TypeAlias
@@ -203,10 +204,11 @@ def resolve_design_packet(
 
     try:
         normalized = _normalize_facts(facts)
-        entries = _load_kernel(repository_root)
+        _assert_commit(repository_root, normalized_head)
+        entries = _load_kernel(repository_root, normalized_head)
         _assert_expected_kernel(normalized.expected_principle_ids, entries)
         selected = _select_entries(normalized, entries)
-        _assert_selected_references(repository_root, selected)
+        _assert_selected_references(repository_root, normalized_head, selected)
     except _Refusal as refusal:
         return DesignPacketRefusal(
             code=refusal.code,
@@ -321,13 +323,11 @@ def _normalized_text_items(values: object, *, field: str, sort: bool = True) -> 
     return tuple(sorted(set(normalized))) if sort else normalized
 
 
-def _load_kernel(repository_root: Path) -> tuple[_KernelEntry, ...]:
+def _load_kernel(repository_root: Path, repository_head: str) -> tuple[_KernelEntry, ...]:
     if not isinstance(repository_root, Path):
         raise _Refusal("kernel_unavailable", "repository_root must be a Path")
-    kernel_path = repository_root / _KERNEL_PATH
-    try:
-        text = kernel_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    text = _git_object_text(repository_root, repository_head, _KERNEL_PATH.as_posix())
+    if text is None:
         raise _Refusal("kernel_unavailable", "the canonical principle kernel is unavailable") from None
 
     start = text.find(_KERNEL_HEADING)
@@ -411,6 +411,7 @@ def _select_entries(
 
 def _assert_selected_references(
     repository_root: Path,
+    repository_head: str,
     entries: tuple[_KernelEntry, ...],
 ) -> None:
     for entry in entries:
@@ -418,29 +419,67 @@ def _assert_selected_references(
         if entry.owner != canonical_owner:
             raise _Refusal("ambiguous_authority", "a principle owner moved outside the canonical kernel")
         for reference in (entry.owner, entry.required_reading):
-            if not _reference_resolves(repository_root, reference):
+            if not _reference_resolves(repository_root, repository_head, reference):
                 raise _Refusal("missing_owner_section", "a selected owner section does not resolve")
 
 
-def _reference_resolves(repository_root: Path, reference: str) -> bool:
+def _assert_commit(repository_root: Path, repository_head: str) -> None:
+    completed = _git_command(repository_root, "cat-file", "-t", repository_head)
+    if completed is None or completed.returncode != 0 or completed.stdout.strip() != b"commit":
+        raise _Refusal(
+            "invalid_repository_head",
+            "repository_head is not a commit in repository_root",
+        )
+
+
+def _reference_resolves(repository_root: Path, repository_head: str, reference: str) -> bool:
     path_text, separator, section = reference.partition(" :: ")
+    if not separator or not section or section != section.strip():
+        return False
     relative = PurePosixPath(path_text)
-    if relative.is_absolute() or ".." in relative.parts:
+    if (
+        not path_text
+        or "\\" in path_text
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or relative.as_posix() != path_text
+    ):
         return False
-    target = repository_root / Path(*relative.parts)
-    if not target.is_file():
-        return False
-    if not separator:
-        return True
-    try:
-        text = target.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    text = _git_object_text(repository_root, repository_head, relative.as_posix())
+    if text is None:
         return False
     headings = {
         match.group("title").strip()
         for match in re.finditer(r"^#{1,6} (?P<title>.+)$", text, re.MULTILINE)
     }
     return section in headings
+
+
+def _git_object_text(repository_root: Path, repository_head: str, path: str) -> str | None:
+    completed = _git_command(repository_root, "show", f"{repository_head}:{path}")
+    if completed is None or completed.returncode != 0:
+        return None
+    try:
+        return completed.stdout.decode("utf-8")
+    except UnicodeError:
+        return None
+
+
+def _git_command(
+    repository_root: Path,
+    *args: str,
+) -> subprocess.CompletedProcess[bytes] | None:
+    if not isinstance(repository_root, Path):
+        return None
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repository_root), *args],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
 
 
 def _canonical_json(value: object) -> str:

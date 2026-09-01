@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from app.governance.design_packet_resolver import (
@@ -12,7 +13,20 @@ from app.governance.design_packet_resolver import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HEAD = "a" * 40
+
+
+def _git_head(root: Path) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+REPO_HEAD = _git_head(REPO_ROOT)
 
 
 def _facts(**overrides: object) -> ChangeFacts:
@@ -29,7 +43,7 @@ def _facts(**overrides: object) -> ChangeFacts:
     return ChangeFacts(**values)  # type: ignore[arg-type]
 
 
-def _write_kernel(root: Path, entries: list[dict[str, str]]) -> None:
+def _write_kernel(root: Path, entries: list[dict[str, str]]) -> Path:
     principle_blocks = []
     for entry in entries:
         principle_blocks.append(
@@ -56,9 +70,23 @@ def _write_kernel(root: Path, entries: list[dict[str, str]]) -> None:
         + "\n\n## Documentation Design Principles\n",
         encoding="utf-8",
     )
+    return path
 
 
-def test_equal_change_facts_produce_canonical_packet() -> None:
+def _commit_kernel(root: Path, entries: list[dict[str, str]]) -> tuple[str, Path]:
+    path = _write_kernel(root, entries)
+    for command in (
+        ("git", "init", "-q"),
+        ("git", "config", "user.name", "Design Packet Test"),
+        ("git", "config", "user.email", "design-packet@example.invalid"),
+        ("git", "add", "docs/DESIGN_PRINCIPLES.md"),
+        ("git", "commit", "-qm", "test kernel"),
+    ):
+        subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
+    return _git_head(root), path
+
+
+def test_equal_change_facts_produce_canonical_packet(tmp_path: Path) -> None:
     first = resolve_design_packet(
         _facts(
             changed_paths=("docs/ARCHITECTURE.md", "app/retrieval/query.py"),
@@ -66,7 +94,7 @@ def test_equal_change_facts_produce_canonical_packet() -> None:
             risk_triggers=("public-contract-or-interface-change",),
         ),
         repository_root=REPO_ROOT,
-        repository_head=HEAD,
+        repository_head=REPO_HEAD,
     )
     second = resolve_design_packet(
         _facts(
@@ -82,14 +110,14 @@ def test_equal_change_facts_produce_canonical_packet() -> None:
             ),
         ),
         repository_root=REPO_ROOT,
-        repository_head=HEAD,
+        repository_head=REPO_HEAD,
     )
 
     assert isinstance(first, DesignPacket)
     assert isinstance(second, DesignPacket)
     assert first.canonical_json() == second.canonical_json()
     assert json.loads(first.canonical_json()) == first.to_dict()
-    assert first.repository_head == HEAD
+    assert first.repository_head == REPO_HEAD
     assert first.kernel_version == "design-principle-kernel.v1"
     assert [item.principle_id for item in first.principles] == ["DP-01", "DP-04", "DP-06"]
     assert [item.owner for item in first.principles] == [
@@ -98,21 +126,63 @@ def test_equal_change_facts_produce_canonical_packet() -> None:
         "docs/DESIGN_PRINCIPLES.md :: 6. Contracts Over Implementations",
     ]
 
+    exact_head_root = tmp_path / "exact-head"
+    exact_head, kernel_path = _commit_kernel(
+        exact_head_root,
+        [
+            {
+                "title": "1. First",
+                "principle_id": "DP-01",
+                "applicability": "architecture-boundary-change",
+                "owner": "docs/DESIGN_PRINCIPLES.md :: 1. First",
+                "required_reading": "docs/DESIGN_PRINCIPLES.md :: 1. First",
+                "enforcement": "manual-review",
+            }
+        ],
+    )
+    committed = resolve_design_packet(
+        _facts(
+            write_class="read-only",
+            persistence_class="none",
+            external_effects=(),
+            risk_triggers=(),
+        ),
+        repository_root=exact_head_root,
+        repository_head=exact_head,
+    )
+    kernel_path.write_text(
+        kernel_path.read_text(encoding="utf-8").replace("ID `DP-01`", "ID `DP-DIRTY`"),
+        encoding="utf-8",
+    )
+    dirty_worktree = resolve_design_packet(
+        _facts(
+            write_class="read-only",
+            persistence_class="none",
+            external_effects=(),
+            risk_triggers=(),
+        ),
+        repository_root=exact_head_root,
+        repository_head=exact_head,
+    )
+    assert isinstance(committed, DesignPacket)
+    assert isinstance(dirty_worktree, DesignPacket)
+    assert dirty_worktree.canonical_json() == committed.canonical_json()
+
 
 def test_ambiguous_or_stale_authority_refuses_without_partial_packet(tmp_path: Path) -> None:
     stale = resolve_design_packet(
         _facts(expected_principle_ids=("DP-01", "DP-STALE")),
         repository_root=REPO_ROOT,
-        repository_head=HEAD,
+        repository_head=REPO_HEAD,
     )
     contradictory = resolve_design_packet(
         _facts(write_class="read-only", external_effects=("remote-write",)),
         repository_root=REPO_ROOT,
-        repository_head=HEAD,
+        repository_head=REPO_HEAD,
     )
 
     ambiguous_root = tmp_path / "ambiguous"
-    _write_kernel(
+    ambiguous_head, _ = _commit_kernel(
         ambiguous_root,
         [
             {
@@ -141,11 +211,11 @@ def test_ambiguous_or_stale_authority_refuses_without_partial_packet(tmp_path: P
             risk_triggers=(),
         ),
         repository_root=ambiguous_root,
-        repository_head=HEAD,
+        repository_head=ambiguous_head,
     )
 
     missing_root = tmp_path / "missing"
-    _write_kernel(
+    missing_head, _ = _commit_kernel(
         missing_root,
         [
             {
@@ -153,7 +223,7 @@ def test_ambiguous_or_stale_authority_refuses_without_partial_packet(tmp_path: P
                 "principle_id": "DP-01",
                 "applicability": "architecture-boundary-change",
                 "owner": "docs/DESIGN_PRINCIPLES.md :: 1. First",
-                "required_reading": "docs/MISSING.md :: Missing owner",
+                "required_reading": "docs/DESIGN_PRINCIPLES.md",
                 "enforcement": "manual-review",
             }
         ],
@@ -166,7 +236,7 @@ def test_ambiguous_or_stale_authority_refuses_without_partial_packet(tmp_path: P
             risk_triggers=(),
         ),
         repository_root=missing_root,
-        repository_head=HEAD,
+        repository_head=missing_head,
     )
 
     outcomes = {
@@ -190,7 +260,7 @@ def test_packet_is_read_only_projection(monkeypatch) -> None:
     packet = resolve_design_packet(
         _facts(),
         repository_root=REPO_ROOT,
-        repository_head=HEAD,
+        repository_head=REPO_HEAD,
     )
 
     assert isinstance(packet, DesignPacket)
