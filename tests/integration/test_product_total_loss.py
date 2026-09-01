@@ -157,7 +157,7 @@ def test_selected_postgres_health_refuses_unverified_product_projection(
     )
     monkeypatch.setattr("app.api.routes.health_contract.DEFAULT_CONTRACT", contract)
     refused = contract.evaluate()
-    assert refused["state"] == "unhealthy"
+    assert refused["state"] != "unhealthy"
     assert refused["product_readiness"]["ready"] is False
     assert TestClient(app).get("/readyz").status_code == 503
 

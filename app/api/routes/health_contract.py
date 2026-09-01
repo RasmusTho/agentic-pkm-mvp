@@ -21,12 +21,18 @@ READY_STATES = {"running", "catch_up", "degraded"}
 @router.get("/readyz")
 async def readyz() -> dict[str, str]:
     snapshot = await run_in_threadpool(DEFAULT_CONTRACT.evaluate)
-    if snapshot["state"] not in READY_STATES:
+    product_readiness = snapshot.get("product_readiness") or {}
+    if snapshot["state"] not in READY_STATES or product_readiness.get("ready") is False:
+        reason = (
+            snapshot.get("reason")
+            if product_readiness.get("ready") is not False
+            else f"product replay refused: {product_readiness.get('reason', 'verification incomplete')}"
+        )
         raise HTTPException(
             status_code=503,
             detail={
                 "state": snapshot["state"],
-                "reason": snapshot["reason"],
+                "reason": reason,
                 "class": snapshot.get("bootstrap_state") or "active",
             },
         )

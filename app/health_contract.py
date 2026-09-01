@@ -560,10 +560,6 @@ class HealthContract:
                 state = "unhealthy"
                 reason = dependency_override
                 since_ts = now.isoformat()
-        if not product_readiness.ready:
-            state = "unhealthy"
-            reason = f"product replay refused: {product_readiness.reason}"
-            since_ts = now.isoformat()
         catch_up_progress = self._catch_up_progress(
             outbox_count,
             age,
@@ -608,7 +604,7 @@ class HealthContract:
             store_count_error=store_count_error,
         )
         if not product_readiness.ready:
-            suggested_actions.append("rebuild Product projection from retained sources")
+            suggested_actions.append("rebuild Product projection from retained sources before readiness")
 
         bootstrap_state, bootstrap_reason = self._bootstrap_state(
             object_count, outbox_count, store_error=store_count_error
