@@ -151,17 +151,40 @@ def test_pin_write_preserves_channel_runtime_env() -> None:
     assert 'mv "${tmp_file}" "${file}"' in write_pin
 
 
-def test_health_gate_blocks_and_triggers_rollback() -> None:
+def test_health_gate_requires_liveness_readiness_and_functional_health() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "health_gate" in text
-    assert "http://127.0.0.1:${api_port}/healthz" in text
-    assert "http://127.0.0.1:${ui_port}/healthz" in text
-    assert 'wait_json_ok "http://127.0.0.1:${ui_port}/healthz"' in text
+    health_gate = text.split("health_gate() {", 1)[1].split("\n}\n", 1)[0]
+    readiness_wait = text.split("wait_http_success() {", 1)[1].split("\n}\n", 1)[0]
+    functional_health_wait = text.split("wait_json_required_ok() {", 1)[1].split(
+        "\n}\n", 1
+    )[0]
+
+    assert 'wait_json_ok "http://127.0.0.1:${api_port}/healthz"' in health_gate
+    assert 'wait_http_success "http://127.0.0.1:${api_port}/readyz"' in health_gate
+    assert 'wait_json_required_ok "http://127.0.0.1:${api_port}/api/health"' in health_gate
+    assert 'wait_json_ok "http://127.0.0.1:${ui_port}/healthz"' in health_gate
+    assert 'curl -fsS --max-time 3 "${url}"' in readiness_wait
+    assert 'data.get("required_ok") is True' in functional_health_wait
     assert "isinstance(data, dict)" in text
     assert 'run_postmutation_gate "health gate failed"' in text
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("recreate_channel_services") < run_block.index("health_gate")
     assert run_block.index("health_gate") < run_block.index("version_gate")
+
+
+def test_embedding_rebuild_path_preserves_deferred_readiness_exception() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    recreate = text.split("recreate_channel_services() {", 1)[1].split(
+        "\n}\n\nscalar_rollback_gateway_auth_gate", 1
+    )[0]
+    acknowledged_path = recreate.split(
+        'if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then',
+        1,
+    )[1].split("  fi\n\n  compose up", 1)[0]
+
+    assert 'wait_json_ok "http://127.0.0.1:${api_port}/healthz"' in acknowledged_path
+    assert "/readyz must stay red" in acknowledged_path
+    assert 'run_postmutation_gate "health gate failed" health_gate' in text
 
 
 def test_rollback_uses_previous_pin_and_skips_forward_only_reversal() -> None:
