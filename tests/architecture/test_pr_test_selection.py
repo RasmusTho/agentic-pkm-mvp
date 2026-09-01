@@ -92,6 +92,14 @@ def test_state_owning_subsystems_select_the_spine_gates() -> None:
         )
 
 
+def test_design_packet_resolver_has_exact_builder_system_test_ownership() -> None:
+    selection = select_tests(["app/governance/design_packet_resolver.py"])
+
+    assert not selection.unowned_paths
+    assert "builder_system" in selection.subsystems
+    assert "tests/governance" in selection.targets
+
+
 def test_every_known_agent_state_class_is_gated_or_fail_closed() -> None:
     """Every class in `_KNOWN_AGENT_STATE_CLASSES` is either gated by its owning subsystem's PR
     selection or provably unowned (fail-closed)."""
