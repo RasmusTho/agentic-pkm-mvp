@@ -10,6 +10,7 @@ from .product_total_loss import (
     product_replay_provenance,
 )
 from .product_projection_rebuild import (
+    DbOutboxProjectionQueue,
     DurableProjectionWork,
     ProjectionRelation,
     ProjectionReplayQueue,
@@ -23,6 +24,7 @@ from .product_projection_rebuild import (
 )
 
 __all__ = [
+    "DbOutboxProjectionQueue",
     "PRODUCT_REPLAY_RECIPE_VERSION",
     "ProductReadiness",
     "ProductReplayRefusal",

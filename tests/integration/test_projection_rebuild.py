@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from app.components.embeddings import EmbeddingIdentity
 from app.instance.binding_ids import OUTBOX_QUARANTINE_BINDING_ID
 from app.rebuildability import (
+    DbOutboxProjectionQueue,
     DurableProjectionWork,
     ProjectionRelation,
     ProjectionReplayQueue,
@@ -284,3 +286,47 @@ def test_projection_replay_rejects_target_identity_before_writes(tmp_path) -> No
     assert targets.objects.count_objects() == 0
     assert targets.vectors.count_vectors() == 1
     assert targets.queue.pending == {}
+
+
+def test_projection_replay_rejects_cross_source_relation_before_writes(tmp_path) -> None:
+    sources = _sources(tmp_path)
+    tampered = replace(
+        sources[0],
+        relations=(
+            ProjectionRelation(
+                src_id=OBJECT_B,
+                dst_id=OBJECT_A,
+                relation_type="related_to",
+            ),
+        ),
+    )
+    targets = _targets()
+
+    with pytest.raises(ProductProjectionReplayRefusal):
+        rebuild_product_projections([tampered, sources[1]], [_work(sources)], targets)
+
+    assert targets.objects.count_objects() == 0
+    assert targets.vectors.count_vectors() == 0
+    assert targets.relations.neighbors(OBJECT_A, rel="related_to") == []
+    assert targets.queue.pending == {}
+
+
+def test_db_outbox_projection_queue_reads_durable_pending_work(tmp_path) -> None:
+    sources = _sources(tmp_path)
+    work = _work(sources)
+    queue = DbOutboxProjectionQueue(
+        _Connection(
+            [
+                {
+                    "id": work.row_id,
+                    "vault_binding_id": work.vault_binding_id,
+                    "topic": work.event,
+                    "payload": work.envelope,
+                }
+            ]
+        ),
+        eligible_binding_ids=("binding-a",),
+    )
+
+    assert queue.pending == {work.event_id: work}
+    assert queue.enqueue(work) is False

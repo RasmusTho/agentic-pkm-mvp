@@ -82,6 +82,10 @@ class RelationProjectionSink(Protocol):
     ) -> None: ...
 
 
+class ProjectionQueueSink(Protocol):
+    def enqueue(self, work: "DurableProjectionWork") -> bool: ...
+
+
 class ProjectionEmbeddingSource(Protocol):
     identity: EmbeddingIdentity
 
@@ -347,7 +351,7 @@ def load_durable_projection_work(
 
 @dataclass
 class ProjectionReplayQueue:
-    """Isolated pending-work sink; it never dispatches or executes effects."""
+    """In-memory test double for the durable DB-outbox-backed queue view."""
 
     pending: dict[str, DurableProjectionWork] = field(default_factory=dict)
 
@@ -363,12 +367,52 @@ class ProjectionReplayQueue:
         return True
 
 
+class DbOutboxProjectionQueue:
+    """Read-only queue projection backed by canonical undelivered DB rows.
+
+    The database outbox remains the durable queue and worker authority. Replay
+    does not copy rows into process memory or execute them; this adapter only
+    confirms that a work item came from the selected durable row set.
+    """
+
+    def __init__(
+        self,
+        conn: Any,
+        *,
+        eligible_binding_ids: tuple[str, ...],
+        required_binding_stamp: Mapping[str, object] | None = None,
+    ) -> None:
+        self._conn = conn
+        self._eligible_binding_ids = eligible_binding_ids
+        self._required_binding_stamp = required_binding_stamp
+
+    @property
+    def pending(self) -> dict[str, DurableProjectionWork]:
+        return {
+            work.event_id: work
+            for work in load_durable_projection_work(
+                self._conn,
+                eligible_binding_ids=self._eligible_binding_ids,
+                required_binding_stamp=self._required_binding_stamp,
+            )
+        }
+
+    def enqueue(self, work: "DurableProjectionWork") -> bool:
+        durable = self.pending
+        existing = durable.get(work.event_id)
+        if existing != work:
+            raise ProductProjectionReplayRefusal(
+                f"event {work.event_id!r} is not the selected durable DB outbox row"
+            )
+        return False
+
+
 @dataclass(frozen=True)
 class ProductProjectionTargets:
     objects: ObjectProjectionSink
     vectors: VectorProjectionSink
     relations: RelationProjectionSink
-    queue: ProjectionReplayQueue
+    queue: ProjectionQueueSink
 
 
 @dataclass(frozen=True)
@@ -409,6 +453,10 @@ def _validate_sources(
     relation_keys: set[tuple[UUID, UUID, str]] = set()
     for source in sources:
         for relation in source.relations:
+            if relation.src_id != source.object_id:
+                raise ProductProjectionReplayRefusal(
+                    f"relation {relation.relation_type!r} is not owned by its retained source"
+                )
             if relation.src_id not in known_ids or relation.dst_id not in known_ids:
                 raise ProductProjectionReplayRefusal(
                     f"relation {relation.relation_type!r} references an unknown object"
@@ -545,6 +593,7 @@ def rebuild_product_projections(
 
 
 __all__ = [
+    "DbOutboxProjectionQueue",
     "DurableProjectionWork",
     "ProjectionRelation",
     "ProjectionReplayQueue",
