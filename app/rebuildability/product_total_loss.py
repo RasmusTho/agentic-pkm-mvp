@@ -1,0 +1,258 @@
+"""Fail-closed Product store readiness for retained-source rebuilds.
+
+This module deliberately covers the object projection only.  Vector, relation,
+and queue replay belong to RSC-03.  A Product object row is usable after loss
+only when its retained source locator, source-content generation, and replay
+recipe are all present and agree with the current retained note.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, Literal
+
+import yaml
+
+from app.agents.panel.filters import strip_ai_panels
+from app.agents.panel.writeback import strip_ai_status_block
+from app.vault.manager import iter_vault_markdown_files
+
+PRODUCT_REPLAY_RECIPE_VERSION = "product-object-replay-v1"
+ProductReadinessState = Literal["ready", "empty", "refused", "not_selected"]
+
+
+class ProductReplayRefusal(RuntimeError):
+    """Typed refusal to serve a Product projection with incomplete replay proof."""
+
+    code = "product_replay_refused"
+
+
+@dataclass(frozen=True)
+class ProductReplayTuple:
+    """The minimum source-bound identity needed to use one Product row."""
+
+    source_identity: str
+    source_generation: str
+    recipe_version: str = PRODUCT_REPLAY_RECIPE_VERSION
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "source_identity": self.source_identity,
+            "source_generation": self.source_generation,
+            "recipe_version": self.recipe_version,
+        }
+
+
+@dataclass(frozen=True)
+class _RetainedSource:
+    replay: ProductReplayTuple
+    title: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ProductReadiness:
+    state: ProductReadinessState
+    ready: bool
+    reason: str
+    source_count: int
+    projection_count: int
+    refused_source_identities: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "ready": self.ready,
+            "reason": self.reason,
+            "source_count": self.source_count,
+            "projection_count": self.projection_count,
+            "refused_source_identities": list(self.refused_source_identities),
+        }
+
+
+def product_replay_provenance(
+    *,
+    source_identity: str,
+    source_text: str,
+    recipe_version: str = PRODUCT_REPLAY_RECIPE_VERSION,
+    allow_empty_source: bool = False,
+) -> dict[str, str]:
+    """Build the source-bound tuple stamped into a Product object payload."""
+
+    identity = source_identity.strip().replace("\\", "/")
+    if not identity:
+        raise ProductReplayRefusal("source identity is empty")
+    if not source_text.strip() and not allow_empty_source:
+        raise ProductReplayRefusal(f"source {identity!r} has no meaning-bearing text")
+    if not recipe_version.strip():
+        raise ProductReplayRefusal("replay recipe version is empty")
+    return ProductReplayTuple(
+        source_identity=identity,
+        source_generation=hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+        recipe_version=recipe_version,
+    ).as_dict()
+
+
+def _canonical_source_text(raw_text: str) -> str:
+    _frontmatter, body = parse_markdown_text(raw_text)
+    del _frontmatter
+    return strip_ai_status_block(strip_ai_panels(body)).strip()
+
+
+def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
+    """Parse one note using the same bounded frontmatter shape as ingest."""
+
+    lines = raw_text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, raw_text.strip()
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return {}, raw_text.strip()
+    try:
+        frontmatter = yaml.safe_load("\n".join(lines[1:end])) or {}
+    except yaml.YAMLError:
+        frontmatter = {}
+    return (frontmatter if isinstance(frontmatter, dict) else {}), "\n".join(lines[end + 1 :]).strip()
+
+
+def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str]]:
+    sources: list[_RetainedSource] = []
+    failures: list[str] = []
+    root = vault_root.expanduser().resolve()
+    for path in iter_vault_markdown_files(root):
+        try:
+            relative = path.resolve().relative_to(root).as_posix()
+            raw_text = path.read_text(encoding="utf-8")
+            text = _canonical_source_text(raw_text)
+            replay = ProductReplayTuple(
+                **product_replay_provenance(source_identity=relative, source_text=text)
+            )
+        except Exception as exc:
+            failures.append(f"{path.name}:{type(exc).__name__}")
+            continue
+        sources.append(
+            _RetainedSource(
+                replay=replay,
+                title=path.stem,
+                text=text,
+            )
+        )
+    return sources, failures
+
+
+def _row_payload(row: Any) -> dict[str, Any] | None:
+    payload = row.get("payload") if isinstance(row, dict) else getattr(row, "payload", None)
+    return payload if isinstance(payload, dict) else None
+
+
+def _is_product_row(row: Any) -> bool:
+    kind = row.get("kind") if isinstance(row, dict) else getattr(row, "kind", None)
+    return kind in {None, "note"}
+
+
+def _row_replay(payload: dict[str, Any]) -> ProductReplayTuple | None:
+    raw = payload.get("replay")
+    if not isinstance(raw, dict):
+        return None
+    source_identity = raw.get("source_identity")
+    source_generation = raw.get("source_generation")
+    recipe_version = raw.get("recipe_version")
+    if not isinstance(source_identity, str) or not source_identity.strip():
+        return None
+    if not isinstance(source_generation, str) or not source_generation.strip():
+        return None
+    if not isinstance(recipe_version, str) or not recipe_version.strip():
+        return None
+    return ProductReplayTuple(
+        source_identity=source_identity,
+        source_generation=source_generation,
+        recipe_version=recipe_version,
+    )
+
+
+def _payload_text(payload: dict[str, Any]) -> str:
+    for key in ("text", "content", "raw_text"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def evaluate_product_store_readiness(
+    vault_root: Path | None,
+    projection_rows: Iterable[Any],
+) -> ProductReadiness:
+    """Return a non-authorizing, fail-closed readiness result for Product objects.
+
+    ``projection_rows`` is intentionally supplied by the StorePort caller.  The
+    function never repairs, deletes, or falls back to process memory.
+    """
+
+    if vault_root is None:
+        return ProductReadiness("not_selected", True, "no vault selected", 0, 0)
+
+    sources, source_failures = _retained_sources(vault_root)
+    rows = [row for row in projection_rows if _is_product_row(row)]
+    if not sources and not rows and not source_failures:
+        return ProductReadiness("empty", True, "no retained Product sources", 0, 0)
+    if source_failures:
+        return ProductReadiness(
+            "refused",
+            False,
+            "retained source inventory is unreadable",
+            len(sources),
+            len(rows),
+            tuple(sorted(source_failures)),
+        )
+    if not sources:
+        return ProductReadiness("refused", False, "projection has no retained source set", 0, len(rows))
+
+    by_identity: dict[str, list[tuple[ProductReplayTuple, dict[str, Any]]]] = {}
+    corrupt: list[str] = []
+    for row in rows:
+        payload = _row_payload(row)
+        if payload is None:
+            corrupt.append("projection-row")
+            continue
+        replay = _row_replay(payload)
+        if replay is None:
+            corrupt.append("projection-row")
+            continue
+        by_identity.setdefault(replay.source_identity, []).append((replay, payload))
+
+    refused: list[str] = list(corrupt)
+    for source in sources:
+        observed = by_identity.get(source.replay.source_identity, [])
+        if (
+            len(observed) != 1
+            or observed[0][0] != source.replay
+            or _canonical_source_text(_payload_text(observed[0][1])) != source.text
+        ):
+            refused.append(source.replay.source_identity)
+    expected = {source.replay.source_identity for source in sources}
+    for identity in by_identity:
+        if identity not in expected:
+            refused.append(identity)
+
+    if refused:
+        return ProductReadiness(
+            "refused",
+            False,
+            "Product projection requires source-bound reconstruction and integrity verification",
+            len(sources),
+            len(rows),
+            tuple(sorted(set(refused))),
+        )
+    return ProductReadiness("ready", True, "source-bound Product projection verified", len(sources), len(rows))
+
+
+__all__ = [
+    "PRODUCT_REPLAY_RECIPE_VERSION",
+    "ProductReadiness",
+    "ProductReplayRefusal",
+    "ProductReplayTuple",
+    "evaluate_product_store_readiness",
+    "product_replay_provenance",
+]

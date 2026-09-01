@@ -2,7 +2,7 @@
 name: Prove Product Total Loss
 description: Establish a fail-closed Product store/readiness kernel that reconstructs only from retained source fixtures.
 task_id: RSC-02
-github_issue:
+github_issue: 5282
 source_anchor: "docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md :: Rebuild semantics"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-01]
@@ -21,7 +21,8 @@ rebuild coverage.
 
 Add isolated retained-source fixtures and production readiness checks for an empty or corrupt
 Product database. Rebuild/use binds source identity, source generation/content identity, and
-recipe version; serving stays blocked until reconstruction and integrity verification complete.
+recipe version; `/readyz` stays blocked until reconstruction and integrity verification complete,
+while the source-backed recovery write path remains available to perform that rebuild.
 
 ## Concretely
 

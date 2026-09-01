@@ -108,6 +108,14 @@ def test_design_boundary_doctor_has_exact_builder_system_test_ownership() -> Non
     assert "tests/governance" in selection.targets
 
 
+def test_product_total_loss_has_store_ingest_test_ownership() -> None:
+    selection = select_tests(["app/rebuildability/product_total_loss.py"])
+
+    assert not selection.unowned_paths
+    assert "store_ingest" in selection.subsystems
+    assert "tests/integration/test_product_total_loss.py" in selection.targets
+
+
 def test_every_known_agent_state_class_is_gated_or_fail_closed() -> None:
     """Every class in `_KNOWN_AGENT_STATE_CLASSES` is either gated by its owning subsystem's PR
     selection or provably unowned (fail-closed)."""

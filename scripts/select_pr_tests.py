@@ -501,6 +501,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/stores/",
             "app/ingest/",
+            "app/rebuildability/",
             # The object-store facade writes canonical objects through the
             # store provider seam and emits ingest lifecycle events. Keep this
             # shared producer on the established store/ingest contracts
@@ -508,12 +509,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/objects/__init__.py",
             "tests/stores/",
             "tests/ingest/",
+            "tests/integration/test_product_total_loss.py",
             "docs/DB_SCHEMA.md",
             "docs/RUNTIME_CORRECTNESS_KERNEL/",
         ),
         (
             "tests/stores",
             "tests/ingest",
+            "tests/integration/test_product_total_loss.py",
             "tests/architecture",
             "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event",
         ),
