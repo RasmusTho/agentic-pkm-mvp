@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,9 @@ class RetrievedHit(BaseModel):
     # exceeds the item's intrinsic role. Carried through to the ContextEnvelope assembled at the
     # ASK synthesis seam.
     evidence_role_in_context: Optional[str] = None
+    orientation: Literal["active", "waiting", "supporting", "background", "unknown"] = "unknown"
+    orientation_provenance: dict[str, str] = Field(default_factory=dict)
+    orientation_degradation: Optional[str] = None
 
 
 class AgentState(RuntimeStateModel):

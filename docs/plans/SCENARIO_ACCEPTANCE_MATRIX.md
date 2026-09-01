@@ -172,8 +172,16 @@ The system should help the user re-orient to current commitments, relevant artif
 
 ### Validation posture
 
-- current implementation posture: bounded `/api/ask` orientation retrieval is available; owner acceptance remains pending
+- current implementation posture: production-shaped bounded `/api/ask` orientation retrieval is agent-validated by #5228; owner acceptance remains pending
 - test posture: `non-blocking acceptance` moving toward `nightly`
+- current slice evidence:
+  - `tests/e2e/test_human_need_uat.py::test_human_uat_orientation_classifies_production_indexed_background`
+  - `tests/e2e/test_human_need_uat.py::test_human_uat_orientation_filters_background_before_synthesis`
+  - `tests/e2e/test_human_need_uat.py::test_human_uat_return_after_interruption_orientation`
+  - `tests/e2e/test_human_need_uat.py::test_human_uat_orientation_producer_projection_and_admissibility_are_separate`
+  - `tests/e2e/test_human_need_uat.py::test_human_uat_orientation_intent_requires_resumption_context`
+  - `tests/e2e/test_human_need_uat.py::test_human_uat_orientation_context_limit_and_attribution_are_aligned`
+- remaining boundary: the separate query-absent orientation frame and owner acceptance are not claimed by #5228
 - observable signals:
   - the user can recover the relevant note/source set for a previously active thread of work
   - the surfaced result explains enough context to answer "what was I doing?" and "what is next?"
