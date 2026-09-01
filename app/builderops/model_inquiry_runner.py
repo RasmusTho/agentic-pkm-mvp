@@ -398,6 +398,10 @@ class ModelInquiryRunner:
             try:
                 result = adapter.execute(request)
             except AdapterUnavailableError as exc:
+                if _single_target_mode(trace):
+                    return self._attempt_failure(
+                        inquiry_id, "provider_error", request, trace, exc
+                    )
                 details = self._record_attempt_failure(
                     inquiry_id, "provider_unavailable", request, trace, exc
                 )

@@ -14,6 +14,7 @@ from app.builderops.model_inquiry import (
 )
 from app.builderops.model_inquiry_adapters import (
     INQUIRY_INTENT_CONFIG_ENV,
+    AdapterUnavailableError,
     AdapterExecutionError,
     AdapterResult,
     CredentialUnavailableError,
@@ -1201,6 +1202,49 @@ def test_single_target_malformed_output_is_readable_and_resume_is_idempotent(
     assert first["outcome"] == "malformed_output"
     assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
     assert trace["inquiry"]["acceptance_mode"] == "single_target"
+
+
+def test_single_target_adapter_unavailable_is_terminal_provider_error_without_fallback(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_adapter_unavailable"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    calls: list[str] = []
+
+    class UnavailableAdapter(ScriptedAdapter):
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            calls.append(str(request["role"]))
+            raise AdapterUnavailableError("configured command is unavailable")
+
+    runner = ModelInquiryRunner(
+        service,
+        {
+            perspective: UnavailableAdapter(
+                adapter_id="configured-sol-subscription",
+                provider="configured-provider",
+                model="configured-sol-model",
+                responses=[],
+                calls=[],
+            )
+            for perspective in ("synthesis", "verification")
+        },
+    )
+
+    result = runner.run(inquiry_id, max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert calls == ["synthesis"]
+    trace = service.trace(inquiry_id)
+    assert not any(turn["role"] == "verification" for turn in trace["turns"])
+    terminal = next(
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["outcome"] == "provider_error"
+    assert terminal["details"]["diagnostic"]["adapter_id"] == (
+        "configured-sol-subscription"
+    )
 
 
 def test_single_target_provider_refusal_is_readable_and_resume_is_idempotent(
