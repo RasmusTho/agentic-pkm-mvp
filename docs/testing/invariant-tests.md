@@ -5,8 +5,8 @@ Owner: OEF — Observability, Evaluation & Fitness (registry); CES practice (rul
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (invariant → probe mapping); subordinate to the doctrine, ontology, semantic dimensions, contracts, and boundary charters it maps
-Last reviewed: 2026-07-11
-Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/boundaries/README.md, schemas/README.md
+Last reviewed: 2026-09-01
+Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/architecture/SBS_FITNESS_RULES.md, docs/contracts/STORE_PORT.md, docs/contracts/EXECUTION_REQUEST.md, docs/boundaries/README.md, schemas/README.md
 
 # Mimer Invariant Test Registry
 
@@ -340,6 +340,26 @@ posture is declared and resolvable; it does not upgrade a principle's substantiv
 - **Eventual test path:** `tests/invariants/test_authority_transition.py::test_execution_cannot_authorize_itself` (xfail).
 - **Related docs / contracts / ADRs:** [authority-transition-flow](../architecture/authority-transition-flow.md) §4, [EXE charter](../boundaries/EXE.md), [EXECUTION_REQUEST](../contracts/EXECUTION_REQUEST.md); ADR-0019, ADR-0031.
 - **Related issues:** #2547, #2550, #2552.
+
+### owned_effect_boundaries
+
+- **Purpose:** Durable and external capability effects remain visible at a named owner contract and
+  port, while pure internal computation does not acquire generic wrapper overhead.
+- **Protected principle:** explicit mutation authority and the SBS rule that effects belong to the
+  boundary that owns their semantics/mechanics.
+- **Affected boundaries:** PDM, GOV, EBF, EXE, OEF, and CES practice.
+- **Required fixture / data:** one compliant StorePort declaration, one compliant external effect
+  declaration, one hidden direct-effect declaration, and one pure computation declaration.
+- **Expected failure mode:** a capability performs or declares a durable/external effect without a
+  named owner contract/port, or a pure helper is rejected merely because it has no wrapper.
+- **Current enforcement:** `static_test` — the bounded declaration validator fails hidden direct
+  effects and missing ownership while accepting pure computation.
+- **Test path:** `tests/architecture/test_owned_effect_boundaries.py::test_durable_and_external_effects_require_named_owner_ports`;
+  `tests/architecture/test_owned_effect_boundaries.py::test_pure_internal_functions_do_not_require_generic_wrappers`.
+- **Related docs / contracts / ADRs:** `docs/architecture/SBS_FITNESS_RULES.md`;
+  `docs/contracts/STORE_PORT.md`; `docs/contracts/EXECUTION_REQUEST.md`;
+  `docs/architecture/SBS_OPERATING_MODEL.md` §4.
+- **Related issues:** #5275; #3553 remains the Governed Knowledge Effect Spine authority.
 
 ## Governed knowledge effect spine invariants
 
@@ -1120,6 +1140,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | projection_not_evidence | #8 | DRI/OEF/GOV | schema + xfail | `tests/invariants/test_projection_not_evidence.py` (xfail) |
 | authority_transition_required_for_durable_mutation | #9,#15 | GOV/HKA | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
 | execution_cannot_authorize_itself | #10 | CAO/GOV/EXE | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
+| owned_effect_boundaries | #9,#10,#12 | PDM/GOV/EBF/EXE/OEF | static | `tests/architecture/test_owned_effect_boundaries.py` |
 | parent_aggregation_not_sibling_sharing | #11 | SFC/WSP | doc + static + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
 | sync_preserves_boundaries | #14 | SFC/WSP/GOV | schema + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
 | observability_not_policy | #13 | OEF/GOV | doc + xfail | `tests/invariants/test_projection_not_evidence.py` (xfail) |
