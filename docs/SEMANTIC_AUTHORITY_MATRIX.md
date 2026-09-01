@@ -14,6 +14,8 @@ This document is the per-entity authority detail for **Layer 4 (Governance/Autho
 
 It is a consolidation, not a new authority. Each flag's authoritative definition lives in an owner doc (named in the column legend); where a cell summarizes that owner, the owner wins on conflict and this matrix is updated to match.
 
+The matrix follows the [`RSC-01 continuity classification`](REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts are continuity authority; machine mirrors are rebuildable; diagnostics and optional backups are evidence/ergonomics only; and operational safety state with missing lineage starts a new fenced bootstrap epoch. These target-state continuity semantics do not claim that total-loss recovery is shipped.
+
 The accepted cross-plane Builder/PKM authority and provenance overlay is in
 `docs/architecture/INFORMATION_AUTHORITY_MODEL.md`. This matrix remains the owner of per-entity
 Product/Runtime authority flags; it adopts no replacement schema or local-contract semantics.

@@ -681,8 +681,36 @@ wait_json_ok() {
   return 1
 }
 
+wait_http_success() {
+  local url="$1" deadline
+  deadline=$((SECONDS + health_timeout))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if curl -fsS --max-time 3 "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+wait_json_required_ok() {
+  local url="$1" deadline body
+  deadline=$((SECONDS + health_timeout))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if body="$(curl -fsS --max-time 3 "${url}" 2>/dev/null)"; then
+      if "${PYTHON}" -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if isinstance(data, dict) and data.get("required_ok") is True else 1)' <<<"${body}"; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 health_gate() {
   wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
+  wait_http_success "http://127.0.0.1:${api_port}/readyz" || return 1
+  wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 

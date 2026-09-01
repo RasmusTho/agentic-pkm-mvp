@@ -36,6 +36,7 @@ from app.services.companion_note import (
 )
 from app.services.note_uuid import ensure_note_uuid
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
+from app.rebuildability import product_replay_provenance
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
@@ -569,6 +570,11 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         **producer_fields,
+        "replay": product_replay_provenance(
+            source_identity=rel_path.as_posix(),
+            source_text=stripped_text,
+            allow_empty_source=True,
+        ),
     }
 
     obj = DomainObject(
@@ -611,6 +617,11 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         **producer_fields,
+        "replay": product_replay_provenance(
+            source_identity=rel_path.as_posix(),
+            source_text=stripped_text,
+            allow_empty_source=True,
+        ),
     }
 
     try:
