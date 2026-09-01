@@ -22,6 +22,16 @@ from .product_projection_rebuild import (
     load_durable_projection_work,
     rebuild_product_projections,
 )
+from .mirror_doctor import (
+    DurablePath,
+    DurablePathClass,
+    MirrorDoctorReport,
+    MirrorFinding,
+    MirrorFindingCode,
+    ProjectionRecord,
+    SourceRecord,
+    diagnose_mirror_corruption,
+)
 
 __all__ = [
     "DbOutboxProjectionQueue",
@@ -42,4 +52,12 @@ __all__ = [
     "RetainedProjectionSource",
     "load_durable_projection_work",
     "rebuild_product_projections",
+    "DurablePath",
+    "DurablePathClass",
+    "MirrorDoctorReport",
+    "MirrorFinding",
+    "MirrorFindingCode",
+    "ProjectionRecord",
+    "SourceRecord",
+    "diagnose_mirror_corruption",
 ]
