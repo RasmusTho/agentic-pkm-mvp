@@ -31,6 +31,8 @@ def _text(value: object) -> str | None:
 
 
 def _flag(value: object) -> bool:
+    if value is not None and not isinstance(value, bool):
+        raise click.ClickException("snapshot authority flags must be boolean")
     return value is True
 
 

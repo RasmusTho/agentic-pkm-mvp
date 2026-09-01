@@ -241,3 +241,48 @@ def test_doctor_requires_db_generation_evidence() -> None:
     )
 
     assert {finding.code for finding in report.findings} == {MirrorFindingCode.MISSING_PROVENANCE}
+
+
+def test_doctor_reports_missing_path_identity() -> None:
+    report = diagnose_mirror_corruption(
+        inventory=[
+            DurablePath(
+                path=" ",
+                classification=DurablePathClass.DERIVED,
+                owner="owner",
+                rebuild_or_retention_source="source",
+            )
+        ],
+        sources=[],
+        projections=[],
+    )
+
+    assert report.findings[0].code is MirrorFindingCode.UNCLASSIFIED_PATH
+
+
+def test_rebuildability_doctor_rejects_malformed_authority_flag(tmp_path) -> None:
+    snapshot = tmp_path / "malformed-flag.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "complete": True,
+                "inventory": [
+                    {
+                        "path": "queue",
+                        "classification": "operational_exception",
+                        "owner": "owner",
+                        "rebuild_or_retention_source": "source",
+                        "sole_action_authority": "true",
+                    }
+                ],
+                "sources": [],
+                "projections": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(cli, ["rebuildability-doctor", "--snapshot", str(snapshot)])
+
+    assert result.exit_code == 1
+    assert "authority flags must be boolean" in result.output

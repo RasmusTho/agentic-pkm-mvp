@@ -137,6 +137,8 @@ def diagnose_mirror_corruption(
 
     for path in inventory:
         if (
+            _missing(path.path)
+            or
             path.classification is None
             or _missing(path.owner)
             or _missing(path.rebuild_or_retention_source)
