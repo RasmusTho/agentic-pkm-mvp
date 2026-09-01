@@ -14,6 +14,7 @@ from app.builderops.model_inquiry import (
 )
 from app.builderops.model_inquiry_adapters import (
     INQUIRY_INTENT_CONFIG_ENV,
+    AdapterUnavailableError,
     AdapterExecutionError,
     AdapterResult,
     CredentialUnavailableError,
@@ -232,6 +233,35 @@ def test_legacy_inquiry_is_readable_but_not_reactivated_by_sol_path(tmp_path: Pa
     trace = service.trace("inq_legacy_read_only")
     assert trace["inquiry"]["schema"] == "builderops.model-inquiry.v1"
     assert trace["turns"] == []
+
+
+def test_single_target_never_enters_operational_fallback(tmp_path: Path) -> None:
+    """A command failure cannot turn active-v2 into a second-adapter attempt."""
+    service, _ = _start(tmp_path, "inq_single_target_no_fallback", acceptance_mode="single_target")
+
+    class FailedCommand(LocalCommandAdapter):
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            raise AdapterExecutionError("configured target failed", failure_class="command_exit_nonzero")
+
+    class AlternateCommand(LocalCommandAdapter):
+        calls = 0
+
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            self.calls += 1
+            return AdapterResult(_response("draft"))
+
+    alternate = AlternateCommand("alternate", "configured", "configured-model", ("fixture",))
+    result = ModelInquiryRunner(
+        service,
+        {
+            "synthesis": FailedCommand("primary", "configured", "configured-model", ("fixture",)),
+            "verification": alternate,
+        },
+        allow_operational_fallback=True,
+    ).run("inq_single_target_no_fallback", max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert alternate.calls == 0
 
 
 def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
@@ -958,7 +988,7 @@ def test_adapter_failures_and_bad_config_are_terminal_without_secret_leak(tmp_pa
     inquiry_id = "inq_runner_bad_config"
     service, _ = _start(tmp_path, inquiry_id)
     config = intent_config()
-    config["target_intent"]["capability_tier"] = "economy"
+    config["target_intent"] = {"capability_tier": "economy"}
     result = ModelInquiryRunner(
         service, env={INQUIRY_INTENT_CONFIG_ENV: json.dumps(config)}
     ).run(inquiry_id, max_rounds=1)
@@ -1174,6 +1204,49 @@ def test_single_target_malformed_output_is_readable_and_resume_is_idempotent(
     assert trace["inquiry"]["acceptance_mode"] == "single_target"
 
 
+def test_single_target_adapter_unavailable_is_terminal_provider_error_without_fallback(
+    tmp_path: Path,
+) -> None:
+    inquiry_id = "inq_single_target_adapter_unavailable"
+    service, _ = _start(tmp_path, inquiry_id, acceptance_mode="single_target")
+    calls: list[str] = []
+
+    class UnavailableAdapter(ScriptedAdapter):
+        def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+            calls.append(str(request["role"]))
+            raise AdapterUnavailableError("configured command is unavailable")
+
+    runner = ModelInquiryRunner(
+        service,
+        {
+            perspective: UnavailableAdapter(
+                adapter_id="configured-sol-subscription",
+                provider="configured-provider",
+                model="configured-sol-model",
+                responses=[],
+                calls=[],
+            )
+            for perspective in ("synthesis", "verification")
+        },
+    )
+
+    result = runner.run(inquiry_id, max_rounds=1)
+
+    assert result["outcome"] == "provider_error"
+    assert calls == ["synthesis"]
+    trace = service.trace(inquiry_id)
+    assert not any(turn["role"] == "verification" for turn in trace["turns"])
+    terminal = next(
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["outcome"] == "provider_error"
+    assert terminal["details"]["diagnostic"]["adapter_id"] == (
+        "configured-sol-subscription"
+    )
+
+
 def test_single_target_provider_refusal_is_readable_and_resume_is_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -1196,7 +1269,7 @@ def test_single_target_provider_refusal_is_readable_and_resume_is_idempotent(
     assert trace["inquiry"]["acceptance_mode"] == "single_target"
 
 
-def test_single_target_configuration_failure_is_readable_and_resume_is_idempotent(
+def test_single_target_loader_adapter_unavailable_is_terminal_provider_error_and_resume_is_idempotent(
     tmp_path: Path,
 ) -> None:
     inquiry_id = "inq_single_target_configuration_failure"
@@ -1207,9 +1280,19 @@ def test_single_target_configuration_failure_is_readable_and_resume_is_idempoten
     trace = service.trace(inquiry_id)
     second = runner.run(inquiry_id, max_rounds=1)
 
-    assert first["outcome"] == "provider_unavailable"
+    assert first["outcome"] == "provider_error"
     assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
     assert trace["inquiry"]["acceptance_mode"] == "single_target"
+    terminal = next(
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["outcome"] == "provider_error"
+    assert terminal["details"]["classification"] == "provider adapter execution failed"
+    assert terminal["details"]["diagnostic"]["adapter_failure_class"] == (
+        "unexpected_adapter_error"
+    )
 
 
 def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) -> None:

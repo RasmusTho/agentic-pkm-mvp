@@ -2298,16 +2298,25 @@ def _validate_provider_attempt_receipt(
         raise BuilderOpsValidationError("invalid provider attempt terminal receipt")
     _validate_receipt_details(cast(Mapping[str, Any], details))
     if request_id == "adapter_req_configuration":
-        if (
-            outcome != "provider_unavailable"
-            or details
-            != {
-                "adapter_request_id": "adapter_req_configuration",
-                "classification": "explicit role adapter unavailable",
+        if outcome == "provider_unavailable" and details == {
+            "adapter_request_id": "adapter_req_configuration",
+            "classification": "explicit role adapter unavailable",
+        }:
+            return
+        if outcome == "provider_error":
+            expected_fields = {
+                "adapter_request_id",
+                "classification",
+                "diagnostic",
             }
-        ):
-            raise BuilderOpsValidationError("invalid configuration attempt receipt")
-        return
+            if (
+                set(details) == expected_fields
+                and details.get("adapter_request_id") == "adapter_req_configuration"
+                and details.get("classification") == "provider adapter execution failed"
+            ):
+                _validate_adapter_failure_diagnostic(details["diagnostic"])
+                return
+        raise BuilderOpsValidationError("invalid configuration attempt receipt")
     if request_id == CREDENTIAL_ATTEMPT_REQUEST_ID:
         # A declared credential that is absent or unusable fails closed before a
         # request packet exists, so this reserved attempt carries the classified

@@ -38,6 +38,7 @@ from app.ops.host_secret_contract import (
     load_host_secret_contract,
 )
 from llm_contract import (
+    ModelAccessIntent,
     ModelCapabilities,
     ModelResolutionRequest,
     ResolvedModelAccess,
@@ -53,7 +54,6 @@ DESIGN_AGENT_CONSUMER = "builderops-design-run"
 MODEL_INQUIRY_CONSUMER = "builderops-model-inquiry"
 MODEL_INQUIRY_RESOLUTION_GROUP = "model-inquiry-single-target"
 MODEL_INQUIRY_ROLE = "model_inquiry"
-MODEL_INQUIRY_OPERATIONAL_TRANSPORT = "codex_subscription"
 NON_PROVIDER_IDENTITIES = frozenset({"mock", "fake", "deterministic", "test"})
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,11 +66,6 @@ _CAPABILITY_FIELDS = (
     "system_prompt_channel",
     "deterministic_execution",
 )
-_MODEL_INQUIRY_REASONING_EFFORT = "xhigh"
-_MODEL_INQUIRY_ACCESS_CLASS = "frontier"
-_MODEL_INQUIRY_DETERMINISM_REQUIRED = False
-_MODEL_INQUIRY_OUTPUT_SCHEMA_REF = "builderops.model-turn-response.v1"
-_MODEL_INQUIRY_SIDE_EFFECT_CLASS = "advisory_review"
 _CKM_REASONING_EFFORT = "low"
 _CKM_DETERMINISM_REQUIRED = False
 _CKM_OUTPUT_SCHEMA_REF = "builderops.ckm.semantic-association.v1"
@@ -573,34 +568,10 @@ class BuilderModelAccessResolver:
                 "Builder Model Inquiry policy requires the single-target resolution group"
             )
         intent = request.intent
-        if intent.fallback_requirement != "fallback_forbidden":
+        expected_intent = ModelAccessIntent(**profile.target_intent.model_dump())
+        if intent != expected_intent:
             raise ModelAccessResolutionError(
-                "Builder Model Inquiry policy forbids any fallback requirement other than "
-                "fallback_forbidden"
-            )
-        if intent.capability_tier != _MODEL_INQUIRY_ACCESS_CLASS:
-            raise ModelAccessResolutionError(
-                "Builder Model Inquiry policy requires the frontier access class"
-            )
-        if intent.reasoning_effort != _MODEL_INQUIRY_REASONING_EFFORT:
-            raise ModelAccessResolutionError(
-                "Builder Model Inquiry policy requires xhigh reasoning effort"
-            )
-        if intent.determinism_required is not _MODEL_INQUIRY_DETERMINISM_REQUIRED:
-            raise ModelAccessResolutionError(
-                "Builder Model Inquiry policy refuses deterministic execution"
-            )
-        if intent.output_schema_ref != _MODEL_INQUIRY_OUTPUT_SCHEMA_REF:
-            raise ModelAccessResolutionError(
-                "Builder Model Inquiry policy requires the declared response schema"
-            )
-        if intent.side_effect_class != _MODEL_INQUIRY_SIDE_EFFECT_CLASS:
-            raise ModelAccessResolutionError(
-                "Builder Model Inquiry policy permits advisory review only"
-            )
-        if intent.independence != "none":
-            raise ModelAccessResolutionError(
-                "Builder Model Inquiry single-target policy forbids independence claims"
+                "Builder Model Inquiry request does not match the declared capability profile"
             )
         target = self._builder_execution_profile(
             channel=channel,
@@ -726,7 +697,6 @@ __all__ = [
     "MODEL_INQUIRY_CONSUMER",
     "MODEL_INQUIRY_RESOLUTION_GROUP",
     "MODEL_INQUIRY_ROLE",
-    "MODEL_INQUIRY_OPERATIONAL_TRANSPORT",
     "BuilderModelAccessResolver",
     "DeclaredCredentialUnavailableError",
     "ModelAccessResolutionError",
