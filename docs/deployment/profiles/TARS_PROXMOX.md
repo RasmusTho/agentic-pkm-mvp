@@ -32,6 +32,8 @@ Runtime `dev`, `test`, and `prod` channels. It does not invent channel VM identi
 residency. A fresh, redaction-safe `product_tars_channel_topology.v1` qualification input must bind
 each channel to its VM and engine identity, source/image identity, private ingress/auth class,
 health/version evidence, data/backup/rollback boundary, observed-at time, and explicit gaps/refusals.
+The validator accepts evidence no more than 24 hours old and allows at most five minutes of bounded
+future clock skew; older or farther-future evidence is rejected.
 Until that input and later operator acceptance exist, placement remains a repository contract only.
 
 Demerzel/Mac mini is a control, development, client, and operator computer, not a Product Runtime

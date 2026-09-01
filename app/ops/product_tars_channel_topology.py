@@ -8,6 +8,7 @@ local-workstation and Builder System VM-102 placement claims.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 from typing import Any, Mapping
@@ -18,6 +19,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 SCHEMA_VERSION = "product_tars_channel_topology.v1"
 SCHEMA_PATH = Path("config/platform/product_tars_channel_topology.v1.schema.json")
 CHANNELS = ("dev", "test", "prod")
+MAX_EVIDENCE_AGE = timedelta(hours=24)
+MAX_CLOCK_SKEW = timedelta(minutes=5)
 _ROOT = Path(__file__).resolve().parents[2]
 _SENSITIVE_KEY = re.compile(
     r"(?:password|token|credential|private[_-]?key|api[_-]?key|secret|authorization|dsn)",
@@ -34,7 +37,7 @@ _LOCAL_WORKSTATION = re.compile(
     r"\bloopback\b|docker-desktop|pkm-(?:dev|test|prod))",
     re.IGNORECASE,
 )
-_VM102 = re.compile(r"(?:vm[-_ ]?102|builder[-_ ]?system)", re.IGNORECASE)
+_VM102 = re.compile(r"(?:\btars-vm:102\b|\bvm[-_ ]?102\b|builder[-_ ]?system)", re.IGNORECASE)
 
 
 class ProductTarsChannelTopologyError(ValueError):
@@ -81,6 +84,21 @@ def _validate_schema(payload: Mapping[str, Any]) -> None:
         raise ProductTarsChannelTopologyError(errors[0].message)
 
 
+def _validate_observed_at(observed_at: str) -> None:
+    try:
+        observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ProductTarsChannelTopologyError("observed_at must be a valid timestamp") from exc
+    if observed.tzinfo is None:
+        raise ProductTarsChannelTopologyError("observed_at must include a timezone")
+    observed = observed.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if observed - now > MAX_CLOCK_SKEW:
+        raise ProductTarsChannelTopologyError("observed_at is too far in the future")
+    if now - observed > MAX_EVIDENCE_AGE:
+        raise ProductTarsChannelTopologyError("observed_at evidence is stale")
+
+
 def validate_product_tars_channel_topology(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and return a copy of one redaction-safe topology input.
 
@@ -94,14 +112,21 @@ def validate_product_tars_channel_topology(payload: Mapping[str, Any]) -> dict[s
     candidate = dict(payload)
     _walk_forbidden(candidate)
     _validate_schema(candidate)
+    _validate_observed_at(candidate["observed_at"])
     channels = candidate["channels"]
     if {entry["channel"] for entry in channels} != set(CHANNELS):
         raise ProductTarsChannelTopologyError("topology input must cover dev, test, and prod exactly once")
+    vm_identities: set[str] = set()
     for entry in channels:
         if _VM102.search(entry["vm_identity"]):
             raise ProductTarsChannelTopologyError("Product Runtime cannot use Builder System VM 102")
         if _VM102.search(entry["engine_identity"]):
             raise ProductTarsChannelTopologyError("Product Runtime cannot use the Builder System engine")
+        vm_identity = entry["vm_identity"]
+        if vm_identity != "unknown" and vm_identity in vm_identities:
+            raise ProductTarsChannelTopologyError("Product Runtime channels must use distinct VM identities")
+        if vm_identity != "unknown":
+            vm_identities.add(vm_identity)
         identity_evidence = (
             entry["vm_identity"],
             entry["engine_identity"],

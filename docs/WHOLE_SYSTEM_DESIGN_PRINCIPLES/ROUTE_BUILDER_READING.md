@@ -2,7 +2,7 @@
 name: Route Builder Reading
 description: Use the design packet resolver at Builder workflow boundaries without making Builder System the design authority.
 task_id: DSP-03
-github_issue:
+github_issue: 5273
 source_anchor: "AGENTS.md :: Reading order"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-02]
