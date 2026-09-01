@@ -64,6 +64,20 @@ def _ref_values(value: Any) -> set[str]:
     return set()
 
 
+def _references_match(left: str, right: str) -> bool:
+    """Match canonical IDs and vault-relative/absolute path aliases safely."""
+
+    left_normalized = re.sub(r"[/\\\\]+", "/", left.strip()).strip("/").casefold()
+    right_normalized = re.sub(r"[/\\\\]+", "/", right.strip()).strip("/").casefold()
+    if not left_normalized or not right_normalized:
+        return False
+    return (
+        left_normalized == right_normalized
+        or left_normalized.endswith("/" + right_normalized)
+        or right_normalized.endswith("/" + left_normalized)
+    )
+
+
 def _candidate_key(item: Mapping[str, Any]) -> str:
     for value in (
         item.get("id"),
@@ -153,7 +167,12 @@ def derive_orientation_signals(
             )
             continue
         target_refs = _ref_values(payload.get("target_ref"))
-        target_matches = target_refs & candidate_ids
+        target_matches = {
+            candidate_id
+            for target_ref in target_refs
+            for candidate_id in candidate_ids
+            if _references_match(target_ref, candidate_id)
+        }
         if target_matches & (active_aliases | waiting_aliases):
             signals[key] = OrientationSignal(
                 "supporting",

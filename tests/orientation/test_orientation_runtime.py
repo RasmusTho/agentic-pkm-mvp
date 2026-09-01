@@ -57,3 +57,22 @@ def test_ask_orientation_detects_background_in_absolute_vault_path() -> None:
         "source": "vault_path_segment",
         "value": "archive",
     }
+
+
+def test_ask_orientation_matches_vault_relative_supporting_target() -> None:
+    signals = derive_orientation_signals(
+        [
+            {
+                "id": "active-note",
+                "source_ref": "/vault/Projects/active-note.md",
+                "payload": {"uuid": "active-note", "active_context_ref": "active-note"},
+            },
+            {
+                "id": "supporting-note",
+                "source_ref": "/vault/Projects/supporting-note.md",
+                "payload": {"uuid": "supporting-note", "target_ref": "Projects/active-note.md"},
+            },
+        ]
+    )
+
+    assert signals["supporting-note"].state == "supporting"
