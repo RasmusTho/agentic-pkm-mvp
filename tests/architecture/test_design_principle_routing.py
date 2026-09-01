@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_PRINCIPLES = REPO_ROOT / "docs" / "DESIGN_PRINCIPLES.md"
@@ -55,14 +57,20 @@ class RoutingMetadata:
 
 
 def _parse_routing_metadata(text: str) -> list[RoutingMetadata]:
-    headings = list(PRINCIPLE_HEADING.finditer(text))
+    section_start = text.index("## System Design Principles")
+    section_end = text.index("\n## ", section_start + 1)
+    section = text[section_start:section_end]
+    headings = list(PRINCIPLE_HEADING.finditer(section))
+    titles = [heading.group("title") for heading in headings]
+    assert titles == list(EXPECTED_PRINCIPLES), (
+        "Canonical principle headings drifted from the registered routing kernel: "
+        f"expected {list(EXPECTED_PRINCIPLES)!r}, found {titles!r}"
+    )
     parsed: list[RoutingMetadata] = []
     for index, heading in enumerate(headings):
         title = heading.group("title")
-        if title not in EXPECTED_PRINCIPLES:
-            continue
-        section_end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
-        matches = list(ROUTING_LINE.finditer(text, heading.end(), section_end))
+        principle_end = headings[index + 1].start() if index + 1 < len(headings) else len(section)
+        matches = list(ROUTING_LINE.finditer(section, heading.end(), principle_end))
         assert len(matches) == 1, (
             f"Canonical principle {title!r} must contain exactly one routing metadata line; "
             f"found {len(matches)}"
@@ -112,6 +120,19 @@ def test_canonical_principles_have_unique_resolvable_routing_metadata() -> None:
             f"Unresolvable required-reading reference: {entry.required_reading}"
         )
         assert entry.enforcement in ALLOWED_ENFORCEMENT
+
+
+def test_unregistered_canonical_principle_heading_fails_closed() -> None:
+    text = CANONICAL_PRINCIPLES.read_text(encoding="utf-8")
+    mutated = text.replace(
+        "\n## Documentation Design Principles",
+        "\n### 12. Unregistered Principle\n\n- Synthetic drift.\n\n"
+        "## Documentation Design Principles",
+        1,
+    )
+
+    with pytest.raises(AssertionError, match="Canonical principle headings drifted"):
+        _parse_routing_metadata(mutated)
 
 
 def test_principle_projections_reference_canonical_ids_without_redefining_them() -> None:
