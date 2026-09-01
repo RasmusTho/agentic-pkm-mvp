@@ -1,10 +1,4 @@
-"""Declaration contract for owned durable and external effects.
-
-This module classifies an effect at a capability boundary. It intentionally
-does not define a universal port base class: concrete owner contracts continue
-to define their own ports and enforcement. The validator only makes missing
-ownership visible to targeted architecture checks.
-"""
+"""Declaration contract used by the owned-effect architecture fitness rail."""
 
 from __future__ import annotations
 
@@ -55,7 +49,7 @@ def validate_effect_declarations(
             messages.append("effectful capability requires a named owner contract")
         if effectful and not _non_empty(declaration.port):
             messages.append("effectful capability requires a named port")
-        if not effectful and declaration.effect_class == "none":
+        if declaration.effect_class == "none":
             if declaration.owner_contract or declaration.port:
                 messages.append("pure capability must not claim an owner contract or port")
             if declaration.direct_effects:

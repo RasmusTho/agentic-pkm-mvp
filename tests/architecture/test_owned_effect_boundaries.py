@@ -8,7 +8,7 @@ the owner contract or the concrete port implementation.
 
 from __future__ import annotations
 
-from app.architecture.owned_effects import (
+from tests.architecture.owned_effects import (
     EffectDeclaration,
     validate_effect_declarations,
 )
