@@ -6,10 +6,10 @@ ledger and terminal acceptance writeback only.
 
 ## Continuity Child Ledger
 
-1. RSC-01 — `RECONCILE_CONTINUITY_AUTHORITY.md` — file after DSP-01 is terminal.
-2. RSC-02 — `PROVE_PRODUCT_TOTAL_LOSS.md` — file after RSC-01.
-3. RSC-03 — `REBUILD_PRODUCT_PROJECTIONS.md` — file after RSC-02.
-4. RSC-04 — `DIAGNOSE_MIRROR_CORRUPTION.md` — file after RSC-02 and RSC-03.
+1. RSC-01 — `RECONCILE_CONTINUITY_AUTHORITY.md` — delivered as #5280 / PR #5281 after DSP-01.
+2. RSC-02 — `PROVE_PRODUCT_TOTAL_LOSS.md` — delivered as #5282 / PR #5283 after RSC-01.
+3. RSC-03 — `REBUILD_PRODUCT_PROJECTIONS.md` — delivered as #5284 / PR #5285 after RSC-02.
+4. RSC-04 — `DIAGNOSE_MIRROR_CORRUPTION.md` — filed as #5292 (`agent:ready`) after RSC-02 and RSC-03.
 5. RSC-05 — `SPECIFY_MVR_NEW_BOOTSTRAP.md` — file after RSC-01 and reconcile with #2143.
 6. RSC-06 — `APPLY_MVR_NEW_BOOTSTRAP.md` — file only when the amended MVR prerequisites are live.
 7. RSC-07 — `BOOTSTRAP_BUILDEROPS_FROM_AUTHORITY.md` — file after RSC-01; link #5056 without

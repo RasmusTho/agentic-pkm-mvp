@@ -2,7 +2,7 @@
 name: Diagnose Mirror Corruption
 description: Report typed inventory, provenance, consistency, and hidden-authority failures without mutating owner state.
 task_id: RSC-04
-github_issue:
+github_issue: 5292
 source_anchor: "docs/audits/REBUILDABILITY_RECOVERY_AUTHORITY_AUDIT_2026-08-31.md :: DOCTOR"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-02, RSC-03]

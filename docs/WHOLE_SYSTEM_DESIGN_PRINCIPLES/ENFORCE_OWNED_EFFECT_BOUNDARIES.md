@@ -2,7 +2,7 @@
 name: Enforce Owned Effect Boundaries
 description: Enforce that durable and external effects cross named owner ports while pure internal functions avoid generic wrappers.
 task_id: DSP-04
-github_issue:
+github_issue: 5275
 source_anchor: "docs/DESIGN_PRINCIPLES.md :: Change Classification Rules"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-01]

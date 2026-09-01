@@ -62,14 +62,15 @@ does not claim that total-loss recovery or a generalized restore program is ship
 
 ## Implementation Tasks And Execution Order
 
-1. [Reconcile Continuity Authority](RECONCILE_CONTINUITY_AUTHORITY.md) — RSC-01. Depends on DSP-01;
-   align owner docs and diagnostic-retention wording with the selected new-bootstrap posture.
-2. [Prove Product Total Loss](PROVE_PRODUCT_TOTAL_LOSS.md) — RSC-02. Depends on RSC-01; establish
-   the Product DB/readiness loss kernel from retained source fixtures.
-3. [Rebuild Product Projections](REBUILD_PRODUCT_PROJECTIONS.md) — RSC-03. Depends on RSC-02;
-   converge object/vector/relation projections and reconstructable queue work.
-4. [Diagnose Mirror Corruption](DIAGNOSE_MIRROR_CORRUPTION.md) — RSC-04. Depends on RSC-02 and
-   RSC-03; expose typed, read-only inventory and refusal evidence.
+1. [Reconcile Continuity Authority](RECONCILE_CONTINUITY_AUTHORITY.md) — RSC-01, delivered as
+   #5280 / PR #5281 after DSP-01; aligned owner docs and diagnostic-retention wording with the
+   selected new-bootstrap posture.
+2. [Prove Product Total Loss](PROVE_PRODUCT_TOTAL_LOSS.md) — RSC-02, delivered as #5282 / PR #5283
+   after RSC-01; established the Product DB/readiness loss kernel from retained source fixtures.
+3. [Rebuild Product Projections](REBUILD_PRODUCT_PROJECTIONS.md) — RSC-03, delivered as #5284 /
+   PR #5285 after RSC-02; converged object/vector/relation projections and reconstructable queue work.
+4. [Diagnose Mirror Corruption](DIAGNOSE_MIRROR_CORRUPTION.md) — RSC-04, filed as #5292
+   (`agent:ready`) after RSC-02 and RSC-03; exposes typed, read-only inventory and refusal evidence.
 5. [Specify MVR New Bootstrap](SPECIFY_MVR_NEW_BOOTSTRAP.md) — RSC-05. Depends on RSC-01; amend the
    existing MVR owner contract and existing #2143 chain without duplicate recovery authority.
 6. [Apply MVR New Bootstrap](APPLY_MVR_NEW_BOOTSTRAP.md) — RSC-06. Depends on RSC-05 and applicable
