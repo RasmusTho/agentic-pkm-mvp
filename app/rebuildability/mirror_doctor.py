@@ -42,6 +42,8 @@ class DurablePath:
     classification: DurablePathClass | None = None
     owner: str | None = None
     rebuild_or_retention_source: str | None = None
+    sole_meaning_authority: bool = False
+    sole_action_authority: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,10 @@ def diagnose_mirror_corruption(
             findings.append(
                 MirrorFinding(MirrorFindingCode.UNCLASSIFIED_PATH, _digest("path", path.path))
             )
+        if path.sole_meaning_authority or path.sole_action_authority:
+            findings.append(
+                MirrorFinding(MirrorFindingCode.HIDDEN_AUTHORITY, _digest("path", path.path))
+            )
 
     for projection in projections:
         subject = _digest("projection", projection.projection_id)
@@ -147,14 +153,17 @@ def diagnose_mirror_corruption(
             or _missing(projection.recipe_version)
         ):
             findings.append(MirrorFinding(MirrorFindingCode.MISSING_PROVENANCE, subject))
-        else:
+        if not _missing(projection.source_identity):
             source_identity = projection.source_identity
-            assert source_identity is not None  # narrowed by the provenance guard above
+            assert source_identity is not None
             source_generation = source_generations.get(source_identity)
             if source_generation is None:
                 findings.append(MirrorFinding(MirrorFindingCode.ORPHANED_PROJECTION, subject))
             else:
-                if projection.source_generation != source_generation:
+                if (
+                    not _missing(projection.source_generation)
+                    and projection.source_generation != source_generation
+                ):
                     findings.append(MirrorFinding(MirrorFindingCode.STALE_GENERATION, subject))
                 if (
                     not _missing(projection.db_source_generation)

@@ -25,8 +25,11 @@ Output is redacted or digest-only where content is sensitive.
 
 ## Concretely
 
-Production-command tests inspect healthy, stale, corrupt, orphaned, and unclassified isolated
-fixtures and compare canonical typed results while asserting no filesystem/database mutation.
+The `rebuildability-doctor` Product command consumes one explicit JSON snapshot supplied by
+owner-native readers; it performs no path discovery, host scan, repair, activation, restore, or
+authority creation. Production-command tests inspect healthy, stale, corrupt, orphaned, and
+unclassified isolated fixtures and compare canonical typed results while asserting no
+filesystem/database mutation.
 
 ## Why This Matters
 

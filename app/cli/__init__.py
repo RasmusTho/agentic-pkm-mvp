@@ -28,6 +28,7 @@ from app.cli.index_rebuild import index as index_cli
 from app.cli.llm_doctor import llm as llm_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
 from app.cli.events_doctor import events_doctor
+from app.cli.rebuildability_doctor import rebuildability_doctor
 from app.cli.smoke import smoke as smoke_cli
 from app.cli.settings_validate import run_settings_validate
 from app.cli.settings_explain import build_settings_explain_payload, emit_settings_explain
@@ -320,6 +321,7 @@ def cli() -> None:
 cli.add_command(index_cli, name="index")
 cli.add_command(llm_cli)
 cli.add_command(events_doctor)
+cli.add_command(rebuildability_doctor)
 cli.add_command(smoke_cli, name="smoke")
 cli.add_command(builderops_cli, name="builderops")
 cli.add_command(vault_cli, name="vault")
