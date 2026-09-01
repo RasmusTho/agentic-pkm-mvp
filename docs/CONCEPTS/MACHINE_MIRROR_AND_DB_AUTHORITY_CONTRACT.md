@@ -14,6 +14,8 @@ The system runs on Postgres, pgvector, indexes, and caches. These are essential 
 
 It is the Layer 6 detail for `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md` and the mirror-row detail for `docs/SEMANTIC_AUTHORITY_MATRIX.md`.
 
+The continuity classification is owned by [`RSC-01 continuity classification`](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts remain authority; machine mirrors remain rebuildable; diagnostics and optional backups remain evidence/ergonomics only; and missing operational lineage requires a new fenced bootstrap epoch. This contract does not claim a generalized restore program.
+
 ## Canonical authority
 
 The durable, authoritative set is the human-readable surface; machine mirrors sit beneath it.

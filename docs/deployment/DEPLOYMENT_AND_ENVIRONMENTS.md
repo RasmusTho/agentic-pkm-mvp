@@ -11,6 +11,8 @@ Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.ym
 
 ## Why this document exists
 
+Deployment follows the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts remain continuity authority; machine mirrors and deployment projections are rebuildable; diagnostic dumps and optional backups are evidence/ergonomics only, never semantic authority or a mandatory restore proof. Deployment journals, leases, ownership records, and fences are operational safety state. Missing lineage requires a new inactive fenced bootstrap and owner-native/external readback before activation; this document does not claim shipped total-loss recovery.
+
 ## BuilderOps local rebuildable deployment contract
 
 The BuilderOps control plane is a separate deployment boundary from the Product channels. Its API
