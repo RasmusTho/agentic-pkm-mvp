@@ -2,7 +2,7 @@
 name: Report Design Boundary Drift
 description: Add a read-only doctor for principle mappings, owner references, effect classifications, and packet drift.
 task_id: DSP-05
-github_issue:
+github_issue: 5277
 source_anchor: "docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/README.md :: Capability Acceptance"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-02, DSP-04]
