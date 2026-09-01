@@ -153,6 +153,15 @@ def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
     memory_state = payload.get("memory_state")
     if admitted_provisional and memory_state in _MEMORY_STATE_ENUM:
         bundle["memory_state"] = memory_state
+    orientation = payload.get("_orientation_projection")
+    if isinstance(orientation, dict):
+        bundle["extensions"] = {
+            "orientation": {
+                "state": str(orientation.get("state") or "unknown"),
+                "provenance": dict(orientation.get("provenance") or {}),
+                "degradation": orientation.get("degradation"),
+            }
+        }
     sphere = payload.get("sphere") or payload.get("domain")
     if isinstance(sphere, str) and sphere.strip():
         bundle["sphere"] = sphere.strip()

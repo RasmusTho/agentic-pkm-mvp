@@ -147,6 +147,7 @@ def test_object_vector_and_relation_projections_converge_from_retained_sources(t
     object_row = targets.objects.get(OBJECT_A)
     assert object_row is not None
     assert object_row["payload"]["replay"] == sources[0].replay.as_dict()
+    assert object_row["payload"]["episode_ref"] == "unbound"
     assert [row["object_id"] for row in targets.vectors.all_rows()] == [OBJECT_A, OBJECT_B]
     assert targets.relations.neighbors(OBJECT_A, rel="related_to") == [OBJECT_B]
     assert [item.value for item in targets.relations.memberships(OBJECT_B)] == ["continuity"]

@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Protocol
 from uuid import UUID
 
 from app.components.embeddings import EmbeddingIdentity
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.instance.binding_ids import (
     COMPATIBILITY_BINDING_ID,
     OUTBOX_GLOBAL_BINDING_ID,
@@ -164,6 +165,7 @@ class RetainedProjectionSource:
         embedding_identity = embedding_source.identity
         stamped = dict(payload)
         stamped["text"] = text
+        stamped["episode_ref"] = episode_ref_from_frontmatter(frontmatter)
         stamped["replay"] = product_replay_provenance(
             source_identity=identity,
             source_text=text,
