@@ -225,8 +225,11 @@ def test_human_uat_orientation_filters_background_before_synthesis(
         "I am returning to the Atlas migration after interruption. What is next?"
     )
     returned_paths = {hit.path for hit in state.hits}
-    assert str(paths["unrelated"]) not in returned_paths
-    assert all(hit.orientation != "background" for hit in state.hits)
+    assert str(paths["unrelated"]) in returned_paths
+    background_index = next(
+        index for index, hit in enumerate(state.hits) if hit.path == str(paths["unrelated"])
+    )
+    assert all(hit.orientation != "background" for hit in state.hits[:background_index])
     if state.synthesis_source_ids:
         assert set(state.synthesis_source_ids) <= {hit.object_id for hit in state.hits}
 
@@ -278,7 +281,10 @@ def test_human_uat_orientation_intent_requires_resumption_context(
     response = client.post(
         "/api/ask", json={"question": "Help me resume the Atlas migration."}
     )
-    assert str(paths["unrelated"]) not in {source["path"] for source in response.json()["sources"]}
+    sources = response.json()["sources"]
+    assert sources
+    assert sources[0]["path"] != str(paths["unrelated"])
+    assert any(source["path"] == str(paths["unrelated"]) for source in sources)
 
 
 def test_human_uat_orientation_context_limit_and_attribution_are_aligned(
@@ -323,7 +329,8 @@ def test_human_uat_return_after_interruption_orientation(tmp_path: Path, monkeyp
     assert str(paths["active"]) in source_paths
     assert str(paths["waiting"]) in source_paths
     assert str(paths["source"]) in source_paths
-    assert str(paths["unrelated"]) not in source_paths
+    assert str(paths["unrelated"]) in source_paths
+    assert sources[-1]["orientation"] == "background"
     orientation_by_path = {source["path"]: source["orientation"] for source in sources}
     assert orientation_by_path[str(paths["active"])] == "active"
     assert orientation_by_path[str(paths["waiting"])] == "waiting"

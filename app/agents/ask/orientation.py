@@ -104,9 +104,10 @@ def _is_background(item: Mapping[str, Any]) -> tuple[bool, dict[str, str]]:
         ),
         "",
     )
-    first_segment = re.split(r"[/\\\\]", path, maxsplit=1)[0].casefold() if path else ""
-    if first_segment in _BACKGROUND_ZONES:
-        return True, {"source": "vault_path_segment", "value": first_segment}
+    segments = [segment.casefold() for segment in re.split(r"[/\\\\]", path) if segment]
+    for segment in segments:
+        if segment in _BACKGROUND_ZONES:
+            return True, {"source": "vault_path_segment", "value": segment}
     return False, {}
 
 

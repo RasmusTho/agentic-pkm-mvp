@@ -91,6 +91,7 @@ def test_ask_consumes_envelope(tmp_path, monkeypatch) -> None:
     envelope = captured["envelope"]
     assert envelope["access_mode"] == "bounded_context_only"
     validate_envelope(envelope)  # re-validate: fail loud if the seam ever emits a non-conforming one
+    assert envelope["retrieved_items"][0]["metadata_bundle"]["extensions"]["orientation"]["state"] == "unknown"
 
     # No raw vault/index/storage field anywhere — including the vault_id planted in the payload.
     _walk_assert_no_raw_access(envelope)

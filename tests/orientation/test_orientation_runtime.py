@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.agents.ask.orientation import derive_orientation_signals
 from app.orientation.runtime import build_orientation_frame
 
 
@@ -38,3 +39,21 @@ def test_orientation_does_not_evaluate_write_guard(monkeypatch) -> None:
     monkeypatch.setattr("app.observability.status_service.DEFAULT_CONTRACT.evaluate", _fail)
     frame = build_orientation_frame()
     assert frame.read_only is True
+
+
+def test_ask_orientation_detects_background_in_absolute_vault_path() -> None:
+    signals = derive_orientation_signals(
+        [
+            {
+                "id": "old-note",
+                "source_ref": "/vault/archive/old-note.md",
+                "payload": {"uuid": "old-note"},
+            }
+        ]
+    )
+
+    assert signals["old-note"].state == "background"
+    assert signals["old-note"].provenance == {
+        "source": "vault_path_segment",
+        "value": "archive",
+    }

@@ -130,9 +130,10 @@ def _orientation_node(state: AgentState) -> AgentState:
                 "orientation_degradation": signal.degradation,
             }
         )
-        if is_return_orientation_question(state.query) and signal.state == "background":
-            continue
         annotated.append(projected)
+    if is_return_orientation_question(state.query):
+        priority = {"active": 0, "waiting": 1, "supporting": 2, "unknown": 3, "background": 4}
+        annotated.sort(key=lambda hit: priority.get(hit.orientation, priority["unknown"]))
     state.hits = annotated
     return state
 
@@ -151,6 +152,8 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
             self.id = id
             self.text = text
 
+    orientation_query = is_return_orientation_question(state.query)
+    orientation_priority = {"active": 0, "waiting": 1, "supporting": 2, "unknown": 3, "background": 4}
     if reranker:
         rr_items = [
             _RRItem(
@@ -162,7 +165,15 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
         try:
             results = reranker.rerank(state.query, rr_items, top_k=None)  # type: ignore[arg-type]
             order = {res.id: idx for idx, res in enumerate(results)}
-            sorted_hits = sorted(sorted_hits, key=lambda h: order.get(h.object_id, len(order)))
+            sorted_hits = sorted(
+                sorted_hits,
+                key=lambda h: (
+                    orientation_priority.get(h.orientation, orientation_priority["unknown"])
+                    if orientation_query
+                    else 0,
+                    order.get(h.object_id, len(order)),
+                ),
+            )
         except Exception:
             pass
 
@@ -421,7 +432,14 @@ def _hits_as_scoped_retrieval(state: AgentState) -> ScopedRetrieval:
                 "score": hit.score,
                 "snippet": hit.snippet,
                 "source_ref": hit.path,
-                "payload": dict(hit.payload or {}),
+                "payload": {
+                    **dict(hit.payload or {}),
+                    "_orientation_projection": {
+                        "state": hit.orientation,
+                        "provenance": dict(hit.orientation_provenance),
+                        "degradation": hit.orientation_degradation,
+                    },
+                },
                 "evidence_role_in_context": hit.evidence_role_in_context,
             }
         )
