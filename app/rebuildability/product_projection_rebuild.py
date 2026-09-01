@@ -10,13 +10,16 @@ ledger.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Protocol
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Protocol
 from uuid import UUID
 
 from app.components.embeddings import EmbeddingIdentity
 from app.rebuildability.product_total_loss import (
     ProductReplayRefusal,
     ProductReplayTuple,
+    canonical_product_source_text,
+    parse_markdown_text,
     product_replay_provenance,
 )
 RECONSTRUCTABLE_QUEUE_EVENTS = frozenset(
@@ -27,6 +30,8 @@ RECONSTRUCTABLE_QUEUE_EVENTS = frozenset(
         "note.move.workbench",
     }
 )
+_RETAINED_SOURCE_AUTHORITY = object()
+_DB_OUTBOX_AUTHORITY = object()
 
 
 class ObjectProjectionSink(Protocol):
@@ -96,37 +101,65 @@ class RetainedProjectionSource:
     embedding_identity: EmbeddingIdentity
     relations: tuple[ProjectionRelation, ...] = ()
     memberships: tuple[tuple[str, str, dict[str, Any]], ...] = ()
+    _authority: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._authority is not _RETAINED_SOURCE_AUTHORITY:
+            raise ProductProjectionReplayRefusal(
+                "projection sources must be loaded from a retained source authority"
+            )
 
     @classmethod
-    def from_source(
+    def from_retained_file(
         cls,
         *,
-        object_id: UUID,
+        vault_root: Path,
         source_identity: str,
-        text: str,
+        object_id: UUID,
         payload: dict[str, Any],
         embedding: list[float],
         embedding_identity: EmbeddingIdentity,
         relations: Iterable[ProjectionRelation] = (),
         memberships: Iterable[tuple[str, str, dict[str, Any]]] = (),
     ) -> "RetainedProjectionSource":
-        """Build a source record with the RSC-02 replay tuple stamped in payload."""
+        """Load source text and identity from the retained vault owner seam."""
 
+        root = vault_root.expanduser().resolve()
+        identity = source_identity.strip().replace("\\", "/")
+        path = (root / identity).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise ProductProjectionReplayRefusal(
+                f"retained source {source_identity!r} escapes the selected vault"
+            ) from exc
+        if not path.is_file():
+            raise ProductProjectionReplayRefusal(
+                f"retained source {identity!r} is not a regular file"
+            )
+        raw_text = path.read_text(encoding="utf-8")
+        frontmatter, _body = parse_markdown_text(raw_text)
+        if str(frontmatter.get("uuid") or "") != str(object_id):
+            raise ProductProjectionReplayRefusal(
+                f"retained source {identity!r} does not own object {object_id}"
+            )
+        text = canonical_product_source_text(raw_text)
         stamped = dict(payload)
         stamped["text"] = text
         stamped["replay"] = product_replay_provenance(
-            source_identity=source_identity,
+            source_identity=identity,
             source_text=text,
         )
         return cls(
             object_id=object_id,
-            source_identity=source_identity,
+            source_identity=identity,
             text=text,
             payload=stamped,
             embedding=list(embedding),
             embedding_identity=embedding_identity,
             relations=tuple(relations),
             memberships=tuple(memberships),
+            _authority=_RETAINED_SOURCE_AUTHORITY,
         )
 
     @property
@@ -166,6 +199,83 @@ class DurableProjectionWork:
     replay: ProductReplayTuple
     payload: dict[str, Any] = field(default_factory=dict)
     source_kind: str = "db_outbox"
+    _authority: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._authority is not _DB_OUTBOX_AUTHORITY:
+            raise ProductProjectionReplayRefusal(
+                "projection work must be loaded from the canonical DB outbox"
+            )
+
+    @classmethod
+    def _from_db_outbox_row(cls, row: Mapping[str, Any]) -> "DurableProjectionWork":
+        row_id = str(row.get("id") or "").strip()
+        topic = str(row.get("topic") or "").strip()
+        envelope = row.get("payload")
+        if not row_id or not topic or not isinstance(envelope, Mapping):
+            raise ProductProjectionReplayRefusal("malformed canonical DB outbox row")
+        event_id = str(envelope.get("event_id") or "").strip()
+        trace_id = str(envelope.get("trace_id") or "").strip()
+        source = str(envelope.get("source") or "").strip()
+        timestamp = str(envelope.get("timestamp") or "").strip()
+        inner = envelope.get("payload")
+        if (
+            not event_id
+            or not trace_id
+            or not source
+            or not timestamp
+            or not isinstance(inner, Mapping)
+        ):
+            raise ProductProjectionReplayRefusal(
+                f"DB outbox row {row_id!r} has an incomplete event envelope"
+            )
+        if str(envelope.get("event") or "") != topic:
+            raise ProductProjectionReplayRefusal(
+                f"DB outbox row {row_id!r} topic does not match its event envelope"
+            )
+        source_identity = str(inner.get("source_identity") or "").strip()
+        replay_raw = inner.get("replay")
+        if not source_identity or not isinstance(replay_raw, Mapping):
+            raise ProductProjectionReplayRefusal(
+                f"DB outbox row {row_id!r} has no source-bound replay payload"
+            )
+        try:
+            replay = ProductReplayTuple(
+                source_identity=str(replay_raw["source_identity"]),
+                source_generation=str(replay_raw["source_generation"]),
+                recipe_version=str(replay_raw["recipe_version"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProductProjectionReplayRefusal(
+                f"DB outbox row {row_id!r} has malformed replay provenance"
+            ) from exc
+        return cls(
+            event_id=event_id,
+            event=topic,
+            source_identity=source_identity,
+            replay=replay,
+            payload=dict(inner),
+            _authority=_DB_OUTBOX_AUTHORITY,
+        )
+
+
+def load_durable_projection_work(conn: Any) -> list[DurableProjectionWork]:
+    """Read pending work from the canonical DB outbox without acknowledging it."""
+
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "select id, topic, payload from outbox "
+            "where delivered_at is null and vault_binding_id <> %s "
+            "order by created_at asc",
+            ("quarantined",),
+        )
+        rows = cursor.fetchall()
+    finally:
+        close = getattr(cursor, "close", None)
+        if close is not None:
+            close()
+    return [DurableProjectionWork._from_db_outbox_row(dict(row)) for row in rows]
 
 
 @dataclass
@@ -358,5 +468,6 @@ __all__ = [
     "ProductProjectionTargets",
     "RECONSTRUCTABLE_QUEUE_EVENTS",
     "RetainedProjectionSource",
+    "load_durable_projection_work",
     "rebuild_product_projections",
 ]

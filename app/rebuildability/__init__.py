@@ -5,6 +5,7 @@ from .product_total_loss import (
     ProductReadiness,
     ProductReplayRefusal,
     ProductReplayTuple,
+    canonical_product_source_text,
     evaluate_product_store_readiness,
     product_replay_provenance,
 )
@@ -17,6 +18,7 @@ from .product_projection_rebuild import (
     ProductProjectionTargets,
     RECONSTRUCTABLE_QUEUE_EVENTS,
     RetainedProjectionSource,
+    load_durable_projection_work,
     rebuild_product_projections,
 )
 
@@ -25,6 +27,7 @@ __all__ = [
     "ProductReadiness",
     "ProductReplayRefusal",
     "ProductReplayTuple",
+    "canonical_product_source_text",
     "evaluate_product_store_readiness",
     "product_replay_provenance",
     "DurableProjectionWork",
@@ -35,5 +38,6 @@ __all__ = [
     "ProductProjectionTargets",
     "RECONSTRUCTABLE_QUEUE_EVENTS",
     "RetainedProjectionSource",
+    "load_durable_projection_work",
     "rebuild_product_projections",
 ]

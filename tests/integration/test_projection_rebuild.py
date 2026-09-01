@@ -12,6 +12,7 @@ from app.rebuildability import (
     ProductProjectionReplayRefusal,
     ProductProjectionTargets,
     RetainedProjectionSource,
+    load_durable_projection_work,
     rebuild_product_projections,
 )
 from app.stores.memory import MemoryObjectStore, MemoryRelationIndex, MemoryVectorIndex
@@ -25,12 +26,43 @@ OBJECT_A = UUID("00000000-0000-0000-0000-0000000000a1")
 OBJECT_B = UUID("00000000-0000-0000-0000-0000000000b2")
 
 
-def _sources() -> list[RetainedProjectionSource]:
+class _Cursor:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def execute(self, query: str, params: tuple[str, ...]) -> None:
+        assert "from outbox" in query
+        assert params == ("quarantined",)
+
+    def fetchall(self) -> list[dict]:
+        return self.rows
+
+    def close(self) -> None:
+        return None
+
+
+class _Connection:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self.rows)
+
+
+def _sources(tmp_path) -> list[RetainedProjectionSource]:
+    notes = tmp_path / "Notes"
+    notes.mkdir()
+    (notes / "a.md").write_text(
+        f"---\nuuid: {OBJECT_A}\n---\n\nCanonical alpha meaning.\n", encoding="utf-8"
+    )
+    (notes / "b.md").write_text(
+        f"---\nuuid: {OBJECT_B}\n---\n\nCanonical beta meaning.\n", encoding="utf-8"
+    )
     return [
-        RetainedProjectionSource.from_source(
+        RetainedProjectionSource.from_retained_file(
+            vault_root=tmp_path,
             object_id=OBJECT_A,
             source_identity=SOURCE_A,
-            text="Canonical alpha meaning.",
             payload={"title": "Alpha", "kind": "note", "machine_cache": {"rank": 4}},
             embedding=[1.0, 0.0, 0.0],
             embedding_identity=IDENTITY,
@@ -43,16 +75,42 @@ def _sources() -> list[RetainedProjectionSource]:
                 ),
             ),
         ),
-        RetainedProjectionSource.from_source(
+        RetainedProjectionSource.from_retained_file(
+            vault_root=tmp_path,
             object_id=OBJECT_B,
             source_identity=SOURCE_B,
-            text="Canonical beta meaning.",
             payload={"title": "Beta", "kind": "note"},
             embedding=[0.0, 1.0, 0.0],
             embedding_identity=IDENTITY,
             memberships=(("tag", "continuity", {"machine_order": 99}),),
         ),
     ]
+
+
+def _work(sources: list[RetainedProjectionSource]) -> DurableProjectionWork:
+    event = {
+        "event": "index.embedding.requested",
+        "event_id": "evt-embedding-a",
+        "trace_id": "trace-a",
+        "source": "test-outbox-producer",
+        "timestamp": "2026-09-01T00:00:00Z",
+        "payload": {
+            "object_id": str(OBJECT_A),
+            "source_identity": SOURCE_A,
+            "replay": sources[0].replay.as_dict(),
+        },
+    }
+    return load_durable_projection_work(
+        _Connection(
+            [
+                {
+                    "id": "db-row-a",
+                    "topic": "index.embedding.requested",
+                    "payload": event,
+                }
+            ]
+        )
+    )[0]
 
 
 def _targets() -> ProductProjectionTargets:
@@ -64,15 +122,9 @@ def _targets() -> ProductProjectionTargets:
     )
 
 
-def test_object_vector_and_relation_projections_converge_from_retained_sources() -> None:
-    sources = _sources()
-    work = DurableProjectionWork(
-        event_id="evt-embedding-a",
-        event="index.embedding.requested",
-        source_identity=SOURCE_A,
-        replay=sources[0].replay,
-        payload={"object_id": str(OBJECT_A)},
-    )
+def test_object_vector_and_relation_projections_converge_from_retained_sources(tmp_path) -> None:
+    sources = _sources(tmp_path)
+    work = _work(sources)
     targets = _targets()
 
     summary = rebuild_product_projections(sources, [work], targets)
@@ -90,14 +142,9 @@ def test_object_vector_and_relation_projections_converge_from_retained_sources()
     assert targets.queue.pending["evt-embedding-a"].source_kind == "db_outbox"
 
 
-def test_projection_replay_is_idempotent() -> None:
-    sources = _sources()
-    work = DurableProjectionWork(
-        event_id="evt-embedding-a",
-        event="index.embedding.requested",
-        source_identity=SOURCE_A,
-        replay=sources[0].replay,
-    )
+def test_projection_replay_is_idempotent(tmp_path) -> None:
+    sources = _sources(tmp_path)
+    work = _work(sources)
     targets = _targets()
 
     first = rebuild_product_projections(sources, [work], targets)
@@ -126,26 +173,50 @@ def test_projection_replay_is_idempotent() -> None:
     assert targets.relations.neighbors(OBJECT_A, rel="related_to") == [OBJECT_B]
 
 
-def test_queue_rebuild_rejects_diagnostic_and_unknown_effect_sources() -> None:
-    sources = _sources()
-    for work in (
+def test_queue_rebuild_rejects_diagnostic_and_unknown_effect_sources(tmp_path) -> None:
+    sources = _sources(tmp_path)
+    targets = _targets()
+    with pytest.raises(ProductProjectionReplayRefusal):
         DurableProjectionWork(
             event_id="audit-1",
             event="index.embedding.requested",
             source_identity=SOURCE_A,
             replay=sources[0].replay,
             source_kind="jsonl_audit",
-        ),
-        DurableProjectionWork(
-            event_id="unknown-1",
-            event="external.effect.execute",
+        )
+    unknown_event = {
+        "event": "external.effect.execute",
+        "event_id": "unknown-1",
+        "trace_id": "trace-unknown",
+        "source": "test-outbox-producer",
+        "timestamp": "2026-09-01T00:00:00Z",
+        "payload": {
+            "source_identity": SOURCE_A,
+            "replay": sources[0].replay.as_dict(),
+        },
+    }
+    unknown_work = load_durable_projection_work(
+        _Connection(
+            [
+                {
+                    "id": "db-row-unknown",
+                    "topic": "external.effect.execute",
+                    "payload": unknown_event,
+                }
+            ]
+        )
+    )[0]
+    with pytest.raises(ProductProjectionReplayRefusal):
+        rebuild_product_projections(sources, [unknown_work], targets)
+    with pytest.raises(ProductProjectionReplayRefusal):
+        RetainedProjectionSource(
+            object_id=OBJECT_A,
             source_identity=SOURCE_A,
-            replay=sources[0].replay,
-        ),
-    ):
-        targets = _targets()
-        with pytest.raises(ProductProjectionReplayRefusal):
-            rebuild_product_projections(sources, [work], targets)
-        assert targets.objects.count_objects() == 0
-        assert targets.vectors.count_vectors() == 0
-        assert targets.queue.pending == {}
+            text="fabricated",
+            payload={},
+            embedding=[1.0, 0.0, 0.0],
+            embedding_identity=IDENTITY,
+        )
+    assert targets.objects.count_objects() == 0
+    assert targets.vectors.count_vectors() == 0
+    assert targets.queue.pending == {}
