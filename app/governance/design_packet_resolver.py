@@ -21,7 +21,6 @@ KERNEL_VERSION = "design-principle-kernel.v1"
 PACKET_AUTHORITY = "projection_only_no_mutation_acceptance_or_ranking_authority"
 
 _KERNEL_PATH = Path("docs/DESIGN_PRINCIPLES.md")
-_KERNEL_HEADING = "## System Design Principles"
 _ALLOWED_SYSTEM_CLASSIFICATIONS = {"product", "builder", "platform-ops", "boundary"}
 _ALLOWED_WRITE_CLASSES = {
     "none",
@@ -39,6 +38,9 @@ _SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 _PRINCIPLE_ID_PATTERN = re.compile(r"DP-[0-9A-Z]+")
 _SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _PRINCIPLE_HEADING = re.compile(r"^### (?P<title>.+)$", re.MULTILINE)
+_KERNEL_SECTION_HEADING = re.compile(r"^## System Design Principles$", re.MULTILINE)
+_LEVEL_TWO_HEADING = re.compile(r"^## .+$", re.MULTILINE)
+_MARKDOWN_HEADING = re.compile(r"^#{1,6} (?P<title>[^\r\n]+)$", re.MULTILINE)
 _ROUTING_LINE = re.compile(
     r"^\*\*Routing metadata:\*\* "
     r"ID `(?P<id>DP-[0-9A-Z]+)`; "
@@ -47,6 +49,22 @@ _ROUTING_LINE = re.compile(
     r"required reading `(?P<required_reading>[^`]+)`; "
     r"enforcement `(?P<enforcement>[a-z-]+)`\.$",
     re.MULTILINE,
+)
+# Fail-closed identity projection only; routing metadata and prose remain authoritative in the blob.
+_CANONICAL_KERNEL = (
+    ("1. Boundary-First Design", "DP-01"),
+    ("2. Capability-Based Composition", "DP-02"),
+    ("2A. Interaction-First Architecture", "DP-02A"),
+    ("2B. Foundation Before Agency", "DP-02B"),
+    ("3. Separation of System Layers", "DP-03"),
+    ("4. Explicit Mutation Authority", "DP-04"),
+    ("5. Governance Before Autonomy", "DP-05"),
+    ("6. Contracts Over Implementations", "DP-06"),
+    ("7. Modularity With Replaceability", "DP-07"),
+    ("8. Flexibility Without Semantic Drift", "DP-08"),
+    ("9. Volatility Isolation", "DP-09"),
+    ("10. Single-Operator Scale", "DP-10"),
+    ("11. Shared Visual Language", "DP-11"),
 )
 
 
@@ -206,9 +224,9 @@ def resolve_design_packet(
         normalized = _normalize_facts(facts)
         _assert_commit(repository_root, normalized_head)
         entries = _load_kernel(repository_root, normalized_head)
+        _assert_kernel_references(repository_root, normalized_head, entries)
         _assert_expected_kernel(normalized.expected_principle_ids, entries)
         selected = _select_entries(normalized, entries)
-        _assert_selected_references(repository_root, normalized_head, selected)
     except _Refusal as refusal:
         return DesignPacketRefusal(
             code=refusal.code,
@@ -330,14 +348,31 @@ def _load_kernel(repository_root: Path, repository_head: str) -> tuple[_KernelEn
     if text is None:
         raise _Refusal("kernel_unavailable", "the canonical principle kernel is unavailable") from None
 
-    start = text.find(_KERNEL_HEADING)
-    if start < 0:
-        raise _Refusal("stale_kernel_ids", "the canonical principle section is missing")
-    end = text.find("\n## ", start + len(_KERNEL_HEADING))
-    section = text[start : len(text) if end < 0 else end]
+    boundaries = list(_KERNEL_SECTION_HEADING.finditer(text))
+    if len(boundaries) != 1:
+        raise _Refusal(
+            "stale_kernel_ids",
+            "the canonical principle section boundary must occur exactly once",
+        )
+    boundary = boundaries[0]
+    next_section = _LEVEL_TWO_HEADING.search(text, boundary.end())
+    section = text[boundary.start() : len(text) if next_section is None else next_section.start()]
     headings = list(_PRINCIPLE_HEADING.finditer(section))
     if not headings:
         raise _Refusal("stale_kernel_ids", "the canonical principle kernel is empty")
+
+    metadata_candidates = [
+        line
+        for line in section.splitlines()
+        if "Routing metadata" in line or re.search(r"\bDP-[0-9A-Z]+\b", line) is not None
+    ]
+    if len(metadata_candidates) != len(headings) or any(
+        _ROUTING_LINE.fullmatch(line) is None for line in metadata_candidates
+    ):
+        raise _Refusal(
+            "stale_kernel_ids",
+            "routing metadata must form one complete canonical line per principle block",
+        )
 
     entries: list[_KernelEntry] = []
     for index, heading in enumerate(headings):
@@ -363,9 +398,27 @@ def _load_kernel(repository_root: Path, repository_head: str) -> tuple[_KernelEn
             )
         )
 
-    ids = [entry.principle_id for entry in entries]
-    if len(ids) != len(set(ids)):
-        raise _Refusal("stale_kernel_ids", "the kernel contains duplicate principle IDs")
+    identity = tuple(
+        (
+            entry.title,
+            entry.principle_id,
+            entry.owner,
+        )
+        for entry in entries
+    )
+    expected_identity = tuple(
+        (
+            title,
+            principle_id,
+            f"docs/DESIGN_PRINCIPLES.md :: {title}",
+        )
+        for title, principle_id in _CANONICAL_KERNEL
+    )
+    if identity != expected_identity:
+        raise _Refusal(
+            "stale_kernel_ids",
+            "the kernel heading, ID, and canonical-owner registry drifted",
+        )
     return tuple(entries)
 
 
@@ -409,18 +462,14 @@ def _select_entries(
     return tuple(entry for entry in entries if entry.principle_id in selected_ids)
 
 
-def _assert_selected_references(
+def _assert_kernel_references(
     repository_root: Path,
     repository_head: str,
     entries: tuple[_KernelEntry, ...],
 ) -> None:
     for entry in entries:
-        canonical_owner = f"docs/DESIGN_PRINCIPLES.md :: {entry.title}"
-        if entry.owner != canonical_owner:
-            raise _Refusal("ambiguous_authority", "a principle owner moved outside the canonical kernel")
         for reference in (entry.owner, entry.required_reading):
-            if not _reference_resolves(repository_root, repository_head, reference):
-                raise _Refusal("missing_owner_section", "a selected owner section does not resolve")
+            _assert_reference(repository_root, repository_head, reference)
 
 
 def _assert_commit(repository_root: Path, repository_head: str) -> None:
@@ -432,10 +481,13 @@ def _assert_commit(repository_root: Path, repository_head: str) -> None:
         )
 
 
-def _reference_resolves(repository_root: Path, repository_head: str, reference: str) -> bool:
+def _assert_reference(repository_root: Path, repository_head: str, reference: str) -> None:
     path_text, separator, section = reference.partition(" :: ")
     if not separator or not section or section != section.strip():
-        return False
+        raise _Refusal(
+            "missing_owner_section",
+            "a kernel reference must name one exact nonempty section",
+        )
     relative = PurePosixPath(path_text)
     if (
         not path_text
@@ -444,15 +496,22 @@ def _reference_resolves(repository_root: Path, repository_head: str, reference: 
         or ".." in relative.parts
         or relative.as_posix() != path_text
     ):
-        return False
+        raise _Refusal(
+            "missing_owner_section",
+            "a kernel reference must use one canonical repository-relative path",
+        )
     text = _git_object_text(repository_root, repository_head, relative.as_posix())
     if text is None:
-        return False
-    headings = {
-        match.group("title").strip()
-        for match in re.finditer(r"^#{1,6} (?P<title>.+)$", text, re.MULTILINE)
-    }
-    return section in headings
+        raise _Refusal("missing_owner_section", "a referenced owner document is unavailable")
+    matches = [
+        match.group("title")
+        for match in _MARKDOWN_HEADING.finditer(text)
+        if match.group("title") == section
+    ]
+    if not matches:
+        raise _Refusal("missing_owner_section", "a kernel reference section does not resolve")
+    if len(matches) != 1:
+        raise _Refusal("ambiguous_authority", "a kernel reference section is ambiguous")
 
 
 def _git_object_text(repository_root: Path, repository_head: str, path: str) -> str | None:
