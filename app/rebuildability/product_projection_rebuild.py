@@ -10,7 +10,7 @@ ledger.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 from uuid import UUID
 
 from app.components.embeddings import EmbeddingIdentity
@@ -19,8 +19,6 @@ from app.rebuildability.product_total_loss import (
     ProductReplayTuple,
     product_replay_provenance,
 )
-from app.stores.base import ObjectStore, RelationIndex, VectorIndex
-
 RECONSTRUCTABLE_QUEUE_EVENTS = frozenset(
     {
         "index.embedding.requested",
@@ -29,6 +27,47 @@ RECONSTRUCTABLE_QUEUE_EVENTS = frozenset(
         "note.move.workbench",
     }
 )
+
+
+class ObjectProjectionSink(Protocol):
+    """Structural owner-native object projection seam.
+
+    The protocol is kept local because ``app.stores`` is a deprecated import
+    surface. Concrete Product store providers already satisfy this contract.
+    """
+
+    def put(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict[str, Any]) -> None: ...
+
+
+class VectorProjectionSink(Protocol):
+    """Structural owner-native vector projection seam."""
+
+    def upsert(
+        self,
+        object_id: UUID,
+        *,
+        kind: str,
+        source_ref: str,
+        payload: dict[str, Any],
+        embedding: list[float],
+        model: str,
+        identity: EmbeddingIdentity,
+    ) -> None: ...
+
+
+class RelationProjectionSink(Protocol):
+    """Structural owner-native relation projection seam."""
+
+    def link(self, src: UUID, dst: UUID, *, rel: str, payload: dict[str, Any]) -> None: ...
+
+    def add_membership(
+        self,
+        src: UUID,
+        *,
+        rel: str,
+        value: str,
+        payload: dict[str, Any],
+    ) -> None: ...
 
 
 class ProductProjectionReplayRefusal(ProductReplayRefusal):
@@ -149,9 +188,9 @@ class ProjectionReplayQueue:
 
 @dataclass(frozen=True)
 class ProductProjectionTargets:
-    objects: ObjectStore
-    vectors: VectorIndex
-    relations: RelationIndex
+    objects: ObjectProjectionSink
+    vectors: VectorProjectionSink
+    relations: RelationProjectionSink
     queue: ProjectionReplayQueue
 
 
