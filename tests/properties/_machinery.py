@@ -106,7 +106,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 582): (
+    ("app/ingest/vault_alpha.py", 588): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
@@ -1460,16 +1460,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 582): (
+    ("app/ingest/vault_alpha.py", 588): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 632): (
+    ("app/ingest/vault_alpha.py", 629): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 629): (
+    ("app/ingest/vault_alpha.py", 643): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 91): (
@@ -1487,6 +1487,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
     ),
     ("app/ingest/vault_root.py", 122): (
         "carries_frontmatter: same payload ({**payload, 'text': ...}) -> store.put -> store_objects."
+    ),
+    ("app/rebuildability/product_projection_rebuild.py", 542): (
+        "carries_at_construction: payload=source.canonical_payload carries episode_ref from the "
+        "retained source frontmatter before rebuilding store_objects. Verified by "
+        "test_object_vector_and_relation_projections_converge_from_retained_sources."
+    ),
+    ("app/rebuildability/product_projection_rebuild.py", 548): (
+        "carries_at_construction: payload=source.canonical_payload carries episode_ref from the "
+        "retained source frontmatter before rebuilding store_vector_index. Verified by "
+        "test_object_vector_and_relation_projections_converge_from_retained_sources."
     ),
     # -- carries_unbound_default: frontmatter-less source; honest 'unbound' -----------------------
     ("app/ingest/external.py", 66): (
