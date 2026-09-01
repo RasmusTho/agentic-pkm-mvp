@@ -18,7 +18,9 @@ from app.rebuildability.mirror_doctor import (
 
 
 def _items(payload: Mapping[str, Any], key: str) -> Iterable[Mapping[str, Any]]:
-    value = payload.get(key, [])
+    if key not in payload:
+        raise click.ClickException(f"snapshot must include the {key!r} collection")
+    value = payload[key]
     if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
         raise click.ClickException(f"snapshot field {key!r} must be a list of objects")
     return value
@@ -30,6 +32,17 @@ def _text(value: object) -> str | None:
 
 def _flag(value: object) -> bool:
     return value is True
+
+
+def _classification(value: object) -> DurablePathClass | None:
+    """Treat an unknown owner classification as diagnosable, not a traceback."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        return DurablePathClass(value)
+    except ValueError:
+        return None
 
 
 def _load_snapshot(path: Path):
@@ -44,11 +57,7 @@ def _load_snapshot(path: Path):
     inventory = [
         DurablePath(
             path=_text(item.get("path")) or "",
-            classification=(
-                DurablePathClass(value)
-                if (value := _text(item.get("classification"))) is not None
-                else None
-            ),
+            classification=_classification(item.get("classification")),
             owner=_text(item.get("owner")),
             rebuild_or_retention_source=_text(item.get("rebuild_or_retention_source")),
             sole_meaning_authority=_flag(item.get("sole_meaning_authority")),

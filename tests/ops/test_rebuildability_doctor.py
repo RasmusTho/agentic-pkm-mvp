@@ -174,3 +174,42 @@ def test_rebuildability_doctor_command_is_read_only_and_redacted(tmp_path) -> No
     assert "must-not-be-rendered" not in result.output
     assert "queue owner" not in result.output
     assert json.loads(result.output)["healthy"] is False
+
+
+def test_rebuildability_doctor_rejects_incomplete_snapshot(tmp_path) -> None:
+    snapshot = tmp_path / "incomplete.json"
+    snapshot.write_text("{}", encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["rebuildability-doctor", "--snapshot", str(snapshot)])
+
+    assert result.exit_code == 1
+    assert "must include the 'inventory' collection" in result.output
+
+
+def test_rebuildability_doctor_reports_unknown_classification(tmp_path) -> None:
+    snapshot = tmp_path / "unknown-classification.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "inventory": [
+                    {
+                        "path": "skewed-path",
+                        "classification": "from-a-newer-owner",
+                        "owner": "owner",
+                        "rebuild_or_retention_source": "source",
+                    }
+                ],
+                "sources": [],
+                "projections": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["rebuildability-doctor", "--snapshot", str(snapshot), "--json", "--strict"],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["findings"][0]["code"] == "unclassified_path"
