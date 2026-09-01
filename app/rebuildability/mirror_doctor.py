@@ -32,6 +32,7 @@ class MirrorFindingCode(str, Enum):
     INDEX_IDENTITY_DRIFT = "index_identity_drift"
     DB_SOURCE_MISMATCH = "db_source_mismatch"
     HIDDEN_AUTHORITY = "hidden_authority"
+    INCOMPLETE_SNAPSHOT = "incomplete_snapshot"
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ def diagnose_mirror_corruption(
     inventory: Iterable[DurablePath],
     sources: Iterable[SourceRecord],
     projections: Iterable[ProjectionRecord],
+    snapshot_complete: bool = True,
 ) -> MirrorDoctorReport:
     """Classify supplied mirrors without reading, writing, or authorizing state.
 
@@ -126,6 +128,8 @@ def diagnose_mirror_corruption(
     """
 
     findings: list[MirrorFinding] = []
+    if not snapshot_complete:
+        findings.append(MirrorFinding(MirrorFindingCode.INCOMPLETE_SNAPSHOT, _digest("snapshot")))
     source_generations: dict[str, str] = {}
     for source in sources:
         if not _missing(source.identity) and not _missing(source.generation):
@@ -151,6 +155,7 @@ def diagnose_mirror_corruption(
             _missing(projection.source_identity)
             or _missing(projection.source_generation)
             or _missing(projection.recipe_version)
+            or _missing(projection.db_source_generation)
         ):
             findings.append(MirrorFinding(MirrorFindingCode.MISSING_PROVENANCE, subject))
         if not _missing(projection.source_identity):

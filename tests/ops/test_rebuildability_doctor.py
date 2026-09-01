@@ -148,6 +148,7 @@ def test_doctor_is_redacted_and_non_mutating() -> None:
 def test_rebuildability_doctor_command_is_read_only_and_redacted(tmp_path) -> None:
     snapshot = tmp_path / "snapshot.json"
     payload = {
+        "complete": True,
         "inventory": [
             {
                 "path": "queue",
@@ -191,6 +192,7 @@ def test_rebuildability_doctor_reports_unknown_classification(tmp_path) -> None:
     snapshot.write_text(
         json.dumps(
             {
+                "complete": True,
                 "inventory": [
                     {
                         "path": "skewed-path",
@@ -213,3 +215,29 @@ def test_rebuildability_doctor_reports_unknown_classification(tmp_path) -> None:
 
     assert result.exit_code == 2
     assert json.loads(result.output)["findings"][0]["code"] == "unclassified_path"
+
+
+def test_rebuildability_doctor_reports_incomplete_empty_snapshot(tmp_path) -> None:
+    snapshot = tmp_path / "empty.json"
+    snapshot.write_text(
+        json.dumps({"inventory": [], "sources": [], "projections": []}),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["rebuildability-doctor", "--snapshot", str(snapshot), "--json", "--strict"],
+    )
+
+    assert result.exit_code == 2
+    assert json.loads(result.output)["findings"][0]["code"] == "incomplete_snapshot"
+
+
+def test_doctor_requires_db_generation_evidence() -> None:
+    report = diagnose_mirror_corruption(
+        inventory=_inventory(),
+        sources=[_source()],
+        projections=[_projection(db_source_generation=None)],
+    )
+
+    assert {finding.code for finding in report.findings} == {MirrorFindingCode.MISSING_PROVENANCE}

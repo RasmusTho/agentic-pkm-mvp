@@ -86,7 +86,7 @@ def _load_snapshot(path: Path):
         )
         for item in _items(payload, "projections")
     ]
-    return inventory, sources, projections
+    return inventory, sources, projections, payload.get("complete") is True
 
 
 @click.command(
@@ -104,11 +104,12 @@ def _load_snapshot(path: Path):
 def rebuildability_doctor(snapshot: Path, as_json: bool, strict: bool) -> None:
     """Render a digest-only report from a caller-selected, read-only snapshot."""
 
-    inventory, sources, projections = _load_snapshot(snapshot)
+    inventory, sources, projections, snapshot_complete = _load_snapshot(snapshot)
     report = diagnose_mirror_corruption(
         inventory=inventory,
         sources=sources,
         projections=projections,
+        snapshot_complete=snapshot_complete,
     )
     if as_json:
         click.echo(json.dumps(report.as_dict(), sort_keys=True))
