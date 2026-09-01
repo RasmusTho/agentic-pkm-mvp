@@ -83,6 +83,17 @@ Do not rely on a human remembering where BuilderOps material belongs.
    any findings, sources, or process narrative worth keeping, unless the material is trivial enough
    that losing it costs nothing.
 
+## Structural-work design packet route
+
+Before structural guidance, declare the change facts (`changed_paths`, `system_classification`,
+`write_class`, `persistence_class`, `external_effects`, and `risk_triggers`) and request a
+`design_packet.v1` from `app.governance.design_packet_resolver`. Read only the exact
+owner-document sections returned by the packet plus independently mandatory workflow contracts.
+If the resolver is unavailable or returns `design_packet_refusal.v1`, use the existing explicit
+owner-document route; refusal must not waive mandatory workflow reads. Product/Runtime design
+authority remains in owner documents; the packet is a read-only routing projection and cannot
+redefine principles.
+
 ## Skill routing
 
 This section is the complete discoverability index for repo-local skills. Every immediate
