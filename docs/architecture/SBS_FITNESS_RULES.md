@@ -19,10 +19,16 @@ These rules make the target SBS inspectable without claiming current implementat
 - CI check now: should be enforced by current checks if a matching test/lint exists.
 - Blocking invariant: violation should block merge or require a new ADR.
 
+For design-principle routing, this catalog uses the `blocking`, `advisory`, and `manual-review`
+postures defined in `docs/testing/invariant-tests.md :: Design principle routing`. The canonical IDs
+and routing metadata remain owned by `docs/DESIGN_PRINCIPLES.md :: System Design Principles`; this
+fitness catalog does not duplicate them.
+
 ## Seed Rules
 
 | Rule | Classification | Detection | Response |
 |---|---|---|---|
+| Canonical design-principle routing metadata and projection pointers resolve. | CI check now for metadata integrity; substantive enforcement remains blocking, advisory, or manual review as declared by the canonical principle. | `tests/architecture/test_design_principle_routing.py::test_canonical_principles_have_unique_resolvable_routing_metadata` and `tests/architecture/test_design_principle_routing.py::test_principle_projections_reference_canonical_ids_without_redefining_them`. | Repair the canonical metadata or compact projection pointer; do not copy principle prose or create another registry. |
 | No global `activeVault` as architecture contract outside WSP/EBF/HIX adapters. | CI check now for target SBS contract stubs; manual review elsewhere | `tests/architecture/test_sbs_fitness_rules.py::test_target_sbs_contracts_do_not_reintroduce_active_vault_identity` scans target public SBS contracts outside WSP for active-vault/vault-path/root contract terms. | Replace with ActiveContextSet and source binding. |
 | No backward import from non-interaction `app.*` module into the interaction layer (`app.api`, `app.chat`, `app.cli`, `app.web`). | **Blocking invariant — CI blocking now** | `.github/workflows/import-linter.yaml` (blocking, no `continue-on-error`) runs `lint-imports --config importlinter.ini` on PRs that change the import graph or its contract. All known violations resolved before flip; no allowlist. Governed by ADR-0013. | Extract shared helpers to `app.text` or another Foundation package; remove the backward import. |
 | No new callers of deprecated `app.store` or `app.stores` packages. | **CI check now (blocking)** | `tests/architecture/test_deprecated_store_callers.py::test_no_new_store_callers` walks `app/**/*.py`, detects imports of `app.store`/`app.stores`, and fails if any importer outside the documented allowlist appears. | Migrate to `app.objects` (for `DomainObject`/`ObjectStore` types) or to service+outbox boundaries. See `docs/CODE_INVENTORY.md` §Cleanup follow-ups. |

@@ -67,6 +67,25 @@ blocks the structurally-expressible part, the skeleton holds the cross-field or 
 [schemas/README §Known JSON Schema limits](../../schemas/README.md) lists exactly which checks are
 declarative-schema-impossible and therefore live here as the source of truth.
 
+## Design principle routing
+
+The canonical principle kernel is `docs/DESIGN_PRINCIPLES.md :: System Design Principles`. Each
+principle owns one stable ID plus applicability, owner, required-reading, and enforcement metadata
+beside its normative prose. `docs/PROJECT_KERNEL.md` and `docs/MODULAR_ARCHITECTURE.md` are compact
+projections only; neither owns a second registry. The static checks live in
+`tests/architecture/test_design_principle_routing.py`.
+
+The routing posture is intentionally separate from the invariant enforcement categories above:
+
+| Routing posture | Meaning |
+| --- | --- |
+| `blocking` | A named current gate in the principle's required reading blocks an applicable violation. It does not claim broader mechanical coverage than that gate. |
+| `advisory` | A named decision record or structured review signal identifies applicable drift, but the signal does not itself block merge. |
+| `manual-review` | The principle and its required reading must be evaluated during review; no mechanical or advisory coverage is claimed. |
+
+The static routing test is blocking for metadata integrity and projection drift. It verifies that a
+posture is declared and resolvable; it does not upgrade a principle's substantive enforcement.
+
 ## Registry
 
 ### one_vault_settings_location
