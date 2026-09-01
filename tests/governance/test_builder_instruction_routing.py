@@ -1,5 +1,6 @@
 """Governance checks for the canonical Builder design-packet reading route."""
 
+import re
 from pathlib import Path
 
 
@@ -12,16 +13,6 @@ BUILDER_SURFACES = (
     ".codex/skills/docs-governance/SKILL.md",
 )
 ROUTE_REFERENCE = ".codex/skills/README.md :: Structural-work design packet route"
-PRODUCT_PRINCIPLE_HEADINGS = (
-    "Boundary-First Design",
-    "Capability-Based Composition",
-    "Interaction-First Architecture",
-    "Foundation Before Agency",
-    "Separation of System Layers",
-    "Explicit Mutation Authority",
-    "Governance Before Autonomy",
-    "Contracts Over Implementations",
-)
 
 
 def _read(path: str) -> str:
@@ -32,6 +23,19 @@ def _normalized(path: str) -> str:
     return " ".join(_read(path).split())
 
 
+def _product_principle_headings() -> tuple[str, ...]:
+    kernel = _read("docs/DESIGN_PRINCIPLES.md")
+    section = kernel.split("## System Design Principles", maxsplit=1)[1].split(
+        "## Documentation Design Principles", maxsplit=1
+    )[0]
+    return tuple(
+        match.group("title")
+        for match in re.finditer(
+            r"^### (?:[0-9]+[A-Z]?[.] )?(?P<title>.+)$", section, re.MULTILINE
+        )
+    )
+
+
 def test_structural_changes_use_minimal_design_packet() -> None:
     index = _normalized(".codex/skills/README.md")
     route = index.split("## Structural-work design packet route", maxsplit=1)[1].split(
@@ -40,6 +44,10 @@ def test_structural_changes_use_minimal_design_packet() -> None:
 
     assert "design_packet.v1" in route
     assert "app.governance.design_packet_resolver" in route
+    assert "ChangeFacts" in route
+    assert "repository_root" in route
+    assert "repository_head" in route
+    assert "resolve_design_packet" in route
     for fact in (
         "changed_paths",
         "system_classification",
@@ -84,4 +92,4 @@ def test_builder_route_points_to_product_authority_without_absorbing_it() -> Non
             assert "## Structural-work design packet route" in text
         else:
             assert ROUTE_REFERENCE in text
-        assert not any(heading in text for heading in PRODUCT_PRINCIPLE_HEADINGS)
+        assert not any(heading in text for heading in _product_principle_headings())
