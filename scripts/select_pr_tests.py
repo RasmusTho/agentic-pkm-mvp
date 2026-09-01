@@ -68,6 +68,10 @@ FULL_SUITE_PREFIXES = (
 DOCS_TARGETS = (
     "tests/docs",
     "tests/architecture",
+    # Human-need E2E scenarios are deferred to post-merge/nightly. Treat a
+    # co-changed E2E scenario as scope-neutral for a docs-only PR so the docs
+    # contract does not fall through to the fail-closed unowned path.
+    "tests/e2e",
     # test_review_before_ci_gate.py reads docs/TESTING.md content directly
     # (#4281); a docs/**-only PR must run it, not only tests/architecture.
     "tests/ops/test_review_before_ci_gate.py",
@@ -1167,7 +1171,11 @@ def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
 
 def _pr_targets(targets: list[str]) -> tuple[str, ...]:
     """Keep slower end-to-end coverage in the post-merge/nightly lanes."""
-    return _dedupe(target for target in targets if not target.startswith("tests/e2e/"))
+    return _dedupe(
+        target
+        for target in targets
+        if target != "tests/e2e" and not target.startswith("tests/e2e/")
+    )
 
 
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:

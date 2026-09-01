@@ -154,6 +154,21 @@ def test_governance_docs_change_selects_governance_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
+def test_docs_change_with_deferred_e2e_scenario_is_owned() -> None:
+    selection = select_tests(
+        [
+            "docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md",
+            "tests/e2e/test_human_need_uat.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs",)
+    assert selection.unowned_paths == ()
+    assert "tests/architecture" in selection.targets
+    assert "tests/e2e" not in selection.pytest_args
+
+
 def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     selection = select_tests(["app/new_surface/example.py"])
 
