@@ -237,7 +237,7 @@ functions.
 
 ### Validation posture
 
-- current implementation posture: `partial`
+- current implementation posture: bounded archive-source reuse is agent-validated by #5224; owner acceptance remains pending
 - test posture: `non-blocking acceptance` moving toward `nightly`
 - observable signals:
   - an archived artifact can be found without first being rewritten into a vault note
