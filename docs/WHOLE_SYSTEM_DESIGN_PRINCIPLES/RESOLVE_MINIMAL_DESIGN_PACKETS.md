@@ -2,7 +2,7 @@
 name: Resolve Minimal Design Packets
 description: Select the smallest deterministic set of principle and owner sections for declared change facts.
 task_id: DSP-02
-github_issue:
+github_issue: 5270
 source_anchor: "docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/README.md :: Cross-Task Invariants / Interaction Safety"
 parent_capability: Whole-System Design Principle Routing
 prerequisites: [DSP-01]

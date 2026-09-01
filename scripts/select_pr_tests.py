@@ -232,6 +232,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/builderops/",
             "app/dispatcher/",
+            # The design-packet resolver is Builder System/CES projection
+            # machinery. Keep this ownership exact: sibling app/governance
+            # modules are Product GOV runtime boundaries with different tests.
+            "app/governance/design_packet_resolver.py",
             # The TARS inventory boundary is Builder System/CES machinery.
             # It carries an inventory-only PVE token and its direct proof
             # lives in tests/proxmox; leaving this new app prefix unowned
