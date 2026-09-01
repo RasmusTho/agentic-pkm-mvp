@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,8 +11,10 @@ from fastapi.testclient import TestClient
 from app.api.app import app
 from app.api.routes import ask as ask_route
 from app.agents.ask.graph import run_ask_graph
+from app.ingest.external import ingest_external_folder
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.retrieval.hybrid import get_store as get_hybrid_store
+from app.retrieval.hybrid import reset_durable_rebuild_state
 from app.stores import get_object_store, get_vector_index, reset_store_backends
 
 
@@ -32,22 +35,23 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DB_DSN", raising=False)
     monkeypatch.delenv("REASONING_ENABLE", raising=False)
     reset_store_backends()
+    reset_durable_rebuild_state()
     get_hybrid_store().set_documents([])
     monkeypatch.setattr(ask_route, "_HYBRID_WARMED", False, raising=False)
 
 
-def _seed_object(*, title: str, source_ref: str, text: str, origin: str = "vault", plane: str | None = None) -> str:
-    object_id = uuid4()
-    payload = {
-        "uuid": str(object_id),
-        "title": title,
-        "origin": origin,
-        "plane": plane or origin,
-        "text": text,
-        "source_ref": source_ref,
-    }
-    get_object_store().put(object_id, kind="note", source_ref=source_ref, payload=payload)
-    return str(object_id)
+def _seed_archive_artifact(tmp_path: Path, *, filename: str, text: str) -> tuple[str, str]:
+    """Ingest a supported retained artifact through the production external adapter."""
+    artifact_path = tmp_path / "Archive" / "Vendor" / filename
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(text, encoding="utf-8")
+
+    summary = ingest_external_folder(tmp_path)
+    assert summary.scanned == 1
+    assert summary.ingested == 1
+    rows = list(get_vector_index().all_rows())
+    assert len(rows) == 1
+    return str(rows[0]["object_id"]), str(artifact_path.resolve())
 
 
 def _seed_orientation_pack(tmp_path: Path) -> dict[str, Path]:
@@ -365,11 +369,9 @@ def test_human_uat_orientation_is_read_only(tmp_path: Path, monkeypatch: pytest.
     assert not list(tmp_path.rglob("*")), "orientation must not materialize vault artifacts"
 
 
-@pytest.mark.xfail(
-    reason="Archive retrieval exists in parts, but archive-source reuse is not yet fully established as a release-grade human flow.",
-    strict=False,
-)
-def test_human_uat_archive_source_reuse_without_note_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_human_uat_archive_source_reuse_without_note_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """
     Human-need target from docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md §2A.
 
@@ -378,14 +380,11 @@ def test_human_uat_archive_source_reuse_without_note_conversion(monkeypatch: pyt
     """
     _reset_runtime_state(monkeypatch)
 
-    retained_path = "Archive/Vendor/quarterly-timeline-report.pdf"
-    _seed_object(
-        title="Quarterly Timeline Report",
-        source_ref=retained_path,
-        origin="external_raw",
-        plane="external",
+    _object_id, retained_path = _seed_archive_artifact(
+        tmp_path,
+        filename="quarterly-timeline-report.txt",
         text=(
-            "Retained PDF report. Vendor timeline states the gateway migration must finish before October "
+            "Retained archive report. Vendor timeline states the gateway migration must finish before October "
             "and cites a two-week validation window."
         ),
     )
@@ -405,3 +404,58 @@ def test_human_uat_archive_source_reuse_without_note_conversion(monkeypatch: pyt
     assert top.get("origin") == "external_raw"
     assert top.get("plane") == "external"
     assert top.get("path") == retained_path
+
+
+def test_human_uat_archive_source_reuse_is_non_destructive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Archive retrieval must not create or mutate a warm vault note."""
+    _reset_runtime_state(monkeypatch)
+
+    object_id, retained_path = _seed_archive_artifact(
+        tmp_path,
+        filename="quarterly-timeline-report.txt",
+        text="The retained report says the vendor migration finishes before October.",
+    )
+    before_objects = deepcopy(get_object_store()._objects)
+    before_rows = deepcopy(list(get_vector_index().all_rows()))
+
+    response = TestClient(app).post(
+        "/api/ask",
+        json={"question": "When does the vendor migration finish according to the retained report?"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert get_object_store()._objects == before_objects
+    assert get_vector_index().all_rows() == before_rows
+    stored = get_object_store().get(UUID(object_id))
+    assert stored is not None
+    assert stored["kind"] == "external"
+    assert stored["source_ref"] == retained_path
+
+
+def test_human_uat_archive_source_identity_is_citable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The response must expose the durable source identity needed for citation."""
+    _reset_runtime_state(monkeypatch)
+
+    object_id, retained_path = _seed_archive_artifact(
+        tmp_path,
+        filename="quarterly-timeline-report.txt",
+        text="Retained vendor report states the vendor migration timeline and cites a two-week validation window.",
+    )
+
+    response = TestClient(app).post(
+        "/api/ask",
+        json={"question": "What does the retained vendor report say about the vendor migration timeline?"},
+    )
+
+    assert response.status_code == 200, response.text
+    sources = response.json().get("sources") or []
+    assert sources
+    top = sources[0]
+    assert top["uuid"] == object_id
+    assert top["path"] == retained_path
+    assert top["origin"] == "external_raw"
+    assert top["plane"] == "external"
