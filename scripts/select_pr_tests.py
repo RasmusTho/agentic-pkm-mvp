@@ -236,6 +236,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # machinery. Keep this ownership exact: sibling app/governance
             # modules are Product GOV runtime boundaries with different tests.
             "app/governance/design_packet_resolver.py",
+            # The design-boundary doctor is Builder System/CES report machinery;
+            # keep its ownership explicit so the governance tests cannot be
+            # filtered out as an unowned app module.
+            "app/governance/design_boundary_doctor.py",
             # The TARS inventory boundary is Builder System/CES machinery.
             # It carries an inventory-only PVE token and its direct proof
             # lives in tests/proxmox; leaving this new app prefix unowned
