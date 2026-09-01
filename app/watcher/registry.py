@@ -1510,7 +1510,7 @@ def _collect_changed_entries(
     scan_roots: Iterable[Path],
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
-    settings_source_reload_results: dict[str, bool] | None = None,
+    settings_source_reload_results: dict[str, bool | float] | None = None,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -1629,9 +1629,17 @@ def _collect_changed_entries(
             # physical path is observed; on failure none are advanced, keeping
             # every source retryable on the next scan generation.
             if "full_bundle" in settings_source_reload_results:
-                if settings_source_reload_results["full_bundle"]:
+                reload_started_at = settings_source_reload_results.get(
+                    "full_bundle_started_at"
+                )
+                if (
+                    settings_source_reload_results["full_bundle"] is True
+                    and isinstance(reload_started_at, float)
+                    and mtime <= reload_started_at
+                ):
                     state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
                 continue
+            settings_source_reload_results["full_bundle_started_at"] = time.time()
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
                 vault_root=cfg.vault_path,
@@ -1960,7 +1968,7 @@ def _run_spec_tick(
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
     handled_settings_sources: set[Path] | None = None,
-    settings_source_reload_results: dict[str, bool] | None = None,
+    settings_source_reload_results: dict[str, bool | float] | None = None,
     retain_unemitted_observations: int | None = None,
 ) -> dict[str, object]:
     tick_start = now
@@ -2415,7 +2423,7 @@ def run_registry_once(
     }
     now = time.time()
     handled_settings_sources: set[Path] = set()
-    settings_source_reload_results: dict[str, bool] = {}
+    settings_source_reload_results: dict[str, bool | float] = {}
     summaries = {
         spec.name: _run_spec_tick(
             cfg,
@@ -2511,7 +2519,7 @@ def run_registry_forever(
         )
         now = time.time()
         handled_settings_sources: set[Path] = set()
-        settings_source_reload_results: dict[str, bool] = {}
+        settings_source_reload_results: dict[str, bool | float] = {}
         summaries = {
             spec.name: _run_spec_tick(
                 cfg,

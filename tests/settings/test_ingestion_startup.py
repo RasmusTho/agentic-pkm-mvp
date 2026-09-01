@@ -10,6 +10,7 @@ Source: docs/SETTINGS_SPINE/WIRE_SETTINGS_INGESTION.md
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import time
 
@@ -464,5 +465,71 @@ def test_registry_watcher_coalesces_canonical_and_legacy_source_reload(
 
     assert len(attempted_paths) == 2
     assert recovered.get("settings_source_reloads_in_tick") == 1
+    assert state.file_entry("settings/global.md") is not None
+    assert state.file_entry("@Settings/global.md") is not None
+
+
+def test_registry_watcher_retries_source_changed_during_coalesced_reload(
+    sandbox_sources: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source changed after reload start is not acknowledged by that reload."""
+    vault_root = sandbox_sources.parent
+    initialize_test_vault(vault_root)
+    (vault_root / "settings" / "global.md").write_text(
+        _source_md("ERROR"), encoding="utf-8"
+    )
+    legacy_source = sandbox_sources / "global.md"
+    legacy_source.write_text(_source_md("DEBUG"), encoding="utf-8")
+    (vault_root / "Notes").mkdir()
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text(
+        "watchers:\n  - name: panel\n    scope_glob: 'Notes/**'\n    emit_event: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "Notes/**")
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "watcher-state"))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    cfg = registry.load_registry_config(config_path)
+    state = WatcherState()
+    attempted_paths: list[Path] = []
+    reload_clock = [100.0]
+    changed_rel: Path | None = None
+
+    monkeypatch.setattr(registry.time, "time", lambda: reload_clock[0])
+
+    def reload_settings(
+        *, rel_path: Path, vault_root: Path | None = None
+    ) -> SettingsSourceDeltaResult:
+        assert vault_root == sandbox_sources.parent
+        attempted_paths.append(rel_path)
+        if len(attempted_paths) == 1:
+            changed_source = (
+                sandbox_sources.parent / "settings" / "global.md"
+                if rel_path.parts[0] == "@Settings"
+                else legacy_source
+            )
+            changed_source.write_text(_source_md("WARNING"), encoding="utf-8")
+            os.utime(changed_source, (150.0, 150.0))
+            nonlocal changed_rel
+            changed_rel = changed_source.relative_to(sandbox_sources.parent)
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(registry, "handle_settings_source_delta", reload_settings)
+
+    first = registry._run_spec_tick(cfg, cfg.specs[0], state, now=0.0)
+
+    assert first.get("settings_source_reloads_in_tick") == 1
+    assert changed_rel is not None
+    assert state.file_entry(str(changed_rel)) is None
+
+    reload_clock[0] = 200.0
+    second = registry._run_spec_tick(cfg, cfg.specs[0], state, now=1.0)
+
+    assert len(attempted_paths) == 2
+    assert second.get("settings_source_reloads_in_tick") == 1
     assert state.file_entry("settings/global.md") is not None
     assert state.file_entry("@Settings/global.md") is not None
