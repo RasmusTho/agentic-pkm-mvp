@@ -231,6 +231,33 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
 
 
+def test_closed_issue_label_cleanup_is_idempotent() -> None:
+    """The production cleanup path tolerates only the known absent-label race."""
+    text = _read(".github/workflows/issue-pr-governance.yml")
+    cleanup = text.split("  issue-agent-labels:", 1)[1].split(
+        "  issue-shape:", 1
+    )[0]
+
+    assert "const removeIssueLabel = async (name) => {" in cleanup
+    assert "if (error && error.status === 404) return;" in cleanup
+    assert "throw error;" in cleanup
+    assert "await github.rest.issues.removeLabel" in cleanup
+
+
+def test_closed_issue_label_cleanup_removes_present_labels() -> None:
+    """Both active-label collections use the production cleanup helper."""
+    text = _read(".github/workflows/issue-pr-governance.yml")
+    cleanup = text.split("  issue-agent-labels:", 1)[1].split(
+        "  issue-shape:", 1
+    )[0]
+
+    assert cleanup.count("await removeIssueLabel(name);") == 2
+    assert "for (const name of agentLabels)" in cleanup
+    assert "for (const name of actionLabels)" in cleanup
+    assert "issue.state === \"closed\" && agentLabels.length" in cleanup
+    assert "issue.state === \"closed\" && actionLabels.length" in cleanup
+
+
 def test_pr_template_includes_builderops_routing_receipt() -> None:
     text = _read(".github/pull_request_template.md")
 
