@@ -558,7 +558,9 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         "replay": product_replay_provenance(
-            source_identity=rel_path.as_posix(), source_text=stripped_text
+            source_identity=rel_path.as_posix(),
+            source_text=stripped_text,
+            allow_empty_source=True,
         ),
     }
 
@@ -602,7 +604,9 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         "replay": product_replay_provenance(
-            source_identity=rel_path.as_posix(), source_text=stripped_text
+            source_identity=rel_path.as_posix(),
+            source_text=stripped_text,
+            allow_empty_source=True,
         ),
     }
 

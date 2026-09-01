@@ -73,14 +73,18 @@ class ProductReadiness:
 
 
 def product_replay_provenance(
-    *, source_identity: str, source_text: str, recipe_version: str = PRODUCT_REPLAY_RECIPE_VERSION
+    *,
+    source_identity: str,
+    source_text: str,
+    recipe_version: str = PRODUCT_REPLAY_RECIPE_VERSION,
+    allow_empty_source: bool = False,
 ) -> dict[str, str]:
     """Build the source-bound tuple stamped into a Product object payload."""
 
     identity = source_identity.strip().replace("\\", "/")
     if not identity:
         raise ProductReplayRefusal("source identity is empty")
-    if not source_text.strip():
+    if not source_text.strip() and not allow_empty_source:
         raise ProductReplayRefusal(f"source {identity!r} has no meaning-bearing text")
     if not recipe_version.strip():
         raise ProductReplayRefusal("replay recipe version is empty")
