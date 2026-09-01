@@ -2,7 +2,7 @@
 name: Prove Product Total Loss
 description: Establish a fail-closed Product store/readiness kernel that reconstructs only from retained source fixtures.
 task_id: RSC-02
-github_issue:
+github_issue: 5282
 source_anchor: "docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md :: Rebuild semantics"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-01]
