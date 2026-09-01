@@ -1269,7 +1269,7 @@ def test_single_target_provider_refusal_is_readable_and_resume_is_idempotent(
     assert trace["inquiry"]["acceptance_mode"] == "single_target"
 
 
-def test_single_target_configuration_failure_is_readable_and_resume_is_idempotent(
+def test_single_target_loader_adapter_unavailable_is_terminal_provider_error_and_resume_is_idempotent(
     tmp_path: Path,
 ) -> None:
     inquiry_id = "inq_single_target_configuration_failure"
@@ -1280,9 +1280,19 @@ def test_single_target_configuration_failure_is_readable_and_resume_is_idempoten
     trace = service.trace(inquiry_id)
     second = runner.run(inquiry_id, max_rounds=1)
 
-    assert first["outcome"] == "provider_unavailable"
+    assert first["outcome"] == "provider_error"
     assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
     assert trace["inquiry"]["acceptance_mode"] == "single_target"
+    terminal = next(
+        receipt
+        for receipt in trace["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["outcome"] == "provider_error"
+    assert terminal["details"]["classification"] == "provider adapter execution failed"
+    assert terminal["details"]["diagnostic"]["adapter_failure_class"] == (
+        "unexpected_adapter_error"
+    )
 
 
 def test_auth_failure_class_survives_persistence_revalidation(tmp_path: Path) -> None:

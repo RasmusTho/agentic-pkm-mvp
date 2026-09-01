@@ -167,9 +167,15 @@ class ModelInquiryRunner:
                 # Fail closed before any adapter call. No subscription CLI, no
                 # ambient environment, and no other provider is attempted.
                 return self._credential_failure(inquiry_id, trace, exc)
-            except (AdapterUnavailableError, BuilderOpsValidationError):
-                # v1 records remain readable, but the retired Fable/GPT execution
-                # path is deliberately not reactivated by the permanent Sol route.
+            except AdapterUnavailableError as exc:
+                # Active-v2 adapter unavailability is an execution failure even
+                # when resolution discovers it before a request packet exists.
+                return self._configuration_failure(
+                    inquiry_id,
+                    trace,
+                    error=exc if _single_target_mode(trace) else None,
+                )
+            except BuilderOpsValidationError:
                 return self._configuration_failure(
                     inquiry_id,
                     trace,
@@ -671,22 +677,34 @@ class ModelInquiryRunner:
         self,
         inquiry_id: str,
         trace: Mapping[str, Any],
+        *,
+        error: AdapterUnavailableError | None = None,
     ) -> dict[str, Any]:
         request_id = "adapter_req_configuration"
-        details = {
+        outcome = "provider_error" if error is not None else "provider_unavailable"
+        details: dict[str, Any] = {
             "adapter_request_id": request_id,
-            "classification": "explicit role adapter unavailable",
+            "classification": (
+                "provider adapter execution failed"
+                if outcome == "provider_error"
+                else "explicit role adapter unavailable"
+            ),
         }
+        if error is not None:
+            details["diagnostic"] = sanitized_adapter_failure(
+                error,
+                adapter_id="configuration",
+            )
         self.service.commit_provider_attempt_receipt(
             inquiry_id,
             adapter_request_id=request_id,
-            outcome="provider_unavailable",
+            outcome=outcome,
             details=details,
             source_refs=list(trace["source_refs"]),
         )
         return self._terminate(
             inquiry_id,
-            "provider_unavailable",
+            outcome,
             details,
             self.service.trace(inquiry_id),
         )
