@@ -15,6 +15,11 @@ from typing import Any, Iterable, Mapping, Protocol
 from uuid import UUID
 
 from app.components.embeddings import EmbeddingIdentity
+from app.instance.binding_ids import (
+    COMPATIBILITY_BINDING_ID,
+    OUTBOX_GLOBAL_BINDING_ID,
+    OUTBOX_QUARANTINE_BINDING_ID,
+)
 from app.rebuildability.product_total_loss import (
     ProductReplayRefusal,
     ProductReplayTuple,
@@ -47,6 +52,8 @@ class ObjectProjectionSink(Protocol):
 class VectorProjectionSink(Protocol):
     """Structural owner-native vector projection seam."""
 
+    def get_identity(self) -> EmbeddingIdentity | None: ...
+
     def upsert(
         self,
         object_id: UUID,
@@ -73,6 +80,12 @@ class RelationProjectionSink(Protocol):
         value: str,
         payload: dict[str, Any],
     ) -> None: ...
+
+
+class ProjectionEmbeddingSource(Protocol):
+    identity: EmbeddingIdentity
+
+    def embed_text(self, text: str) -> list[float]: ...
 
 
 class ProductProjectionReplayRefusal(ProductReplayRefusal):
@@ -117,8 +130,7 @@ class RetainedProjectionSource:
         source_identity: str,
         object_id: UUID,
         payload: dict[str, Any],
-        embedding: list[float],
-        embedding_identity: EmbeddingIdentity,
+        embedding_source: ProjectionEmbeddingSource,
         relations: Iterable[ProjectionRelation] = (),
         memberships: Iterable[tuple[str, str, dict[str, Any]]] = (),
     ) -> "RetainedProjectionSource":
@@ -144,6 +156,8 @@ class RetainedProjectionSource:
                 f"retained source {identity!r} does not own object {object_id}"
             )
         text = canonical_product_source_text(raw_text)
+        embedding = list(embedding_source.embed_text(text))
+        embedding_identity = embedding_source.identity
         stamped = dict(payload)
         stamped["text"] = text
         stamped["replay"] = product_replay_provenance(
@@ -193,6 +207,9 @@ class RetainedProjectionSource:
 class DurableProjectionWork:
     """A pending event copied from the canonical DB outbox contract."""
 
+    row_id: str
+    vault_binding_id: str
+    envelope: dict[str, Any]
     event_id: str
     event: str
     source_identity: str
@@ -208,11 +225,17 @@ class DurableProjectionWork:
             )
 
     @classmethod
-    def _from_db_outbox_row(cls, row: Mapping[str, Any]) -> "DurableProjectionWork":
+    def _from_db_outbox_row(
+        cls,
+        row: Mapping[str, Any],
+        *,
+        eligible_binding_ids: frozenset[str],
+    ) -> "DurableProjectionWork":
         row_id = str(row.get("id") or "").strip()
+        binding_id = str(row.get("vault_binding_id") or "").strip()
         topic = str(row.get("topic") or "").strip()
         envelope = row.get("payload")
-        if not row_id or not topic or not isinstance(envelope, Mapping):
+        if not row_id or not binding_id or binding_id not in eligible_binding_ids or not topic or not isinstance(envelope, Mapping):
             raise ProductProjectionReplayRefusal("malformed canonical DB outbox row")
         event_id = str(envelope.get("event_id") or "").strip()
         trace_id = str(envelope.get("trace_id") or "").strip()
@@ -250,6 +273,9 @@ class DurableProjectionWork:
                 f"DB outbox row {row_id!r} has malformed replay provenance"
             ) from exc
         return cls(
+            row_id=row_id,
+            vault_binding_id=binding_id,
+            envelope=dict(envelope),
             event_id=event_id,
             event=topic,
             source_identity=source_identity,
@@ -259,23 +285,64 @@ class DurableProjectionWork:
         )
 
 
-def load_durable_projection_work(conn: Any) -> list[DurableProjectionWork]:
+def load_durable_projection_work(
+    conn: Any,
+    *,
+    eligible_binding_ids: tuple[str, ...],
+    required_binding_stamp: Mapping[str, object] | None = None,
+) -> list[DurableProjectionWork]:
     """Read pending work from the canonical DB outbox without acknowledging it."""
 
+    if not eligible_binding_ids:
+        raise ProductProjectionReplayRefusal("no selected DB outbox binding authority")
+    placeholders = ", ".join("%s" for _ in eligible_binding_ids)
+    params: tuple[object, ...] = (
+        OUTBOX_QUARANTINE_BINDING_ID,
+        *eligible_binding_ids,
+    )
+    binding_filter = f"vault_binding_id in ({placeholders})"
+    if required_binding_stamp is not None:
+        binding_id = str(required_binding_stamp["vault_binding_id"])
+        binding_filter += (
+            " and (vault_binding_id in (%s, %s) or (vault_binding_id = %s "
+            "and payload #>> '{meta,vault_binding_id}' = %s "
+            "and payload #>> '{meta,binding_authority}' = %s "
+            "and payload #>> '{meta,binding_authorization_epoch}' = %s "
+            "and payload #>> '{meta,binding_revision}' = %s "
+            "and payload #>> '{meta,vault_root}' = %s))"
+        )
+        params = (
+            *params,
+            COMPATIBILITY_BINDING_ID,
+            OUTBOX_GLOBAL_BINDING_ID,
+            binding_id,
+            binding_id,
+            str(required_binding_stamp["binding_authority"]),
+            str(required_binding_stamp["binding_authorization_epoch"]),
+            str(required_binding_stamp["binding_revision"]),
+            str(required_binding_stamp["vault_root"]),
+        )
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "select id, topic, payload from outbox "
-            "where delivered_at is null and vault_binding_id <> %s "
-            "order by created_at asc",
-            ("quarantined",),
+            "select id, topic, payload, vault_binding_id from outbox "
+            "where delivered_at is null and vault_binding_id <> %s and "
+            + binding_filter
+            + " order by created_at asc, id asc",
+            params,
         )
         rows = cursor.fetchall()
     finally:
         close = getattr(cursor, "close", None)
         if close is not None:
             close()
-    return [DurableProjectionWork._from_db_outbox_row(dict(row)) for row in rows]
+    binding_set = frozenset(eligible_binding_ids)
+    return [
+        DurableProjectionWork._from_db_outbox_row(
+            dict(row), eligible_binding_ids=binding_set
+        )
+        for row in rows
+    ]
 
 
 @dataclass
@@ -383,6 +450,23 @@ def _validate_work(
             )
 
 
+def _validate_embedding_targets(
+    sources: list[RetainedProjectionSource], targets: ProductProjectionTargets
+) -> None:
+    if not sources:
+        return
+    expected = sources[0].embedding_identity
+    if any(source.embedding_identity != expected for source in sources[1:]):
+        raise ProductProjectionReplayRefusal(
+            "retained sources use mixed embedding identities"
+        )
+    target_identity = targets.vectors.get_identity()
+    if target_identity is not None and target_identity != expected:
+        raise ProductProjectionReplayRefusal(
+            "target vector projection has a conflicting embedding identity"
+        )
+
+
 def rebuild_product_projections(
     sources: Iterable[RetainedProjectionSource],
     work_items: Iterable[DurableProjectionWork],
@@ -399,6 +483,7 @@ def rebuild_product_projections(
     work_list = list(work_items)
     by_identity = _validate_sources(source_list)
     _validate_work(work_list, by_identity)
+    _validate_embedding_targets(source_list, targets)
 
     relation_rows = 0
     membership_rows = 0

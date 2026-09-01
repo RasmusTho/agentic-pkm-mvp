@@ -5,6 +5,7 @@ from uuid import UUID
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity
+from app.instance.binding_ids import OUTBOX_QUARANTINE_BINDING_ID
 from app.rebuildability import (
     DurableProjectionWork,
     ProjectionRelation,
@@ -32,7 +33,8 @@ class _Cursor:
 
     def execute(self, query: str, params: tuple[str, ...]) -> None:
         assert "from outbox" in query
-        assert params == ("quarantined",)
+        assert "vault_binding_id in" in query
+        assert params == (OUTBOX_QUARANTINE_BINDING_ID, "binding-a")
 
     def fetchall(self) -> list[dict]:
         return self.rows
@@ -47,6 +49,13 @@ class _Connection:
 
     def cursor(self) -> _Cursor:
         return _Cursor(self.rows)
+
+
+class _Embedder:
+    identity = IDENTITY
+
+    def embed_text(self, text: str) -> list[float]:
+        return [float(len(text)), float(len(text) + 1), float(len(text) + 2)]
 
 
 def _sources(tmp_path) -> list[RetainedProjectionSource]:
@@ -64,8 +73,7 @@ def _sources(tmp_path) -> list[RetainedProjectionSource]:
             object_id=OBJECT_A,
             source_identity=SOURCE_A,
             payload={"title": "Alpha", "kind": "note", "machine_cache": {"rank": 4}},
-            embedding=[1.0, 0.0, 0.0],
-            embedding_identity=IDENTITY,
+            embedding_source=_Embedder(),
             relations=(
                 ProjectionRelation(
                     src_id=OBJECT_A,
@@ -80,8 +88,7 @@ def _sources(tmp_path) -> list[RetainedProjectionSource]:
             object_id=OBJECT_B,
             source_identity=SOURCE_B,
             payload={"title": "Beta", "kind": "note"},
-            embedding=[0.0, 1.0, 0.0],
-            embedding_identity=IDENTITY,
+            embedding_source=_Embedder(),
             memberships=(("tag", "continuity", {"machine_order": 99}),),
         ),
     ]
@@ -105,11 +112,13 @@ def _work(sources: list[RetainedProjectionSource]) -> DurableProjectionWork:
             [
                 {
                     "id": "db-row-a",
+                    "vault_binding_id": "binding-a",
                     "topic": "index.embedding.requested",
                     "payload": event,
                 }
             ]
-        )
+        ),
+        eligible_binding_ids=("binding-a",),
     )[0]
 
 
@@ -140,6 +149,9 @@ def test_object_vector_and_relation_projections_converge_from_retained_sources(t
     assert targets.relations.neighbors(OBJECT_A, rel="related_to") == [OBJECT_B]
     assert [item.value for item in targets.relations.memberships(OBJECT_B)] == ["continuity"]
     assert targets.queue.pending["evt-embedding-a"].source_kind == "db_outbox"
+    assert targets.queue.pending["evt-embedding-a"].row_id == "db-row-a"
+    assert targets.queue.pending["evt-embedding-a"].vault_binding_id == "binding-a"
+    assert targets.queue.pending["evt-embedding-a"].envelope["trace_id"] == "trace-a"
 
 
 def test_projection_replay_is_idempotent(tmp_path) -> None:
@@ -178,6 +190,9 @@ def test_queue_rebuild_rejects_diagnostic_and_unknown_effect_sources(tmp_path) -
     targets = _targets()
     with pytest.raises(ProductProjectionReplayRefusal):
         DurableProjectionWork(
+            row_id="audit-row",
+            vault_binding_id="binding-a",
+            envelope={},
             event_id="audit-1",
             event="index.embedding.requested",
             source_identity=SOURCE_A,
@@ -200,14 +215,34 @@ def test_queue_rebuild_rejects_diagnostic_and_unknown_effect_sources(tmp_path) -
             [
                 {
                     "id": "db-row-unknown",
+                    "vault_binding_id": "binding-a",
                     "topic": "external.effect.execute",
                     "payload": unknown_event,
                 }
             ]
-        )
+        ),
+        eligible_binding_ids=("binding-a",),
     )[0]
     with pytest.raises(ProductProjectionReplayRefusal):
         rebuild_product_projections(sources, [unknown_work], targets)
+    with pytest.raises(ProductProjectionReplayRefusal):
+        load_durable_projection_work(
+            _Connection(
+                [
+                    {
+                        "id": "db-row-foreign",
+                        "vault_binding_id": "binding-foreign",
+                        "topic": "index.embedding.requested",
+                        "payload": {
+                            **unknown_event,
+                            "event": "index.embedding.requested",
+                            "event_id": "foreign-1",
+                        },
+                    }
+                ]
+            ),
+            eligible_binding_ids=("binding-a",),
+        )
     with pytest.raises(ProductProjectionReplayRefusal):
         RetainedProjectionSource(
             object_id=OBJECT_A,
@@ -219,4 +254,33 @@ def test_queue_rebuild_rejects_diagnostic_and_unknown_effect_sources(tmp_path) -
         )
     assert targets.objects.count_objects() == 0
     assert targets.vectors.count_vectors() == 0
+    assert targets.queue.pending == {}
+
+
+def test_projection_replay_rejects_target_identity_before_writes(tmp_path) -> None:
+    sources = _sources(tmp_path)
+    vectors = MemoryVectorIndex()
+    vectors.upsert(
+        OBJECT_B,
+        kind="note",
+        source_ref=SOURCE_B,
+        payload={},
+        embedding=[0.0, 1.0, 0.0],
+        model="other-model",
+        identity=EmbeddingIdentity(
+            provider="other", model="other-model", dim=3, normalize=False
+        ),
+    )
+    targets = ProductProjectionTargets(
+        objects=MemoryObjectStore(),
+        vectors=vectors,
+        relations=MemoryRelationIndex(),
+        queue=ProjectionReplayQueue(),
+    )
+
+    with pytest.raises(ProductProjectionReplayRefusal):
+        rebuild_product_projections(sources, [_work(sources)], targets)
+
+    assert targets.objects.count_objects() == 0
+    assert targets.vectors.count_vectors() == 1
     assert targets.queue.pending == {}
