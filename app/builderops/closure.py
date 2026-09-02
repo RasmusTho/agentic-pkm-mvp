@@ -32,6 +32,12 @@ PR_CONTRACT_NAME = "pr-contract"
 DISPATCHER_MODE = "dispatcher-backed"
 DEGRADED_MODE = "github-label-only-fallback"
 CHECK_CONCLUSIONS_ACCEPTED = {"success", "neutral"}
+PICKUP_RECEIPT_RE = re.compile(
+    r"Pickup intent receipt: agent=(?P<agent>\S+) session=(?P<session>\S+) "
+    r"branch=(?P<branch>\S+) worktree=(?P<worktree>.+?) "
+    r"coordination_mode=(?P<mode>\S+) fallback_reason=(?P<reason>\S+) "
+    r"issue=(?P<issue>[1-9][0-9]*)\Z"
+)
 
 
 class ClosureError(RuntimeError):
@@ -50,6 +56,9 @@ class ClosureRequest:
     coordination_mode: str | None = None
     fallback_reason: str | None = None
     coordination_evidence: str | None = None
+    caller_agent: str | None = None
+    caller_session: str | None = None
+    caller_branch: str | None = None
 
 
 def canonical_json(value: Any) -> str:
@@ -641,41 +650,100 @@ def _degraded_coordination_snapshot(
     issue_number: int,
     fallback_reason: str | None,
     coordination_evidence: str | None,
+    caller_agent: str | None,
+    caller_session: str | None,
+    caller_branch: str | None,
 ) -> dict[str, Any]:
     if (
         not isinstance(fallback_reason, str)
         or not fallback_reason
         or fallback_reason == "none"
         or not isinstance(coordination_evidence, str)
+        or not isinstance(caller_agent, str)
+        or not caller_agent
+        or not isinstance(caller_session, str)
+        or not caller_session
+        or not isinstance(caller_branch, str)
+        or not caller_branch
     ):
-        raise ClosureError("unsupported", "degraded coordination requires an explicit fallback reason and receipt")
+        raise ClosureError("unsupported", "degraded coordination requires explicit caller identity, fallback reason, and receipt")
     match = re.fullmatch(r"github-comment:([1-9][0-9]*)", coordination_evidence)
     if match is None:
         raise ClosureError("unsupported", "degraded coordination evidence must identify a GitHub pickup comment")
     comment_id = int(match.group(1))
-    comment = _api(executor, cwd, repository, "GET", f"/issues/comments/{comment_id}")
-    user = comment.get("user") if isinstance(comment, Mapping) else None
-    body = comment.get("body") if isinstance(comment, Mapping) else None
-    issue_url = comment.get("issue_url") if isinstance(comment, Mapping) else None
+    result = _run(
+        executor,
+        cwd,
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOST,
+            "--method",
+            "GET",
+            "--paginate",
+            "--slurp",
+            f"repos/{repository}/issues/{issue_number}/comments?per_page=100",
+        ],
+    )
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "degraded coordination comments were not JSON") from exc
+    if not isinstance(pages, list):
+        raise ClosureError("incomplete", "degraded coordination comments are incomplete")
+    comments: list[Mapping[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, list):
+            raise ClosureError("incomplete", "degraded coordination comments are malformed")
+        for item in page:
+            if isinstance(item, Mapping):
+                comments.append(item)
+    comment = next((item for item in comments if item.get("id") == comment_id), None)
+    if comment is None:
+        raise ClosureError("incomplete", "degraded coordination pickup receipt is unavailable")
+    user = comment.get("user")
+    body = comment.get("body")
+    issue_url = comment.get("issue_url")
+    if not isinstance(body, str):
+        raise ClosureError("incomplete", "degraded coordination pickup receipt is malformed")
+    receipt_match = PICKUP_RECEIPT_RE.fullmatch(body)
     if (
-        not isinstance(comment, Mapping)
-        or comment.get("id") != comment_id
+        comment.get("id") != comment_id
         or issue_url != f"https://api.github.com/repos/{repository}/issues/{issue_number}"
-        or not isinstance(body, str)
-        or not body.startswith("Pickup intent receipt: ")
-        or " agent=" not in body
-        or " session=" not in body
-        or " branch=" not in body
-        or f" worktree={cwd}" not in body
-        or f" coordination_mode={DEGRADED_MODE}" not in body
-        or f" fallback_reason={fallback_reason}" not in body
-        or f" issue={issue_number}" not in body
+        or receipt_match is None
         or not isinstance(user, Mapping)
         or not isinstance(user.get("login"), str)
         or not user["login"]
         or not isinstance(comment.get("created_at"), str)
     ):
         raise ClosureError("incomplete", "degraded coordination pickup receipt is not authenticated")
+    receipt = receipt_match.groupdict()
+    if (
+        receipt["agent"] != caller_agent
+        or receipt["session"] != caller_session
+        or receipt["branch"] != caller_branch
+        or receipt["worktree"] != str(cwd)
+        or receipt["mode"] != DEGRADED_MODE
+        or receipt["reason"] != fallback_reason
+        or int(receipt["issue"]) != issue_number
+    ):
+        raise ClosureError("incomplete", "degraded coordination caller does not match the pickup receipt")
+    pickup_receipts: list[tuple[datetime, int]] = []
+    for candidate in comments:
+        candidate_body = candidate.get("body")
+        candidate_created_at = candidate.get("created_at")
+        if not isinstance(candidate_body, str) or not isinstance(candidate_created_at, str):
+            continue
+        candidate_match = PICKUP_RECEIPT_RE.fullmatch(candidate_body)
+        if candidate_match is None or candidate_match.group("mode") != DEGRADED_MODE or int(candidate_match.group("issue")) != issue_number:
+            continue
+        candidate_id = candidate.get("id")
+        if not isinstance(candidate_id, int):
+            continue
+        pickup_receipts.append((_parse_timestamp(candidate_created_at, "degraded coordination receipt"), candidate_id))
+    if not pickup_receipts or max(pickup_receipts, key=lambda item: (item[0], item[1]))[1] != comment_id:
+        raise ClosureError("incomplete", "degraded coordination pickup receipt is not the current claimant authority")
     _parse_timestamp(comment["created_at"], "degraded coordination receipt")
     return {
         "mode": DEGRADED_MODE,
@@ -684,6 +752,9 @@ def _degraded_coordination_snapshot(
         "comment_id": comment_id,
         "comment_created_at": comment["created_at"],
         "comment_author": user["login"],
+        "caller_agent": caller_agent,
+        "caller_session": caller_session,
+        "caller_branch": caller_branch,
     }
 
 
@@ -775,27 +846,45 @@ def _dispatcher_completion(
         if active != dispatcher:
             raise ClosureError("drift", "dispatcher task or lease-holder drifted")
         return {"status": "claimed", **active}
+    if task.get("status") == "ready":
+        if any(task.get(field) is not None for field in ("claimed_by", "lease_id", "lease_expires_at")):
+            raise ClosureError("incomplete", "dispatcher ready task retains lease-holder identity")
+        events = _dispatcher_events(executor, cwd, task_id)
+        releases = [
+            row
+            for row in events
+            if isinstance(row, Mapping)
+            and row.get("task_id") == task_id
+            and row.get("event_type") == "task.released"
+            and row.get("lease_id") == dispatcher.get("lease_id")
+            and isinstance(row.get("actor"), str)
+            and row.get("actor")
+            and isinstance(row.get("payload"), Mapping)
+            and row["payload"].get("reason") == "expired"
+        ]
+        if len(releases) != 1:
+            raise ClosureError("incomplete", "dispatcher planned lease expiry-release evidence is unavailable or ambiguous")
+        release = releases[0]
+        release_timestamp = release.get("timestamp")
+        planned_expiry = dispatcher.get("lease_expires_at")
+        if not isinstance(release_timestamp, str) or not isinstance(planned_expiry, str):
+            raise ClosureError("incomplete", "dispatcher expiry-release evidence lacks timestamps")
+        if _parse_timestamp(release_timestamp, "dispatcher expiry release") < _parse_timestamp(planned_expiry, "dispatcher lease"):
+            raise ClosureError("incomplete", "dispatcher expiry-release predates the planned lease expiry")
+        for row in events:
+            if not isinstance(row, Mapping) or row.get("event_type") != "task.claimed":
+                continue
+            timestamp = row.get("timestamp")
+            if not isinstance(timestamp, str):
+                raise ClosureError("incomplete", "dispatcher claimant history is malformed")
+            if _parse_timestamp(timestamp, "dispatcher claimant event") >= _parse_timestamp(release_timestamp, "dispatcher expiry release"):
+                raise ClosureError("drift", "dispatcher task was claimed after the planned lease was reclaimed")
+        return {"status": "released", **dispatcher}
     if task.get("status") != "completed" or task.get("claimed_by") is not None or task.get("lease_id") is not None:
         raise ClosureError("incomplete", "dispatcher completion is unavailable")
-    events = _run(
-        executor,
-        cwd,
-        [
-            sys.executable,
-            "-m",
-            "app.dispatcher",
-            "events",
-            "--task-id",
-            task_id,
-            "--all",
-            "--json",
-        ],
-    )
-    try:
-        rows = json.loads(events.stdout).get("events", [])
-    except (AttributeError, json.JSONDecodeError) as exc:
-        raise ClosureError("unknown", "dispatcher completion receipt was not JSON") from exc
-    matches = [row for row in rows if isinstance(row, Mapping) and row.get("task_id") == task_id and row.get("event_type") == "task.completed" and row.get("actor") == dispatcher.get("lease_holder") and row.get("lease_id") == dispatcher.get("lease_id")]
+
+    events = _dispatcher_events(executor, cwd, task_id)
+    matches = [row for row in events if isinstance(row, Mapping) and row.get("task_id") == task_id and row.get("event_type") == "task.completed" and row.get("actor") == dispatcher.get("lease_holder") and row.get("lease_id") == dispatcher.get("lease_id")]
     if len(matches) != 1:
         raise ClosureError("incomplete", "dispatcher completion receipt is unavailable or ambiguous")
     return {
@@ -812,6 +901,93 @@ def _dispatcher_completion(
             )
         },
     }
+
+
+def _dispatcher_events(
+    executor: CommandExecutor, cwd: Path, task_id: str
+) -> list[Mapping[str, Any]]:
+    result = _run(
+        executor,
+        cwd,
+        [
+            sys.executable,
+            "-m",
+            "app.dispatcher",
+            "events",
+            "--task-id",
+            task_id,
+            "--all",
+            "--json",
+        ],
+    )
+    try:
+        rows = json.loads(result.stdout).get("events", [])
+    except (AttributeError, json.JSONDecodeError) as exc:
+        raise ClosureError("unknown", "dispatcher completion receipt was not JSON") from exc
+    if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
+        raise ClosureError("unknown", "dispatcher event history was malformed")
+    return rows
+
+
+def _dispatcher_reclaim(
+    executor: CommandExecutor,
+    cwd: Path,
+    dispatcher: Mapping[str, Any],
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+) -> dict[str, str]:
+    task_id = dispatcher.get("task_id")
+    holder = dispatcher.get("lease_holder")
+    old_lease_id = dispatcher.get("lease_id")
+    if (
+        not isinstance(task_id, str)
+        or not task_id
+        or not isinstance(holder, str)
+        or not holder
+        or not isinstance(old_lease_id, str)
+        or not old_lease_id
+    ):
+        raise ClosureError("incomplete", "dispatcher planned lease identity is malformed")
+    result = _run(
+        executor,
+        cwd,
+        [sys.executable, "-m", "app.dispatcher", "claim", task_id, "--agent", holder, "--json"],
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "dispatcher lease recovery was not JSON") from exc
+    task = payload.get("task") if isinstance(payload, Mapping) else None
+    lease = payload.get("lease") if isinstance(payload, Mapping) else None
+    if (
+        not isinstance(task, Mapping)
+        or not isinstance(lease, Mapping)
+        or task.get("task_id") != task_id
+        or task.get("repo") != repository
+        or task.get("issue_number") != issue_number
+        or str(task.get("linked_pr")) != str(pr_number)
+        or task.get("status") != "claimed"
+        or task.get("claimed_by") != holder
+        or not isinstance(task.get("lease_id"), str)
+        or task.get("lease_id") == old_lease_id
+        or task.get("lease_id") != lease.get("lease_id")
+        or lease.get("holder") != holder
+        or lease.get("resource") != f"issue:{issue_number}"
+    ):
+        raise ClosureError("drift", "dispatcher lease recovery was not an exact same-agent claim")
+    recovered = _dispatcher_snapshot(
+        executor,
+        cwd,
+        task_id,
+        repository=repository,
+        issue_number=issue_number,
+        pr_number=pr_number,
+    )
+    if recovered is None:
+        raise ClosureError("unknown", "dispatcher lease recovery readback was unavailable")
+    return recovered
 
 
 def _closed_event_evidence(
@@ -1078,6 +1254,9 @@ def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, A
             issue_number,
             request.fallback_reason,
             request.coordination_evidence,
+            request.caller_agent,
+            request.caller_session,
+            request.caller_branch,
         )
     else:
         if request.coordination_mode not in (None, DISPATCHER_MODE):
@@ -1187,13 +1366,19 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
     else:
         if (
             post_merge.get("dispatcher") is not None
-            or set(coordination) != {"mode", "fallback_reason", "evidence", "comment_id", "comment_created_at", "comment_author"}
+            or set(coordination) != {"mode", "fallback_reason", "evidence", "comment_id", "comment_created_at", "comment_author", "caller_agent", "caller_session", "caller_branch"}
             or not isinstance(coordination.get("fallback_reason"), str)
             or not coordination["fallback_reason"]
             or not isinstance(coordination.get("evidence"), str)
             or not isinstance(coordination.get("comment_id"), int)
             or not isinstance(coordination.get("comment_created_at"), str)
             or not isinstance(coordination.get("comment_author"), str)
+            or not isinstance(coordination.get("caller_agent"), str)
+            or not coordination["caller_agent"]
+            or not isinstance(coordination.get("caller_session"), str)
+            or not coordination["caller_session"]
+            or not isinstance(coordination.get("caller_branch"), str)
+            or not coordination["caller_branch"]
         ):
             raise ClosureError("unsupported", "degraded coordination evidence is incomplete")
     return value
@@ -1203,6 +1388,21 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     value = _validated(plan, expected_plan_sha256); runner = executor or SubprocessExecutor(); cwd = Path(value["worktree"])
     dispatcher = value["post_merge"].get("dispatcher") or {}
     task_id = dispatcher.get("task_id") if isinstance(dispatcher, Mapping) else None
+    coordination = value["coordination"]
+    if coordination["mode"] == DEGRADED_MODE:
+        current_coordination = _degraded_coordination_snapshot(
+            runner,
+            cwd,
+            str(value["repository"]),
+            int(value["governing_issue"]),
+            coordination.get("fallback_reason"),
+            coordination.get("evidence"),
+            coordination.get("caller_agent"),
+            coordination.get("caller_session"),
+            coordination.get("caller_branch"),
+        )
+        if current_coordination != coordination:
+            raise ClosureError("drift", "degraded coordination pickup authority drifted")
     current_pr = _pr(runner, cwd, value["repository"], value["pr_number"])
     if str(current_pr.get("state", "")).lower() == "closed" and current_pr.get("merged_at") is not None:
         if current_pr.get("merge_commit_sha") is None or current_pr.get("head", {}).get("sha") != value["head_sha"]:
@@ -1227,7 +1427,6 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         )
         current["closure_attribution"] = attribution
         return _finish_cleanup(value, current, runner, cwd, reconciled=True)
-    coordination = value["coordination"]
     request = ClosureRequest(
         value["repository"],
         cwd,
@@ -1237,6 +1436,9 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         coordination["mode"],
         coordination.get("fallback_reason"),
         coordination.get("evidence"),
+        coordination.get("caller_agent"),
+        coordination.get("caller_session"),
+        coordination.get("caller_branch"),
     )
     planned_dispatcher = (
         _dispatcher_snapshot(
@@ -1377,6 +1579,23 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
             pr_number=int(value["pr_number"]),
             allow_expired_claim=True,
         )
+        if state["status"] == "released":
+            dispatcher = _dispatcher_reclaim(
+                runner,
+                cwd,
+                dispatcher,
+                repository=str(value["repository"]),
+                issue_number=int(value["governing_issue"]),
+                pr_number=int(value["pr_number"]),
+            )
+            state = _dispatcher_completion(
+                runner,
+                cwd,
+                dispatcher,
+                repository=str(value["repository"]),
+                issue_number=int(value["governing_issue"]),
+                pr_number=int(value["pr_number"]),
+            )
         if state["status"] == "claimed":
             completed = runner.run([sys.executable, "-m", "app.dispatcher", "complete", str(dispatcher["task_id"]), "--agent", str(dispatcher["lease_holder"]), "--json"], cwd=cwd)
             if completed.returncode:
@@ -1399,11 +1618,11 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
 
 def cli_main(argv: Sequence[str] | None = None, *, executor: CommandExecutor | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__); subs = parser.add_subparsers(dest="command", required=True)
-    p = subs.add_parser("plan"); p.add_argument("--repository", required=True); p.add_argument("--worktree", type=Path, default=Path.cwd()); p.add_argument("--pr-number", type=int, required=True); p.add_argument("--verify-evidence-json", type=Path, required=True); p.add_argument("--dispatcher-task-id"); p.add_argument("--coordination-mode", choices=(DISPATCHER_MODE, DEGRADED_MODE)); p.add_argument("--fallback-reason"); p.add_argument("--coordination-evidence")
+    p = subs.add_parser("plan"); p.add_argument("--repository", required=True); p.add_argument("--worktree", type=Path, default=Path.cwd()); p.add_argument("--pr-number", type=int, required=True); p.add_argument("--verify-evidence-json", type=Path, required=True); p.add_argument("--dispatcher-task-id"); p.add_argument("--coordination-mode", choices=(DISPATCHER_MODE, DEGRADED_MODE)); p.add_argument("--fallback-reason"); p.add_argument("--coordination-evidence"); p.add_argument("--caller-agent"); p.add_argument("--caller-session"); p.add_argument("--caller-branch")
     a = subs.add_parser("apply"); a.add_argument("--plan-file", type=Path, required=True); a.add_argument("--expected-plan-sha256", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "plan": result = build_closure_plan(ClosureRequest(args.repository, args.worktree, args.pr_number, json.loads(args.verify_evidence_json.read_text()), args.dispatcher_task_id, args.coordination_mode, args.fallback_reason, args.coordination_evidence), executor=executor)
+        if args.command == "plan": result = build_closure_plan(ClosureRequest(args.repository, args.worktree, args.pr_number, json.loads(args.verify_evidence_json.read_text()), args.dispatcher_task_id, args.coordination_mode, args.fallback_reason, args.coordination_evidence, args.caller_agent, args.caller_session, args.caller_branch), executor=executor)
         else: result = apply_closure_plan(json.loads(args.plan_file.read_text()), expected_plan_sha256=args.expected_plan_sha256, executor=executor)
     except ClosureError as exc:
         print(canonical_json({"ok": False, "outcome": exc.outcome, "reason": exc.reason, "returncode": exc.result.returncode if exc.result else None}), file=sys.stderr); return exc.result.returncode if exc.result else (4 if exc.outcome in {"unknown", "incomplete"} else 3)

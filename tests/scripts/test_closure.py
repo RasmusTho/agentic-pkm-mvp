@@ -61,6 +61,7 @@ class Fake:
             "user": {"login": "RasmusTho"},
             "created_at": "2026-09-02T00:00:00Z",
         }
+        self.pickup_comments = [self.coordination_comment]
         self.closed_evidence: list[dict[str, object]] = [
             {
                 "__typename": "ClosedEvent",
@@ -85,6 +86,7 @@ class Fake:
             }
         }
         self.dispatcher_status = "claimed"
+        self.dispatcher_release_events: list[dict[str, object]] = []
         self.dispatcher_task = {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
             "issue_number": 5245,
@@ -120,8 +122,8 @@ class Fake:
             )
         if endpoint.endswith("/issues/5245") and "GET" in args:
             return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
-        if endpoint.endswith("/issues/comments/700") and "GET" in args:
-            return self._json(args, self.coordination_comment)
+        if endpoint.startswith(f"repos/{REPO}/issues/5245/comments") and "GET" in args:
+            return self._json(args, [self.pickup_comments])
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
             current = {"event": "closed", "commit_id": self.events_commit_id, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}
             previous = {"event": "closed", "commit_id": None, "created_at": "2026-09-01T00:00:10Z", "actor": {"login": self.close_actor}}
@@ -163,7 +165,17 @@ class Fake:
                     task.update(self.dispatcher_task)
                 return self._json(args, {"ok": True, "task": task})
             if args[3] == "events":
+                if self.dispatcher_status == "ready":
+                    return self._json(args, {"ok": True, "events": self.dispatcher_release_events})
                 return self._json(args, {"ok": True, "events": [{"task_id": self.dispatcher_task["task_id"], "event_type": "task.completed", "actor": self.dispatcher_task["claimed_by"], "lease_id": self.dispatcher_task["lease_id"]}]})
+            if args[3] == "claim":
+                assert args[4] == self.dispatcher_task["task_id"]
+                assert args[5:7] == ("--agent", self.dispatcher_task["claimed_by"])
+                self.dispatcher_status = "claimed"
+                self.dispatcher_task.update({"lease_id": "lease-2", "lease_expires_at": "2099-01-02T00:00:00+00:00"})
+                task = {"task_id": self.dispatcher_task["task_id"], "status": "claimed", "issue_number": 5245, "repo": REPO, "linked_pr": "99", **self.dispatcher_task}
+                lease = {"lease_id": "lease-2", "holder": self.dispatcher_task["claimed_by"], "resource": "issue:5245", "expires_at": "2099-01-02T00:00:00+00:00"}
+                return self._json(args, {"ok": True, "task": task, "lease": lease})
             if args[3] == "complete":
                 assert args[4] == self.dispatcher_task["task_id"]
                 assert args[5:7] == ("--agent", self.dispatcher_task["claimed_by"])
@@ -197,7 +209,7 @@ def request(tmp_path: Path, task_id: str | None = None) -> ClosureRequest:
         "acceptance_criteria": [{**item, "verified": True, "evidence_sha256": "a" * 64} for item in criteria],
     }
     if task_id is None:
-        return ClosureRequest(REPO, tmp_path, 99, evidence, None, "github-label-only-fallback", "dispatcher_db_missing", "github-comment:700")
+        return ClosureRequest(REPO, tmp_path, 99, evidence, None, "github-label-only-fallback", "dispatcher_db_missing", "github-comment:700", "codex-slice-implementer", "session-5245", "codex/issue-5245-light-closure")
     return ClosureRequest(REPO, tmp_path, 99, evidence, task_id)
 
 
@@ -290,6 +302,98 @@ def test_closure_apply_recovers_planned_dispatcher_after_post_merge_lease_expiry
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["cleanup"]["dispatcher"]["status"] == "completed"
+
+
+def test_closure_apply_recovers_gc_reclaimed_planned_lease_without_replacement_claimant(
+    tmp_path: Path,
+) -> None:
+    fake = Fake(tmp_path)
+    task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    fake.merged = True
+    fake.dispatcher_status = "ready"
+    fake.dispatcher_release_events = [
+        {
+            "task_id": task_id,
+            "event_type": "task.released",
+            "actor": "dispatcher-gc",
+            "lease_id": "lease-1",
+            "timestamp": "2099-01-01T00:00:01+00:00",
+            "payload": {"reason": "expired"},
+        }
+    ]
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["cleanup"]["dispatcher"]["status"] == "completed"
+    assert receipt["cleanup"]["dispatcher"]["lease_id"] == "lease-2"
+    claim = next(call for call in fake.calls if len(call) >= 4 and call[3] == "claim")
+    assert "--takeover-stale" not in claim
+
+
+def test_closure_apply_rejects_reclaimed_task_with_later_replacement_claimant(
+    tmp_path: Path,
+) -> None:
+    fake = Fake(tmp_path)
+    task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    fake.merged = True
+    fake.dispatcher_status = "ready"
+    fake.dispatcher_release_events = [
+        {
+            "task_id": task_id,
+            "event_type": "task.released",
+            "actor": "dispatcher-gc",
+            "lease_id": "lease-1",
+            "timestamp": "2099-01-01T00:00:01+00:00",
+            "payload": {"reason": "expired"},
+        },
+        {
+            "task_id": task_id,
+            "event_type": "task.claimed",
+            "actor": "other-agent",
+            "lease_id": "lease-other",
+            "timestamp": "2099-01-01T00:00:02+00:00",
+        },
+    ]
+    with pytest.raises(ClosureError, match="claimed after the planned lease was reclaimed"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any(len(call) >= 4 and call[3] == "claim" for call in fake.calls)
+
+
+def test_closure_plan_rejects_stale_fallback_claimant_receipt(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.pickup_comments.append(
+        {
+            "id": 701,
+            "issue_url": f"https://api.github.com/repos/{REPO}/issues/5245",
+            "body": "Pickup intent receipt: agent=new-agent session=new-session branch=new-branch worktree="
+            f"{tmp_path} coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing issue=5245",
+            "user": {"login": "RasmusTho"},
+            "created_at": "2026-09-02T00:01:00Z",
+        }
+    )
+    with pytest.raises(ClosureError, match="current claimant authority"):
+        build_closure_plan(request(tmp_path), executor=fake)
+
+
+def test_closure_apply_rejects_stale_fallback_claimant_after_merge(
+    tmp_path: Path,
+) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.merged = True
+    fake.pickup_comments.append(
+        {
+            "id": 701,
+            "issue_url": f"https://api.github.com/repos/{REPO}/issues/5245",
+            "body": "Pickup intent receipt: agent=new-agent session=new-session branch=new-branch worktree="
+            f"{tmp_path} coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing issue=5245",
+            "user": {"login": "RasmusTho"},
+            "created_at": "2026-09-02T00:01:00Z",
+        }
+    )
+    with pytest.raises(ClosureError, match="current claimant authority"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any("DELETE" in call for call in fake.calls)
 
 
 @pytest.mark.parametrize("already_merged", [False, True])
@@ -561,7 +665,7 @@ def test_closure_plan_accepts_valid_tier_one_evidence(tmp_path: Path) -> None:
     evidence["tier"] = 1
     base = request(tmp_path)
     plan = build_closure_plan(
-        ClosureRequest(REPO, tmp_path, 99, evidence, base.dispatcher_task_id, base.coordination_mode, base.fallback_reason, base.coordination_evidence),
+        ClosureRequest(REPO, tmp_path, 99, evidence, base.dispatcher_task_id, base.coordination_mode, base.fallback_reason, base.coordination_evidence, base.caller_agent, base.caller_session, base.caller_branch),
         executor=fake,
     )
     assert plan["tier"] == 1
@@ -585,7 +689,7 @@ def test_closure_plan_rejects_additional_github_closing_keyword_forms(tmp_path: 
     evidence["pr"]["body_sha256"] = hashlib.sha256(fake.body.encode()).hexdigest()
     base = request(tmp_path)
     assert build_closure_plan(
-        ClosureRequest(REPO, tmp_path, 99, evidence, base.dispatcher_task_id, base.coordination_mode, base.fallback_reason, base.coordination_evidence),
+        ClosureRequest(REPO, tmp_path, 99, evidence, base.dispatcher_task_id, base.coordination_mode, base.fallback_reason, base.coordination_evidence, base.caller_agent, base.caller_session, base.caller_branch),
         executor=fake,
     )["governing_issue"] == 5245
 
