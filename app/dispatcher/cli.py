@@ -214,6 +214,12 @@ def _cmd_show(args: argparse.Namespace, store: SqliteStore) -> int:
                     "ORDER BY timestamp, event_id",
                     (args.task_id,),
                 ).fetchall()
+                lease_row = None
+                if task_row["lease_id"] is not None:
+                    lease_row = conn.execute(
+                        "SELECT * FROM dispatcher_leases WHERE lease_id = ?",
+                        (task_row["lease_id"],),
+                    ).fetchone()
                 task_payload = {
                     "task_id": task_row["task_id"],
                     "issue_number": task_row["issue_number"],
@@ -246,7 +252,18 @@ def _cmd_show(args: argparse.Namespace, store: SqliteStore) -> int:
                     )
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             return _emit_error(str(exc), args.json)
-        _emit({"ok": True, "task": task_payload, "events": events}, args.json)
+        lease = None
+        if lease_row is not None:
+            lease = {
+                "lease_id": lease_row["lease_id"],
+                "resource": lease_row["resource"],
+                "holder": lease_row["holder"],
+                "expires_at": lease_row["expires_at"],
+                "heartbeat_at": lease_row["heartbeat_at"],
+                "released_at": lease_row["released_at"],
+                "release_reason": lease_row["release_reason"],
+            }
+        _emit({"ok": True, "task": task_payload, "lease": lease, "events": events}, args.json)
         return 0
     task = store.get_task(args.task_id)
     if task is None:

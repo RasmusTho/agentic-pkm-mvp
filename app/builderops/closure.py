@@ -771,18 +771,7 @@ def _dispatcher_snapshot(
 ) -> dict[str, str] | None:
     if task_id is None:
         return None
-    result = _run(
-        executor,
-        cwd,
-        [sys.executable, "-m", "app.dispatcher", "show", task_id, "--json"],
-    )
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise ClosureError("unknown", "dispatcher readback was not JSON") from exc
-    task = payload.get("task") if isinstance(payload, dict) else None
-    if not isinstance(task, dict) or task.get("task_id") != task_id:
-        raise ClosureError("unknown", "dispatcher task identity was not exact")
+    task, _, lease = _dispatcher_inspect(executor, cwd, task_id)
     return _dispatcher_snapshot_from_task(
         task,
         task_id,
@@ -790,6 +779,7 @@ def _dispatcher_snapshot(
         issue_number=issue_number,
         pr_number=pr_number,
         allow_expired=allow_expired,
+        lease=lease,
     )
 
 
@@ -801,6 +791,7 @@ def _dispatcher_snapshot_from_task(
     issue_number: int,
     pr_number: int,
     allow_expired: bool = False,
+    lease: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     if task.get("task_id") != task_id:
         raise ClosureError("unknown", "dispatcher task identity was not exact")
@@ -812,6 +803,15 @@ def _dispatcher_snapshot_from_task(
         raise ClosureError("incomplete", "dispatcher task has no active lease-holder identity")
     if not isinstance(lease_expires_at, str):
         raise ClosureError("incomplete", "dispatcher lease expiry is unavailable")
+    if (
+        not isinstance(lease, Mapping)
+        or lease.get("lease_id") != lease_id
+        or lease.get("holder") != holder
+        or lease.get("resource") != f"issue:{issue_number}"
+        or lease.get("expires_at") != lease_expires_at
+        or lease.get("released_at") is not None
+    ):
+        raise ClosureError("incomplete", "dispatcher lease row is not the exact unreleased active lease")
     lease_expiry = _parse_timestamp(lease_expires_at, "dispatcher lease")
     if not allow_expired and lease_expiry <= datetime.now(timezone.utc):
         raise ClosureError("incomplete", "dispatcher lease is expired")
@@ -830,7 +830,7 @@ def _dispatcher_snapshot_from_task(
 
 def _dispatcher_inspect(
     executor: CommandExecutor, cwd: Path, task_id: str
-) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]], Mapping[str, Any] | None]:
     result = _run(
         executor,
         cwd,
@@ -842,13 +842,15 @@ def _dispatcher_inspect(
         raise ClosureError("unknown", "dispatcher inspection was not JSON") from exc
     task = payload.get("task") if isinstance(payload, Mapping) else None
     events = payload.get("events") if isinstance(payload, Mapping) else None
+    lease = payload.get("lease") if isinstance(payload, Mapping) else None
     if (
         not isinstance(task, Mapping)
         or not isinstance(events, list)
         or not all(isinstance(row, Mapping) for row in events)
+        or (lease is not None and not isinstance(lease, Mapping))
     ):
         raise ClosureError("unknown", "dispatcher inspection was malformed")
-    return task, events
+    return task, events, lease
 
 
 def _validate_claimant_history(
@@ -916,7 +918,7 @@ def _dispatcher_completion(
     task_id = dispatcher.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         raise ClosureError("unknown", "dispatcher completion identity is malformed")
-    task, events = _dispatcher_inspect(executor, cwd, task_id)
+    task, events, lease = _dispatcher_inspect(executor, cwd, task_id)
     if (
         not isinstance(task, Mapping)
         or task.get("task_id") != task_id
@@ -933,6 +935,7 @@ def _dispatcher_completion(
             issue_number=issue_number,
             pr_number=pr_number,
             allow_expired=allow_expired_claim,
+            lease=lease,
         )
         if active != dispatcher:
             raise ClosureError("drift", "dispatcher task or lease-holder drifted")
@@ -1016,13 +1019,14 @@ def _dispatcher_reclaim(
         or lease.get("resource") != f"issue:{issue_number}"
     ):
         raise ClosureError("drift", "dispatcher lease recovery was not an exact same-agent claim")
-    recovered_task, recovered_events = _dispatcher_inspect(executor, cwd, task_id)
+    recovered_task, recovered_events, recovered_lease = _dispatcher_inspect(executor, cwd, task_id)
     recovered = _dispatcher_snapshot_from_task(
         recovered_task,
         task_id,
         repository=repository,
         issue_number=issue_number,
         pr_number=pr_number,
+        lease=recovered_lease,
     )
     if recovered["lease_holder"] != holder or recovered["lease_id"] != task["lease_id"]:
         raise ClosureError("drift", "dispatcher lease recovery readback drifted")

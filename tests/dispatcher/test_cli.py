@@ -315,6 +315,8 @@ def test_show_with_events_reads_task_and_history(tmp_env, store):
     assert code == 0
     assert data["ok"] is True
     assert data["task"]["lease_id"] is not None
+    assert data["lease"]["lease_id"] == data["task"]["lease_id"]
+    assert data["lease"]["released_at"] is None
     assert data["events"][0]["event_type"] == "task.claimed"
 
 

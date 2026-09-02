@@ -87,6 +87,8 @@ class Fake:
         }
         self.dispatcher_status = "absent"
         self.claim_dispatcher_during_pr_readback = False
+        self.release_dispatcher_lease_during_pr_readback = False
+        self.dispatcher_lease_released_at: str | None = None
         self.dispatcher_release_events: list[dict[str, object]] = []
         self.dispatcher_claim_events: list[dict[str, object]] = [
             {
@@ -132,6 +134,9 @@ class Fake:
             )
             if self.claim_dispatcher_during_pr_readback and not self.merged:
                 self.dispatcher_status = "claimed"
+            if self.release_dispatcher_lease_during_pr_readback and not self.merged:
+                self.dispatcher_status = "claimed"
+                self.dispatcher_lease_released_at = "2026-09-02T00:00:02+00:00"
             return result
         if endpoint.endswith("/issues/5245") and "GET" in args:
             return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
@@ -190,7 +195,16 @@ class Fake:
                         events = self.dispatcher_claim_events
                     else:
                         events = [{"task_id": self.dispatcher_task["task_id"], "event_type": "task.completed", "actor": self.dispatcher_task["claimed_by"], "lease_id": self.dispatcher_task["lease_id"]}]
-                    return self._json(args, {"ok": True, "task": task, "events": events})
+                    lease = None
+                    if self.dispatcher_status == "claimed":
+                        lease = {
+                            "lease_id": self.dispatcher_task["lease_id"],
+                            "holder": self.dispatcher_task["claimed_by"],
+                            "resource": "issue:5245",
+                            "expires_at": self.dispatcher_task["lease_expires_at"],
+                            "released_at": self.dispatcher_lease_released_at,
+                        }
+                    return self._json(args, {"ok": True, "task": task, "lease": lease, "events": events})
                 return self._json(args, {"ok": True, "task": task})
             if args[3] == "events":
                 if self.dispatcher_status == "ready":
@@ -492,6 +506,17 @@ def test_closure_apply_rechecks_fallback_dispatcher_before_merge(tmp_path: Path)
     plan = build_closure_plan(request(tmp_path), executor=fake)
     fake.claim_dispatcher_during_pr_readback = True
     with pytest.raises(ClosureError, match="current dispatcher lease"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any(any(part.endswith("/merge") for part in call) for call in fake.calls)
+
+
+def test_closure_apply_rechecks_dispatcher_lease_row_before_merge(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
+    task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    fake.release_dispatcher_lease_during_pr_readback = True
+    with pytest.raises(ClosureError, match="lease row"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert not any(any(part.endswith("/merge") for part in call) for call in fake.calls)
 
