@@ -169,8 +169,17 @@ def _hash_text(text: str) -> str:
 
 def _read_note(path: Path) -> tuple[dict[str, Any], str]:
     raw = path.read_text(encoding="utf-8") if path.exists() else ""
-    frontmatter, body, _error = parse_bounded_frontmatter(raw)
+    frontmatter, body, error = parse_bounded_frontmatter(raw)
+    if error is not None:
+        raise ValueError("malformed frontmatter")
     return frontmatter, body
+
+
+def _canonical_note_title(frontmatter: dict[str, Any], body: str, path: Path) -> str:
+    """Use the retained-source title semantics shared by all canonical producers."""
+    from app.ingest.vault_alpha import _derive_title, _frontmatter_title
+
+    return _frontmatter_title(frontmatter) or _derive_title(body, path)
 
 
 def _write_note(
@@ -247,11 +256,16 @@ def _merge_canonical_payload(
         existing = {}
     merged = {**existing, **updates}
     existing_ref = existing.get("episode_ref")
+    updated_frontmatter = updates.get("frontmatter")
+    episode_ref_is_explicit = "episode_ref" in updates and (
+        not isinstance(updated_frontmatter, dict)
+        or "episode_ref" in updated_frontmatter
+    )
     # A real binding replaces the prior value. An explicit ``unbound`` is also
     # authoritative and must clear a prior binding; only an omitted field defers
     # to established vault-canonical state.
     if (
-        "episode_ref" not in updates
+        not episode_ref_is_explicit
         and existing_ref is not None
     ):
         # ERE-03: episode_ref is vault-canonical, but a watcher pass whose
@@ -565,7 +579,7 @@ def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = Non
         )
         rename_payload = _canonical_note_payload(
             frontmatter=normalized_frontmatter,
-            title=frontmatter.get("title") or resolved_note_path.stem,
+            title=_canonical_note_title(frontmatter, body, resolved_note_path),
             review_state=normalized_frontmatter["review_state"],
             maturity=normalized_frontmatter.get("maturity"),
             content=body,
@@ -770,7 +784,7 @@ def upsert_object_from_note(
     note_path = Path(path).resolve()
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
-    title = frontmatter.get("title") or note_path.stem
+    title = _canonical_note_title(frontmatter, body, note_path)
     replay = canonical_note_replay(
         note_path, vault_root=vault_root, source_body=body
     )
@@ -966,7 +980,7 @@ def _sync_markdown(
         if state is None and rename_state and rename_state["path"] != str(note_path):
             rename_payload = _canonical_note_payload(
                 frontmatter=normalized_frontmatter,
-                title=frontmatter.get("title") or note_path.stem,
+                title=_canonical_note_title(frontmatter, body, note_path),
                 review_state=normalized_frontmatter["review_state"],
                 maturity=normalized_frontmatter.get("maturity"),
                 content=body,
@@ -1018,7 +1032,7 @@ def _sync_markdown(
 
         obj_payload = {
             "uuid": uuid_value,
-            "title": frontmatter.get("title") or note_path.stem,
+            "title": _canonical_note_title(frontmatter, body, note_path),
             "review_state": normalized_frontmatter["review_state"],
             "maturity": normalized_frontmatter.get("maturity"),
             "content": body,
@@ -1209,7 +1223,7 @@ def handle_rename(
             uuid_value=frontmatter["uuid"],
             payload=_canonical_note_payload(
                 frontmatter=normalized_frontmatter,
-                title=frontmatter.get("title") or new.stem,
+                title=_canonical_note_title(frontmatter, body, new),
                 review_state=normalized_frontmatter["review_state"],
                 maturity=normalized_frontmatter.get("maturity"),
                 content=body,

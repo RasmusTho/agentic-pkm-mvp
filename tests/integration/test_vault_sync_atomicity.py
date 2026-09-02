@@ -345,6 +345,8 @@ def test_sync_markdown_edit_preserves_richer_canonical_payload(tmp_path, monkeyp
                 ),
             )
 
+        # No episode_ref declaration means the edit must preserve the existing
+        # vault-canonical binding rather than project the helper's default.
         _write_note(note_path, uuid_value, "Metadata Note", "edited body")
         vault_sync.sync_markdown(str(note_path))
 
@@ -400,6 +402,83 @@ def test_real_episode_binding_list_survives_merge_without_type_error(
         payload = _canonical_payload(dsn, uuid_value)
         assert payload["episode_ref"] == ["episode-1a2b3c4d"]
         assert payload["content"] == "bound body edited"
+    finally:
+        _drop_database(admin_dsn, database)
+
+
+@pytest.mark.pg
+def test_explicit_unbound_clears_existing_episode_binding(tmp_path, monkeypatch) -> None:
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        note_path = tmp_path / "unbound.md"
+        uuid_value = str(uuid4())
+        _write_note(note_path, uuid_value, "Unbound Note", "first body")
+        vault_sync.sync_markdown(str(note_path))
+        with psycopg.connect(dsn) as conn:
+            conn.execute(
+                """
+                update store_objects
+                set payload = payload || %s::jsonb
+                where vault_binding_id = %s and object_id = %s
+                """,
+                (
+                    '{"episode_ref":["episode:old"]}',
+                    COMPATIBILITY_BINDING_ID,
+                    uuid_value,
+                ),
+            )
+
+        frontmatter = {
+            "uuid": uuid_value,
+            "title": "Unbound Note",
+            "episode_ref": "unbound",
+        }
+        fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+        note_path.write_text(f"---\n{fm_dump}\n---\n\nsecond body", encoding="utf-8")
+        vault_sync.sync_markdown(str(note_path))
+
+        assert _canonical_payload(dsn, uuid_value)["episode_ref"] == "unbound"
+    finally:
+        _drop_database(admin_dsn, database)
+
+
+@pytest.mark.pg
+def test_sync_markdown_uses_heading_title_across_create_edit_and_rename(
+    tmp_path, monkeypatch
+) -> None:
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    admin_dsn, database = _configure_isolated_pg_test(monkeypatch)
+    dsn = os.environ["DATABASE_URL"]
+    try:
+        from app.services import vault_sync
+
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+        note_path = tmp_path / "filename-title.md"
+        uuid_value = str(uuid4())
+        frontmatter = {"uuid": uuid_value}
+        fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
+        note_path.write_text(f"---\n{fm_dump}\n---\n\n# Heading title\nBody", encoding="utf-8")
+
+        vault_sync.sync_markdown(str(note_path), vault_root=tmp_path)
+        assert _canonical_payload(dsn, uuid_value)["title"] == "Heading title"
+
+        note_path.write_text(f"---\n{fm_dump}\n---\n\n# Edited heading\nBody", encoding="utf-8")
+        vault_sync.sync_markdown(str(note_path), vault_root=tmp_path)
+        assert _canonical_payload(dsn, uuid_value)["title"] == "Edited heading"
+
+        renamed = tmp_path / "renamed-filename.md"
+        note_path.rename(renamed)
+        vault_sync.handle_rename(str(note_path), str(renamed), vault_root=tmp_path)
+        assert _canonical_payload(dsn, uuid_value)["title"] == "Edited heading"
     finally:
         _drop_database(admin_dsn, database)
 
