@@ -7,7 +7,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -146,6 +146,24 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
     )
     with pytest.raises(adapters_module.AdapterUnavailableError, match="no enabled adapter"):
         load_operational_adapters(env, resolver=resolver)
+
+
+def test_operational_transport_rejects_incompatible_provider() -> None:
+    env = {
+        **intent_env(),
+        "BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION": "1",
+        "HOME": "/tmp/model-inquiry-home",
+    }
+    selected, config, resolution = adapters_module.resolve_inquiry_target(env)
+    mismatched = resolution.model_copy(update={"provider": "anthropic"})
+
+    with patch.object(
+        adapters_module,
+        "resolve_inquiry_target",
+        return_value=(selected, config, mismatched),
+    ):
+        with pytest.raises(adapters_module.AdapterUnavailableError, match="incompatible"):
+            load_operational_adapters(env)
 
 
 def test_model_inquiry_has_no_hardcoded_target_selection() -> None:
