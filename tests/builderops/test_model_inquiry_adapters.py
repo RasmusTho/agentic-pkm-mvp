@@ -24,12 +24,14 @@ from app.builderops.model_inquiry_adapters import (
     ScriptedAdapter,
     load_adapter_descriptors,
     load_adapters,
+    load_operational_adapters,
     load_operational_subscription_adapters,
     sanitized_adapter_failure,
 )
 from app.builderops.models import BuilderOpsValidationError
 from app.ops.host_secret_bootstrap import HOST_SECRET_RUNTIME_ENV_FILE
 from app.ops.host_secret_contract import load_host_secret_contract
+from app.components.settings.providers_loader import load_provider_census
 from llm_contract import (
     ADAPTER_FAILURE_CLASSES as KERNEL_ADAPTER_FAILURE_CLASSES,
     AdapterResult as KernelAdapterResult,
@@ -67,8 +69,9 @@ def _response() -> dict[str, object]:
 
 def test_single_target_intent_uses_neutral_perspectives() -> None:
     assert COMMITTED_INTENT_CONFIG["acceptance_mode"] == "single_target"
-    assert COMMITTED_INTENT_CONFIG["capability_tier"] == "sol"
     assert COMMITTED_INTENT_CONFIG["perspectives"] == ["synthesis", "verification"]
+    assert "capability_tier" not in COMMITTED_INTENT_CONFIG
+    assert "target_intent" not in COMMITTED_INTENT_CONFIG
     assert "roles" not in COMMITTED_INTENT_CONFIG
 
     descriptors = load_adapter_descriptors(intent_env())
@@ -92,6 +95,8 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
     }
     descriptors = load_adapter_descriptors(env)
     adapters = load_operational_subscription_adapters(env)
+    resolver = adapters_module.BuilderModelAccessResolver.from_declared_sources(env=env)
+    profile = resolver.model_inquiry_profile("dev")
 
     assert set(adapters) == {"synthesis", "verification"}
     for perspective, adapter in adapters.items():
@@ -105,6 +110,42 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
         assert argv[argv.index("--perspective") + 1] == perspective
         assert "--role" not in argv
         assert not any(value in {"fable", "gpt_codex"} for value in argv)
+        assert "--reasoning-effort" in argv
+        assert "xhigh" in argv
+        assert "--output-schema-ref" in argv
+        assert "builderops.model-turn-response.v1" in argv
+
+    # The bridge receives the resolver-selected execution policy; it must not
+    # silently replace a declared reasoning effort or response schema.
+    resolver.census.runtime_channels.model_inquiry["dev"] = profile.model_copy(
+        update={
+            "target_intent": profile.target_intent.model_copy(
+                update={"reasoning_effort": "high"}
+            )
+        }
+    )
+    configured = load_operational_adapters(env, resolver=resolver)
+    configured_argv = configured["synthesis"].argv
+    assert configured_argv[configured_argv.index("--reasoning-effort") + 1] == "high"
+    assert configured["synthesis"].reasoning_effort == "high"
+
+    resolver.census.runtime_channels.model_inquiry["dev"] = profile.model_copy(
+        update={
+            "target_intent": profile.target_intent.model_copy(
+                update={"output_schema_ref": "builderops.future-response.v1"}
+            )
+        }
+    )
+    with pytest.raises(adapters_module.ModelAccessResolutionError, match="response schema"):
+        load_operational_adapters(env, resolver=resolver)
+
+    # A declared but unregistered future transport cannot silently reuse the
+    # current subscription bridge or the API adapter.
+    resolver.census.runtime_channels.model_inquiry["dev"] = profile.model_copy(
+        update={"operational_transport": "future_transport"}
+    )
+    with pytest.raises(adapters_module.AdapterUnavailableError, match="no enabled adapter"):
+        load_operational_adapters(env, resolver=resolver)
 
 
 def test_model_inquiry_has_no_hardcoded_target_selection() -> None:
@@ -204,7 +245,7 @@ def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> Non
         model="configured-model",
         endpoint="https://api.anthropic.com/v1/messages",
         api_key="credential-sentinel",
-        intent=ModelAccessIntent(**COMMITTED_INTENT_CONFIG["target_intent"]),
+        intent=ModelAccessIntent(**load_provider_census().runtime_channels.model_inquiry["dev"].target_intent.model_dump()),
     )
     assert "credential-sentinel" not in json.dumps(
         adapters_module.sanitized_adapter_identity(http_adapter)
@@ -499,7 +540,7 @@ def test_role_credentials_resolve_through_the_host_secret_contract(
     # a provider, a model, or a transport target.
     for forbidden in ("api_key_env", "provider", "model", "endpoint", "argv"):
         payload = intent_config()
-        payload["target_intent"][forbidden] = "declared-elsewhere"
+        payload[forbidden] = "declared-elsewhere"
         with pytest.raises(BuilderOpsValidationError):
             load_adapter_descriptors(
                 {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
@@ -559,14 +600,10 @@ def test_unsupported_model_inquiry_intent_is_refused_before_adapter_creation(
     reason: str,
 ) -> None:
     payload = intent_config()
-    payload["target_intent"][field] = value
+    payload[field] = value
 
-    descriptors = load_adapter_descriptors(
-        {INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)}
-    )
-
-    assert not descriptors["synthesis"]["available"]
-    assert reason in descriptors["synthesis"]["reason"]
+    with pytest.raises(BuilderOpsValidationError, match="intent fields"):
+        load_adapter_descriptors({INQUIRY_INTENT_CONFIG_ENV: json.dumps(payload)})
 
 
 def test_production_resolver_ignores_ambient_census_override(
@@ -614,16 +651,11 @@ def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> No
         "command",
     ):
         assert forbidden not in lowered, forbidden
-    intent = COMMITTED_INTENT_CONFIG["target_intent"]
+    intent = load_provider_census().runtime_channels.model_inquiry["dev"].target_intent.model_dump()
     assert set(intent) == {
-            "capability_tier",
-            "reasoning_effort",
-            "determinism_required",
-            "output_schema_ref",
-            "independence",
-            "fallback_requirement",
-            "side_effect_class",
-        }
+        "capability_tier", "reasoning_effort", "determinism_required",
+        "output_schema_ref", "independence", "fallback_requirement", "side_effect_class",
+    }
     assert intent["independence"] == "none"
     assert intent["fallback_requirement"] == "fallback_forbidden"
 

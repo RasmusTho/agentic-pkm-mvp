@@ -14,8 +14,8 @@ Owner: Platform and Operations System, with the BuilderOps deployment owner
 Temporal class: operational
 Review cadence: before a TARS BuilderOps deployment and whenever host, VM, network, or disk posture changes
 Source of truth: a fresh qualification input and deployment receipts
-Last reviewed: 2026-08-29
-Last verified against: repository deployment contract only; no live TARS/Proxmox readback in this slice
+Last reviewed: 2026-08-31
+Last verified against: repository deployment contract, `product_tars_channel_topology.v1`, and no live TARS/Proxmox readback in this slice
 
 # TARS / Proxmox Deployment Profile
 
@@ -24,6 +24,25 @@ Last verified against: repository deployment contract only; no live TARS/Proxmox
 This profile isolates one TARS/Proxmox setup from the portable BuilderOps deployment contract.
 Alternative hosts, hypervisors, VM layouts, container runtimes, and alerting mechanisms may satisfy
 the generic contract with equivalent evidence.
+
+## Product Runtime channel placement boundary
+
+This profile selects the TARS-hosted Linux VM topology as the intended placement for the Product
+Runtime `dev`, `test`, and `prod` channels. It does not invent channel VM identities or assert live
+residency. A fresh, redaction-safe `product_tars_channel_topology.v1` qualification input must bind
+each channel to its VM and engine identity, source/image identity, private ingress/auth class,
+health/version evidence, data/backup/rollback boundary, observed-at time, and explicit gaps/refusals.
+The validator accepts evidence no more than 24 hours old and allows at most five minutes of bounded
+future clock skew; older or farther-future evidence is rejected.
+Until that input and later operator acceptance exist, placement remains a repository contract only.
+
+Demerzel/Mac mini is a control, development, client, and operator computer, not a Product Runtime
+channel host. Local Compose/Colima is a non-authoritative development fallback. VM 102
+(`builder-system`) remains the separate complete Builder System / Dev System target and must not
+host a `pkm-*` Product Runtime project or share its Product engine.
+
+Provider/model selection is outside placement and is resolved by capability configuration. This
+profile carries no named provider, model, or Codex-only architecture decision.
 
 ## Complete Dev System placement boundary
 

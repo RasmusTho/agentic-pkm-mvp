@@ -36,8 +36,9 @@ the bounded child Issues and the owner document:
   `docs/SETTINGS.md`.
 - **Extract configurable hardcoded values** → SETTINGS-07A..07C / #4796..#4798 and their
   validation hub #3165; no new extraction should be inferred from this old row.
-- **Central SettingsService** → SETTINGS-01..04 plus the delivered Settings Spine; the single
-  owner is `docs/SETTINGS.md`, not this roadmap.
+- **Central SettingsService** → the scoped foundation and target contract; full consumer convergence
+  remains part of the open Settings Spine parent #3156. The single documentation owner is
+  `docs/SETTINGS.md`, not this roadmap.
 
 The Settings Spine capability checklist and exact acceptance path live in
 `docs/SETTINGS_SPINE/README.md`; GitHub parent #3156 and its child Issues remain the executable

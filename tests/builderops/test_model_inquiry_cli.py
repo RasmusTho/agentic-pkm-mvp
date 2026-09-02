@@ -895,17 +895,7 @@ def test_inquiry_run_uses_operational_subscription_fallback(
             "channel": "dev",
             "consumer": "builderops-model-inquiry",
             "acceptance_mode": "single_target",
-            "capability_tier": "sol",
             "perspectives": ["synthesis", "verification"],
-            "target_intent": {
-                "capability_tier": "frontier",
-                "reasoning_effort": "xhigh",
-                "determinism_required": False,
-                "output_schema_ref": "builderops.model-turn-response.v1",
-                "independence": "none",
-                "fallback_requirement": "fallback_forbidden",
-                "side_effect_class": "advisory_review",
-            },
         }
     )
     result = CliRunner().invoke(
@@ -924,7 +914,22 @@ def test_inquiry_run_uses_operational_subscription_fallback(
     )
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["outcome"] == "single_target_acceptance"
+    payload = json.loads(result.output)
+    assert payload["outcome"] == "single_target_acceptance"
+    terminal = next(
+        receipt
+        for receipt in ModelInquiryService.from_env(env).trace(
+            "inq_test_cli_subscription_fallback"
+        )["receipts"]
+        if receipt["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["details"]["effective_targets"] == [
+        {
+            "adapter_id": "openai-gpt-5.6-sol-subscription",
+            "provider": "openai",
+            "model": "gpt-5.6-sol",
+        }
+    ]
     assert set(call[0] for call in calls) == {"openai"}
     assert {call[1] for call in calls} == {"synthesis", "verification"}
 

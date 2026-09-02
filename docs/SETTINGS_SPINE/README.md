@@ -1,7 +1,7 @@
-State: Delivered Settings Spine capability and acceptance map (owner-ruled Option B, 2026-07-07).
-The implementation children and SETTINGS-08 owner-doc handoff are delivered; live GitHub issue
-#3156 is the final validation/closure receipt.
-Doc role: Specification and delivered acceptance record
+State: Settings Spine specification and acceptance map (owner-ruled Option B, 2026-07-07). The
+SETTINGS-08 owner-document slice is delivered; live GitHub issue #3156 remains the final open
+validation/closure receipt.
+Doc role: Specification and partial delivered acceptance record
 Authority: Owns the task decomposition, acceptance criteria, and cross-task invariants for the
 settings-architecture consolidation. `docs/SETTINGS.md` owns shipped settings mechanism; the audit
 remains advisory evidence. Where this directory conflicts with a Product owner doc, the owner doc
@@ -9,7 +9,7 @@ wins and the conflict is raised as an issue.
 
 # Settings Spine
 
-One settings model for all of Yggdrasil: **two scopes** (instance settings in an app-local
+Target settings model for all of Yggdrasil: **two scopes** (instance settings in an app-local
 markdown file that exists before any vault; vault settings as human-editable markdown at one
 canonical, visible `<vault>/settings/` folder) resolved through **one spine** (a single
 `SettingsService` resolution order with a single default registry), with **watcher-fed ingestion**
@@ -35,7 +35,7 @@ writers. Findings F1-F7 and invariants SET-1..SET-7:
 | 7A | [LLM_AND_RETRIEVAL_SETTINGS.md](LLM_AND_RETRIEVAL_SETTINGS.md) | Model routing and rerank tuning migrate into the registry, tier-gated | SET-4/SET-1 | 2, 3 |
 | 7B | [TTS_SETTINGS.md](TTS_SETTINGS.md) | TTS voices and explicit fallback policy migrate into the registry | SET-4/SET-1 | 7A |
 | 7C | [WATCHER_AND_TUNING_SETTINGS.md](WATCHER_AND_TUNING_SETTINGS.md) | Watcher tunables and curation/expansion thresholds migrate through the existing reload path | SET-4/SET-1 | 7B |
-| 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent-closure handoff | SET-6 | 1-7 (all — its closure handoff verifies the full capability checklist) |
+| 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent acceptance remains with #3156 | SET-6 | 1-7 (parent acceptance remains separately governed) |
 
 Tasks 1 and 2 can run in parallel (disjoint surfaces: ingestion wiring vs default declarations).
 After task 1, tasks 3 and 4 may run in parallel. SETTINGS-05 starts only after both merge **and**
@@ -58,7 +58,7 @@ child posts a receipt to #3156 before the next child is readied.
       Verify: `tests/vault/test_settings_receipt_durable.py` extended per task 4.
 - [x] Pre-vault boot consumes only instance-scope settings; `no_vault` behavior unchanged (#2005).
       Verify: `tests/settings/test_health_settings_no_vault.py`, `tests/settings/test_watcher_settings_no_vault.py` stay green through every task.
-- [x] Vault selection through the UI rebinds the watcher ingest path (the real rebind #3119's
+- [ ] Vault selection through the UI rebinds the watcher ingest path (the real rebind #3119's
       closing fix deliberately deferred; supersedes #2476's "do not converge" per owner ruling).
       Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_settings05_parent_acceptance`
       + runtime receipt on #3163 (task 5C).
@@ -119,15 +119,14 @@ The parent feature issue is the live validation hub: each merged child posts a v
 there before the next dependent child is picked up. Capability acceptance = all checklist items
 above verified + the integrated-runtime receipt `settings.parent.v1` (edit a setting in Obsidian on
 the dev channel, observe live effect + receipt). Owner-doc promotion (task 8 rewrites
-`docs/SETTINGS.md` as the single owner) is the final child and carries the parent-closure handoff;
-the live parent issue and its final closure receipt remain authoritative for lifecycle state.
+`docs/SETTINGS.md` as the single owner) is the delivered docs slice; the live parent issue and its
+final capability/closure receipt remain authoritative for lifecycle state.
 
 ## Relationship to GitHub issues
 
-Parent feature issue #3156; delivered children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163
-(SETTINGS-05 delivered validation hub; its three serial implementation children are delivered),
+Parent feature issue #3156; delivered children #3159 (01), #3160 (02), #3161 (03), #3162 (04),
 #3164 (06), #3165 (07 validation hub), #4796 (07A),
-#4797 (07B), #4798 (07C), and #3166 (08) — delivered map and
+#4797 (07B), #4798 (07C), and #3166 (08) — delivered child map and
 lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
 Reconciliation (do not duplicate): task 5 builds the live rebind that #3119's closing fix
 (PR #3126, visible-warning only) deliberately deferred, superseding #2476's "do not converge"

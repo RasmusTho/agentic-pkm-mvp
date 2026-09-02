@@ -30,6 +30,8 @@ authority; PDM owns storage mechanics; GOV owns access and policy decisions; SIP
 provenance; DRI owns rebuildable derivatives. Adapters map those owner-native contracts into the
 common flow without copying their truth into a central archive registry.
 
+This target-state specification follows the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts and document-backed receipts remain owner-native authority; derivatives and other machine projections are rebuildable; diagnostic dumps and optional backups are evidence/ergonomics only, never semantic authority or a mandatory restore proof. HKA recovery remains a bounded, blocked/target-state adapter until its own delivery and acceptance evidence exists; this directory is not a shipped general restore capability.
+
 ## Current-Main Reconciliation
 
 - Heimdal parent #3842 and HAR-01..05 (#3847–#3851) are closed. PR #5061 delivered HAR-05 at

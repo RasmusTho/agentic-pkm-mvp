@@ -1,8 +1,10 @@
-State: Current-state owner document for the delivered Settings Spine (SETTINGS-01..08).
+State: Current-state owner document for the delivered Settings-08 documentation slice; the
+Settings Spine parent acceptance remains open on #3156.
 Doc role: Core SoT / owner document
-Authority: Owns the settings mechanism, scopes, resolution order, canonical vault location,
-ingestion/degradation semantics, receipts, and operator/lab tiering. Runtime validation commands
-and the code contracts they exercise remain the executable evidence.
+Authority: Owns the settings mechanism contract, scopes, resolution order, canonical vault location,
+ingestion/degradation semantics, receipts, and operator/lab tiering. It distinguishes the target
+one-spine model from current runtime evidence; runtime validation commands and the code contracts
+they exercise remain the executable evidence.
 
 ## Ownership and reading order
 
@@ -19,8 +21,12 @@ The two settings scopes are:
 - **Vault scope** — human-visible Markdown settings under the selected vault's canonical
   `<vault>/settings/` root, divided into vault-shared and clone-local files.
 
-Both scopes resolve through one `SettingsService` and one default registry. A runtime/session
-override is an explicit final-layer override, not a third persistent settings location.
+The target model resolves both scopes through one `SettingsService` and one default registry. Current
+runtime evidence is not yet one universal resolver: vault/context paths use `app/vault/settings_service.py`,
+ASK prompts use `app/settings/prompts.py::resolve_ask_system_prompt`, and compiled runtime settings
+use `app/settings/compiler.py` plus `app/settings/runtime.py::get_settings_bundle`. A runtime/session
+override is an explicit final-layer override, not a third persistent settings location; future
+convergence must preserve these named seams and their existing validation.
 
 ## Current-state baseline
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -28,12 +34,12 @@ override is an explicit final-layer override, not a third persistent settings lo
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
-The delivered spine covers ingestion and visible degradation (SETTINGS-01), one default registry
-(SETTINGS-02), one canonical vault settings root (SETTINGS-03), durable receipts for settings
-writers (SETTINGS-04), protected picker/watcher rebind (SETTINGS-05), prompt settings (SETTINGS-06),
-and the serial model/TTS/watcher tuning wave (SETTINGS-07A..07C). The owner-document consolidation
-and parent validation handoff are SETTINGS-08; no separate settings owner or orphan schema is
-implied by the older roadmap.
+The delivered child work covers ingestion and visible degradation (SETTINGS-01), default-registry
+repair (SETTINGS-02), one canonical vault settings root (SETTINGS-03), durable receipts for settings
+writers (SETTINGS-04), prompt settings (SETTINGS-06), and the serial model/TTS/watcher tuning wave
+(SETTINGS-07A..07C). SETTINGS-05 parent acceptance remains open on #3156; SETTINGS-08 is the
+owner-document consolidation slice recorded by this PR. No separate settings owner or orphan schema
+is implied by the older roadmap.
 
 ## Target-state boundary
 

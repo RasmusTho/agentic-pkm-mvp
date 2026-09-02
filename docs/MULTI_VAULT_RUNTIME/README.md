@@ -232,6 +232,38 @@ dimension revision as provenance. Registration removal transactionally strips th
 every dimension in the same locked registry transaction; production registration removal itself
 stays `capability_not_ready` until MVR-06B.
 
+### Fresh bootstrap after operational-lineage loss
+
+MVR operational journals, leases, ownership records, and recovery lineage are safety state, not
+semantic or human-knowledge authority. If any of those records is missing, corrupt, stale, or
+ambiguous, MVR starts a **fresh bootstrap epoch** while all writers, owners, and effects remain
+fenced. The fresh epoch never claims to restore the prior owner or to replay an effect whose prior
+outcome is unknown.
+
+The state machine is deliberately monotonic and fail-closed:
+
+| Event | From | To | Required evidence / refusal |
+| --- | --- | --- | --- |
+| Missing operational lineage (journal, lease, ownership, or recovery lineage) | unknown_or_missing | inactive_fenced | Mint a new epoch ID, hold the inactive fence, and refuse owner/effect claims. |
+| Fenced bootstrap begins | inactive_fenced | source_config_discovery | Discover the owner-native MVR registry/config without enabling writers or effects. |
+| Source/config discovery complete | source_config_discovery | authoritative_readback | Bind the discovered source digest to the new epoch before reading external state. |
+| Ownership conflict or overlap detected | authoritative_readback | ownership_conflict_refused | Refuse activation and preserve the conflict evidence; never choose an owner by recency or guess. |
+| Readback unavailable, stale, or incomplete | authoritative_readback | inactive_fenced | Remain fenced and retry only with a new readback; absence is not proof of no owner or no effect. |
+| Authoritative readback complete with no conflict | authoritative_readback | convergence_receipt_pending | Require owner-native MVR registry/config, host-global ownership ledger, live channel/process readback, and external effect readback. |
+| Convergence receipt complete | convergence_receipt_pending | activation_ready | Receipt binds epoch ID, source digest, readback digest, and decision digest; every required source must agree. |
+| Explicit activation | activation_ready | active | Require the convergence receipt, an explicit activation decision, no inferred ownership, and no inferred prior effect. |
+| Owner binding admitted | active | owned | Revalidate the owner-native binding and current host-global ownership ledger under the existing lock. |
+| Effect capability enablement | owned | effect_capable | Enable effects only after the active epoch, owner binding, and receipt-bound preconditions still match. |
+
+The readback set is owner-native: the existing MVR registry/config establishes the instance-local
+mechanical state; the host-global ownership ledger and live channel/process readback establish
+current ownership and quiescence; and external effect readback establishes what can be known about
+prior effects. A missing or conflicting source produces a typed refusal (`readback_unavailable` or
+`ownership_conflict_refused`) and leaves the epoch `inactive_fenced`. Neither an empty local record,
+a retained journal/backup, nor a stale lease may be interpreted as proof of ownership, completion,
+or an absent effect. Activation must consume the complete convergence receipt; it cannot create
+ownership or a prior effect result by inference.
+
 ## Reconciliation — do not duplicate
 
 - **#2566** owns the downstream overlay/UI active-vault switcher. It consumes this runtime seam;
@@ -253,6 +285,11 @@ stays `capability_not_ready` until MVR-06B.
   not a multi-active implementation, and no duplicate watcher-rebind issue is created here.
 - **#2003 / #2311** delivered no-vault startup, runtime switching foundations, and removal of
   silent `./vault` fallback. This capability preserves those contracts.
+- **RSC-05 / #5309** amends this section in place with the fresh-bootstrap state machine and
+  contract tests; **RSC-06** is the later implementation slice. **#2143**, **#3863**, **#3864**,
+  **#3865**, **#3866**, **#3867**, **#3868**, and **#3869** retain MVR delivery authority. This
+  work creates no parallel registry, parallel journal, parallel supervisor, or parallel recovery
+  Issue chain.
 - **#2356** delivered the v0 `ActiveContextSet` containment adapter. Task 03 evolved that seam in
   place (`app/vault/active_context_v1.py` alongside the retained v0 adapter); it did not create a
   rival context type.

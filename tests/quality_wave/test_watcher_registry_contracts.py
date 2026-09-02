@@ -132,24 +132,28 @@ def test_backoff_tick_short_circuits_scanning_until_expiry(tmp_path: Path, monke
 
 
 def test_bad_tick_resets_after_following_healthy_tick(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_fake_emit(monkeypatch)
-    cfg, spec = _make_cfg(tmp_path, max_scanned=1)
-    one = cfg.vault_path / "Inbox" / "one.md"
-    two = cfg.vault_path / "Inbox" / "two.md"
-    _write_note(one, "one", mtime=1_700_003_000)
-    _write_note(two, "two", mtime=1_700_003_001)
+    cfg, spec = _make_cfg(tmp_path)
+    note = cfg.vault_path / "Inbox" / "note.md"
+    _write_note(note, "payload", mtime=1_700_003_000)
+
+    def boom(**kwargs: object) -> str:
+        raise RuntimeError("emit failed")
+
+    monkeypatch.setattr(registry, "_emit_watch_event", boom)
 
     state = WatcherState()
     bad = _run_tick(monkeypatch, cfg, spec, state, now=1_700_003_100.0)
     assert bad["bad_tick"] is True
+    assert bad["bad_tick_reason"] == "errors"
+    assert bad["observation_status"] == "degraded"
     assert state.bad_ticks == 1
 
-    two.unlink()
-    cfg.max_scanned_files_per_tick = 2
+    _install_fake_emit(monkeypatch)
     healthy = _run_tick(monkeypatch, cfg, spec, state, now=1_700_003_200.0)
 
     assert healthy["bad_tick"] is False
     assert healthy["bad_tick_reason"] is None
+    assert healthy["observation_status"] == "healthy-idle"
     assert state.bad_ticks == 0
     assert healthy["chosen_sleep_seconds"] == cfg.tick_sleep_seconds
     assert state.dynamic_sleep_seconds is None

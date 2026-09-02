@@ -84,8 +84,8 @@ def test_rendered_full_host_mount_policy_keeps_fence_read_only(tmp_path) -> None
     )
 
     fence = services["instance-state-init"]
-    assert _mount_source(fence, str(selected_root)) == str(selected_root)
-    assert _mount_is_read_only(fence, str(selected_root))
+    assert _mount_source(fence, str(selected_root)) is None
+    assert _mount_source(fence, "/app/selected-vault") is None
 
 
 def _runtime(tmp_path):

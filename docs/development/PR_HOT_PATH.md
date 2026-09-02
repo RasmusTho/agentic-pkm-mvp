@@ -321,7 +321,9 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 
 - current SHA truth before merge
 - issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
-  revalidates the neutralized live body/head/closing links and requires `pr-contract` to authenticate
+  publishes the neutralized body in the LF-less canonical transport form, revalidates the live
+  body/head/closing links with at most one stored terminal LF, rejects a second LF, CR/CRLF, or any
+  other whitespace drift, and requires `pr-contract` to authenticate
   its trusted exact-head authority receipt, uses a fixed non-closing merge message,
   persists trusted authority plus continuous prepared/merged/reconciled/restored phases, explicitly
   closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
@@ -333,7 +335,8 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 - a neutralized PR body may not outlive its merge attempt: neutralization requires a head-bound
   readiness statement that CI and review are green and no further commits are anticipated, and a head
   change while the body is still neutralized requires restoring the canonical body before further
-  repair work
+  repair work; an exact-head body stranded by the historical extra-LF transport is restoration-only
+  and requires the unique authenticated body/receipt proof before the original body may be restored
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

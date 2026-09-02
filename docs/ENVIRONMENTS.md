@@ -5,9 +5,9 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-31
 Last live runtime verification: 2026-08-22 (Tailscale hosts `ygg-dev` and `ygg-prod`; `ygg-test` was not present/reachable)
-Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
+Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
 
 ## Overview
 
@@ -21,9 +21,10 @@ Reading rule:
 
 ## Current live runtime topology
 
-The live product runtime is now intended to run on the new Linux/Tailscale hosts. The Mac mini is an
-Ollama/model host only; its legacy `pkm-*` Compose stacks are not evidence that the product runtime is
-deployed there. The following is the verified live baseline as of 2026-08-22:
+The intended Product Runtime placement is the TARS-hosted Linux VM topology, with private
+Linux/Tailscale ingress for `dev`, `test`, and `prod`. The Mac mini is a control, development, client,
+and operator computer only for Product Runtime placement; its legacy `pkm-*` Compose stacks are not
+runtime evidence. The following is the verified live baseline as of 2026-08-22:
 
 | Environment | Live endpoint evidence | Current state | Artifact identity |
 | --- | --- | --- | --- |
@@ -35,6 +36,11 @@ This table is runtime evidence, not a replacement for the environment contract b
 blocked until the new host deployment path is authoritative, the candidate has an exact immutable
 identity, `test` is reachable, and the test verification receipt is green. Until then, local Compose
 commands are a fallback for development/testing only and must not be reported as promotion evidence.
+
+The exact TARS channel VM and engine identities are intentionally not hardcoded here. They are
+qualification inputs, not environment-selection values, and must be supplied by the redaction-safe
+`product_tars_channel_topology.v1` contract. VM 102 (`builder-system`) belongs to the separate
+complete Builder System / Dev System boundary and is not a Product Runtime channel target.
 
 ## Vault terminology
 

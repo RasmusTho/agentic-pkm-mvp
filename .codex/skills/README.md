@@ -83,6 +83,51 @@ Do not rely on a human remembering where BuilderOps material belongs.
    any findings, sources, or process narrative worth keeping, unless the material is trivial enough
    that losing it costs nothing.
 
+## Structural-work design packet route
+
+Before structural guidance, declare the change facts (`changed_paths`, `system_classification`,
+`write_class`, `persistence_class`, `external_effects`, and `risk_triggers`) and request a
+`design_packet.v1` from `app.governance.design_packet_resolver`. Read only the exact
+owner-document sections returned by the packet plus independently mandatory workflow contracts.
+If the resolver is unavailable or returns `design_packet_refusal.v1`, use the existing explicit
+owner-document route; refusal must not waive mandatory workflow reads. Product/Runtime design
+authority remains in owner documents; the packet is a read-only routing projection and cannot
+redefine principles.
+
+Use the resolver directly with `ChangeFacts`, a repository Path, and the exact `git rev-parse
+HEAD` value. The closed fact values are "product", "builder", "platform-ops", or "boundary" for
+"system_classification"; "none", "read-only", "governance-docs-process", "derived", "mechanical",
+"authority-bearing", "durable", or "external-effect" for "write_class"; and "none",
+"derived-rebuildable", "durable", or "authority" for "persistence_class". "risk_triggers" uses the
+exact kernel applicability slugs: "architecture-boundary-change",
+"capability-or-orchestration-change", "human-interaction-surface-change",
+"cognitive-foundation-change", "layer-or-import-boundary-change",
+"durable-or-external-mutation-change", "cognition-automation-or-governance-change",
+"public-contract-or-interface-change", "runtime-or-component-substitution",
+"semantic-model-or-generalization-change", "cross-layer-coupling-or-volatility-change",
+"scale-complexity-or-infrastructure-change", and "human-facing-visual-change".
+
+```python
+from pathlib import Path
+from app.governance.design_packet_resolver import ChangeFacts, resolve_design_packet
+
+facts = ChangeFacts(
+    changed_paths=("`<repo-relative-path>`",),
+    system_classification="`<closed classification>`",
+    write_class="`<closed write class>`",
+    persistence_class="`<closed persistence class>`",
+    external_effects=(),
+    risk_triggers=("`<exact kernel applicability slug>`",),
+)
+packet = resolve_design_packet(
+    facts, repository_root=Path("."), repository_head="`<git rev-parse HEAD>`"
+)
+```
+
+If the result is a `DesignPacket`, read its exact `owner` and `required_reading` sections. If it
+is a `DesignPacketRefusal`, follow the explicit owner-document route above and retain every
+independently mandatory workflow read.
+
 ## Skill routing
 
 This section is the complete discoverability index for repo-local skills. Every immediate

@@ -5,8 +5,8 @@ Owner: Runtime / architecture SoT
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-08
-Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, docker-compose.yaml, docs/architecture/system-context-overlay.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, and PR #3200 merge b3726a7e on 2026-07-08. This review stamp does not cover later doc changes unless those changes are named by their own review/verification evidence.
+Last reviewed: 2026-08-31
+Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, docker-compose.yaml, docs/architecture/system-context-overlay.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, docs/ENVIRONMENTS.md, docs/RELEASE_CHANNELS/README.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, and Issue #5237 repository reconciliation on 2026-08-31. This review stamp does not cover later doc changes unless those changes are named by their own review/verification evidence.
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6.0 seams shipped)
 
@@ -854,6 +854,16 @@ Detailed mechanics for each subsystem live in `docs/builderops/`.
 ## Release Channel Identity
 
 <!-- release-channel-identity -->
+
+### Product Runtime placement boundary
+
+The intended Product Runtime placement for `dev`, `test`, and `prod` is the TARS-hosted Linux VM
+topology. Exact channel identity and qualification evidence are supplied by the redaction-safe
+`product_tars_channel_topology.v1` contract; this architecture reference does not claim live TARS
+qualification or deployment. Demerzel/Mac mini remains control/development/client/operator
+infrastructure, local Compose/Colima remains a fallback, and VM 102 (`builder-system`) remains the
+separate Builder System / Dev System target. Provider/model selection remains capability- and
+configuration-resolved rather than encoded by placement.
 
 A release channel is a named operational build identified by four mandatory properties.
 The channel layer is orthogonal to the existing `dev`/`prod` environment layer:

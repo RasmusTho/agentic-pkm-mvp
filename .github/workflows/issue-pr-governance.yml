@@ -25,23 +25,31 @@ jobs:
             const actionLabels = labels.filter(name => name.startsWith("action:"));
             const blockedActions = new Set(["action:repair-contract", "action:wait-dependency", "action:restore-environment", "action:wait-external", "action:review-at"]);
             const humanActions = new Set(["action:human-decision", "action:human-authorization", "action:human-access", "action:human-operation", "action:human-acceptance"]);
-            if (agentLabels.length > 1) {
-              core.setFailed(`Issue must not carry more than one agent label at once: ${agentLabels.join(", ")}`);
-              return;
-            }
-            if (issue.state === "closed" && agentLabels.length) {
-              for (const name of agentLabels) {
+            const removeIssueLabel = async (name) => {
+              try {
                 await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
                   name,
                 });
+              } catch (error) {
+                if (error && error.status === 404) return;
+                throw error;
+              }
+            };
+            if (agentLabels.length > 1) {
+              core.setFailed(`Issue must not carry more than one agent label at once: ${agentLabels.join(", ")}`);
+              return;
+            }
+            if (issue.state === "closed" && agentLabels.length) {
+              for (const name of agentLabels) {
+                await removeIssueLabel(name);
               }
             }
             if (issue.state === "closed" && actionLabels.length) {
               for (const name of actionLabels) {
-                await github.rest.issues.removeLabel({owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.number, name});
+                await removeIssueLabel(name);
               }
               return;
             }
@@ -532,6 +540,8 @@ jobs:
               return allowLegacy && !body.endsWith("\n") && !body.includes("\r") &&
                 rawTerminalLfDigest(body) === storedDigest;
             };
+            const neutralizedBodyTransportCanonical = body =>
+              typeof body === "string" && !body.includes("\r") && !body.endsWith("\n\n");
             const trustedAuthorityReceipts = comments => {
               const escaped = AUTHORITY_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
               const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
@@ -579,6 +589,7 @@ jobs:
                   typeof receipt.neutralized_body_sha256 === "string" &&
                   /^[0-9a-f]{64}$/.test(receipt.neutralized_body_sha256) &&
                   receipt.body_sha256 !== receipt.neutralized_body_sha256 &&
+                  neutralizedBodyTransportCanonical(liveBody) &&
                   matchesStoredBodyDigest(
                     liveBody, receipt.neutralized_body_sha256, {allowLegacy}
                   )

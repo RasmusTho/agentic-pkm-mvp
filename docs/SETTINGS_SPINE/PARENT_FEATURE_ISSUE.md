@@ -1,6 +1,6 @@
-State: Settings Spine child delivery and owner-doc consolidation are delivered; the GitHub parent
-feature issue [#3156](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3156) is the authoritative
-validation/closure receipt. This file is the local pointer/receipt, not the live body.
+State: SETTINGS-08 owner-document consolidation is delivered; the GitHub parent feature issue
+[#3156](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3156) remains open and is the
+authoritative validation/closure receipt. This file is the local pointer/receipt, not the live body.
 Doc role: Specification companion (parent-issue pointer)
 Authority: The GitHub issue body wins for live backlog state; `README.md` wins for the task decomposition.
 
@@ -17,13 +17,13 @@ Authority: The GitHub issue body wins for live backlog state; `README.md` wins f
 | SETTINGS-02 SINGLE_DEFAULT_REGISTRY | [#3160](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3160) | delivered / closed |
 | SETTINGS-03 CANONICALIZE_SETTINGS_LOCATION | [#3161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3161) | delivered / closed |
 | SETTINGS-04 RECEIPT_EVERY_SETTINGS_WRITE | [#3162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3162) | delivered / closed |
-| SETTINGS-05 REBIND_ON_VAULT_SELECTION | [#3163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3163) | delivered / closed validation hub; 05A→05B→05C aggregate receipt verified |
+| SETTINGS-05 REBIND_ON_VAULT_SELECTION | [#3163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3163) | open validation hub; aggregate acceptance remains pending |
 | SETTINGS-06 PROMPTS_AS_SETTINGS | [#3164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3164) | delivered / closed |
 | SETTINGS-07 validation hub | [#3165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3165) | delivered / closed; 07A→07B→07C receipts verified |
 | SETTINGS-07A LLM_AND_RETRIEVAL_SETTINGS | [#4796](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4796) | delivered / closed |
 | SETTINGS-07B TTS_SETTINGS | [#4797](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4797) | delivered / closed |
 | SETTINGS-07C WATCHER_AND_TUNING_SETTINGS | [#4798](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4798) | delivered / closed |
-| SETTINGS-08 CONSOLIDATE_SETTINGS_OWNER_DOCS | [#3166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3166) | delivered owner-doc consolidation and parent-closure handoff; picked up only after #3159-#3165 |
+| SETTINGS-08 CONSOLIDATE_SETTINGS_OWNER_DOCS | [#3166](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3166) | delivered owner-doc consolidation; parent closure remains with #3156 |
 
 ## Lifecycle rules
 

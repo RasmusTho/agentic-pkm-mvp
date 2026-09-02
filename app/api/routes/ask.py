@@ -13,6 +13,7 @@ from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
 from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
+from app.agents.ask.orientation import is_return_orientation_question
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.retrieval.hybrid import rebuild_from_durable_index
 from app.tts.config import load_tts_config
@@ -115,7 +116,10 @@ class AskSource(BaseModel):
     plane: str
     zone: str | None = None
     path: str | None = None
-    orientation: Literal["active", "waiting", "supporting", "background"] = "active"
+    orientation: Literal["active", "waiting", "supporting", "background", "unknown"] = "unknown"
+    orientation_provenance: dict[str, str] = Field(default_factory=dict)
+    orientation_degradation: str | None = None
+    evidence_role: str | None = None
 
 
 class RecallAttribution(BaseModel):
@@ -183,21 +187,6 @@ def _capture_intent_suggestion(transcript: str) -> str | None:
     return None
 
 
-def _orientation_of(payload: dict[str, Any], path: str | None) -> Literal["active", "waiting", "supporting", "background"]:
-    """Derive a bounded, read-only orientation label from retrieved evidence."""
-
-    declared = payload.get("orientation_role")
-    if declared in {"active", "waiting", "supporting", "background"}:
-        return declared
-    normalized_path = (path or "").casefold()
-    if "/sources/" in normalized_path or normalized_path.startswith("sources/"):
-        return "supporting"
-    text = " ".join(str(payload.get(key) or "") for key in ("title", "text", "content")).casefold()
-    if any(token in text for token in ("waiting", "deferred", "blocked")):
-        return "waiting"
-    return "active"
-
-
 def _to_source(hit: Any) -> AskSource:
     raw: dict[str, Any]
     if hasattr(hit, "model_dump"):
@@ -220,13 +209,14 @@ def _to_source(hit: Any) -> AskSource:
         plane=plane,
         zone=zone,
         path=str(path) if path else None,
-        orientation=_orientation_of(payload, str(path) if path else None),
+        orientation=raw.get("orientation") or "unknown",
+        orientation_provenance=dict(raw.get("orientation_provenance") or {}),
+        orientation_degradation=raw.get("orientation_degradation"),
+        evidence_role=payload.get("evidence_role"),
     )
 
 
-def _is_return_orientation_question(question: str) -> bool:
-    normalized = question.casefold()
-    return "interrupt" in normalized or "returning" in normalized or "resume" in normalized
+_is_return_orientation_question = is_return_orientation_question
 
 
 @router.post("/ask", response_model=AskResponse)
@@ -260,8 +250,6 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     latency_ms = int((time.perf_counter() - start) * 1000)
     record_ask_query(float(latency_ms))
     sources = [_to_source(hit) for hit in top_hits]
-    if _is_return_orientation_question(req.question):
-        sources = [source for source in sources if source.orientation != "background"]
     recalled = [
         RecallAttribution(
             memory_id=exp.artifact_id,

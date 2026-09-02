@@ -17,6 +17,8 @@ can_parallelize_with: [Adapt Retained Source Artifacts, Govern Rebuildable Deriv
 Give durable human-authored and human-accepted artifacts a portable recovery path while preserving
 HKA as the authority for identity, generation, provenance, and governed writes.
 
+This is target-state recovery work and follows the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): HKA artifacts and document-backed receipts remain owner-native authority, while staged exports and machine representations are not authority until a governed write succeeds. Diagnostic dumps and optional backups are evidence/ergonomics only, never semantic authority or a mandatory restore proof. Historical restore-first material is superseded by this owner-native, conflict-safe posture. The adapter is not an active shipped capability until its bounded Issue and parent acceptance evidence are complete.
+
 ## What This Task Does
 
 - Implement an HKA recovery adapter under `app.archival.adapters` over the existing ArtifactContract

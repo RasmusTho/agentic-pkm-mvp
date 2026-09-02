@@ -1,23 +1,19 @@
-# Explicit full-host vault binding for a source already visible through the
-# base compose's same-path /Users and /Volumes mounts. This overlay binds the
-# runtime selectors to that same container path without adding a duplicate
+# Explicit full-host vault binding for runtime consumers. This overlay binds
+# the governed selector to the same container path without adding a duplicate
 # /app/vault mount, which can deadlock on iCloud-backed filesystems under
 # Colima. The deploy helper derives and pins DEPLOY_VAULT_CONTAINER_ROOT from
 # the governed VAULT_HOST_ROOT; caller-shell selectors cannot replace it.
+# `instance-state-init` is deliberately absent: it consumes only its bounded
+# container-visible state and host-produced opaque receipt material and must
+# not receive the selected vault. If DESIGN_HANDOFF_APP_LOCAL_SETTINGS is
+# explicitly configured to a host-side path, the deployment wrapper refuses
+# before the deployment mutation window instead of treating that legacy source
+# as absent.
+# The explicit MVR-01C authority-cutover command is the separately governed
+# exception that mounts its already-authorized rollback root read-only.
 x-requires-explicit-full-host-vault: "${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}"
 
 services:
-  # The deployment fence validates drained legacy-owner roots from inside the
-  # instance-state-init container. On Linux hosts the selected vault is an
-  # absolute host path outside /Users and /Volumes, so expose that same path
-  # read-only to the fence controller and writable to the runtime consumers.
-  instance-state-init:
-    volumes:
-      - type: bind
-        source: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
-        target: ${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}
-        read_only: true
-
   api:
     volumes:
       - type: bind

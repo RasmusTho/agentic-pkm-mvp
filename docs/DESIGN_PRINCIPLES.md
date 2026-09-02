@@ -52,11 +52,15 @@ It exists to keep high-level design work systematic:
 
 ### 1. Boundary-First Design
 
+**Routing metadata:** ID `DP-01`; applicability `architecture-boundary-change`; owner `docs/DESIGN_PRINCIPLES.md :: 1. Boundary-First Design`; required reading `docs/ARCHITECTURE.md :: Boundary Enforcement`; enforcement `manual-review`.
+
 - Define stable system boundaries before defining implementations.
 - Separate responsibilities before choosing tools, runtimes, or event families.
 - A design is incomplete if authority, mutation rights, or accountability boundaries are unclear.
 
 ### 2. Capability-Based Composition
+
+**Routing metadata:** ID `DP-02`; applicability `capability-or-orchestration-change`; owner `docs/DESIGN_PRINCIPLES.md :: 2. Capability-Based Composition`; required reading `docs/CAPABILITY_CONTRACT_MODEL.md :: Capability definition`; enforcement `manual-review`.
 
 - Reusable capabilities are preferred over monolithic central-agent decomposition.
 - Capabilities should be composable, testable, and reusable across multiple interaction surfaces.
@@ -65,6 +69,8 @@ It exists to keep high-level design work systematic:
 
 ### 2A. Interaction-First Architecture
 
+**Routing metadata:** ID `DP-02A`; applicability `human-interaction-surface-change`; owner `docs/DESIGN_PRINCIPLES.md :: 2A. Interaction-First Architecture`; required reading `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md :: Human needs this serves`; enforcement `manual-review`.
+
 - Interaction is primary for the user-facing architecture; retrieval, reasoning, transformation, ingestion, and indexing are foundational supporting capabilities.
 - The architecture should be organized first around how the human interacts with the system, what authority that interaction carries, and which foundational capabilities support it.
 - Retrieval should not become the conceptual center of the architecture just because it is widely reused.
@@ -72,18 +78,24 @@ It exists to keep high-level design work systematic:
 
 ### 2B. Foundation Before Agency
 
+**Routing metadata:** ID `DP-02B`; applicability `cognitive-foundation-change`; owner `docs/DESIGN_PRINCIPLES.md :: 2B. Foundation Before Agency`; required reading `docs/ARCHITECTURE.md :: Layered cognitive/runtime architecture`; enforcement `manual-review`.
+
 - Ingestion, indexing, retrieval, and memory maintenance are foundational cognitive-system capabilities, not secondary plumbing.
 - Advanced agency is a core requirement of the system, but the foundation should be strong before the most ambitious agent behavior is rolled out broadly.
 - Foundation work should therefore be treated as enabling core capability, not as a detour away from the agentic goal.
 
 ### 3. Separation of System Layers
 
+**Routing metadata:** ID `DP-03`; applicability `layer-or-import-boundary-change`; owner `docs/DESIGN_PRINCIPLES.md :: 3. Separation of System Layers`; required reading `docs/adr/ADR-0013-code-dependency-direction.md :: Decision`; enforcement `blocking`.
+
 - Interaction, cognition, execution, memory, and governance are distinct layers.
 - A layer should have one primary responsibility and a clear contract with adjacent layers.
 - A layer may depend on another layer’s contract, but should not absorb its authority.
-- Changed (2026-06-16): the code-level projection of these layers onto `app.*` packages — a directional, forward-only import-dependency contract with the interaction layer import-protected — is governed by `docs/adr/ADR-0013-code-dependency-direction.md` and enforced (non-blocking) by `importlinter.ini`.
+- Changed (2026-06-16; blocking since 2026-06-24): the code-level projection of these layers onto `app.*` packages — a directional, forward-only import-dependency contract with the interaction layer import-protected — is governed by `docs/adr/ADR-0013-code-dependency-direction.md` and enforced by `importlinter.ini`.
 
 ### 4. Explicit Mutation Authority
+
+**Routing metadata:** ID `DP-04`; applicability `durable-or-external-mutation-change`; owner `docs/DESIGN_PRINCIPLES.md :: 4. Explicit Mutation Authority`; required reading `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md :: Rules for writes (automatic vs confirmed vs never)`; enforcement `manual-review`.
 
 - Mutation rights must be explicit and narrow.
 - Cognition alone must not imply execution authority.
@@ -92,6 +104,8 @@ It exists to keep high-level design work systematic:
 
 ### 5. Governance Before Autonomy
 
+**Routing metadata:** ID `DP-05`; applicability `cognition-automation-or-governance-change`; owner `docs/DESIGN_PRINCIPLES.md :: 5. Governance Before Autonomy`; required reading `docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md :: Human-first posture: inference-first, friction-on-crossing`; enforcement `manual-review`.
+
 - Governance is a prerequisite, not an afterthought.
 - New cognition or automation must be introduced only where policy, admissibility, provenance, approval, and auditability remain intact.
 - Read-only cognition surfaces should precede mutation-capable autonomous behavior.
@@ -99,11 +113,15 @@ It exists to keep high-level design work systematic:
 
 ### 6. Contracts Over Implementations
 
+**Routing metadata:** ID `DP-06`; applicability `public-contract-or-interface-change`; owner `docs/DESIGN_PRINCIPLES.md :: 6. Contracts Over Implementations`; required reading `docs/CAPABILITY_CONTRACT_MODEL.md :: Standard capability contract shape`; enforcement `manual-review`.
+
 - Stable contracts matter more than specific implementation choices.
 - Event names, runtimes, and libraries may evolve; authority boundaries and contract semantics should remain clear.
 - High-level docs should define invariants and interfaces before concrete mechanisms.
 
 ### 7. Modularity With Replaceability
+
+**Routing metadata:** ID `DP-07`; applicability `runtime-or-component-substitution`; owner `docs/DESIGN_PRINCIPLES.md :: 7. Modularity With Replaceability`; required reading `docs/MODULAR_ARCHITECTURE.md :: Kernel and extension fabric`; enforcement `manual-review`.
 
 - The system should be designed so individual mechanisms can change without collapsing the whole architecture.
 - Frameworks such as LangGraph, Deep Agents, or future execution runtimes are replaceable implementation choices, not architectural identities.
@@ -111,17 +129,23 @@ It exists to keep high-level design work systematic:
 
 ### 8. Flexibility Without Semantic Drift
 
+**Routing metadata:** ID `DP-08`; applicability `semantic-model-or-generalization-change`; owner `docs/DESIGN_PRINCIPLES.md :: 8. Flexibility Without Semantic Drift`; required reading `docs/CONCEPTS/ONTOLOGY_VOCABULARY.md :: Source of truth rule`; enforcement `manual-review`.
+
 - Flexibility does not mean vague authority.
 - Generality should come from clean seams and reusable contracts, not from collapsing distinct concepts into one runtime construct.
 - When a distinction matters semantically, the design should preserve it even if one implementation temporarily compresses it.
 
 ### 9. Volatility Isolation
 
+**Routing metadata:** ID `DP-09`; applicability `cross-layer-coupling-or-volatility-change`; owner `docs/DESIGN_PRINCIPLES.md :: 9. Volatility Isolation`; required reading `docs/adr/ADR-0042-design-principles-9-volatility-isolation.md :: Decision`; enforcement `advisory`.
+
 - Mimer should be treated as a modular, differentiated decomposition, not as one undifferentiated agent runtime.
 - Interaction, cognition, execution, memory, and governance must be able to evolve at different speeds.
 - Cross-layer coupling should be deliberate, minimal, and documented.
 
 ### 10. Single-Operator Scale
+
+**Routing metadata:** ID `DP-10`; applicability `scale-complexity-or-infrastructure-change`; owner `docs/DESIGN_PRINCIPLES.md :: 10. Single-Operator Scale`; required reading `docs/PROJECT_KERNEL.md :: 3. System Principles (must always hold)`; enforcement `manual-review`.
 
 - The system serves exactly one human on trusted personal infrastructure. Design for that
   reality, not for a hypothetical enterprise deployment.
@@ -137,6 +161,8 @@ It exists to keep high-level design work systematic:
   default); this principle governs product architecture, that one governs how we build.
 
 ### 11. Shared Visual Language
+
+**Routing metadata:** ID `DP-11`; applicability `human-facing-visual-change`; owner `docs/DESIGN_PRINCIPLES.md :: 11. Shared Visual Language`; required reading `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md :: Yggdrasil design-system gate`; enforcement `blocking`.
 
 - Every new or revised human-facing visual component, whether it belongs to a Product surface or a
   Builder surface, must use the canonical **Yggdrasil Design System**.
