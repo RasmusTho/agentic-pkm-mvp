@@ -132,6 +132,24 @@ def test_doctor_rejects_unsupported_recipe_version_but_accepts_current() -> None
     }
 
 
+def test_snapshot_cannot_self_bless_unsupported_recipe_version() -> None:
+    report = diagnose_mirror_corruption(
+        inventory=_inventory(),
+        sources=[_source()],
+        projections=[
+            _projection(
+                recipe_version="product-object-replay-v0",
+                # A snapshot must not choose the version that validates it.
+            )
+        ],
+    )
+
+    assert report.healthy is False
+    assert MirrorFindingCode.RECIPE_VERSION_MISMATCH in {
+        finding.code for finding in report.findings
+    }
+
+
 def test_doctor_is_redacted_and_non_mutating() -> None:
     inventory = [
         *_inventory(),
