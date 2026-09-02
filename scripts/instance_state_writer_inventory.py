@@ -673,7 +673,16 @@ def _env_list(values: object) -> dict[str, str]:
         return {}
     if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         raise InventoryError("docker legacy owner source inventory is malformed")
-    return _read_env_bytes(("\n".join(values) + "\n").encode("utf-8"))
+    parsed: dict[str, str] = {}
+    for value in values:
+        key, separator, literal_value = value.partition("=")
+        if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            continue
+        # Docker inspect exposes already-resolved Config.Env entries.  A '#'
+        # here is literal data; only env-file source text uses Compose comment
+        # and quote parsing through _read_env_bytes.
+        parsed[key] = literal_value
+    return parsed
 
 
 def _translate_container_root(value: str, mounts: object) -> Path | None:
