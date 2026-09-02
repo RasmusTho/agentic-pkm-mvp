@@ -145,6 +145,27 @@ def test_product_readiness_ignores_ingest_excluded_files(tmp_path: Path) -> None
     assert result.source_count == 1
 
 
+def test_product_readiness_ignores_projection_for_source_removed_from_policy(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    layout = vault_root / "⚙️ System" / "vault.layout.md"
+    layout.write_text(
+        "---\nsystem_folder: ⚙️ System\ninbox_folder: 📥 Inbox\n"
+        "desk_folder: 🛠️ Workbench\ninclude_folders:\n  - Other\n---\n\n"
+        "Source removed from retained policy.\n",
+        encoding="utf-8",
+    )
+
+    result = evaluate_product_store_readiness(
+        vault_root,
+        [_verified_row(source_identity, "Meaning-bearing Product note.")],
+    )
+
+    assert result.ready is True
+    assert result.state == "empty"
+    assert result.source_count == 0
+
+
 def test_source_backed_rebuild_is_reachable_while_unready() -> None:
     """Only the named source-backed reconstruction admission bypasses the guard."""
     from app.write_guard import SOURCE_BACKED_REBUILD_ACTION

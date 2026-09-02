@@ -221,7 +221,7 @@ def evaluate_product_store_readiness(
 
     sources, source_failures = _retained_sources(vault_root)
     rows = [row for row in projection_rows if _is_product_row(row)]
-    if not sources and not rows and not source_failures:
+    if not sources and not source_failures:
         return ProductReadiness("empty", True, "no retained Product sources", 0, 0)
     if source_failures:
         return ProductReadiness(
@@ -257,11 +257,6 @@ def evaluate_product_store_readiness(
             or _canonical_source_text(_payload_text(observed[0][1])) != source.text
         ):
             refused.append(source.replay.source_identity)
-    expected = {source.replay.source_identity for source in sources}
-    for identity in by_identity:
-        if identity not in expected:
-            refused.append(identity)
-
     if refused:
         return ProductReadiness(
             "refused",
