@@ -85,8 +85,17 @@ class Fake:
                 "checks": [{"context": "CI", "app_id": 7}],
             }
         }
-        self.dispatcher_status = "claimed"
+        self.dispatcher_status = "absent"
         self.dispatcher_release_events: list[dict[str, object]] = []
+        self.dispatcher_claim_events: list[dict[str, object]] = [
+            {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
+                "event_type": "task.claimed",
+                "actor": "codex-slice-implementer",
+                "lease_id": "lease-1",
+            }
+        ]
+        self.recovery_claim_events_after: list[dict[str, object]] = []
         self.dispatcher_task = {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
             "issue_number": 5245,
@@ -160,9 +169,24 @@ class Fake:
             return self._json(args, {})
         if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
             if args[3] == "show":
+                if self.dispatcher_status == "absent":
+                    return CommandResult(
+                        args,
+                        1,
+                        json.dumps({"ok": False, "error": f"Task {self.dispatcher_task['task_id']} not found"}),
+                        "",
+                    )
                 task = {"task_id": self.dispatcher_task["task_id"], "status": self.dispatcher_status, "issue_number": 5245, "repo": REPO, "linked_pr": "99"}
                 if self.dispatcher_status == "claimed":
                     task.update(self.dispatcher_task)
+                if "--events" in args:
+                    if self.dispatcher_status == "ready":
+                        events = self.dispatcher_release_events
+                    elif self.dispatcher_status == "claimed":
+                        events = self.dispatcher_claim_events
+                    else:
+                        events = [{"task_id": self.dispatcher_task["task_id"], "event_type": "task.completed", "actor": self.dispatcher_task["claimed_by"], "lease_id": self.dispatcher_task["lease_id"]}]
+                    return self._json(args, {"ok": True, "task": task, "events": events})
                 return self._json(args, {"ok": True, "task": task})
             if args[3] == "events":
                 if self.dispatcher_status == "ready":
@@ -173,12 +197,18 @@ class Fake:
                 assert args[5:7] == ("--agent", self.dispatcher_task["claimed_by"])
                 self.dispatcher_status = "claimed"
                 self.dispatcher_task.update({"lease_id": "lease-2", "lease_expires_at": "2099-01-02T00:00:00+00:00"})
+                self.dispatcher_claim_events = [
+                    *self.dispatcher_release_events,
+                    {"task_id": self.dispatcher_task["task_id"], "event_type": "task.claimed", "actor": self.dispatcher_task["claimed_by"], "lease_id": "lease-2"},
+                    *self.recovery_claim_events_after,
+                ]
                 task = {"task_id": self.dispatcher_task["task_id"], "status": "claimed", "issue_number": 5245, "repo": REPO, "linked_pr": "99", **self.dispatcher_task}
                 lease = {"lease_id": "lease-2", "holder": self.dispatcher_task["claimed_by"], "resource": "issue:5245", "expires_at": "2099-01-02T00:00:00+00:00"}
                 return self._json(args, {"ok": True, "task": task, "lease": lease})
             if args[3] == "complete":
                 assert args[4] == self.dispatcher_task["task_id"]
                 assert args[5:7] == ("--agent", self.dispatcher_task["claimed_by"])
+                assert args[7:9] == ("--lease-id", self.dispatcher_task["lease_id"])
                 self.dispatcher_status = "completed"; return CommandResult(args, 0, "", "")
         raise AssertionError(args)
 
@@ -234,6 +264,7 @@ def test_closure_plan_requires_explicit_coordination_when_dispatcher_task_is_omi
 
 def test_closure_plan_rejects_expired_dispatcher_lease(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
     fake.dispatcher_task["lease_expires_at"] = "2000-01-01T00:00:00+00:00"
     with pytest.raises(ClosureError, match="dispatcher lease is expired"):
         build_closure_plan(request(tmp_path, fake.dispatcher_task["task_id"]), executor=fake)
@@ -275,6 +306,7 @@ def test_closure_apply_accepts_valid_event_without_optional_issue_number(tmp_pat
 
 def test_closure_apply_completes_exact_dispatcher_task_with_lease_holder(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
     task_id = fake.dispatcher_task["task_id"]
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
@@ -287,6 +319,7 @@ def test_closure_apply_recovers_planned_dispatcher_after_post_merge_lease_expiry
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
     fake.dispatcher_task["lease_expires_at"] = "2026-09-02T00:00:30+00:00"
     real_datetime = datetime
 
@@ -308,6 +341,7 @@ def test_closure_apply_recovers_gc_reclaimed_planned_lease_without_replacement_c
     tmp_path: Path,
 ) -> None:
     fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
     task_id = fake.dispatcher_task["task_id"]
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
     fake.merged = True
@@ -327,12 +361,53 @@ def test_closure_apply_recovers_gc_reclaimed_planned_lease_without_replacement_c
     assert receipt["cleanup"]["dispatcher"]["lease_id"] == "lease-2"
     claim = next(call for call in fake.calls if len(call) >= 4 and call[3] == "claim")
     assert "--takeover-stale" not in claim
+    complete = next(call for call in fake.calls if len(call) >= 4 and call[3] == "complete")
+    assert complete[7:9] == ("--lease-id", "lease-2")
+
+
+def test_closure_apply_rejects_recovered_dispatcher_after_claimant_history_race(
+    tmp_path: Path,
+) -> None:
+    fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
+    task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    fake.merged = True
+    fake.dispatcher_status = "ready"
+    fake.dispatcher_release_events = [
+        {
+            "task_id": task_id,
+            "event_type": "task.released",
+            "actor": "dispatcher-gc",
+            "lease_id": "lease-1",
+            "timestamp": "2099-01-01T00:00:01+00:00",
+            "payload": {"reason": "expired"},
+        }
+    ]
+    fake.recovery_claim_events_after = [
+        {
+            "task_id": task_id,
+            "event_type": "task.claimed",
+            "actor": "other-agent",
+            "lease_id": "lease-other",
+        },
+        {
+            "task_id": task_id,
+            "event_type": "task.released",
+            "actor": "other-agent",
+            "lease_id": "lease-other",
+        },
+    ]
+    with pytest.raises(ClosureError, match="claimant history changed"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any(len(call) >= 4 and call[3] == "complete" for call in fake.calls)
 
 
 def test_closure_apply_rejects_reclaimed_task_with_later_replacement_claimant(
     tmp_path: Path,
 ) -> None:
     fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
     task_id = fake.dispatcher_task["task_id"]
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
     fake.merged = True
@@ -381,6 +456,7 @@ def test_closure_apply_rejects_stale_fallback_claimant_after_merge(
     fake = Fake(tmp_path)
     plan = build_closure_plan(request(tmp_path), executor=fake)
     fake.merged = True
+    fake.dispatcher_status = "claimed"
     fake.pickup_comments.append(
         {
             "id": 701,
@@ -394,6 +470,17 @@ def test_closure_apply_rejects_stale_fallback_claimant_after_merge(
     with pytest.raises(ClosureError, match="current claimant authority"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert not any("DELETE" in call for call in fake.calls)
+
+
+def test_closure_apply_rejects_fallback_when_dispatcher_lease_is_current(
+    tmp_path: Path,
+) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.dispatcher_status = "claimed"
+    with pytest.raises(ClosureError, match="current dispatcher lease"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any(any(part.endswith("/merge") for part in call) for call in fake.calls)
 
 
 @pytest.mark.parametrize("already_merged", [False, True])
@@ -473,18 +560,19 @@ def test_closure_plan_rejects_conflicting_duplicate_required_check_identities(tm
 
 
 def test_closure_apply_recovers_completed_dispatcher_from_governed_completion_event(tmp_path: Path) -> None:
-    fake = Fake(tmp_path); task_id = fake.dispatcher_task["task_id"]
+    fake = Fake(tmp_path); fake.dispatcher_status = "claimed"; task_id = fake.dispatcher_task["task_id"]
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
     fake.merged = True; fake.dispatcher_status = "completed"
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["reconciled"] is True
     assert not any(len(call) >= 4 and call[3] == "complete" for call in fake.calls)
-    events_call = next(call for call in fake.calls if len(call) >= 4 and call[3] == "events")
-    assert "--task-id" in events_call and task_id in events_call and "--all" in events_call
+    inspect_call = next(call for call in fake.calls if len(call) >= 4 and call[3] == "show" and "--events" in call)
+    assert task_id in inspect_call
 
 
 def test_closure_plan_requires_dispatcher_repository_and_issue_binding(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
+    fake.dispatcher_status = "claimed"
     fake.dispatcher_task["repo"] = "other/repository"
     with pytest.raises(ClosureError, match="governing repository and Issue"):
         build_closure_plan(request(tmp_path, fake.dispatcher_task["task_id"]), executor=fake)

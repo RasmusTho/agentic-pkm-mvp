@@ -121,50 +121,71 @@ def complete(
     store: SqliteStore,
     task_id: str,
     actor: str,
+    expected_lease_id: str | None = None,
 ) -> TaskRecord:
     """Mark a task as completed, releasing its lease.
 
     Only the current lease holder can complete the task.
     Emits a task.completed event.
     """
-    task = store.get_task(task_id)
-    if task is None:
-        raise ValueError(f"Task {task_id} not found")
-
-    if task.lease_id is None:
-        raise ValueError(f"Task {task_id} has no active lease")
-
-    lease = store.get_lease(task.lease_id)
-    if lease is None:
-        raise ValueError(f"Lease {task.lease_id} not found")
-
-    if lease.holder != actor:
-        raise ValueError(
-            f"Cannot complete task {task_id}: held by {lease.holder}, not {actor}"
-        )
-
     now = _utc_now()
-    lease.released_at = now
-    lease.release_reason = "completed"
-    store.upsert_lease(lease)
-
-    task.status = "completed"
-    task.lease_id = None
-    task.claimed_by = None
-    task.last_heartbeat_at = None
-    task.updated_at = now
-    store.upsert_task(task)
-
-    event = EventRecord(
-        event_id=_make_event_id(),
-        timestamp=now,
-        task_id=task_id,
-        event_type="task.completed",
-        actor=actor,
-        lease_id=lease.lease_id,
-    )
-    store.append_event(event)
-
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task_row = conn.execute(
+            "SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        if task_row is None:
+            raise ValueError(f"Task {task_id} not found")
+        current_lease_id = task_row["lease_id"]
+        if current_lease_id is None:
+            raise ValueError(f"Task {task_id} has no active lease")
+        if expected_lease_id is not None and current_lease_id != expected_lease_id:
+            raise ValueError(
+                f"Cannot complete task {task_id}: lease changed from {expected_lease_id}"
+            )
+        lease_row = conn.execute(
+            "SELECT * FROM dispatcher_leases WHERE lease_id = ?", (current_lease_id,)
+        ).fetchone()
+        if lease_row is None:
+            raise ValueError(f"Lease {current_lease_id} not found")
+        if lease_row["holder"] != actor:
+            raise ValueError(
+                f"Cannot complete task {task_id}: held by {lease_row['holder']}, not {actor}"
+            )
+        released = conn.execute(
+            "UPDATE dispatcher_leases SET released_at = ?, release_reason = 'completed' "
+            "WHERE lease_id = ? AND holder = ? AND released_at IS NULL",
+            (now, current_lease_id, actor),
+        )
+        if released.rowcount != 1:
+            raise ValueError(f"Cannot complete task {task_id}: lease changed concurrently")
+        completed = conn.execute(
+            "UPDATE dispatcher_tasks SET status = 'completed', lease_id = NULL, "
+            "claimed_by = NULL, last_heartbeat_at = NULL, lease_expires_at = NULL, "
+            "updated_at = ? WHERE task_id = ? AND lease_id = ? AND claimed_by = ?",
+            (now, task_id, current_lease_id, actor),
+        )
+        if completed.rowcount != 1:
+            raise ValueError(f"Cannot complete task {task_id}: task changed concurrently")
+        event = EventRecord(
+            event_id=_make_event_id(),
+            timestamp=now,
+            task_id=task_id,
+            event_type="task.completed",
+            actor=actor,
+            lease_id=current_lease_id,
+        )
+        conn.execute(
+            "INSERT INTO dispatcher_events "
+            "(event_id, timestamp, task_id, event_type, actor, lease_id, payload) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (event.event_id, event.timestamp, event.task_id, event.event_type, event.actor, event.lease_id, None),
+        )
+        conn.commit()
+    if store._event_writer is not None:
+        store._event_writer.append(event)
+    task = store.get_task(task_id)
+    assert task is not None, f"task {task_id} missing after successful completion"
     return task
 
 

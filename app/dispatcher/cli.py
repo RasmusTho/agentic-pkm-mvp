@@ -200,6 +200,54 @@ def _cmd_next(args: argparse.Namespace, store: SqliteStore) -> int:
 
 
 def _cmd_show(args: argparse.Namespace, store: SqliteStore) -> int:
+    if args.with_events:
+        try:
+            with store._connect() as conn:
+                conn.execute("BEGIN")
+                task_row = conn.execute(
+                    "SELECT * FROM dispatcher_tasks WHERE task_id = ?", (args.task_id,)
+                ).fetchone()
+                if task_row is None:
+                    return _emit_error(f"Task {args.task_id} not found", args.json)
+                event_rows = conn.execute(
+                    "SELECT * FROM dispatcher_events WHERE task_id = ? "
+                    "ORDER BY timestamp, event_id",
+                    (args.task_id,),
+                ).fetchall()
+                task_payload = {
+                    "task_id": task_row["task_id"],
+                    "issue_number": task_row["issue_number"],
+                    "repo": task_row["repo"],
+                    "title": task_row["title"],
+                    "status": task_row["status"],
+                    "priority": task_row["priority"],
+                    "claimed_by": task_row["claimed_by"],
+                    "lease_id": task_row["lease_id"],
+                    "lease_expires_at": task_row["lease_expires_at"],
+                    "linked_pr": task_row["linked_pr"],
+                    "blocked_reason": task_row["blocked_reason"],
+                    "updated_at": task_row["updated_at"],
+                }
+                events = []
+                for row in event_rows:
+                    payload = json.loads(row["payload"]) if row["payload"] is not None else None
+                    if payload is not None and not isinstance(payload, dict):
+                        raise ValueError("dispatcher event payload is malformed")
+                    events.append(
+                        {
+                            "event_id": row["event_id"],
+                            "timestamp": row["timestamp"],
+                            "task_id": row["task_id"],
+                            "event_type": row["event_type"],
+                            "actor": row["actor"],
+                            "lease_id": row["lease_id"],
+                            "payload": payload,
+                        }
+                    )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            return _emit_error(str(exc), args.json)
+        _emit({"ok": True, "task": task_payload, "events": events}, args.json)
+        return 0
     task = store.get_task(args.task_id)
     if task is None:
         return _emit_error(f"Task {args.task_id} not found", args.json)
@@ -296,6 +344,7 @@ def _cmd_complete(args: argparse.Namespace, store: SqliteStore) -> int:
             store,
             task_id=args.task_id,
             actor=args.agent,
+            expected_lease_id=args.lease_id,
         )
         _emit({"ok": True, "task": _compact_task(task)}, args.json)
         return 0
@@ -1149,6 +1198,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("show", help="Show task details")
     p.add_argument("task_id")
+    p.add_argument("--events", dest="with_events", action="store_true", help="Read task and complete event history in one snapshot")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("claim", help="Claim a task")
@@ -1191,6 +1241,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("complete", help="Complete a task (terminal)")
     p.add_argument("task_id")
     p.add_argument("--agent", required=True)
+    p.add_argument("--lease-id", default=None)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("events", help="Show recent events")

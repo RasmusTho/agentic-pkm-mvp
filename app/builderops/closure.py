@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from app.builderops.publication import CommandExecutor, CommandResult, SubprocessExecutor
 from app.builderops.issue_contract_validation import is_resolvable_verify_target
+from app.dispatcher.sync_github import github_issue_task_id
 from app.dispatcher.verification_contract import CLOSING_ISSUE_PATTERN, resolve_issue_authority
 
 PLAN_SCHEMA = "builder.closure-plan.v1"
@@ -782,6 +783,27 @@ def _dispatcher_snapshot(
     task = payload.get("task") if isinstance(payload, dict) else None
     if not isinstance(task, dict) or task.get("task_id") != task_id:
         raise ClosureError("unknown", "dispatcher task identity was not exact")
+    return _dispatcher_snapshot_from_task(
+        task,
+        task_id,
+        repository=repository,
+        issue_number=issue_number,
+        pr_number=pr_number,
+        allow_expired=allow_expired,
+    )
+
+
+def _dispatcher_snapshot_from_task(
+    task: Mapping[str, Any],
+    task_id: str,
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+    allow_expired: bool = False,
+) -> dict[str, str]:
+    if task.get("task_id") != task_id:
+        raise ClosureError("unknown", "dispatcher task identity was not exact")
     if task.get("repo") != repository or task.get("issue_number") != issue_number:
         raise ClosureError("incomplete", "dispatcher task is not bound to the governing repository and Issue")
     holder, lease_id, linked_pr = task.get("claimed_by"), task.get("lease_id"), task.get("linked_pr")
@@ -806,6 +828,81 @@ def _dispatcher_snapshot(
     }
 
 
+def _dispatcher_inspect(
+    executor: CommandExecutor, cwd: Path, task_id: str
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
+    result = _run(
+        executor,
+        cwd,
+        [sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "dispatcher inspection was not JSON") from exc
+    task = payload.get("task") if isinstance(payload, Mapping) else None
+    events = payload.get("events") if isinstance(payload, Mapping) else None
+    if (
+        not isinstance(task, Mapping)
+        or not isinstance(events, list)
+        or not all(isinstance(row, Mapping) for row in events)
+    ):
+        raise ClosureError("unknown", "dispatcher inspection was malformed")
+    return task, events
+
+
+def _validate_claimant_history(
+    events: Sequence[Mapping[str, Any]], dispatcher: Mapping[str, Any]
+) -> None:
+    task_id = dispatcher.get("task_id")
+    holder = dispatcher.get("lease_holder")
+    lease_id = dispatcher.get("lease_id")
+    claims = [
+        row
+        for row in events
+        if row.get("task_id") == task_id
+        and row.get("event_type") == "task.claimed"
+        and row.get("actor") == holder
+        and row.get("lease_id") == lease_id
+    ]
+    if len(claims) != 1:
+        raise ClosureError("incomplete", "dispatcher exact claimant event is unavailable or ambiguous")
+    claim_index = next(index for index, row in enumerate(events) if row is claims[0])
+    for row in events[claim_index + 1 :]:
+        if row.get("task_id") != task_id:
+            continue
+        if row.get("event_type") in {"task.claimed", "task.released", "task.completed"}:
+            raise ClosureError("drift", "dispatcher claimant history changed before completion")
+
+
+def _planned_release_index(
+    events: Sequence[Mapping[str, Any]], dispatcher: Mapping[str, Any]
+) -> int:
+    task_id = dispatcher.get("task_id")
+    lease_id = dispatcher.get("lease_id")
+    releases = [
+        (index, row)
+        for index, row in enumerate(events)
+        if row.get("task_id") == task_id
+        and row.get("event_type") == "task.released"
+        and row.get("lease_id") == lease_id
+        and isinstance(row.get("actor"), str)
+        and row.get("actor")
+        and isinstance(row.get("payload"), Mapping)
+        and row["payload"].get("reason") == "expired"
+    ]
+    if len(releases) != 1:
+        raise ClosureError("incomplete", "dispatcher planned lease expiry-release evidence is unavailable or ambiguous")
+    release_index, release = releases[0]
+    release_timestamp = release.get("timestamp")
+    planned_expiry = dispatcher.get("lease_expires_at")
+    if not isinstance(release_timestamp, str) or not isinstance(planned_expiry, str):
+        raise ClosureError("incomplete", "dispatcher expiry-release evidence lacks timestamps")
+    if _parse_timestamp(release_timestamp, "dispatcher expiry release") < _parse_timestamp(planned_expiry, "dispatcher lease"):
+        raise ClosureError("incomplete", "dispatcher expiry-release predates the planned lease expiry")
+    return release_index
+
+
 def _dispatcher_completion(
     executor: CommandExecutor,
     cwd: Path,
@@ -819,12 +916,7 @@ def _dispatcher_completion(
     task_id = dispatcher.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         raise ClosureError("unknown", "dispatcher completion identity is malformed")
-    result = _run(executor, cwd, [sys.executable, "-m", "app.dispatcher", "show", task_id, "--json"])
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise ClosureError("unknown", "dispatcher readback was not JSON") from exc
-    task = payload.get("task") if isinstance(payload, Mapping) else None
+    task, events = _dispatcher_inspect(executor, cwd, task_id)
     if (
         not isinstance(task, Mapping)
         or task.get("task_id") != task_id
@@ -834,9 +926,8 @@ def _dispatcher_completion(
     ):
         raise ClosureError("incomplete", "dispatcher completion task identity drifted")
     if task.get("status") == "claimed":
-        active = _dispatcher_snapshot(
-            executor,
-            cwd,
+        active = _dispatcher_snapshot_from_task(
+            task,
             task_id,
             repository=repository,
             issue_number=issue_number,
@@ -845,45 +936,19 @@ def _dispatcher_completion(
         )
         if active != dispatcher:
             raise ClosureError("drift", "dispatcher task or lease-holder drifted")
+        _validate_claimant_history(events, dispatcher)
         return {"status": "claimed", **active}
     if task.get("status") == "ready":
         if any(task.get(field) is not None for field in ("claimed_by", "lease_id", "lease_expires_at")):
             raise ClosureError("incomplete", "dispatcher ready task retains lease-holder identity")
-        events = _dispatcher_events(executor, cwd, task_id)
-        releases = [
-            row
-            for row in events
-            if isinstance(row, Mapping)
-            and row.get("task_id") == task_id
-            and row.get("event_type") == "task.released"
-            and row.get("lease_id") == dispatcher.get("lease_id")
-            and isinstance(row.get("actor"), str)
-            and row.get("actor")
-            and isinstance(row.get("payload"), Mapping)
-            and row["payload"].get("reason") == "expired"
-        ]
-        if len(releases) != 1:
-            raise ClosureError("incomplete", "dispatcher planned lease expiry-release evidence is unavailable or ambiguous")
-        release = releases[0]
-        release_timestamp = release.get("timestamp")
-        planned_expiry = dispatcher.get("lease_expires_at")
-        if not isinstance(release_timestamp, str) or not isinstance(planned_expiry, str):
-            raise ClosureError("incomplete", "dispatcher expiry-release evidence lacks timestamps")
-        if _parse_timestamp(release_timestamp, "dispatcher expiry release") < _parse_timestamp(planned_expiry, "dispatcher lease"):
-            raise ClosureError("incomplete", "dispatcher expiry-release predates the planned lease expiry")
-        for row in events:
-            if not isinstance(row, Mapping) or row.get("event_type") != "task.claimed":
-                continue
-            timestamp = row.get("timestamp")
-            if not isinstance(timestamp, str):
-                raise ClosureError("incomplete", "dispatcher claimant history is malformed")
-            if _parse_timestamp(timestamp, "dispatcher claimant event") >= _parse_timestamp(release_timestamp, "dispatcher expiry release"):
+        release_index = _planned_release_index(events, dispatcher)
+        for row in events[release_index + 1 :]:
+            if row.get("task_id") == task_id and row.get("event_type") == "task.claimed":
                 raise ClosureError("drift", "dispatcher task was claimed after the planned lease was reclaimed")
         return {"status": "released", **dispatcher}
     if task.get("status") != "completed" or task.get("claimed_by") is not None or task.get("lease_id") is not None:
         raise ClosureError("incomplete", "dispatcher completion is unavailable")
 
-    events = _dispatcher_events(executor, cwd, task_id)
     matches = [row for row in events if isinstance(row, Mapping) and row.get("task_id") == task_id and row.get("event_type") == "task.completed" and row.get("actor") == dispatcher.get("lease_holder") and row.get("lease_id") == dispatcher.get("lease_id")]
     if len(matches) != 1:
         raise ClosureError("incomplete", "dispatcher completion receipt is unavailable or ambiguous")
@@ -901,32 +966,6 @@ def _dispatcher_completion(
             )
         },
     }
-
-
-def _dispatcher_events(
-    executor: CommandExecutor, cwd: Path, task_id: str
-) -> list[Mapping[str, Any]]:
-    result = _run(
-        executor,
-        cwd,
-        [
-            sys.executable,
-            "-m",
-            "app.dispatcher",
-            "events",
-            "--task-id",
-            task_id,
-            "--all",
-            "--json",
-        ],
-    )
-    try:
-        rows = json.loads(result.stdout).get("events", [])
-    except (AttributeError, json.JSONDecodeError) as exc:
-        raise ClosureError("unknown", "dispatcher completion receipt was not JSON") from exc
-    if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
-        raise ClosureError("unknown", "dispatcher event history was malformed")
-    return rows
 
 
 def _dispatcher_reclaim(
@@ -977,17 +1016,89 @@ def _dispatcher_reclaim(
         or lease.get("resource") != f"issue:{issue_number}"
     ):
         raise ClosureError("drift", "dispatcher lease recovery was not an exact same-agent claim")
-    recovered = _dispatcher_snapshot(
-        executor,
-        cwd,
+    recovered_task, recovered_events = _dispatcher_inspect(executor, cwd, task_id)
+    recovered = _dispatcher_snapshot_from_task(
+        recovered_task,
         task_id,
         repository=repository,
         issue_number=issue_number,
         pr_number=pr_number,
     )
-    if recovered is None:
-        raise ClosureError("unknown", "dispatcher lease recovery readback was unavailable")
+    if recovered["lease_holder"] != holder or recovered["lease_id"] != task["lease_id"]:
+        raise ClosureError("drift", "dispatcher lease recovery readback drifted")
+    release_index = _planned_release_index(recovered_events, dispatcher)
+    recovery_claims = [
+        (index, row)
+        for index, row in enumerate(recovered_events)
+        if row.get("task_id") == task_id
+        and row.get("event_type") == "task.claimed"
+        and row.get("actor") == recovered["lease_holder"]
+        and row.get("lease_id") == recovered["lease_id"]
+    ]
+    if len(recovery_claims) != 1 or recovery_claims[0][0] <= release_index:
+        raise ClosureError("incomplete", "dispatcher recovery claimant event is unavailable or out of order")
+    recovery_claim_index = recovery_claims[0][0]
+    for row in recovered_events[release_index + 1 : recovery_claim_index]:
+        if row.get("task_id") == task_id and row.get("event_type") in {
+            "task.claimed",
+            "task.released",
+            "task.completed",
+        }:
+            raise ClosureError("drift", "dispatcher replacement claimant history changed before recovery")
+    _validate_claimant_history(recovered_events, recovered)
     return recovered
+
+
+def _reject_dispatcher_lease_for_fallback(
+    executor: CommandExecutor,
+    cwd: Path,
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+) -> None:
+    task_id = github_issue_task_id(repository, issue_number)
+    result = executor.run(
+        [sys.executable, "-m", "app.dispatcher", "show", task_id, "--events", "--json"],
+        cwd=cwd,
+    )
+    if result.returncode:
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ClosureError("unknown", "dispatcher fallback conflict readback was not JSON", result) from exc
+        error = payload.get("error") if isinstance(payload, Mapping) else None
+        if isinstance(error, str) and (
+            error == f"Task {task_id} not found"
+            or error.startswith("dispatcher not initialised")
+        ):
+            return
+        raise ClosureError("unknown", "dispatcher fallback conflict readback was unavailable", result)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "dispatcher fallback conflict readback was not JSON", result) from exc
+    task = payload.get("task") if isinstance(payload, Mapping) else None
+    if not isinstance(task, Mapping):
+        raise ClosureError("unknown", "dispatcher fallback conflict readback was malformed", result)
+    if (
+        task.get("task_id") != task_id
+        or task.get("repo") != repository
+        or task.get("issue_number") != issue_number
+    ):
+        raise ClosureError("drift", "dispatcher fallback task identity drifted")
+    linked_pr = task.get("linked_pr")
+    if linked_pr is not None and str(linked_pr) != str(pr_number):
+        raise ClosureError("drift", "dispatcher fallback task is linked to a different PR")
+    if task.get("status") == "claimed":
+        if any(
+            not isinstance(task.get(field), str) or not task.get(field)
+            for field in ("claimed_by", "lease_id", "lease_expires_at")
+        ):
+            raise ClosureError("incomplete", "dispatcher fallback task has malformed active lease identity")
+        raise ClosureError("drift", "fallback coordination conflicts with the current dispatcher lease")
+    if any(task.get(field) is not None for field in ("claimed_by", "lease_id", "lease_expires_at")):
+        raise ClosureError("incomplete", "dispatcher fallback task retains lease identity")
 
 
 def _closed_event_evidence(
@@ -1403,6 +1514,13 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         )
         if current_coordination != coordination:
             raise ClosureError("drift", "degraded coordination pickup authority drifted")
+        _reject_dispatcher_lease_for_fallback(
+            runner,
+            cwd,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
     current_pr = _pr(runner, cwd, value["repository"], value["pr_number"])
     if str(current_pr.get("state", "")).lower() == "closed" and current_pr.get("merged_at") is not None:
         if current_pr.get("merge_commit_sha") is None or current_pr.get("head", {}).get("sha") != value["head_sha"]:
@@ -1597,7 +1715,21 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
                 pr_number=int(value["pr_number"]),
             )
         if state["status"] == "claimed":
-            completed = runner.run([sys.executable, "-m", "app.dispatcher", "complete", str(dispatcher["task_id"]), "--agent", str(dispatcher["lease_holder"]), "--json"], cwd=cwd)
+            completed = runner.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "app.dispatcher",
+                    "complete",
+                    str(dispatcher["task_id"]),
+                    "--agent",
+                    str(dispatcher["lease_holder"]),
+                    "--lease-id",
+                    str(dispatcher["lease_id"]),
+                    "--json",
+                ],
+                cwd=cwd,
+            )
             if completed.returncode:
                 raise ClosureError("incomplete", "merge succeeded but dispatcher completion failed", completed)
             state = _dispatcher_completion(

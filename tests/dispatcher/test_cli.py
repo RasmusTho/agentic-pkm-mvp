@@ -305,6 +305,19 @@ def test_show_returns_task(tmp_env, store):
     assert "repo" in data["task"]
 
 
+def test_show_with_events_reads_task_and_history(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    from app.dispatcher.leases import claim
+
+    tasks = seed_tasks(store)
+    claim(store, tasks[0].task_id, "codex")
+    code, data = _run(["show", tasks[0].task_id, "--events", "--json"])
+    assert code == 0
+    assert data["ok"] is True
+    assert data["task"]["lease_id"] is not None
+    assert data["events"][0]["event_type"] == "task.claimed"
+
+
 def test_events_can_be_scoped_to_one_task(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
 
@@ -692,6 +705,32 @@ def test_complete_wrong_holder(tmp_env, store):
     assert code == 1
     assert data["ok"] is False
     assert "error" in data
+
+
+def test_complete_rejects_stale_lease_id_without_mutation(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(
+        [
+            "complete",
+            ready.task_id,
+            "--agent",
+            "codex",
+            "--lease-id",
+            "stale-lease",
+            "--json",
+        ]
+    )
+    assert code == 1
+    assert data["ok"] is False
+    current = store.get_task(ready.task_id)
+    assert current is not None
+    assert current.status == "claimed"
+    assert current.lease_id != "stale-lease"
+    assert not any(event.event_type == "task.completed" for event in store.list_events(ready.task_id))
 
 
 # ---------------------------------------------------------------------------
