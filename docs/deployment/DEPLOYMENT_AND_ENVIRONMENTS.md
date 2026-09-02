@@ -205,7 +205,7 @@ a private receipt bound to the deployment/quiescence proof. The Docker deploymen
 that bound result and its opaque identity evidence; it does not directly resolve host-only paths or
 re-run `root.is_dir()` inside `instance-state-init`.
 
-This decision keeps the one-shot's small mount set intact. Ordinary deploy-selected Compose overlays
+This decision keeps the one-shot's ordinary mount set intentionally bounded. Ordinary deploy-selected Compose overlays
 exclude `/Users`, `/Volumes`, and selected-vault mounts from `instance-state-init`; the selected-root
 bind in the full-host overlay is for `api`, `worker`, and `watcher` only. The rejected Option A—adding
 broad `/Users` and `/Volumes` visibility so the container can re-check host paths—would widen deployment
@@ -301,9 +301,9 @@ its original recovery path.
 | Pinned tag recorded in | `config/deploy/dev.env` (or equivalent per-channel deploy pin) | `config/deploy/test.env` | `config/deploy/prod.env` |
 | Config/data/ports | unchanged from current matrix (only differ by config, not by code) | unchanged | unchanged |
 | Gateway | managed unit (container or `launchd`), recreate-on-deploy, restart-on-failure | managed unit | managed unit |
-| Vault selection mounts | `/Users` + `/Volumes` retained (#2310) | retained | retained |
+| Vault selection mounts | `/Users` + `/Volumes` retained for runtime consumers (#2310) | retained for runtime consumers | retained for runtime consumers |
 
-The target keeps the **ports, DB names, vault bindings, and the `dev/test → serve_dev_page`, `prod → serve_production_page`** split exactly as today. The only changes are: (a) the app code arrives as a **pinned image** instead of a live bind-mount, and (b) gateways become **managed units** instead of `nohup` processes. Everything that varies between channels stays config/data/ports — never a code fork.
+The target keeps the **ports, DB names, vault bindings, and the `dev/test → serve_dev_page`, `prod → serve_production_page`** split exactly as today. The vault-selection row is consumer-scoped: ordinary deploy-selected overlays retain selected-root runtime mounts for `api`, `worker`, and `watcher`, while `instance-state-init` receives no selected-vault mount. The explicit MVR-01C authority-cutover command remains the qualified exception and mounts its already-authorized `MVR01C_ROLLBACK_VAULT_ROOT` read-only at `/app/selected-vault` for that command only. The only other changes are: (a) the app code arrives as a **pinned image** instead of a live bind-mount, and (b) gateways become **managed units** instead of `nohup` processes. Everything that varies between channels stays config/data/ports — never a code fork.
 
 ## Build-once / promote model
 

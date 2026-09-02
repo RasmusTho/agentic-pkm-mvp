@@ -274,6 +274,7 @@ def test_deploy_channel_test_explicit_vault_uses_governed_overlay_order(
 
     finalizer = services["instance-state-init"]
     assert _mount_source(finalizer, "/app/vault") is None
+    assert _mount_source(finalizer, "/app/selected-vault") is None
 
     migrate = _environment(services["migrate"])
     assert migrate["DATABASE_URL"].endswith("/app_test")
@@ -302,6 +303,7 @@ def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
 
     finalizer = services["instance-state-init"]
     assert _mount_source(finalizer, "/app/vault") is None
+    assert _mount_source(finalizer, "/app/selected-vault") is None
 
 
 @requires_docker
