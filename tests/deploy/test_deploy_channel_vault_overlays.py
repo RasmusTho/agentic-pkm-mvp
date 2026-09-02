@@ -273,8 +273,8 @@ def test_deploy_channel_test_explicit_vault_uses_governed_overlay_order(
         assert service["image"] == f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
 
     finalizer = services["instance-state-init"]
-    assert _mount_source(finalizer, "/app/vault") == selected_vault
-    assert _mount_is_read_only(finalizer, "/app/vault")
+    assert _mount_source(finalizer, "/app/vault") is None
+    assert _mount_source(finalizer, "/app/selected-vault") is None
 
     migrate = _environment(services["migrate"])
     assert migrate["DATABASE_URL"].endswith("/app_test")
@@ -302,8 +302,8 @@ def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
         assert env["DB_DSN"].endswith("/app")
 
     finalizer = services["instance-state-init"]
-    assert _mount_source(finalizer, "/app/vault") == selected_vault
-    assert _mount_is_read_only(finalizer, "/app/vault")
+    assert _mount_source(finalizer, "/app/vault") is None
+    assert _mount_source(finalizer, "/app/selected-vault") is None
 
 
 @requires_docker

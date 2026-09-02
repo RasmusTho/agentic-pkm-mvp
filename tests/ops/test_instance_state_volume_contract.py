@@ -68,6 +68,48 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITER_INVENTORY_HELPER = REPO_ROOT / "scripts/instance_state_writer_inventory.py"
 
 
+def _compose_volume_source(volume: str | dict[str, object]) -> str:
+    if isinstance(volume, str):
+        return volume.split(":", 1)[0]
+    source = volume.get("source")
+    assert isinstance(source, str)
+    return source
+
+
+def _render_effective_instance_state_init_volumes(overlay_name: str) -> list[str | dict[str, object]]:
+    """Return the one-shot mount list after the deploy-selected overlay.
+
+    Compose adds service volumes from an overlay unless a later declaration
+    replaces the same target. This narrow renderer is sufficient for the two
+    vault overlays: it preserves base mounts and includes any overlay mounts
+    declared specifically for ``instance-state-init``.
+    """
+
+    base = _load_compose(REPO_ROOT / "docker-compose.yaml")
+    overlay = _load_compose(REPO_ROOT / overlay_name)
+    volumes = list(base["services"]["instance-state-init"]["volumes"])
+    init_overlay = overlay.get("services", {}).get("instance-state-init", {})
+    volumes.extend(init_overlay.get("volumes", []))
+    return volumes
+
+
+def test_instance_state_init_effective_compose_rejects_broad_and_selected_vault_mounts() -> None:
+    """#5249: deploy-selected overlays cannot widen the one-shot boundary."""
+
+    for overlay_name, selected_source in (
+        ("docker-compose.full-host-vault.yml", "DEPLOY_VAULT_CONTAINER_ROOT"),
+        ("docker-compose.legacy-vault.yml", "VAULT_HOST_ROOT"),
+    ):
+        sources = {
+            _compose_volume_source(volume)
+            for volume in _render_effective_instance_state_init_volumes(overlay_name)
+        }
+
+        assert "/Users" not in sources
+        assert "/Volumes" not in sources
+        assert not any(selected_source in source for source in sources)
+
+
 def _legacy_owner_inventory_payload(
     owners: list[dict[str, str]],
     *,
@@ -2088,6 +2130,213 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     validate_index = next(i for i, event in enumerate(events) if "validate-legacy-owners" in event)
     finish_index = next(i for i, event in enumerate(events) if "deployment-finish" in event)
     assert produce_index < begin_index < stop_index < proof_index < validate_index < finish_index
+
+
+@pytest.mark.parametrize(
+    "legacy_path",
+    (
+        "/Users/operator/agentic-pkm/app-local.md",
+        "/Volumes/legacy/agentic-pkm/app-local.md",
+        "/app/tmp/../tmp/agentic-pkm/app-local.md",
+        "/app/tmp/agentic-pkm/legacy/app-local.md",
+        "/app/tmp/legacy-link/app-local.md",
+    ),
+)
+def test_real_deployment_wrapper_rejects_host_legacy_settings_before_init(
+    tmp_path: Path, legacy_path: str
+) -> None:
+    """A host-side legacy override cannot be mistaken for an absent source."""
+
+    event_log = tmp_path / "events.log"
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() { printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"; }\n"
+        "prepare_instance_state_deployment fake_compose prod\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir(mode=0o700)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "MVR03_PRINCIPAL_CUTOVER"}
+    }
+    env.update(
+        {
+            "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": legacy_path,
+            "EVENT_LOG": str(event_log),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "MVR03_PRINCIPAL_CUTOVER": "0",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78, result.stderr
+    assert "configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert "refusing before initialization" in result.stderr
+    assert not event_log.exists()
+    assert not any(ownership_root.iterdir())
+
+
+def test_real_deployment_wrapper_reads_channel_legacy_settings_before_init(
+    tmp_path: Path,
+) -> None:
+    """A configured channel-file override is guarded before the producer runs."""
+
+    event_log = tmp_path / "events.log"
+    channel_env = tmp_path / "prod.env"
+    host_path = "/Users/operator/agentic-pkm/app-local.md"
+    channel_env.write_text(
+        "APP_IMAGE_TAG=fixture\n"
+        f"  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = {host_path}\n",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() { printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"; }\n"
+        f"prepare_instance_state_deployment fake_compose prod '{channel_env}'\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir(mode=0o700)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "MVR03_PRINCIPAL_CUTOVER"}
+    }
+    env.update(
+        {
+            "EVENT_LOG": str(event_log),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "MVR03_PRINCIPAL_CUTOVER": "0",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78, result.stderr
+    assert "configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert host_path not in result.stderr
+    assert not event_log.exists()
+    assert not any(ownership_root.iterdir())
+
+
+def test_effective_legacy_path_distinguishes_empty_shell_value_from_unset(
+    tmp_path: Path,
+) -> None:
+    """Compose's empty shell override selects the canonical default path."""
+
+    channel_env = tmp_path / "prod.env"
+    channel_env.write_text(
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/Users/operator/app-local.md\n",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "read-effective-path.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "_instance_state_deployment_effective_legacy_path prod \"$1\"\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    base_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "DESIGN_HANDOFF_APP_LOCAL_SETTINGS"
+    }
+
+    unset_result = subprocess.run(
+        ["bash", str(harness), str(channel_env)],
+        env=base_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    empty_env = {**base_env, "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": ""}
+    empty_result = subprocess.run(
+        ["bash", str(harness), str(channel_env)],
+        env=empty_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert unset_result.returncode == 0, unset_result.stderr
+    assert empty_result.returncode == 0, empty_result.stderr
+    assert unset_result.stdout.strip() == "/Users/operator/app-local.md"
+    assert empty_result.stdout.strip() == "/app/tmp/agentic-pkm/app-local.md"
+
+
+def test_real_deployment_wrapper_rejects_duplicate_channel_legacy_settings(
+    tmp_path: Path,
+) -> None:
+    """A first safe declaration cannot mask a later unsafe effective value."""
+
+    event_log = tmp_path / "events.log"
+    channel_env = tmp_path / "prod.env"
+    host_path = "/Volumes/legacy/agentic-pkm/app-local.md"
+    channel_env.write_text(
+        "  DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
+        f"\t export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = {host_path}\n",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() { printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"; }\n"
+        f"prepare_instance_state_deployment fake_compose prod '{channel_env}'\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir(mode=0o700)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "MVR03_PRINCIPAL_CUTOVER"}
+    }
+    env.update(
+        {
+            "EVENT_LOG": str(event_log),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "MVR03_PRINCIPAL_CUTOVER": "0",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78, result.stderr
+    assert "duplicate DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert host_path not in result.stderr
+    assert not event_log.exists()
+    assert not any(ownership_root.iterdir())
 
 
 def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
@@ -4527,9 +4776,44 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     } == before
     deploy = (REPO_ROOT / "scripts/deploy_channel.sh").read_text(encoding="utf-8")
     start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+    assert deploy.index("preflight_instance_state_deployment_legacy_settings") < deploy.index(
+        'mkdir -p "$(dirname "${pin_file}")"'
+    )
     assert deploy.index("prepare_instance_state_deployment compose") < deploy.index(
         'run_postmutation_gate "service recreate/liveness gate failed"'
     )
+    selector = "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
+    assert start.index('source "scripts/lib/instance_state_deployment.sh"') < start.index(
+        "_pkm_resolved_channel="
+    )
+    preflight_marker = (
+        '\n    preflight_instance_state_deployment_legacy_settings \\\n'
+        '      "${_pkm_resolved_channel}" "${_pkm_deploy_pin_file}"'
+    )
+    preflight_position = start.index(preflight_marker)
+    assert preflight_position < start.index(
+        "\nrun_preflight\nensure_prod_instance_state_volume"
+    )
+    assert (
+        '  *)\n    preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}"'
+        in start
+    )
+    assert start.index('load_env_defaults_file "${_pkm_deploy_pin_file}"') > preflight_position
+    assert preflight_position < start.index("\nunset _pkm_deploy_pin_file")
+    for mutation_marker in (
+        'mkdir -p "$ROOT/tmp"',
+        "prepare_instance_ownership_host_state_dir",
+        "scripts/start_builderops_services.sh",
+        'flight_recorder_log_path="$ROOT/tmp/',
+        "runtime_env_path=",
+    ):
+        assert preflight_position < start.index(mutation_marker)
+    assert f'_pkm_resolved_channel="{selector}"' in start
+    assert preflight_marker in start
+    assert 'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"' in start
+    for selector_name in ("ENVIRONMENT", "CHANNEL", "PKM_CHANNEL"):
+        assert f"${{{selector_name}:-" in selector
+    assert "unset _pkm_resolved_channel" not in start
     assert start.index("prepare_instance_state_deployment run_docker_compose") < start.index(
         'start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"'
     )

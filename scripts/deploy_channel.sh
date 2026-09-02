@@ -118,6 +118,14 @@ promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
 
+# Resolve the effective instance-state-init legacy setting before creating the
+# channel lock, pin markers, volumes, pulling an image, or touching Compose.
+# The ordinary one-shot has no host-side mount/receipt handoff for this input,
+# so configured host paths and noncanonical container aliases fail closed.
+if [ "${action}" = "deploy" ]; then
+  preflight_instance_state_deployment_legacy_settings "${channel}" "${pin_file}" || exit $?
+fi
+
 # Pin the topology declaration from the governed channel file before the
 # shared deployment wrapper runs. Do not inherit an ambient shell value across
 # channels: Docker-published dev/test/prod API traffic is not proven loopback
@@ -1503,7 +1511,7 @@ if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
     retire_scalar_rollback_services || exit $?
 fi
 if [ "${action}" = "deploy" ]; then
-  if prepare_instance_state_deployment compose "${channel}"; then
+  if prepare_instance_state_deployment compose "${channel}" "${pin_file}"; then
     :
   else
     instance_state_rc=$?

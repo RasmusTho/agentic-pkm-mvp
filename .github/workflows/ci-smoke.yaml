@@ -535,20 +535,12 @@ jobs:
           source scripts/lib/instance_ownership_host_state.sh
           prepare_instance_ownership_host_state_dir
           VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.yml"
-          # Production finalizers see host-spelled vault roots through the
-          # same-path /Users and /Volumes mounts. Mirror that identity contract
-          # for the /tmp CI fixture while it seeds the binding and finalizes it:
-          # the staged registry and the host-produced owner inventory must name
-          # the same root, or an adopted lease is indistinguishable from a
-          # registry/ledger inconsistency in the mount-blind verifier.
+          # The watcher sees the CI fixture through the same-path bind while it
+          # seeds the binding and finalizes it. Keep instance-state-init
+          # mount-blind just like production; its host-side owner inventory is
+          # the only authority for the retained root.
           cat > "$VAULT_IDENTITY_OVERLAY_PATH" <<EOF
           services:
-            instance-state-init:
-              volumes:
-                - type: bind
-                  source: "$VAULT_ROOT"
-                  target: "$VAULT_ROOT"
-                  read_only: true
             watcher:
               volumes:
                 - type: bind

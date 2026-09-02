@@ -50,11 +50,14 @@ API and worker share the same Python image built from the repo.
 
 ## Cross-container vault and scalar-rollback contract
 
-The full-host-vault overlay binds the selected host vault read-only into
-`instance-state-init` and writable into `api`, `worker`, and `watcher`. The init
-container must see the same selected root as the runtime consumers so deployment
-admission can validate drained legacy-owner roots from inside its container
-namespace without granting that fence controller vault-write authority.
+For ordinary deploy-selected Compose overlays, the full-host-vault overlay binds
+the selected host vault read-only or writable at the runtime consumers' shared
+container path (`api`, `worker`, and `watcher`). It does not bind the selected
+vault, `/Users`, or `/Volumes` into `instance-state-init`; host-side deployment
+admission validates legacy-owner roots and passes only its bounded opaque receipt
+to that fence controller. The separately governed MVR-01C authority-cutover
+command is the sole exception: it may mount the already-authorized rollback root
+read-only at `/app/selected-vault` for that explicit invocation.
 
 The scalar-rollback overlay also exposes the repo-owned policy sources
 read-only to `instance-state-init` at:

@@ -130,8 +130,6 @@ services:
       - "./scripts/deploy_channel.sh:/run/principal-fence-native-producers/scripts/deploy_channel.sh:ro"
       - "./scripts/start_full_system.sh:/run/principal-fence-native-producers/scripts/start_full_system.sh:ro"
       - "./scripts/export_runtime_env.sh:/run/principal-fence-native-producers/scripts/export_runtime_env.sh:ro"
-      - "/Users:/Users"
-      - "/Volumes:/Volumes"
     command:
       - /bin/bash
       - -c
