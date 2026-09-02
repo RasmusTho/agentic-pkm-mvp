@@ -853,7 +853,9 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
 
     renamed = vault / "renamed-retained-id.md"
     note.rename(renamed)
-    assert vault_sync.handle_rename(str(note), str(renamed))["updated"] is True
+    assert vault_sync.handle_rename(
+        str(note), str(renamed), vault_root=vault
+    )["updated"] is True
     renamed.unlink()
     assert vault_sync.delete_note(str(renamed), uuid_value=str(watcher_uuid)) is True
 

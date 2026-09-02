@@ -1172,12 +1172,9 @@ def handle_rename(
     )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
-    selected_root = vault_root
-    if selected_root is None:
-        configured_root = os.getenv("VAULT_ROOT") or os.getenv("VAULT_DIR")
-        if configured_root:
-            selected_root = Path(configured_root)
-    replay = canonical_note_replay(new, vault_root=selected_root, source_body=body)
+    if vault_root is None:
+        raise ValueError("vault_root is required for Product replay identity")
+    replay = canonical_note_replay(new, vault_root=vault_root, source_body=body)
     binding_id = _binding_id()
     with _conn() as conn:
         _prepare(conn)
