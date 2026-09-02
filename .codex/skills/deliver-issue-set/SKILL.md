@@ -147,10 +147,10 @@ Delivery rules:
 - Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
   not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior
   governed by the existing dispatcher flow until a separate child issue changes it.
-- Before launching any multi-issue worker wave, use the runtime-neutral dry-run dispatch helper when candidate
+- Before launching any multi-issue worker wave, use the Codex-only dry-run dispatch helper when candidate
   data is available:
   `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`.
-  The helper emits TCD launch decisions, capped batch selection, minimal Codex/Claude worker context
+  The helper emits TCD launch decisions, capped batch selection, minimal Codex worker context
   packs, and an `epic_run_state_update.dispatch_decisions` payload. It performs no GitHub label,
   Project, PR, branch/worktree, dispatcher lease, or agent-spawn mutation. Persist its
   `dispatch_decisions` only through the existing `epic-run-state record` path when the coordinator

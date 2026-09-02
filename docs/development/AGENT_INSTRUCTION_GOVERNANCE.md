@@ -11,7 +11,8 @@ It governs development-time instruction surfaces only. It does not define runtim
 - `.codex/skills/README.md :: Skill routing` is the complete discoverability index for repo-local
   skills. It is subordinate to `AGENTS.md`, but the root must link to it instead of maintaining a
   second full list.
-- `CLAUDE.md` is a thin Claude adapter that should point to `AGENTS.md` and add only minimal Claude-specific notes when needed.
+- `CLAUDE.md` is a thin, non-operational compatibility/provenance pointer to `AGENTS.md`. It
+  must not launch Claude, read Anthropic credentials, or select a provider/model target.
 - `.codex/AGENTS.md` is a compatibility pointer only. It must not become the canonical policy surface again.
 
 ## Repo-local skills
@@ -38,7 +39,8 @@ It governs development-time instruction surfaces only. It does not define runtim
 - Keep `AGENTS.md` at or below 161 lines, 2,080 whitespace-delimited words, and 15,500 characters.
   These budgets preserve the owner's requested 30% active-instruction ceiling against the
   pre-compaction baseline while leaving margin for platform newline differences.
-- Update `CLAUDE.md` only when Claude-specific adapter behavior is required.
+- Update `CLAUDE.md` only to keep the non-operational compatibility/provenance pointer
+  aligned or to retire it through a governed change.
 - If a longer explanation is needed, extend a development reference doc instead of expanding the root instruction files.
 - When canonical entrypoints, reading order, or doc roles change, update `docs/DOCS_INDEX.md` in the same change.
 - When compatibility pointers remain, label them explicitly as non-canonical.
@@ -54,7 +56,8 @@ When changing builder-agent guidance, confirm:
 - `AGENTS.md` remains the canonical root instruction file.
 - `AGENTS.md` remains within its line, word, and character budgets.
 - the Skill routing index names every repo-local skill, including `klart`.
-- `CLAUDE.md` is shorter than `AGENTS.md` and does not restate it.
+- `CLAUDE.md` is shorter than `AGENTS.md`, remains non-operational compatibility/provenance
+  only, and does not authorize Claude execution, credentials, or provider/model selection.
 - runtime/system-agent docs are still clearly separate from builder-agent instruction files.
 - long rationale or recordkeeping lives outside the auto-loaded instruction files.
 - duplicated normative policy has not been introduced across `AGENTS.md`, `CLAUDE.md`, and development docs.
