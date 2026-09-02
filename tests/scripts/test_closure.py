@@ -27,11 +27,18 @@ class Fake:
         self.merged = False
         self.fail_merge = False
         self.calls: list[tuple[str, ...]] = []
+        self.inputs: list[str | None] = []
         self.body = "Governing-Issue: #5245\n\nFixes #5245\n\nFinal-Review-Rounds: 0\n"
+        self.events_commit_id = MERGE
+        self.dispatcher_task = {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
+            "claimed_by": "codex-slice-implementer",
+            "lease_id": "lease-1",
+        }
 
     def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> CommandResult:
-        del cwd, input_text
-        args = tuple(argv); self.calls.append(args)
+        del cwd
+        args = tuple(argv); self.calls.append(args); self.inputs.append(input_text)
         endpoint = args[6] if args[:2] == ("gh", "api") else ""
         if endpoint.endswith("/pulls/99") and "GET" in args:
             return self._json(
@@ -49,14 +56,23 @@ class Fake:
             )
         if endpoint.endswith("/issues/5245") and "GET" in args:
             return self._json(args, {"number": 5245, "state": "closed" if self.merged else "open", "labels": [{"name": "agent:in-progress"}, {"name": "lane:governance"}]})
+        if endpoint.endswith("/issues/5245/events") and "GET" in args:
+            return self._json(args, [{"event": "closed", "issue": {"number": 5245}, "commit_id": self.events_commit_id}])
         if endpoint.endswith("check-runs"):
             return self._json(args, {"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]})
         if endpoint.endswith("/pulls/99/merge") and "PUT" in args:
             if self.fail_merge: return CommandResult(args, 1, "", "transport")
             self.merged = True; return self._json(args, {"sha": MERGE, "merged": True})
-        if endpoint.endswith("/issues/5245") and "PATCH" in args: return self._json(args, {})
-        if args[:3] == ("/usr/bin/python3", "-m", "app.dispatcher") or args[:3] == ("python3", "-m", "app.dispatcher"):
-            return CommandResult(args, 0, "", "")
+        if endpoint.endswith("/issues/5245") and "PATCH" in args:
+            assert args[-2:] == ("--input", "-")
+            return self._json(args, {})
+        if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
+            if args[3] == "show":
+                return self._json(args, {"ok": True, "task": self.dispatcher_task})
+            if args[3] == "complete":
+                assert args[4] == self.dispatcher_task["task_id"]
+                assert args[5:7] == ("--agent", self.dispatcher_task["claimed_by"])
+                return CommandResult(args, 0, "", "")
         raise AssertionError(args)
 
     @staticmethod
@@ -64,8 +80,8 @@ class Fake:
         return CommandResult(argv, 0, json.dumps(value), "")
 
 
-def request(tmp_path: Path) -> ClosureRequest:
-    return ClosureRequest(REPO, tmp_path, 99, {"head_sha": HEAD, "verified": True})
+def request(tmp_path: Path, task_id: str | None = None) -> ClosureRequest:
+    return ClosureRequest(REPO, tmp_path, 99, {"head_sha": HEAD, "verified": True}, task_id)
 
 
 def test_closure_plan_is_canonical_hash_bound_read_only_and_strictly_light_path(tmp_path: Path) -> None:
@@ -94,6 +110,28 @@ def test_closure_apply_reads_back_merge_closure_and_bounded_cleanup(tmp_path: Pa
     assert receipt["merge_sha"] == MERGE and receipt["issue"]["state"] == "closed"
     assert receipt["remaining_action"] == "post-merge-owner-doc"
     assert any(any(part.endswith("/merge") for part in call) and "PUT" in call for call in fake.calls)
+    patch_call = next(call for call in fake.calls if "PATCH" in call)
+    patch_input = fake.inputs[fake.calls.index(patch_call)]
+    assert json.loads(patch_input or "") == {"labels": ["lane:governance"]}
+
+
+def test_closure_apply_completes_exact_dispatcher_task_with_lease_holder(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["cleanup"]["dispatcher"]["lease_holder"] == "codex-slice-implementer"
+    complete = next(call for call in fake.calls if len(call) >= 4 and call[3] == "complete")
+    assert complete[4:7] == (task_id, "--agent", "codex-slice-implementer")
+
+
+def test_closure_apply_requires_exact_closing_issue_attribution(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.events_commit_id = "c" * 40
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    with pytest.raises(ClosureError, match="attribution"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any("PATCH" in call for call in fake.calls)
 
 
 def test_closure_apply_reconciles_repeats_partial_results_and_ambiguity_without_retry(tmp_path: Path) -> None:

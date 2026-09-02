@@ -53,15 +53,34 @@ def closure_plan_hash(plan: Mapping[str, Any]) -> str:
     return _digest(value)
 
 
-def _run(executor: CommandExecutor, cwd: Path, argv: Sequence[str]) -> CommandResult:
-    result = executor.run(argv, cwd=cwd)
+def _run(
+    executor: CommandExecutor,
+    cwd: Path,
+    argv: Sequence[str],
+    *,
+    input_text: str | None = None,
+) -> CommandResult:
+    result = executor.run(argv, cwd=cwd, input_text=input_text)
     if result.returncode:
         raise ClosureError("command-failed", "closure command failed", result)
     return result
 
 
-def _api(executor: CommandExecutor, cwd: Path, repository: str, method: str, endpoint: str, *fields: str) -> Any:
-    result = _run(executor, cwd, ["gh", "api", "--hostname", GITHUB_HOST, "--method", method, f"repos/{repository}{endpoint}", *fields])
+def _api(
+    executor: CommandExecutor,
+    cwd: Path,
+    repository: str,
+    method: str,
+    endpoint: str,
+    *fields: str,
+    input_text: str | None = None,
+) -> Any:
+    result = _run(
+        executor,
+        cwd,
+        ["gh", "api", "--hostname", GITHUB_HOST, "--method", method, f"repos/{repository}{endpoint}", *fields],
+        input_text=input_text,
+    )
     try:
         return json.loads(result.stdout) if result.stdout.strip() else {}
     except json.JSONDecodeError as exc:
@@ -82,6 +101,13 @@ def _issue(executor: CommandExecutor, cwd: Path, repository: str, number: int) -
     return value
 
 
+def _issue_events(executor: CommandExecutor, cwd: Path, repository: str, number: int) -> list[dict[str, Any]]:
+    value = _api(executor, cwd, repository, "GET", f"/issues/{number}/events", "-f", "per_page=100")
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ClosureError("unknown", "Issue event readback was malformed")
+    return [dict(item) for item in value]
+
+
 def _issue_number(body: str) -> int:
     governing = re.findall(r"(?m)^Governing-Issue:\s*#(\d+)\s*$", body)
     closing = re.findall(r"(?mi)^\s*(?:fixes|closes|resolves)\s+#(\d+)\s*$", body)
@@ -99,6 +125,44 @@ def _checks(executor: CommandExecutor, cwd: Path, repository: str, sha: str) -> 
     if len(normalized) != len(runs) or any(run.get("status") != "completed" or run.get("conclusion") != "success" for run in normalized):
         raise ClosureError("incomplete", "current-head checks are not all successful")
     return normalized
+
+
+def _dispatcher_snapshot(
+    executor: CommandExecutor, cwd: Path, task_id: str | None
+) -> dict[str, str] | None:
+    if task_id is None:
+        return None
+    result = _run(
+        executor,
+        cwd,
+        [sys.executable, "-m", "app.dispatcher", "show", task_id, "--json"],
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "dispatcher readback was not JSON") from exc
+    task = payload.get("task") if isinstance(payload, dict) else None
+    if not isinstance(task, dict) or task.get("task_id") != task_id:
+        raise ClosureError("unknown", "dispatcher task identity was not exact")
+    holder = task.get("claimed_by")
+    lease_id = task.get("lease_id")
+    if not isinstance(holder, str) or not holder or not isinstance(lease_id, str) or not lease_id:
+        raise ClosureError("incomplete", "dispatcher task has no active lease-holder identity")
+    return {"task_id": task_id, "lease_holder": holder, "lease_id": lease_id}
+
+
+def _validate_closure_attribution(
+    events: Sequence[Mapping[str, Any]], issue_number: int, merge_sha: str
+) -> None:
+    matches = [
+        event
+        for event in events
+        if event.get("event") == "closed"
+        and event.get("issue", {}).get("number", issue_number) == issue_number
+        and event.get("commit_id") == merge_sha
+    ]
+    if len(matches) != 1:
+        raise ClosureError("incomplete", "exact closing Issue attribution was not proven")
 
 
 def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, Any]:
@@ -129,7 +193,8 @@ def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, A
     if not isinstance(request.verify_evidence, Mapping) or request.verify_evidence.get("head_sha") != sha or not request.verify_evidence.get("verified"):
         raise ClosureError("incomplete", "self-verified Verify evidence is not bound to the PR head")
     checks = _checks(executor, cwd, request.repository, sha)
-    return {"pr": pr, "issue": issue, "issue_labels": labels, "checks": checks, "head_sha": sha, "issue_number": issue_number}
+    dispatcher = _dispatcher_snapshot(executor, cwd, request.dispatcher_task_id)
+    return {"pr": pr, "issue": issue, "issue_labels": labels, "checks": checks, "head_sha": sha, "issue_number": issue_number, "dispatcher": dispatcher}
 
 
 def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | None = None) -> dict[str, Any]:
@@ -144,7 +209,7 @@ def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | N
         "tier": 2, "final_review_rounds": 0, "verify_evidence": json.loads(canonical_json(request.verify_evidence)),
         "checks": [{"name": item.get("name"), "status": item.get("status"), "conclusion": item.get("conclusion")} for item in before["checks"]],
         "merge": {"method": "squash", "commit_title": f"Merge PR #{request.pr_number}", "commit_message": "Governed light-path closure."},
-        "post_merge": {"remove_label_prefix": "agent:", "dispatcher_task_id": request.dispatcher_task_id, "remaining_action": "post-merge-owner-doc"},
+        "post_merge": {"remove_label_prefix": "agent:", "dispatcher": before["dispatcher"], "remaining_action": "post-merge-owner-doc"},
     }
     plan["plan_sha256"] = closure_plan_hash(plan)
     return plan
@@ -161,14 +226,21 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
 
 def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, executor: CommandExecutor | None = None) -> dict[str, Any]:
     value = _validated(plan, expected_plan_sha256); runner = executor or SubprocessExecutor(); cwd = Path(value["worktree"])
-    request = ClosureRequest(value["repository"], cwd, int(value["pr_number"]), value["verify_evidence"], value["post_merge"].get("dispatcher_task_id"))
+    dispatcher = value["post_merge"].get("dispatcher") or {}
+    task_id = dispatcher.get("task_id") if isinstance(dispatcher, Mapping) else None
+    request = ClosureRequest(value["repository"], cwd, int(value["pr_number"]), value["verify_evidence"], task_id)
+    planned_dispatcher = _dispatcher_snapshot(runner, cwd, task_id) if task_id else {}
+    if planned_dispatcher != dispatcher:
+        raise ClosureError("drift", "dispatcher task or lease-holder drifted before merge")
     current_pr = _pr(runner, cwd, value["repository"], value["pr_number"])
     if str(current_pr.get("state", "")).lower() == "closed" and current_pr.get("merged_at") is not None:
         if current_pr.get("merge_commit_sha") is None or current_pr.get("head", {}).get("sha") != value["head_sha"]:
             raise ClosureError("unknown", "closed PR does not prove the planned exact merge")
-        current = {"pr": current_pr, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"]}
+        current = {"pr": current_pr, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}
         if str(current["issue"].get("state", "")).lower() != "closed":
             raise ClosureError("incomplete", "merged PR exists but GitHub-native Issue closure is absent")
+        events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
+        _validate_closure_attribution(events, int(value["governing_issue"]), str(current_pr["merge_commit_sha"]))
         return _finish_cleanup(value, current, runner, cwd, reconciled=True)
     current = _snapshot(request, runner)
     if current["head_sha"] != value["head_sha"] or current["issue_number"] != value["governing_issue"] or current["pr"].get("base", {}).get("sha") != value["base_sha"] or hashlib.sha256(str(current["pr"].get("body") or "").encode()).hexdigest() != value["body_sha256"] or hashlib.sha256(str(current["pr"].get("title") or "").encode()).hexdigest() != value["title_sha256"]:
@@ -182,8 +254,10 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         try:
             readback = _pr(runner, cwd, value["repository"], value["pr_number"])
             if readback.get("merged_at") is not None and readback.get("head", {}).get("sha") == value["head_sha"]:
-                current = {"pr": readback, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"]}
+                current = {"pr": readback, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}
                 if str(current["issue"].get("state", "")).lower() == "closed":
+                    events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
+                    _validate_closure_attribution(events, int(value["governing_issue"]), str(readback["merge_commit_sha"]))
                     return _finish_cleanup(value, current, runner, cwd, reconciled=True)
         except ClosureError:
             pass
@@ -193,7 +267,9 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     closed = _issue(runner, cwd, value["repository"], int(value["governing_issue"]))
     if str(merged.get("state", "")).lower() != "closed" or merged.get("merged_at") is None or not isinstance(merge_sha, str) or not SHA_RE.fullmatch(merge_sha) or str(closed.get("state", "")).lower() != "closed":
         raise ClosureError("incomplete", "merge or GitHub-native Issue closure lacks exact readback")
-    return _finish_cleanup(value, {"pr": merged, "issue": closed, "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"]}, runner, cwd, reconciled=False, merge_sha=merge_sha)
+    events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
+    _validate_closure_attribution(events, int(value["governing_issue"]), merge_sha)
+    return _finish_cleanup(value, {"pr": merged, "issue": closed, "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}, runner, cwd, reconciled=False, merge_sha=merge_sha)
 
 
 def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner: CommandExecutor, cwd: Path, *, reconciled: bool, merge_sha: str | None = None) -> dict[str, Any]:
@@ -201,14 +277,14 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
     labels = [str(item.get("name") if isinstance(item, dict) else item) for item in closed.get("labels", [])]
     retained = [label for label in labels if not label.startswith("agent:")]
     if set(labels) != set(retained):
-        _api(runner, cwd, str(value["repository"]), "PATCH", f"/issues/{value['governing_issue']}", "-f", f"labels={json.dumps(retained)}")
-    dispatcher = value["post_merge"].get("dispatcher_task_id")
-    if dispatcher:
-        completed = runner.run([sys.executable, "-m", "app.dispatcher", "complete", "--task-id", str(dispatcher)], cwd=cwd)
+        _api(runner, cwd, str(value["repository"]), "PATCH", f"/issues/{value['governing_issue']}", "--input", "-", input_text=canonical_json({"labels": retained}))
+    dispatcher = value["post_merge"].get("dispatcher")
+    if isinstance(dispatcher, Mapping):
+        completed = runner.run([sys.executable, "-m", "app.dispatcher", "complete", str(dispatcher["task_id"]), "--agent", str(dispatcher["lease_holder"]), "--json"], cwd=cwd)
         if completed.returncode:
             raise ClosureError("incomplete", "merge succeeded but dispatcher completion failed", completed)
     merge_sha = merge_sha or current["pr"].get("merge_commit_sha")
-    receipt = {"schema": RECEIPT_SCHEMA, "outcome": "success", "reconciled": reconciled, "plan_sha256": value["plan_sha256"], "repository": value["repository"], "pr_number": value["pr_number"], "head_sha": value["head_sha"], "merge_sha": merge_sha, "issue": {"number": value["governing_issue"], "state": "closed", "closure_attribution": "GitHub-native closing keyword"}, "cleanup": {"removed_agent_labels": sorted(set(labels) - set(retained)), "dispatcher_task_id": dispatcher, "project_projection": "optional/unmodified"}, "remaining_action": "post-merge-owner-doc"}
+    receipt = {"schema": RECEIPT_SCHEMA, "outcome": "success", "reconciled": reconciled, "plan_sha256": value["plan_sha256"], "repository": value["repository"], "pr_number": value["pr_number"], "head_sha": value["head_sha"], "merge_sha": merge_sha, "issue": {"number": value["governing_issue"], "state": "closed", "closure_attribution": "GitHub-native closing keyword and exact merge event"}, "cleanup": {"removed_agent_labels": sorted(set(labels) - set(retained)), "dispatcher": dispatcher, "project_projection": "optional/unmodified"}, "remaining_action": "post-merge-owner-doc"}
     receipt["receipt_sha256"] = _digest(receipt)
     return receipt
 
