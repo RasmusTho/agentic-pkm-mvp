@@ -219,7 +219,7 @@ mounts the already-authorized `MVR01C_ROLLBACK_VAULT_ROOT` read-only at `/app/se
 command only. For ordinary deploy/start, the effective setting from the ambient environment or
 `config/deploy/<channel>.env` is admitted only at the exact channel container path
 (`/app/tmp/agentic-pkm/app-local.md`, or `/app/tmp-test/agentic-pkm/app-local.md` for TEST); host
-paths, traversal, aliases, symlink-like paths, and other `/app` locations fail closed before the
+paths, duplicate declarations, traversal, aliases, symlink-like paths, and other `/app` locations fail closed before the
 deployment mutation window. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
 evidence cannot release the fence or mutate registry/ledger state.
 

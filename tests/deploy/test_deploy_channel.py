@@ -1519,6 +1519,31 @@ def test_deploy_preflights_configured_legacy_settings_before_pin_or_compose_muta
     assert not (root / "config/deploy/dev.migration-pending.env").exists()
 
 
+def test_deploy_preflights_duplicate_legacy_settings_before_pin_or_compose_mutation(
+    tmp_path: Path,
+) -> None:
+    """A later unsafe duplicate cannot be hidden by an earlier canonical value."""
+
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_before = (
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={sha}\n"
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/Users/operator/agentic-pkm/app-local.md\n"
+    )
+    pin_path.write_text(pin_before, encoding="utf-8")
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert "duplicate DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert pin_path.read_text(encoding="utf-8") == pin_before
+    assert _deploy_events(env) == ["archive-preflight dev"]
+    assert not (tmp_path / "docker-called").exists()
+    assert not (root / "config/deploy/dev.env.lock").exists()
+
+
 def test_deploy_passes_configured_canonical_legacy_settings_to_init(
     tmp_path: Path,
 ) -> None:

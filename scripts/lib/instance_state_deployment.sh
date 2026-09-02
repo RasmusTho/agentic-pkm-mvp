@@ -168,6 +168,7 @@ _instance_state_deployment_env_value() {
   [ -f "${env_file}" ] || return 0
   awk -v key="${key}" '
     index($0, key "=") == 1 {
+      matches += 1
       value = substr($0, length(key) + 2)
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
@@ -178,8 +179,10 @@ _instance_state_deployment_env_value() {
           value = substr(value, 2, length(value) - 2)
         }
       }
-      print value
-      exit
+    }
+    END {
+      if (matches > 1) exit 2
+      if (matches == 1) print value
     }
   ' "${env_file}"
 }
@@ -204,15 +207,23 @@ _instance_state_deployment_effective_legacy_path() {
   local channel="${1:?channel required}"
   local channel_env_file="${2:-}"
   local configured_path=""
+  local parser_rc=0
 
   if [ -n "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}" ]; then
     printf '%s\n' "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS}"
     return 0
   fi
   if [ -n "${channel_env_file}" ] && [ -f "${channel_env_file}" ]; then
-    if ! configured_path="$(_instance_state_deployment_env_value \
+    if configured_path="$(_instance_state_deployment_env_value \
       "${channel_env_file}" DESIGN_HANDOFF_APP_LOCAL_SETTINGS)"; then
-      echo "instance state deployment: channel legacy settings configuration could not be read; refusing before initialization" >&2
+      :
+    else
+      parser_rc=$?
+      if [ "${parser_rc}" -eq 2 ]; then
+        echo "instance state deployment: duplicate DESIGN_HANDOFF_APP_LOCAL_SETTINGS declarations; refusing before initialization" >&2
+      else
+        echo "instance state deployment: channel legacy settings configuration could not be read; refusing before initialization" >&2
+      fi
       return 78
     fi
     if [ -n "${configured_path}" ]; then

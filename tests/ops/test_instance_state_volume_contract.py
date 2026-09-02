@@ -2240,6 +2240,58 @@ def test_real_deployment_wrapper_reads_channel_legacy_settings_before_init(
     assert not any(ownership_root.iterdir())
 
 
+def test_real_deployment_wrapper_rejects_duplicate_channel_legacy_settings(
+    tmp_path: Path,
+) -> None:
+    """A first safe declaration cannot mask a later unsafe effective value."""
+
+    event_log = tmp_path / "events.log"
+    channel_env = tmp_path / "prod.env"
+    host_path = "/Volumes/legacy/agentic-pkm/app-local.md"
+    channel_env.write_text(
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
+        f"DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() { printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"; }\n"
+        f"prepare_instance_state_deployment fake_compose prod '{channel_env}'\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir(mode=0o700)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "MVR03_PRINCIPAL_CUTOVER"}
+    }
+    env.update(
+        {
+            "EVENT_LOG": str(event_log),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "MVR03_PRINCIPAL_CUTOVER": "0",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78, result.stderr
+    assert "duplicate DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert host_path not in result.stderr
+    assert not event_log.exists()
+    assert not any(ownership_root.iterdir())
+
+
 def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     tmp_path,
 ) -> None:
