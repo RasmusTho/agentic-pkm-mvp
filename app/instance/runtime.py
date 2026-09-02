@@ -3039,7 +3039,19 @@ def _finish_instance_state_deployment_locked(
                         _capability=_STORAGE_MUTATION_CAPABILITY,
                     )
                     pending_legacy_owners.append(pending_owner)
-            owners = list(ledger.resolve_live_owner_bindings(owners, skip_unadopted=True))
+            # Foreign receipt owners are complete host-validated evidence,
+            # not this channel's mount-blind config candidates. Require each
+            # omitted foreign binding to resolve before the compatibility path
+            # below may skip a current-channel unadopted candidate.
+            foreign_owners_without_bindings = tuple(
+                owner
+                for owner in owners
+                if owner.channel_id != channel and not owner.vault_binding_id
+            )
+            ledger.resolve_live_owner_bindings(foreign_owners_without_bindings)
+            owners = list(
+                ledger.resolve_live_owner_bindings(owners, skip_unadopted=True)
+            )
         except (FilesystemIdentityError, LedgerError):
             recovery_failed = True
         if recovery_failed:
