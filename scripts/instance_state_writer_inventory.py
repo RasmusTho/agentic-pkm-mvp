@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from scripts.compose_env import compose_env_value as _compose_env_value
 
 INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
@@ -462,26 +463,6 @@ def _run_checked(command: Sequence[str], *, label: str, env: dict[str, str] | No
     if result.returncode != 0:
         raise InventoryError(f"{label} failed")
     return result.stdout
-
-
-def _compose_env_value(raw_value: str) -> str:
-    """Parse the bounded dotenv forms accepted by the Compose launcher."""
-
-    value = raw_value.strip()
-    if value[:1] in {"'", '"'}:
-        quote = value[0]
-        for index in range(1, len(value)):
-            if value[index] != quote:
-                continue
-            suffix = value[index + 1 :].lstrip()
-            if not suffix or suffix.startswith("#"):
-                return value[1:index]
-            break
-        return value
-    comment = re.search(r"[ \t]+#", value)
-    if comment:
-        value = value[: comment.start()].rstrip()
-    return value
 
 
 def _read_env_bytes(raw: bytes) -> dict[str, str]:

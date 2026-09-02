@@ -43,12 +43,14 @@ def test_read_env_bytes_matches_compose_quoted_comment_rules() -> None:
     values = writer_inventory._read_env_bytes(
         b'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n'
         b'VALUE="literal # data" # trailing comment\n'
+        b'ESCAPED="prefix\\"suffix" # trailing comment\n'
         b'PLAIN=/app/tmp/runtime.env # canonical\n'
     )
 
     assert values == {
         "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": "/app/tmp/agentic-pkm/app-local.md",
         "VALUE": "literal # data",
+        "ESCAPED": 'prefix"suffix',
         "PLAIN": "/app/tmp/runtime.env",
     }
 

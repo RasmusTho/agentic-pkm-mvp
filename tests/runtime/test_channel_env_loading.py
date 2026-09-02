@@ -68,6 +68,22 @@ def test_load_env_defaults_file_accepts_compose_export_prefix() -> None:
         assert out == "/app/tmp/agentic-pkm/app-local.md"
 
 
+def test_load_env_defaults_file_decodes_escaped_double_quote() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env_file = Path(tmpdir) / ".env.dev.local"
+        env_file.write_text(
+            'TOKEN="prefix\\"suffix" # trailing comment\n',
+            encoding="utf-8",
+        )
+        out = _bash_ok(
+            f"source scripts/lib/load_env_defaults.sh; "
+            f"unset TOKEN; "
+            f"load_env_defaults_file '{env_file}'; "
+            f"printf '%s' \"${{TOKEN:-}}\""
+        )
+        assert out == 'prefix"suffix'
+
+
 @pytest.mark.parametrize(
     "assignment",
     [
