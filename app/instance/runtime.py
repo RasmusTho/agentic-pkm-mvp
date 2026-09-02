@@ -3002,13 +3002,25 @@ def _finish_instance_state_deployment_locked(
     )
     if established is not None and established.legacy_bootstrap_complete:
         try:
+            # Only pending registrations need the recovery transition here.
+            # Active leases must reach the canonical consistency check below
+            # first; otherwise a corrupted stored identity is misreported as
+            # generic recovery failure instead of the specific consistency
+            # failure that governs this finish path.
             for registration in registry.registrations.values():
-                ledger.recover_or_require_active(
-                    registration.vault_binding_id,
-                    channel_id=channel,
-                    root=Path(registration.path),
-                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                registration_lease = established.leases.get(
+                    registration.vault_binding_id
                 )
+                if (
+                    registration_lease is not None
+                    and registration_lease.state == "pending"
+                ):
+                    ledger.recover_or_require_active(
+                        registration.vault_binding_id,
+                        channel_id=channel,
+                        root=Path(registration.path),
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
             owners = list(ledger.resolve_live_owner_bindings(owners, skip_unadopted=True))
         except LedgerError as exc:
             raise InstanceStatePreflightError(
