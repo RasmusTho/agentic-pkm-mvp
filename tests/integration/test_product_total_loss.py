@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,8 @@ from app.rebuildability import (
     product_replay_provenance,
 )
 from app.write_guard import WriteGuard, WritesBlockedError
+
+from app.ingest.vault_alpha import _VAULT_NOTE_UUID_NAMESPACE
 
 
 def _write_source(vault_root: Path, text: str = "Meaning-bearing Product note.") -> str:
@@ -33,7 +36,7 @@ def _write_source(vault_root: Path, text: str = "Meaning-bearing Product note.")
 
 def _verified_row(source_identity: str, text: str) -> dict[str, object]:
     return {
-        "object_id": "00000000-0000-0000-0000-000000000001",
+        "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
         "source_ref": source_identity,
         "payload": {
@@ -140,6 +143,7 @@ def test_product_readiness_accepts_admitted_empty_source_projection(tmp_path: Pa
     vault_root = tmp_path / "vault"
     source_identity = _write_source(vault_root, "")
     row = {
+        "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
         "source_ref": source_identity,
         "payload": {
@@ -155,6 +159,18 @@ def test_product_readiness_accepts_admitted_empty_source_projection(tmp_path: Pa
     result = evaluate_product_store_readiness(vault_root, [row])
 
     assert result.ready is True
+
+
+def test_product_readiness_rejects_wrong_canonical_object_id(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    row = _verified_row(source_identity, "Meaning-bearing Product note.")
+    row["object_id"] = "00000000-0000-0000-0000-000000000001"
+
+    result = evaluate_product_store_readiness(vault_root, [row])
+
+    assert result.ready is False
+    assert source_identity in result.refused_source_identities
 
 
 def test_product_readiness_ignores_ingest_excluded_files(tmp_path: Path) -> None:
@@ -283,6 +299,12 @@ def test_canonical_ingest_producers_stamp_replay_tuple(tmp_path: Path) -> None:
     assert product_replay_for_vault_note(note, vault_root=vault_root) == expected
     assert canonical_note_replay(note, vault_root=vault_root) == expected
 
+    assert canonical_note_replay(
+        note, vault_root=vault_root, source_body=""
+    ) == product_replay_provenance(
+        source_identity="Notes/product.md", source_text="", allow_empty_source=True
+    )
+
 
 def test_vault_sync_replay_canonicalizes_extracted_thematic_body(tmp_path: Path) -> None:
     from app.rebuildability import canonical_product_body_text
@@ -307,6 +329,7 @@ def test_readiness_preserves_watcher_extracted_body_semantics(tmp_path: Path) ->
     source_identity = _write_source(vault_root, "---\nA thematic section\n---\n\nMeaning-bearing suffix.")
     body = "---\nA thematic section\n---\n\nMeaning-bearing suffix."
     row = {
+        "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
         "payload": {
             "content": body,
@@ -325,6 +348,7 @@ def test_readiness_preserves_vault_alpha_extracted_body_semantics(tmp_path: Path
     source_identity = _write_source(vault_root, "---\nA thematic section\n---\n\nMeaning-bearing suffix.")
     body = "---\nA thematic section\n---\n\nMeaning-bearing suffix."
     row = {
+        "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
         "payload": {
             "text": body,
@@ -360,6 +384,10 @@ def test_selected_postgres_health_refuses_unverified_product_projection(
 
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.setattr(
+        "app.rebuildability.product_total_loss.resolve_canonical_object_id",
+        lambda value: value,
+    )
     monkeypatch.setattr("app.health_contract.resolve_store_backend", lambda: "pg")
     monkeypatch.setattr("app.health_contract.get_object_store", lambda: FakeStore())
     monkeypatch.setattr("app.health_contract.diagnose_index", lambda: {

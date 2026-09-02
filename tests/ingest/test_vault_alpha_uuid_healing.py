@@ -155,6 +155,49 @@ def test_source_backed_rebuild_forces_projection_reconciliation(
     assert captured["force"] is True
 
 
+def test_source_backed_ingest_uses_atomic_projection_reconciliation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    note_path = tmp_path / "Notes" / "recovered.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("---\ntitle: Recovered\n---\n\nBody\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class RecoveryStore:
+        def put_and_reconcile_source_backed(self, object_id, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(object_id=object_id, **kwargs)
+
+        def put(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("source-backed recovery must use the atomic seam")
+
+    monkeypatch.setattr(vault_alpha, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_alpha, "get_object_store", lambda: RecoveryStore())
+    monkeypatch.setattr(vault_alpha, "read_companion", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, "_find_companion_by_fingerprint", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        vault_alpha,
+        "check_companion_eligibility",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            eligible=False, reason="system_path", next_check_after=None
+        ),
+    )
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    object_id = vault_alpha._ingest_single(
+        note_path,
+        vault_root=tmp_path,
+        trace_id="trace",
+        reconcile_existing_projection=True,
+        write_companion_record=False,
+    )
+
+    assert str(captured["object_id"]) == object_id
+    assert captured["source_identity"] == "Notes/recovered.md"
+    assert captured["source_ref"] == str(note_path)
+
+
 def test_source_backed_locked_retry_forwards_recovery_admission(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

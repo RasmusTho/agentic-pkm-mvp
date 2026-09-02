@@ -17,6 +17,7 @@ import yaml
 
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
+from app.objects import resolve_canonical_object_id
 
 PRODUCT_REPLAY_RECIPE_VERSION = "product-object-replay-v1"
 ProductReadinessState = Literal["ready", "empty", "refused", "not_selected"]
@@ -49,6 +50,7 @@ class _RetainedSource:
     replay: ProductReplayTuple
     title: str
     text: str
+    object_id: str
 
 
 @dataclass(frozen=True)
@@ -137,8 +139,10 @@ def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
 def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str]]:
     # Imported lazily because vault-alpha stamps this module's replay tuple.
     # The selected candidates are its production source admission policy.
-    from app.ingest.vault_alpha import select_source_backed_rebuild_candidates
-
+    from app.ingest.vault_alpha import (
+        resolve_vault_note_identity,
+        select_source_backed_rebuild_candidates,
+    )
     root = vault_root.expanduser().resolve()
     try:
         candidates = select_source_backed_rebuild_candidates(root)
@@ -151,6 +155,7 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
         try:
             relative = path.resolve().relative_to(root).as_posix()
             raw_text = path.read_text(encoding="utf-8")
+            frontmatter, body = parse_markdown_text(raw_text)
             text = _canonical_source_text(raw_text)
             replay = ProductReplayTuple(
                 **product_replay_provenance(
@@ -159,6 +164,10 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
                     allow_empty_source=True,
                 )
             )
+            note_identity = resolve_vault_note_identity(
+                path, vault_root=root, frontmatter=frontmatter, body=body
+            )
+            object_id = resolve_canonical_object_id(note_identity.note_uuid)
         except Exception as exc:
             failures.append(f"{path.name}:{type(exc).__name__}")
             continue
@@ -167,6 +176,7 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
                 replay=replay,
                 title=path.stem,
                 text=text,
+                object_id=object_id,
             )
         )
     return sources, failures
@@ -189,6 +199,11 @@ def _row_source_identity(row: Any, *, vault_root: Path) -> str:
         except ValueError:
             return ""
     return raw_source.strip().replace("\\", "/").lstrip("./")
+
+
+def _row_object_id(row: Any) -> str:
+    raw_object_id = row.get("object_id") if isinstance(row, dict) else getattr(row, "object_id", None)
+    return str(raw_object_id).strip() if raw_object_id is not None else ""
 
 
 def _is_product_row(row: Any) -> bool:
@@ -263,7 +278,7 @@ def evaluate_product_store_readiness(
         return ProductReadiness("refused", False, "projection has no retained source set", 0, len(rows))
 
     retained_identities = {source.replay.source_identity for source in sources}
-    by_identity: dict[str, list[tuple[ProductReplayTuple, dict[str, Any]]]] = {}
+    by_identity: dict[str, list[tuple[ProductReplayTuple, dict[str, Any], str]]] = {}
     corrupt: list[str] = []
     for row in rows:
         payload = _row_payload(row)
@@ -278,7 +293,9 @@ def evaluate_product_store_readiness(
             continue
         if replay.source_identity not in retained_identities:
             continue
-        by_identity.setdefault(replay.source_identity, []).append((replay, payload))
+        by_identity.setdefault(replay.source_identity, []).append(
+            (replay, payload, _row_object_id(row))
+        )
 
     refused: list[str] = list(corrupt)
     for source in sources:
@@ -289,6 +306,7 @@ def evaluate_product_store_readiness(
             len(observed) != 1
             or observed[0][0] != source.replay
             or observed_text != source.text
+            or observed[0][2] != source.object_id
         ):
             refused.append(source.replay.source_identity)
     if refused:

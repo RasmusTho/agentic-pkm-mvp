@@ -228,7 +228,11 @@ def test_vault_root_and_vault_alpha_resolve_declared_identity_the_same_way(
     monkeypatch.setattr(vault_root, "append_jsonl", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(vault_alpha, "resolve_canonical_object_id", lambda value: value)
     monkeypatch.setattr(vault_alpha, "read_companion", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(vault_alpha, "_find_companion_by_fingerprint", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        vault_alpha,
+        "_find_companion_by_fingerprint",
+        lambda *_args, **_kwargs: "",
+    )
     monkeypatch.setattr(
         vault_alpha,
         "load_companion_settings",
@@ -266,3 +270,47 @@ def test_vault_root_and_vault_alpha_resolve_declared_identity_the_same_way(
     )
 
     assert root_ids == [alpha_id]
+
+
+def test_vault_root_reuses_existing_companion_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services.companion_note import CompanionNote
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root_path = tmp_path / "vault"
+    vault_root_path.mkdir()
+    note_path = vault_root_path / "root-note.md"
+    note_path.write_text("---\ntitle: Root\n---\n\nBody\n", encoding="utf-8")
+    companion_uuid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+    monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(
+        vault_alpha,
+        "read_companion",
+        lambda *_args, **_kwargs: CompanionNote(
+            uuid=companion_uuid,
+            source_ref="old-root-note.md",
+            title="Root",
+            content_hash="",
+            ingest_state="tracked",
+            last_ingested="",
+            created_by_instance="test",
+        ),
+    )
+    monkeypatch.setattr(
+        vault_alpha,
+        "_find_companion_by_fingerprint",
+        lambda *_args, **_kwargs: companion_uuid,
+    )
+
+    frontmatter, body = load_frontmatter(note_path.read_text(encoding="utf-8"))
+    assert (
+        vault_root._stable_vault_root_object_id(
+            note_path,
+            vault_root=vault_root_path,
+            frontmatter=frontmatter,
+            source_body=body,
+        )
+        == companion_uuid
+    )

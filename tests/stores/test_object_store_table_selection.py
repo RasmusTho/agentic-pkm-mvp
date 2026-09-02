@@ -122,6 +122,65 @@ def test_transactional_writes_evict_explicit_memory_entries(monkeypatch):
     assert object_id not in legacy._MEMORY_STORE
 
 
+def test_source_backed_store_reconciles_duplicates_in_one_transaction(monkeypatch):
+    from app.stores import pg
+
+    class FakeCursor:
+        def __init__(self):
+            self.executions: list[tuple[str, object]] = []
+            self.rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params=()):  # type: ignore[no-untyped-def]
+            self.executions.append((str(statement), params))
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return self.cursor_instance
+
+    connection = FakeConnection()
+    monkeypatch.setattr(pg, "_ensure_tables", lambda: None)
+    monkeypatch.setattr(pg, "_connect", lambda: connection)
+    store = pg.PgObjectStore.__new__(pg.PgObjectStore)
+    store.vault_binding_id = "binding"
+    object_id = uuid4()
+
+    store.put_and_reconcile_source_backed(
+        object_id,
+        kind="note",
+        source_ref="/vault/Notes/recovered.md",
+        source_identity="Notes/recovered.md",
+        payload={"replay": {"source_identity": "Notes/recovered.md"}},
+    )
+
+    assert len(connection.cursor_instance.executions) == 2
+    insert_sql, _ = connection.cursor_instance.executions[0]
+    delete_sql, delete_params = connection.cursor_instance.executions[1]
+    assert "INSERT INTO store_objects" in insert_sql
+    assert "DELETE FROM store_objects" in delete_sql
+    assert "payload -> 'replay' ->> 'source_identity' = %s" in delete_sql
+    assert delete_params == (
+        "binding",
+        "note",
+        object_id,
+        "/vault/Notes/recovered.md",
+        "Notes/recovered.md",
+    )
+
 def test_postgres_reads_ignore_stale_process_memory(monkeypatch):
     from app import objects as legacy
 

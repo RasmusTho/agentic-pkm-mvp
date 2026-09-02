@@ -950,6 +950,54 @@ class PgObjectStore(ObjectStore):
                 vault_binding_id=self.vault_binding_id,
             )
 
+    def put_and_reconcile_source_backed(
+        self,
+        object_id: UUID,
+        *,
+        kind: str,
+        source_ref: str,
+        source_identity: str,
+        payload: dict,
+    ) -> None:
+        """Atomically upsert one retained projection and remove its duplicates.
+
+        A prior producer may have persisted a transient identity or an older
+        identity-change row for the same retained source.  Match both the
+        durable locator and replay identity, then leave exactly the requested
+        canonical row in this vault binding.  The upsert and cleanup share one
+        transaction so a recovery pass cannot expose a half-reconciled source.
+        """
+        _ensure_tables()
+        with _connect() as conn:
+            put_object_with_connection(
+                conn,
+                object_id=object_id,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload,
+                vault_binding_id=self.vault_binding_id,
+            )
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM store_objects
+                    WHERE vault_binding_id = %s
+                      AND kind = %s
+                      AND object_id <> %s
+                      AND (
+                          source_ref = %s
+                          OR payload -> 'replay' ->> 'source_identity' = %s
+                      )
+                    """,
+                    (
+                        self.vault_binding_id,
+                        kind,
+                        object_id,
+                        source_ref,
+                        source_identity,
+                    ),
+                )
+
     def put_if_absent(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> bool:
         _ensure_tables()
         with _connect() as conn:

@@ -320,6 +320,7 @@ def canonical_note_replay(
     return product_replay_provenance(
         source_identity=path.relative_to(root).as_posix(),
         source_text=canonical_text,
+        allow_empty_source=True,
     )
 
 

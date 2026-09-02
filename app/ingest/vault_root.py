@@ -23,25 +23,20 @@ logger = logging.getLogger(__name__)
 
 
 def _stable_vault_root_object_id(
-    path: Path, *, vault_root: Path, frontmatter: dict
+    path: Path, *, vault_root: Path, frontmatter: dict, source_body: str = ""
 ) -> str:
     """Resolve one canonical Product identity for a root-ingested retained note."""
     from app.ingest.vault_alpha import (
-        _derive_note_uuid,
-        _normalize_uuid,
-        _sanitize_uuid,
+        resolve_vault_note_identity,
     )
 
-    source_identity = path.resolve().relative_to(vault_root.resolve()).as_posix()
-    raw_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
-    frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(raw_uuid)
-    vault_uuid = _derive_note_uuid(
-        frontmatter_uuid,
-        "",
-        Path(source_identity),
-        invalid_frontmatter=frontmatter_invalid,
+    identity = resolve_vault_note_identity(
+        path,
+        vault_root=vault_root,
+        frontmatter=frontmatter,
+        body=source_body,
     )
-    return resolve_canonical_object_id(vault_uuid)
+    return resolve_canonical_object_id(identity.note_uuid)
 
 
 def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[Path]:
@@ -109,7 +104,9 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     if not normalized_object_id:
         raise RuntimeError("normalize did not return object_id")
     object_id = (
-        _stable_vault_root_object_id(path, vault_root=root, frontmatter=frontmatter)
+        _stable_vault_root_object_id(
+            path, vault_root=root, frontmatter=frontmatter, source_body=_body
+        )
         if store_backend == "pg"
         else normalized_object_id
     )

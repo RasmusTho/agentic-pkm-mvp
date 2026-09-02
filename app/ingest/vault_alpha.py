@@ -366,6 +366,72 @@ def _derive_note_uuid(
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
+@dataclass(frozen=True)
+class VaultNoteIdentity:
+    """The read-only identity decision shared by retained-source producers."""
+
+    note_uuid: str
+    frontmatter_uuid_raw: str
+    frontmatter_uuid: str
+    frontmatter_invalid: bool
+    companion: CompanionNote | None
+
+
+def resolve_vault_note_identity(
+    path: Path, *, vault_root: Path, frontmatter: dict, body: str
+) -> VaultNoteIdentity:
+    """Resolve a note's declared, companion, or deterministic recovery identity.
+
+    This is intentionally read-only.  Root ingestion and Product readiness must
+    make the same identity decision as vault-alpha without healing frontmatter
+    or writing companion state while they inspect retained source.
+    """
+    root = vault_root.expanduser().resolve()
+    resolved_path = path.expanduser().resolve()
+    rel_path = resolved_path.relative_to(root)
+    frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+    frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
+    if frontmatter_invalid:
+        click.echo(
+            f"Warning: {rel_path} has invalid frontmatter uuid {frontmatter_uuid_raw}; "
+            "using a stable recovery candidate.",
+            err=True,
+        )
+    companion = read_companion(root, frontmatter_uuid) if frontmatter_uuid else None
+    companion_uuid = companion.uuid if companion else ""
+    if frontmatter_uuid and companion_uuid and frontmatter_uuid != companion_uuid:
+        click.echo(
+            f"Warning: {rel_path} companion uuid {companion_uuid} differs from frontmatter uuid {frontmatter_uuid}; using frontmatter uuid.",
+            err=True,
+        )
+
+    fingerprint_uuid = ""
+    if not frontmatter_uuid and not companion_uuid:
+        title = _frontmatter_title(frontmatter) or _derive_title(body, resolved_path)
+        stripped_text = strip_ai_status_block(strip_ai_panels(body)).strip()
+        ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, resolved_path)
+        fingerprint_uuid = _find_companion_by_fingerprint(
+            root, str(ingest_fingerprint.get("text_sha256") or ""), title
+        )
+        if fingerprint_uuid:
+            companion = read_companion(root, fingerprint_uuid)
+            companion_uuid = companion.uuid if companion else ""
+
+    if frontmatter_invalid:
+        note_uuid = _derive_note_uuid(
+            frontmatter_uuid, companion_uuid, rel_path, invalid_frontmatter=True
+        )
+    else:
+        note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
+    return VaultNoteIdentity(
+        note_uuid=note_uuid,
+        frontmatter_uuid_raw=frontmatter_uuid_raw,
+        frontmatter_uuid=frontmatter_uuid,
+        frontmatter_invalid=frontmatter_invalid,
+        companion=companion,
+    )
+
+
 
 def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, str, bool]:
     """
@@ -503,6 +569,7 @@ def _ingest_single(
     trace_id: str,
     raw_text: str | None = None,
     write_companion_record: bool = True,
+    reconcile_existing_projection: bool = False,
 ) -> str:
     rel_path = path.relative_to(vault_root)
     if raw_text is None:
@@ -510,22 +577,10 @@ def _ingest_single(
     if "\x00" in raw_text:
         raise InvalidNoteError("null byte detected", error_type="NullByteError")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
-    frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
-    frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
-    if frontmatter_invalid:
-        click.echo(
-            f"Warning: {rel_path} has invalid frontmatter uuid {frontmatter_uuid_raw}; "
-            "using a stable recovery candidate.",
-            err=True,
-        )
-    companion = read_companion(vault_root, frontmatter_uuid) if frontmatter_uuid else None
-    companion_uuid = companion.uuid if companion else ""
-    # Frontmatter is the canonical identity; companion is the system surface.
-    if frontmatter_uuid and companion_uuid and frontmatter_uuid != companion_uuid:
-        click.echo(
-            f"Warning: {rel_path} companion uuid {companion_uuid} differs from frontmatter uuid {frontmatter_uuid}; using frontmatter uuid.",
-            err=True,
-        )
+    identity = resolve_vault_note_identity(
+        path, vault_root=vault_root, frontmatter=frontmatter, body=body
+    )
+    companion = identity.companion
 
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
     review_state = str(frontmatter.get("review_state") or "provisional")
@@ -553,14 +608,7 @@ def _ingest_single(
         if key in frontmatter and frontmatter[key] is not None
     }
 
-    fingerprint_uuid = ""
-    if not frontmatter_uuid and not companion_uuid:
-        fingerprint_uuid = _find_companion_by_fingerprint(vault_root, text_sha256, title)
-
-    if frontmatter_invalid:
-        note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid, rel_path, invalid_frontmatter=True)
-    else:
-        note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
+    note_uuid = identity.note_uuid
     canonical_object_id = resolve_canonical_object_id(note_uuid)
 
     companion_settings = load_companion_settings(vault_root)
@@ -639,9 +687,6 @@ def _ingest_single(
         source_ref=str(path),
         created_at=datetime.now(timezone.utc),
     )
-    # Legacy ObjectStore keeps classifier/normalizer flows working with memory fallback during tests.
-    ObjectStore().save_object(obj, emit_outbox=False, trace_id=trace_id)
-
     try:
         classify_res = classify_run(canonical_object_id, trace_id=trace_id)
     except Exception:
@@ -676,16 +721,32 @@ def _ingest_single(
         "replay": replay,
     }
 
-    try:
-        # Store abstraction (memory/pg) used by ASK/status/hybrid warm-loads.
-        get_object_store().put(
+    object_store = get_object_store()
+    reconcile = getattr(object_store, "put_and_reconcile_source_backed", None)
+    if reconcile_existing_projection and callable(reconcile):
+        # Recovery must perform the canonical upsert and duplicate cleanup
+        # in one durable transaction.  A failure is intentionally loud so
+        # bootstrap cannot claim a partial reconstruction.
+        reconcile(
             object_uuid,
             kind="note",
             source_ref=str(path),
+            source_identity=replay["source_identity"],
             payload=store_payload,
         )
-    except Exception:
-        pass
+    else:
+        # Legacy ObjectStore keeps classifier/normalizer flows working with memory fallback during tests.
+        ObjectStore().save_object(obj, emit_outbox=False, trace_id=trace_id)
+        try:
+            # Store abstraction (memory/pg) used by ASK/status/hybrid warm-loads.
+            object_store.put(
+                object_uuid,
+                kind="note",
+                source_ref=str(path),
+                payload=store_payload,
+            )
+        except Exception:
+            pass
 
     try:
         # Durable write only (KERNEL-05, I-D3): the retrieval cache is never
@@ -905,24 +966,16 @@ def _ingest_candidates(
             if fm_error:
                 malformed.append(rel_display)
                 continue
-            frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
-            needs_uuid_write = not bool(frontmatter_uuid_raw)
+            identity = resolve_vault_note_identity(
+                path, vault_root=vault_root, frontmatter=frontmatter, body=body
+            )
+            needs_uuid_write = not bool(identity.frontmatter_uuid_raw)
             title = _frontmatter_title(frontmatter) or _derive_title(body, path)
             stripped_text = strip_ai_status_block(strip_ai_panels(body)).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
-            frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
             text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")
-            companion = read_companion(vault_root, frontmatter_uuid) if frontmatter_uuid else None
-            companion_uuid = companion.uuid if companion else ""
-            fingerprint_uuid = ""
-            if not frontmatter_uuid and not companion_uuid:
-                fingerprint_uuid = _find_companion_by_fingerprint(vault_root, text_sha256, title)
-                if fingerprint_uuid:
-                    companion = read_companion(vault_root, fingerprint_uuid)
-            if frontmatter_invalid:
-                note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid, rel_path, invalid_frontmatter=True)
-            else:
-                note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
+            companion = identity.companion
+            note_uuid = identity.note_uuid
             if needs_uuid_write and note_uuid:
                 try:
                     ensure_note_uuid(
@@ -987,8 +1040,11 @@ def _ingest_candidates(
                     trace_id=trace_id,
                     raw_text=raw_text,
                     write_companion_record=uuid_write_action != SOURCE_BACKED_REBUILD_ACTION,
+                    reconcile_existing_projection=uuid_write_action == SOURCE_BACKED_REBUILD_ACTION,
                 )
             except TypeError:
+                if uuid_write_action == SOURCE_BACKED_REBUILD_ACTION:
+                    raise
                 _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
             processed.add(rel_display)

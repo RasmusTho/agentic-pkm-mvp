@@ -500,3 +500,12 @@ wait_for_watcher_heartbeat
         bootstrap_block = script.split('object_count="$objects_before"', 1)[1]
         condition = bootstrap_block.split('then', 1)[0]
         assert '[ "$objects_before" -le 0 ] || [ "$product_rebuild_required" -eq 1 ]' in condition
+        assert '"bootstrap_product_rebuild_incomplete"' in script
+        assert 'ingest_error_count' in script
+        assert 'ingest_malformed_count' in script
+        assert 'ingest_locked_count' in script
+        assert 'ingest_invalid_count' in script
+        assert '[ "$ingest_rebuilt_count" -ne "$ingest_scanned_count" ]' in script
+        assert 'probe_product_readiness' in script
+        assert '"bootstrap_product_readiness_failed"' in script
+        assert '[ "$readyz_http_status" != "200" ]' in script
