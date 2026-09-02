@@ -17,7 +17,7 @@ Authority: The GitHub issue body wins for live backlog state; `README.md` wins f
 | SETTINGS-02 SINGLE_DEFAULT_REGISTRY | [#3160](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3160) | delivered / closed |
 | SETTINGS-03 CANONICALIZE_SETTINGS_LOCATION | [#3161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3161) | delivered / closed |
 | SETTINGS-04 RECEIPT_EVERY_SETTINGS_WRITE | [#3162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3162) | delivered / closed |
-| SETTINGS-05 REBIND_ON_VAULT_SELECTION | [#3163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3163) | open validation hub; aggregate acceptance remains pending |
+| SETTINGS-05 REBIND_ON_VAULT_SELECTION | [#3163](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3163) | delivered / closed; aggregate receipt recorded |
 | SETTINGS-06 PROMPTS_AS_SETTINGS | [#3164](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3164) | delivered / closed |
 | SETTINGS-07 validation hub | [#3165](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3165) | delivered / closed; 07A→07B→07C receipts verified |
 | SETTINGS-07A LLM_AND_RETRIEVAL_SETTINGS | [#4796](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4796) | delivered / closed |

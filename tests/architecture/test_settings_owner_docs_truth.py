@@ -32,6 +32,7 @@ def test_settings_spine_pointer_preserves_open_parent() -> None:
     assert "SETTINGS-08 owner-document slice is delivered" in spine
     assert "#3156 remains the final open" in spine
     assert "SETTINGS-05" in spine and "[ ] Vault selection" in spine
+    assert "#3163" in parent_pointer and "delivered / closed" in parent_pointer
     assert "remains open and is the" in parent_pointer
     assert "parent closure remains with #3156" in parent_pointer
     assert "does not claim that the parent is closed" in " ".join(task.split())
