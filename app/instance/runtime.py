@@ -3001,8 +3001,8 @@ def _finish_instance_state_deployment_locked(
         channel=channel,
         quiescence_proof=quiescence_proof,
     )
+    pending_legacy_owners: list[LegacyOwner] = []
     if established is not None and established.legacy_bootstrap_complete:
-        pending_legacy_owners: list[LegacyOwner] = []
         recovery_failed = False
         try:
             # Only pending registrations need the recovery transition here.
