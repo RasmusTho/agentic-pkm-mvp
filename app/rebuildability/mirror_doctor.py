@@ -35,6 +35,10 @@ class MirrorFindingCode(str, Enum):
     INCOMPLETE_SNAPSHOT = "incomplete_snapshot"
     CONFLICTING_SOURCE_GENERATION = "conflicting_source_generation"
     MISSING_IDENTITY = "missing_identity"
+    RECIPE_VERSION_MISMATCH = "recipe_version_mismatch"
+
+
+CURRENT_PRODUCT_RECIPE_VERSION = "product-object-replay-v1"
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,7 @@ class ProjectionRecord:
     source_identity: str | None
     source_generation: str | None
     recipe_version: str | None
+    expected_recipe_version: str | None = None
     index_identity: str | None = None
     expected_index_identity: str | None = None
     db_source_generation: str | None = None
@@ -121,6 +126,7 @@ def diagnose_mirror_corruption(
     sources: Iterable[SourceRecord],
     projections: Iterable[ProjectionRecord],
     snapshot_complete: bool = True,
+    expected_recipe_version: str = CURRENT_PRODUCT_RECIPE_VERSION,
 ) -> MirrorDoctorReport:
     """Classify supplied mirrors without reading, writing, or authorizing state.
 
@@ -212,6 +218,12 @@ def diagnose_mirror_corruption(
             and projection.index_identity != projection.expected_index_identity
         ):
             findings.append(MirrorFinding(MirrorFindingCode.INDEX_IDENTITY_DRIFT, subject))
+        expected_recipe = projection.expected_recipe_version or expected_recipe_version
+        if (
+            not _missing(projection.recipe_version)
+            and projection.recipe_version != expected_recipe
+        ):
+            findings.append(MirrorFinding(MirrorFindingCode.RECIPE_VERSION_MISMATCH, subject))
         if projection.sole_meaning_authority or projection.sole_action_authority:
             findings.append(MirrorFinding(MirrorFindingCode.HIDDEN_AUTHORITY, subject))
 
@@ -219,6 +231,7 @@ def diagnose_mirror_corruption(
 
 
 __all__ = [
+    "CURRENT_PRODUCT_RECIPE_VERSION",
     "DurablePath",
     "DurablePathClass",
     "MirrorDoctorReport",

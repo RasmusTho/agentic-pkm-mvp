@@ -80,6 +80,7 @@ def _load_snapshot(path: Path):
             source_identity=_text(item.get("source_identity")),
             source_generation=_text(item.get("source_generation")),
             recipe_version=_text(item.get("recipe_version")),
+            expected_recipe_version=_text(item.get("expected_recipe_version")),
             index_identity=_text(item.get("index_identity")),
             expected_index_identity=_text(item.get("expected_index_identity")),
             db_source_generation=_text(item.get("db_source_generation")),
