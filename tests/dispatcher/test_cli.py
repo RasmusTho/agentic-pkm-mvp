@@ -198,6 +198,27 @@ def test_cleanup_guard_same_owner_is_invocation_exclusive(tmp_env, store, monkey
     leases.release_cleanup_guard(store, ready.task_id, "closure-test", retry["token"])
 
 
+def test_cleanup_guard_refreshes_exact_invocation(tmp_env, store, monkeypatch):
+    from app.dispatcher import leases
+    from tests.dispatcher.helpers import seed_tasks
+
+    ready = next(t for t in seed_tasks(store) if t.status == "ready")
+    timestamps = iter([
+        "2026-09-02T00:00:00+00:00",
+        "2026-09-02T00:00:30+00:00",
+        "2026-09-02T00:00:31+00:00",
+    ])
+    monkeypatch.setattr(leases, "_utc_now", lambda: next(timestamps))
+    first = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    refreshed = leases.refresh_cleanup_guard(
+        store, ready.task_id, "closure-test", first["token"], ttl_seconds=60
+    )
+    assert refreshed["token"] == first["token"]
+    assert refreshed["owner"] == first["owner"]
+    assert refreshed["expires_at"] > first["expires_at"]
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", first["token"])
+
+
 def test_cleanup_guard_bootstraps_missing_db_before_claim(tmp_env):
     from app.dispatcher import leases
     from app.dispatcher.models import TaskRecord
@@ -218,7 +239,9 @@ def test_cleanup_guard_bootstraps_missing_db_before_claim(tmp_env):
     assert data["ok"] is True
     token = data["guard"]["token"]
     paths = load_paths(tmp_env)
+    assert not paths.db_path.exists()
     store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    store.initialize()
     store.upsert_task(
         TaskRecord(
             task_id=task_id,
@@ -235,6 +258,9 @@ def test_cleanup_guard_bootstraps_missing_db_before_claim(tmp_env):
     assert code == 1
     assert "cleanup guard" in data["error"]
     leases.release_cleanup_guard(store, task_id, "closure-test", token)
+    code, data = _run(["claim", task_id, "--agent", "other", "--json"])
+    assert code == 0
+    assert data["task"]["status"] == "claimed"
 
 
 def test_claim_conflict_returns_error(tmp_env, store):

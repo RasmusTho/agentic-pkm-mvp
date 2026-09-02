@@ -161,9 +161,9 @@ def complete(
             raise ValueError(f"Cannot complete task {task_id}: lease changed concurrently")
         completed = conn.execute(
             "UPDATE dispatcher_tasks SET status = 'completed', lease_id = NULL, "
-            "claimed_by = NULL, last_heartbeat_at = NULL, lease_expires_at = NULL, "
+            "claimed_by = NULL, last_heartbeat_at = NULL, lease_expires_at = ?, "
             "updated_at = ? WHERE task_id = ? AND lease_id = ? AND claimed_by = ?",
-            (now, task_id, current_lease_id, actor),
+            (lease_row["expires_at"], now, task_id, current_lease_id, actor),
         )
         if completed.rowcount != 1:
             raise ValueError(f"Cannot complete task {task_id}: task changed concurrently")

@@ -1126,12 +1126,14 @@ def _dispatcher_cleanup_guard(
         "--owner",
         owner,
     ]
-    if action == "acquire":
+    if action in {"acquire", "refresh"}:
         argv.extend(["--ttl-seconds", "900"])
-    elif token is not None:
+    if action in {"refresh", "release"} and token is not None:
         argv.extend(["--token", token])
-    else:
+    elif action == "release":
         raise ClosureError("unknown", "dispatcher cleanup guard release token is missing")
+    elif action not in {"acquire", "refresh"}:
+        raise ClosureError("unknown", "unknown dispatcher cleanup guard action")
     argv.append("--json")
     result = _run(executor, cwd, argv)
     try:
@@ -1140,7 +1142,7 @@ def _dispatcher_cleanup_guard(
         raise ClosureError("unknown", "dispatcher cleanup guard was not JSON", result) from exc
     if not isinstance(payload, Mapping) or payload.get("ok") is not True:
         raise ClosureError("unknown", "dispatcher cleanup guard response was malformed", result)
-    if action == "acquire":
+    if action in {"acquire", "refresh"}:
         guard = payload.get("guard")
         if (
             not isinstance(guard, Mapping)
@@ -1823,6 +1825,7 @@ def _finish_cleanup(
             cwd,
             reconciled=reconciled,
             merge_sha=merge_sha,
+            cleanup_guard=(task_id, owner, token),
         )
     finally:
         _dispatcher_cleanup_guard(
@@ -1835,7 +1838,29 @@ def _finish_cleanup(
         )
 
 
-def _finish_cleanup_effects(value: Mapping[str, Any], current: Mapping[str, Any], runner: CommandExecutor, cwd: Path, *, reconciled: bool, merge_sha: str | None = None) -> dict[str, Any]:
+def _finish_cleanup_effects(
+    value: Mapping[str, Any],
+    current: Mapping[str, Any],
+    runner: CommandExecutor,
+    cwd: Path,
+    *,
+    reconciled: bool,
+    merge_sha: str | None = None,
+    cleanup_guard: tuple[str, str, str] | None = None,
+) -> dict[str, Any]:
+    def refresh_guard() -> None:
+        if cleanup_guard is not None:
+            task_id, owner, token = cleanup_guard
+            _dispatcher_cleanup_guard(
+                runner,
+                cwd,
+                action="refresh",
+                task_id=task_id,
+                owner=owner,
+                token=token,
+            )
+
+    refresh_guard()
     closed = current["issue"]
     dispatcher = value["post_merge"].get("dispatcher")
     coordination = value.get("coordination")
@@ -1849,6 +1874,7 @@ def _finish_cleanup_effects(value: Mapping[str, Any], current: Mapping[str, Any]
             issue_number=int(value["governing_issue"]),
             pr_number=int(value["pr_number"]),
         )
+    refresh_guard()
     labels = [str(item.get("name") if isinstance(item, dict) else item) for item in closed.get("labels", [])]
     configured_prefixes = value.get("post_merge", {}).get("remove_label_prefixes")
     if not isinstance(configured_prefixes, list) or sorted(configured_prefixes) != ["action:", "agent:"]:
@@ -1861,6 +1887,7 @@ def _finish_cleanup_effects(value: Mapping[str, Any], current: Mapping[str, Any]
         }
     )
     for label in removable_labels:
+        refresh_guard()
         result = runner.run(
             [
                 "gh",
@@ -1875,6 +1902,7 @@ def _finish_cleanup_effects(value: Mapping[str, Any], current: Mapping[str, Any]
         )
         if result.returncode and "404" not in f"{result.stdout}\n{result.stderr}":
             raise ClosureError("incomplete", "agent label cleanup failed", result)
+    refresh_guard()
     after_cleanup = _issue(runner, cwd, str(value["repository"]), int(value["governing_issue"]))
     final_labels = [
         str(item.get("name") if isinstance(item, dict) else item)
@@ -1891,6 +1919,7 @@ def _finish_cleanup_effects(value: Mapping[str, Any], current: Mapping[str, Any]
     )
     if remaining_action_labels:
         raise ClosureError("incomplete", "terminal Issue readback retains agent/action labels")
+    refresh_guard()
     if isinstance(dispatcher, Mapping):
         dispatcher = _dispatcher_completion(
             runner,

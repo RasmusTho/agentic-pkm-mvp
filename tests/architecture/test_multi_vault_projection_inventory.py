@@ -1111,6 +1111,9 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         "app/builderops/design_run_governance.py": 1,
         "app/builderops/model_inquiry_runner.py": 1,
         "app/builderops/store.py": 1,
+        # ``dispatcher show --events`` owns one explicit read transaction
+        # whose SQL is intentionally local to the separate SQLite plane.
+        "app/dispatcher/cli.py": 1,
         "app/dispatcher/store.py": 2,
         "app/dispatcher/verification_dispatch.py": 1,
         "app/dispatcher/verification_runtime.py": 1,

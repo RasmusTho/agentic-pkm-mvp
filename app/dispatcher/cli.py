@@ -379,6 +379,17 @@ def _cmd_cleanup_guard(args: argparse.Namespace, store: SqliteStore) -> int:
                 ttl_seconds=args.ttl_seconds,
             )
             _emit({"ok": True, "guard": guard}, args.json)
+        elif args.action == "refresh":
+            if args.token is None:
+                return _emit_error("cleanup-guard refresh requires --token", args.json)
+            guard = lease_module.refresh_cleanup_guard(
+                store,
+                task_id=args.task_id,
+                owner=args.owner,
+                token=args.token,
+                ttl_seconds=args.ttl_seconds,
+            )
+            _emit({"ok": True, "guard": guard}, args.json)
         else:
             if args.token is None:
                 return _emit_error("cleanup-guard release requires --token", args.json)
@@ -390,7 +401,7 @@ def _cmd_cleanup_guard(args: argparse.Namespace, store: SqliteStore) -> int:
             )
             _emit({"ok": True, "released": True, "task_id": args.task_id}, args.json)
         return 0
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         return _emit_error(str(exc), args.json)
 
 
@@ -1288,7 +1299,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("cleanup-guard", help="Reserve a task resource during governed cleanup")
-    p.add_argument("action", choices=("acquire", "release"))
+    p.add_argument("action", choices=("acquire", "refresh", "release"))
     p.add_argument("--task-id", required=True)
     p.add_argument("--owner", required=True)
     p.add_argument("--token", default=None)
@@ -1449,18 +1460,15 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = load_paths()
 
-    # Cleanup guards are the one DB-backed coordination command that may
-    # bootstrap an absent DB.  This closes the gap between a documented
-    # fallback observation and a later dispatcher claim: acquire creates the
-    # durable guard before any task claim can proceed.  Release and all other
-    # lifecycle commands remain fail-closed when the DB is absent.
-    bootstrap_cleanup_guard = (
+    # Cleanup guard acquisition is the one coordination command that may run
+    # without an initialized DB. It persists a sidecar reservation that claim
+    # honors if the dispatcher is initialized while cleanup is in flight.
+    allow_missing_cleanup_guard = (
         args.command == "cleanup-guard"
         and getattr(args, "action", None) == "acquire"
-        and not paths.db_path.exists()
     )
     if args.command in REQUIRED_COMMANDS and args.command != "init":
-        if not paths.db_path.exists() and not bootstrap_cleanup_guard:
+        if not paths.db_path.exists() and not allow_missing_cleanup_guard:
             msg = "dispatcher not initialised — run: make dispatcher-init"
             return _emit_payload(
                 {
@@ -1485,11 +1493,6 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_verification_cycle(args, None)
 
     store = _make_store()
-    if bootstrap_cleanup_guard:
-        try:
-            store.initialize()
-        except (OSError, sqlite3.Error, ValueError) as exc:
-            return _emit_error(f"cleanup guard could not initialize dispatcher: {exc}", getattr(args, "json", False))
     return handler(args, store)
 
 
