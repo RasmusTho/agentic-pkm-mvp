@@ -32,10 +32,19 @@ class Fake:
         self.issue_title = "builder: make light-path closure deterministic with plan/apply"
         self.issue_body = "Issue body"
         self.events_commit_id = MERGE
+        self.timeline: list[object] = []
+        self.required_checks: object = {
+            "required_status_checks": {
+                "contexts": [],
+                "checks": [{"context": "CI", "app_id": 7}],
+            }
+        }
+        self.dispatcher_status = "claimed"
         self.dispatcher_task = {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
             "claimed_by": "codex-slice-implementer",
             "lease_id": "lease-1",
+            "linked_pr": "99",
         }
 
     def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> CommandResult:
@@ -60,8 +69,14 @@ class Fake:
             return self._json(args, {"number": 5245, "state": "closed" if self.merged else "open", "title": self.issue_title, "body": self.issue_body, "labels": [{"name": "agent:in-progress"}, {"name": "lane:governance"}]})
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
             return self._json(args, [{"event": "closed", "commit_id": self.events_commit_id}])
+        if endpoint.endswith("/issues/5245/timeline") and "GET" in args:
+            return self._json(args, self.timeline)
+        if endpoint.endswith("/branches/main/protection") and "GET" in args:
+            return self._json(args, self.required_checks)
         if endpoint.endswith("check-runs"):
-            return self._json(args, {"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]})
+            return self._json(args, {"check_runs": [{"id": 1, "name": "CI", "status": "completed", "conclusion": "success", "app": {"id": 7}}]})
+        if endpoint.endswith("/status"):
+            return self._json(args, {"statuses": []})
         if endpoint.endswith("/pulls/99/merge") and "PUT" in args:
             if self.fail_merge: return CommandResult(args, 1, "", "transport")
             self.merged = True; return self._json(args, {"sha": MERGE, "merged": True})
@@ -70,11 +85,16 @@ class Fake:
             return self._json(args, {})
         if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
             if args[3] == "show":
-                return self._json(args, {"ok": True, "task": self.dispatcher_task})
+                task = {"task_id": self.dispatcher_task["task_id"], "status": self.dispatcher_status, "linked_pr": "99"}
+                if self.dispatcher_status == "claimed":
+                    task.update(self.dispatcher_task)
+                return self._json(args, {"ok": True, "task": task})
+            if args[3] == "events":
+                return self._json(args, {"ok": True, "events": [{"task_id": self.dispatcher_task["task_id"], "event_type": "task.completed", "actor": self.dispatcher_task["claimed_by"], "lease_id": self.dispatcher_task["lease_id"]}]})
             if args[3] == "complete":
                 assert args[4] == self.dispatcher_task["task_id"]
                 assert args[5:7] == ("--agent", self.dispatcher_task["claimed_by"])
-                return CommandResult(args, 0, "", "")
+                self.dispatcher_status = "completed"; return CommandResult(args, 0, "", "")
         raise AssertionError(args)
 
     @staticmethod
@@ -141,6 +161,36 @@ def test_closure_apply_completes_exact_dispatcher_task_with_lease_holder(tmp_pat
     assert receipt["cleanup"]["dispatcher"]["lease_holder"] == "codex-slice-implementer"
     complete = next(call for call in fake.calls if len(call) >= 4 and call[3] == "complete")
     assert complete[4:7] == (task_id, "--agent", "codex-slice-implementer")
+
+
+def test_closure_plan_binds_repository_required_check_authority(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    assert plan["required_checks"] == [{"kind": "check", "name": "CI", "app_id": 7}]
+    fake.required_checks = {}
+    with pytest.raises(ClosureError, match="required-check authority"):
+        build_closure_plan(request(tmp_path), executor=fake)
+
+
+def test_closure_apply_recovers_completed_dispatcher_from_governed_completion_event(tmp_path: Path) -> None:
+    fake = Fake(tmp_path); task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    fake.merged = True; fake.dispatcher_status = "completed"
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["reconciled"] is True
+    assert not any(len(call) >= 4 and call[3] == "complete" for call in fake.calls)
+
+
+def test_closure_apply_requires_pr_specific_attribution_when_closed_event_has_no_commit(tmp_path: Path) -> None:
+    fake = Fake(tmp_path); fake.events_commit_id = None
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    with pytest.raises(ClosureError, match="attribution"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    fake = Fake(tmp_path); fake.events_commit_id = None
+    fake.timeline = [{"event": "cross-referenced", "source": {"issue": {"number": 99, "pull_request": {"url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/pulls/99"}}}}]
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["issue"]["closure_attribution"] == "GitHub-native exact PR closer attribution"
 
 
 def test_closure_apply_requires_exact_closing_issue_attribution(tmp_path: Path) -> None:
