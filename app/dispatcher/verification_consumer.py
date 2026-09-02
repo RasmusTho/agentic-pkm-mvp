@@ -65,10 +65,11 @@ from app.dispatcher.verification_contract import (
 )
 from app.dispatcher.verified_merge import (
     _comments_authenticate_legacy_authority,
-    _matches_stored_body_digest,
+    neutralized_body_matches_digest,
     plan_post_merge_reconciliation,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
+    verified_merge_body_matches_digest,
 )
 
 
@@ -4329,13 +4330,13 @@ class VerificationConsumer:
         allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
             comments, authority
         )
-        if _matches_stored_body_digest(
+        if verified_merge_body_matches_digest(
             live_body,
             authority.get("body_sha256"),
             allow_legacy_terminal_lf=allow_legacy_terminal_lf,
         ):
             body_state = "restored"
-        elif _matches_stored_body_digest(
+        elif neutralized_body_matches_digest(
             live_body,
             authority.get("neutralized_body_sha256"),
             allow_legacy_terminal_lf=allow_legacy_terminal_lf,
