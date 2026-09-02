@@ -5442,6 +5442,71 @@ def test_legacy_owner_inventory_resolves_foreign_binding_ids_before_collision_ch
     } == set(prod.ledger.load().leases)
 
 
+def test_deployment_finish_rejects_foreign_blank_binding_without_active_lease(
+    tmp_path,
+) -> None:
+    """#5250 AC1: every foreign receipt owner must resolve or fail closed."""
+
+    host_global_root = tmp_path / "host-global"
+    prod = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    dev = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "dev-state", "dev"),
+        host_global_root,
+    )
+    prod_root = tmp_path / "prod-vault"
+    dev_root = tmp_path / "dev-vault"
+    prod_root.mkdir()
+    dev_root.mkdir()
+    prod_registration = prod.bootstrap_env_binding(
+        vault_root=prod_root, watcher_vault_path=prod_root
+    )
+    dev_registration = dev.bootstrap_env_binding(
+        vault_root=dev_root, watcher_vault_path=dev_root
+    )
+    prod.ledger.bootstrap_legacy_owners(
+        [],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger_payload = json.loads(prod.ledger.path.read_text(encoding="utf-8"))
+    del ledger_payload["leases"][dev_registration.vault_binding_id]
+    prod.ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    os.chmod(prod.ledger.path, 0o600)
+
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=prod.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {"channel_id": "dev", "root": str(dev_root)},
+            {
+                "channel_id": "prod",
+                "vault_binding_id": prod_registration.vault_binding_id,
+                "root": str(prod_root),
+            },
+        ],
+    )
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="host-validated legacy-owner binding or lease recovery is invalid",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=prod.layout.root.parent,
+            host_global_root=host_global_root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=owner_receipt,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+
+
 def test_deployment_finish_recovers_pending_legacy_owner_lease_before_consistency(
     tmp_path,
 ) -> None:
