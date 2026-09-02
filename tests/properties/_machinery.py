@@ -1468,20 +1468,20 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
     ("app/ingest/vault_alpha.py", 790): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 163): (
+    ("app/ingest/vault_root.py", 177): (
         "carries_frontmatter: canonical_payload carries episode_ref; objects_store.upsert -> "
         "PgObjects.upsert -> PgObjectStore.put -> store_objects (round-5 finding: this IS a "
         "canonical store_objects write, not the legacy `objects` table alone)."
     ),
-    ("app/ingest/vault_root.py", 167): (
+    ("app/ingest/vault_root.py", 181): (
         "carries_frontmatter: the TypeError fallback uses the same canonical_payload; "
         "objects_store.upsert -> store_objects."
     ),
-    ("app/ingest/vault_root.py", 182): (
+    ("app/ingest/vault_root.py", 196): (
         "carries_frontmatter: _ingest_file payload carries episode_ref; index_ingest_object -> "
         "store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 194): (
+    ("app/ingest/vault_root.py", 208): (
         "carries_frontmatter: same payload ({**payload, 'text': ...}) -> store.put -> store_objects."
     ),
     ("app/rebuildability/product_projection_rebuild.py", 542): (
