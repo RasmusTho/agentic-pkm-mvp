@@ -33,6 +33,7 @@ COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "te
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
 LAUNCHER_ROLES = {name.removesuffix(".sh") for name in LAUNCHER_SCRIPTS}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
+ENV_ASSIGNMENT_RE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$")
 PYTHON_RE = re.compile(r"^python(?:3(?:\.\d+)*)?$")
 PF_KTHREAD = 0x00200000
 LINUX_PROCESS_READ_ATTEMPTS = 3
@@ -463,6 +464,26 @@ def _run_checked(command: Sequence[str], *, label: str, env: dict[str, str] | No
     return result.stdout
 
 
+def _compose_env_value(raw_value: str) -> str:
+    """Parse the bounded dotenv forms accepted by the Compose launcher."""
+
+    value = raw_value.strip()
+    if value[:1] in {"'", '"'}:
+        quote = value[0]
+        for index in range(1, len(value)):
+            if value[index] != quote:
+                continue
+            suffix = value[index + 1 :].lstrip()
+            if not suffix or suffix.startswith("#"):
+                return value[1:index]
+            break
+        return value
+    comment = re.search(r"[ \t]+#", value)
+    if comment:
+        value = value[: comment.start()].rstrip()
+    return value
+
+
 def _read_env_bytes(raw: bytes) -> dict[str, str]:
     values: dict[str, str] = {}
     try:
@@ -471,16 +492,13 @@ def _read_env_bytes(raw: bytes) -> dict[str, str]:
         raise InventoryError("legacy owner config source is invalid") from exc
     for raw_line in lines:
         line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line or line.startswith("#"):
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+        match = ENV_ASSIGNMENT_RE.match(line)
+        if match is None:
             continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
+        key, raw_value = match.groups()
+        values[key] = _compose_env_value(raw_value)
     return values
 
 

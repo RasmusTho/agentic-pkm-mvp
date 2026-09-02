@@ -39,6 +39,35 @@ MOUNTS = [
 ENV = ["PKM_ENVIRONMENT=dev", "PATH=/usr/local/bin"]
 
 
+def test_read_env_bytes_matches_compose_quoted_comment_rules() -> None:
+    values = writer_inventory._read_env_bytes(
+        b'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n'
+        b'VALUE="literal # data" # trailing comment\n'
+        b'PLAIN=/app/tmp/runtime.env # canonical\n'
+    )
+
+    assert values == {
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": "/app/tmp/agentic-pkm/app-local.md",
+        "VALUE": "literal # data",
+        "PLAIN": "/app/tmp/runtime.env",
+    }
+
+
+def test_config_sources_accept_quoted_container_app_local_setting(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".env.dev.local").write_text(
+        'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n',
+        encoding="utf-8",
+    )
+    for name in ("VAULT_HOST_ROOT", "VAULT_ROOT", "WATCHER_VAULT_PATH", "VAULT_ROOT_DEV"):
+        monkeypatch.delenv(name, raising=False)
+
+    owners, _ = writer_inventory._config_legacy_owner_sources(repo_root, active_channel="dev")
+
+    assert owners == []
+
+
 def _inspect_payload(mounts):
     return [
         {
