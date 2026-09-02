@@ -32,6 +32,9 @@ ISSUE_BODY = (
 class Fake:
     def __init__(self, worktree: Path) -> None:
         self.worktree = worktree
+        target_file = worktree / "tests/scripts/test_closure.py"
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        target_file.write_text("# fixture for Verify target resolution\n", encoding="utf-8")
         self.merged = False
         self.fail_merge = False
         self.calls: list[tuple[str, ...]] = []
@@ -46,6 +49,15 @@ class Fake:
         self.cleanup_issue_state_open = False
         self.reopen_during_cleanup = False
         self.previous_null_close = False
+        self.event_pages: list[list[dict[str, object]]] | None = None
+        self.coordination_comment = {
+            "id": 700,
+            "issue_url": f"https://api.github.com/repos/{REPO}/issues/5245",
+            "body": "Pickup intent receipt: agent=codex-slice-implementer session=session-5245 branch=codex/issue-5245-light-closure worktree="
+            f"{worktree} coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing issue=5245",
+            "user": {"login": "RasmusTho"},
+            "created_at": "2026-09-02T00:00:00Z",
+        }
         self.closed_evidence: list[dict[str, object]] = [
             {
                 "__typename": "ClosedEvent",
@@ -76,6 +88,7 @@ class Fake:
             "repo": REPO,
             "claimed_by": "codex-slice-implementer",
             "lease_id": "lease-1",
+            "lease_expires_at": "2099-01-01T00:00:00+00:00",
             "linked_pr": "99",
         }
         self.check_runs: list[dict[str, object]] = [
@@ -86,7 +99,7 @@ class Fake:
     def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> CommandResult:
         del cwd
         args = tuple(argv); self.calls.append(args); self.inputs.append(input_text)
-        endpoint = args[6] if args[:2] == ("gh", "api") else ""
+        endpoint = next((part for part in args if part.startswith("repos/")), "") if args[:2] == ("gh", "api") else ""
         if endpoint.endswith("/pulls/99") and "GET" in args:
             return self._json(
                 args,
@@ -104,10 +117,13 @@ class Fake:
             )
         if endpoint.endswith("/issues/5245") and "GET" in args:
             return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
+        if endpoint.endswith("/issues/comments/700") and "GET" in args:
+            return self._json(args, self.coordination_comment)
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
             current = {"event": "closed", "commit_id": self.events_commit_id, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}
             previous = {"event": "closed", "commit_id": None, "created_at": "2026-09-01T00:00:10Z", "actor": {"login": self.close_actor}}
-            return self._json(args, [previous, current] if self.previous_null_close else [current])
+            events = [previous, current] if self.previous_null_close else [current]
+            return self._json(args, self.event_pages if self.event_pages is not None else [events])
         if endpoint.endswith("/issues/5245/timeline") and "GET" in args:
             return self._json(args, self.timeline)
         if endpoint.endswith("/branches/main/protection") and "GET" in args:
@@ -152,6 +168,9 @@ class Fake:
 
 
 def request(tmp_path: Path, task_id: str | None = None) -> ClosureRequest:
+    verify_fixture = tmp_path / "tests/scripts/test_closure.py"
+    verify_fixture.parent.mkdir(parents=True, exist_ok=True)
+    verify_fixture.touch()
     issue_hashes = {
         "title_sha256": hashlib.sha256("builder: make light-path closure deterministic with plan/apply".encode()).hexdigest(),
         "body_sha256": hashlib.sha256(ISSUE_BODY.encode()).hexdigest(),
@@ -169,6 +188,8 @@ def request(tmp_path: Path, task_id: str | None = None) -> ClosureRequest:
         "issue": {"number": 5245, **issue_hashes, "updated_at": PR_UPDATED},
         "acceptance_criteria": [{**item, "verified": True, "evidence_sha256": "a" * 64} for item in criteria],
     }
+    if task_id is None:
+        return ClosureRequest(REPO, tmp_path, 99, evidence, None, "github-label-only-fallback", "dispatcher_db_missing", "github-comment:700")
     return ClosureRequest(REPO, tmp_path, 99, evidence, task_id)
 
 
@@ -182,6 +203,20 @@ def test_closure_plan_is_canonical_hash_bound_read_only_and_strictly_light_path(
     fake.body = "Governing-Issue: #5245\nFixes #5245\nFinal-Review-Rounds: 1"
     with pytest.raises(ClosureError, match="Final-Review-Rounds"):
         build_closure_plan(request(tmp_path), executor=fake)
+
+
+def test_closure_plan_requires_explicit_coordination_when_dispatcher_task_is_omitted(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    evidence = request(tmp_path).verify_evidence
+    with pytest.raises(ClosureError, match="explicit dispatcher or degraded coordination"):
+        build_closure_plan(ClosureRequest(REPO, tmp_path, 99, evidence), executor=fake)
+
+
+def test_closure_plan_rejects_expired_dispatcher_lease(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.dispatcher_task["lease_expires_at"] = "2000-01-01T00:00:00+00:00"
+    with pytest.raises(ClosureError, match="dispatcher lease is expired"):
+        build_closure_plan(request(tmp_path, fake.dispatcher_task["task_id"]), executor=fake)
 
 
 def test_closure_apply_revalidates_all_authority_before_exact_head_merge(tmp_path: Path) -> None:
@@ -242,6 +277,13 @@ def test_closure_plan_preserves_name_bound_required_check_authority(tmp_path: Pa
     fake.required_checks = {"required_status_checks": {"contexts": [], "checks": [{"context": "CI", "app_id": None}]}}
     plan = build_closure_plan(request(tmp_path), executor=fake)
     assert plan["required_checks"] == [{"kind": "check", "name": "CI", "app_id": None}]
+
+
+def test_closure_plan_accepts_neutral_required_check_conclusion(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.check_runs[0]["conclusion"] = "neutral"
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    assert plan["required_check_evidence"] == [{"kind": "check", "name": "CI", "app_id": 7, "evidence_id": 1}]
 
 
 def test_closure_plan_rejects_present_but_empty_required_check_authority(tmp_path: Path) -> None:
@@ -326,6 +368,23 @@ def test_closure_apply_requires_pr_specific_attribution_when_closed_event_has_no
     assert receipt["issue"]["closure_attribution"] == "GitHub-native exact PR closer attribution"
 
 
+def test_closure_apply_paginates_issue_events_before_attribution(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.event_pages = [
+        [{"event": "commented", "created_at": "2026-09-01T00:00:00Z"}],
+        [{"event": "closed", "commit_id": MERGE, "created_at": fake.close_created_at}],
+    ]
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["issue"]["closure_attribution"] == "GitHub-native closing keyword and exact merge event"
+    events_call = next(
+        call
+        for call in fake.calls
+        if call[:2] == ("gh", "api") and any("/issues/5245/events" in part for part in call)
+    )
+    assert "--paginate" in events_call and "--slurp" in events_call
+
+
 def test_closure_apply_requires_exact_closing_issue_attribution(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     fake.events_commit_id = "c" * 40
@@ -392,6 +451,17 @@ def test_closure_plan_binds_each_acceptance_criterion_to_issue_revision(tmp_path
         build_closure_plan(ClosureRequest(REPO, tmp_path, 99, evidence), executor=fake)
 
 
+@pytest.mark.parametrize("target", ["trust me", "tests/scripts/does-not-exist.py::test_missing"])
+def test_closure_plan_rejects_unresolvable_or_missing_verify_target(tmp_path: Path, target: str) -> None:
+    fake = Fake(tmp_path)
+    fake.issue_body = ISSUE_BODY.replace(
+        "tests/scripts/test_closure.py::test_closure_plan_is_canonical_hash_bound_read_only_and_strictly_light_path",
+        target,
+    )
+    with pytest.raises(ClosureError, match="Verify target"):
+        build_closure_plan(request(tmp_path), executor=fake)
+
+
 def test_closure_plan_reconciles_failed_same_head_check_with_later_success(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     fake.check_runs = [
@@ -438,7 +508,11 @@ def test_closure_plan_accepts_valid_tier_one_evidence(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     evidence = dict(request(tmp_path).verify_evidence)
     evidence["tier"] = 1
-    plan = build_closure_plan(ClosureRequest(REPO, tmp_path, 99, evidence), executor=fake)
+    base = request(tmp_path)
+    plan = build_closure_plan(
+        ClosureRequest(REPO, tmp_path, 99, evidence, base.dispatcher_task_id, base.coordination_mode, base.fallback_reason, base.coordination_evidence),
+        executor=fake,
+    )
     assert plan["tier"] == 1
 
 
@@ -458,7 +532,11 @@ def test_closure_plan_rejects_additional_github_closing_keyword_forms(tmp_path: 
     evidence = dict(request(tmp_path).verify_evidence)
     evidence["pr"] = dict(evidence["pr"])
     evidence["pr"]["body_sha256"] = hashlib.sha256(fake.body.encode()).hexdigest()
-    assert build_closure_plan(ClosureRequest(REPO, tmp_path, 99, evidence), executor=fake)["governing_issue"] == 5245
+    base = request(tmp_path)
+    assert build_closure_plan(
+        ClosureRequest(REPO, tmp_path, 99, evidence, base.dispatcher_task_id, base.coordination_mode, base.fallback_reason, base.coordination_evidence),
+        executor=fake,
+    )["governing_issue"] == 5245
 
 
 def test_closure_cleanup_deletes_only_observed_agent_labels(tmp_path: Path) -> None:

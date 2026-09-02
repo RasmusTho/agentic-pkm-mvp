@@ -12,12 +12,13 @@ import json
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote
 
 from app.builderops.publication import CommandExecutor, CommandResult, SubprocessExecutor
+from app.builderops.issue_contract_validation import is_resolvable_verify_target
 from app.dispatcher.verification_contract import CLOSING_ISSUE_PATTERN, resolve_issue_authority
 
 PLAN_SCHEMA = "builder.closure-plan.v1"
@@ -28,6 +29,9 @@ SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 HEX64_RE = re.compile(r"[0-9a-f]{64}\Z")
 PR_CONTRACT_NAME = "pr-contract"
+DISPATCHER_MODE = "dispatcher-backed"
+DEGRADED_MODE = "github-label-only-fallback"
+CHECK_CONCLUSIONS_ACCEPTED = {"success", "neutral"}
 
 
 class ClosureError(RuntimeError):
@@ -43,6 +47,9 @@ class ClosureRequest:
     pr_number: int
     verify_evidence: Mapping[str, Any]
     dispatcher_task_id: str | None = None
+    coordination_mode: str | None = None
+    fallback_reason: str | None = None
+    coordination_evidence: str | None = None
 
 
 def canonical_json(value: Any) -> str:
@@ -132,10 +139,33 @@ def _validate_planned_issue(
 
 
 def _issue_events(executor: CommandExecutor, cwd: Path, repository: str, number: int) -> list[dict[str, Any]]:
-    value = _api(executor, cwd, repository, "GET", f"/issues/{number}/events", "-f", "per_page=100")
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+    result = _run(
+        executor,
+        cwd,
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOST,
+            "--method",
+            "GET",
+            f"repos/{repository}/issues/{number}/events",
+            "--paginate",
+            "--slurp",
+            "-f",
+            "per_page=100",
+        ],
+    )
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "Issue event readback was not JSON") from exc
+    if not isinstance(pages, list) or not pages or not all(isinstance(page, list) for page in pages):
+        raise ClosureError("incomplete", "Issue event pagination was incomplete")
+    events = [event for page in pages for event in page]
+    if not all(isinstance(event, dict) for event in events):
         raise ClosureError("unknown", "Issue event readback was malformed")
-    return [dict(item) for item in value]
+    return [dict(event) for event in events]
 
 
 def _issue_number(body: str) -> int:
@@ -322,7 +352,8 @@ def _required_check_evidence(
             raise ClosureError("incomplete", "required-check evidence is unavailable or ambiguous")
         candidate = candidates[0]
         successful = (
-            candidate.get("status") == "completed" and candidate.get("conclusion") == "success"
+            candidate.get("status") == "completed"
+            and candidate.get("conclusion") in CHECK_CONCLUSIONS_ACCEPTED
             if requirement["kind"] == "check"
             else candidate.get("state") == "success"
         )
@@ -404,7 +435,36 @@ def _closing_issue_references(
     return sorted(numbers)
 
 
-def _acceptance_criteria(issue_body: object) -> list[dict[str, Any]]:
+def _verify_target_path(target: str) -> str | None:
+    canonical = target.strip()
+    annotated = re.fullmatch(r"`(?P<inner>[^`]+)` \S.*", canonical)
+    if annotated is not None:
+        canonical = annotated.group("inner")
+    else:
+        diff_target = re.fullmatch(r"diff of `(?P<path>[^`]+)`(?: \S.*)?", canonical)
+        if diff_target is not None:
+            return diff_target.group("path")
+        presence_target = re.fullmatch(
+            r"`[^`]+` present in `(?P<path>[^`]+)`(?:[,;]? \S.*)?", canonical
+        )
+        if presence_target is not None:
+            return presence_target.group("path")
+    if canonical.startswith("runtime receipt: "):
+        return None
+    for prefix in ("doc writeback at ", "roadmap diff: "):
+        if canonical.startswith(prefix):
+            canonical = canonical.removeprefix(prefix).strip("`")
+            path, separator, _ = canonical.partition(" :: ")
+            return path if separator else None
+    canonical = canonical.strip("`")
+    path, separator, _ = canonical.partition(" :: ")
+    if separator:
+        return path
+    path, separator, _ = canonical.partition("::")
+    return path if separator else None
+
+
+def _acceptance_criteria(issue_body: object, *, repo_root: Path | None = None) -> list[dict[str, Any]]:
     if not isinstance(issue_body, str):
         raise ClosureError("incomplete", "governing Issue acceptance criteria are unavailable")
     section_match = re.search(
@@ -428,6 +488,15 @@ def _acceptance_criteria(issue_body: object) -> list[dict[str, Any]]:
         ]
         if not targets:
             raise ClosureError("incomplete", "governing Issue acceptance criteria lack Verify evidence")
+        root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
+        for target in targets:
+            if not is_resolvable_verify_target(target):
+                raise ClosureError("incomplete", "governing Issue Verify target is not resolvable")
+            path = _verify_target_path(target)
+            if path is not None:
+                candidate = Path(path)
+                if candidate.is_absolute() or ".." in candidate.parts or not (root / candidate).is_file():
+                    raise ClosureError("incomplete", "governing Issue Verify target file is unavailable")
         criteria.append(
             {
                 "index": index,
@@ -448,6 +517,7 @@ def _validate_verify_evidence(
     issue_number: int,
     head_sha: str,
     body: str,
+    repo_root: Path,
 ) -> dict[str, Any]:
     if not isinstance(evidence, Mapping):
         raise ClosureError("incomplete", "Verify evidence is unavailable")
@@ -499,6 +569,7 @@ def _validate_verify_evidence(
         or scope.get("closing_issues") != [issue_number]
     ):
         raise ClosureError("incomplete", "Verify evidence does not authenticate the exact scope")
+    expected_criteria = _acceptance_criteria(issue.get("body"), repo_root=repo_root)
     pr_evidence = evidence.get("pr")
     expected_pr = {
         "number": pr_number,
@@ -520,7 +591,6 @@ def _validate_verify_evidence(
         or not isinstance(issue.get("updated_at"), str)
     ):
         raise ClosureError("incomplete", "Verify evidence is not bound to the governing Issue revision")
-    expected_criteria = _acceptance_criteria(issue.get("body"))
     supplied_criteria = evidence.get("acceptance_criteria")
     if not isinstance(supplied_criteria, list) or len(supplied_criteria) != len(expected_criteria):
         raise ClosureError("incomplete", "Verify evidence does not cover every Acceptance Criterion")
@@ -564,6 +634,59 @@ def _pr_contract_revision(
     }
 
 
+def _degraded_coordination_snapshot(
+    executor: CommandExecutor,
+    cwd: Path,
+    repository: str,
+    issue_number: int,
+    fallback_reason: str | None,
+    coordination_evidence: str | None,
+) -> dict[str, Any]:
+    if (
+        not isinstance(fallback_reason, str)
+        or not fallback_reason
+        or fallback_reason == "none"
+        or not isinstance(coordination_evidence, str)
+    ):
+        raise ClosureError("unsupported", "degraded coordination requires an explicit fallback reason and receipt")
+    match = re.fullmatch(r"github-comment:([1-9][0-9]*)", coordination_evidence)
+    if match is None:
+        raise ClosureError("unsupported", "degraded coordination evidence must identify a GitHub pickup comment")
+    comment_id = int(match.group(1))
+    comment = _api(executor, cwd, repository, "GET", f"/issues/comments/{comment_id}")
+    user = comment.get("user") if isinstance(comment, Mapping) else None
+    body = comment.get("body") if isinstance(comment, Mapping) else None
+    issue_url = comment.get("issue_url") if isinstance(comment, Mapping) else None
+    if (
+        not isinstance(comment, Mapping)
+        or comment.get("id") != comment_id
+        or issue_url != f"https://api.github.com/repos/{repository}/issues/{issue_number}"
+        or not isinstance(body, str)
+        or not body.startswith("Pickup intent receipt: ")
+        or " agent=" not in body
+        or " session=" not in body
+        or " branch=" not in body
+        or f" worktree={cwd}" not in body
+        or f" coordination_mode={DEGRADED_MODE}" not in body
+        or f" fallback_reason={fallback_reason}" not in body
+        or f" issue={issue_number}" not in body
+        or not isinstance(user, Mapping)
+        or not isinstance(user.get("login"), str)
+        or not user["login"]
+        or not isinstance(comment.get("created_at"), str)
+    ):
+        raise ClosureError("incomplete", "degraded coordination pickup receipt is not authenticated")
+    _parse_timestamp(comment["created_at"], "degraded coordination receipt")
+    return {
+        "mode": DEGRADED_MODE,
+        "fallback_reason": fallback_reason,
+        "evidence": coordination_evidence,
+        "comment_id": comment_id,
+        "comment_created_at": comment["created_at"],
+        "comment_author": user["login"],
+    }
+
+
 def _dispatcher_snapshot(
     executor: CommandExecutor,
     cwd: Path,
@@ -590,8 +713,13 @@ def _dispatcher_snapshot(
     if task.get("repo") != repository or task.get("issue_number") != issue_number:
         raise ClosureError("incomplete", "dispatcher task is not bound to the governing repository and Issue")
     holder, lease_id, linked_pr = task.get("claimed_by"), task.get("lease_id"), task.get("linked_pr")
+    lease_expires_at = task.get("lease_expires_at")
     if task.get("status") != "claimed" or not isinstance(holder, str) or not holder or not isinstance(lease_id, str) or not lease_id:
         raise ClosureError("incomplete", "dispatcher task has no active lease-holder identity")
+    if not isinstance(lease_expires_at, str):
+        raise ClosureError("incomplete", "dispatcher lease expiry is unavailable")
+    if _parse_timestamp(lease_expires_at, "dispatcher lease") <= datetime.now(timezone.utc):
+        raise ClosureError("incomplete", "dispatcher lease is expired")
     if str(linked_pr) != str(pr_number):
         raise ClosureError("incomplete", "dispatcher task is not linked to the exact PR")
     return {
@@ -600,6 +728,7 @@ def _dispatcher_snapshot(
         "issue_number": str(issue_number),
         "lease_holder": holder,
         "lease_id": lease_id,
+        "lease_expires_at": lease_expires_at,
         "linked_pr": str(pr_number),
     }
 
@@ -921,20 +1050,37 @@ def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, A
         issue_number=issue_number,
         head_sha=sha,
         body=body,
+        repo_root=cwd,
     )
     checks = _checks(executor, cwd, request.repository, sha)
     statuses = _statuses(executor, cwd, request.repository, sha)
     required_checks = _required_check_authority(executor, cwd, request.repository)
     required_evidence = _required_check_evidence(checks, statuses, required_checks)
     pr_contract = _pr_contract_revision(pr, checks, sha)
-    dispatcher = _dispatcher_snapshot(
-        executor,
-        cwd,
-        request.dispatcher_task_id,
-        repository=request.repository,
-        issue_number=issue_number,
-        pr_number=request.pr_number,
-    )
+    if request.dispatcher_task_id is None:
+        if request.coordination_mode != DEGRADED_MODE:
+            raise ClosureError("unsupported", "closure requires explicit dispatcher or degraded coordination evidence")
+        dispatcher = None
+        coordination = _degraded_coordination_snapshot(
+            executor,
+            cwd,
+            request.repository,
+            issue_number,
+            request.fallback_reason,
+            request.coordination_evidence,
+        )
+    else:
+        if request.coordination_mode not in (None, DISPATCHER_MODE):
+            raise ClosureError("unsupported", "dispatcher task conflicts with degraded coordination mode")
+        dispatcher = _dispatcher_snapshot(
+            executor,
+            cwd,
+            request.dispatcher_task_id,
+            repository=request.repository,
+            issue_number=issue_number,
+            pr_number=request.pr_number,
+        )
+        coordination = {"mode": DISPATCHER_MODE, "dispatcher": dispatcher}
     return {
         "pr": pr,
         "issue": issue,
@@ -945,6 +1091,7 @@ def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, A
         "required_evidence": required_evidence,
         "verify_evidence": verify_evidence,
         "pr_contract": pr_contract,
+        "coordination": coordination,
         "closing_references": closing_references,
         "head_sha": sha,
         "issue_number": issue_number,
@@ -967,6 +1114,7 @@ def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | N
         "checks": [_check_snapshot(item) for item in before["checks"]],
         "required_checks": before["required_checks"], "required_check_evidence": before["required_evidence"],
         "pr_contract": before["pr_contract"],
+        "coordination": before["coordination"],
         "merge": {"method": "squash", "commit_title": f"Merge PR #{request.pr_number}", "commit_message": "Governed light-path closure."},
         "post_merge": {"remove_label_prefix": "agent:", "remove_label_prefixes": ["agent:", "action:"], "dispatcher": before["dispatcher"], "remaining_action": "post-merge-owner-doc"},
     }
@@ -1003,6 +1151,7 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
         raise ClosureError("drift", "closure plan hash mismatch")
     closing_issue = value.get("closing_issue")
     post_merge = value.get("post_merge")
+    coordination = value.get("coordination")
     if (
         value.get("tier") not in (1, 2)
         or value.get("final_review_rounds") != 0
@@ -1018,8 +1167,25 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
         or not isinstance(value.get("verify_evidence"), Mapping)
         or not isinstance(post_merge, Mapping)
         or post_merge.get("remove_label_prefixes") != ["agent:", "action:"]
+        or not isinstance(coordination, Mapping)
+        or coordination.get("mode") not in {DISPATCHER_MODE, DEGRADED_MODE}
     ):
         raise ClosureError("unsupported", "plan is outside the light path")
+    if coordination["mode"] == DISPATCHER_MODE:
+        if not isinstance(coordination.get("dispatcher"), Mapping) or post_merge.get("dispatcher") != coordination["dispatcher"]:
+            raise ClosureError("unsupported", "dispatcher coordination evidence is incomplete")
+    else:
+        if (
+            post_merge.get("dispatcher") is not None
+            or set(coordination) != {"mode", "fallback_reason", "evidence", "comment_id", "comment_created_at", "comment_author"}
+            or not isinstance(coordination.get("fallback_reason"), str)
+            or not coordination["fallback_reason"]
+            or not isinstance(coordination.get("evidence"), str)
+            or not isinstance(coordination.get("comment_id"), int)
+            or not isinstance(coordination.get("comment_created_at"), str)
+            or not isinstance(coordination.get("comment_author"), str)
+        ):
+            raise ClosureError("unsupported", "degraded coordination evidence is incomplete")
     return value
 
 
@@ -1051,7 +1217,17 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         )
         current["closure_attribution"] = attribution
         return _finish_cleanup(value, current, runner, cwd, reconciled=True)
-    request = ClosureRequest(value["repository"], cwd, int(value["pr_number"]), value["verify_evidence"], task_id)
+    coordination = value["coordination"]
+    request = ClosureRequest(
+        value["repository"],
+        cwd,
+        int(value["pr_number"]),
+        value["verify_evidence"],
+        task_id,
+        coordination["mode"],
+        coordination.get("fallback_reason"),
+        coordination.get("evidence"),
+    )
     planned_dispatcher = (
         _dispatcher_snapshot(
             runner,
@@ -1078,6 +1254,7 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         or current["required_evidence"] != value["required_check_evidence"]
         or current["pr_contract"] != value["pr_contract"]
         or current["verify_evidence"] != value["verify_evidence"]
+        or current["coordination"] != value["coordination"]
     ):
         raise ClosureError("drift", "required-check authority or evidence drifted before merge")
     merge = value["merge"]
@@ -1210,11 +1387,11 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
 
 def cli_main(argv: Sequence[str] | None = None, *, executor: CommandExecutor | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__); subs = parser.add_subparsers(dest="command", required=True)
-    p = subs.add_parser("plan"); p.add_argument("--repository", required=True); p.add_argument("--worktree", type=Path, default=Path.cwd()); p.add_argument("--pr-number", type=int, required=True); p.add_argument("--verify-evidence-json", type=Path, required=True); p.add_argument("--dispatcher-task-id")
+    p = subs.add_parser("plan"); p.add_argument("--repository", required=True); p.add_argument("--worktree", type=Path, default=Path.cwd()); p.add_argument("--pr-number", type=int, required=True); p.add_argument("--verify-evidence-json", type=Path, required=True); p.add_argument("--dispatcher-task-id"); p.add_argument("--coordination-mode", choices=(DISPATCHER_MODE, DEGRADED_MODE)); p.add_argument("--fallback-reason"); p.add_argument("--coordination-evidence")
     a = subs.add_parser("apply"); a.add_argument("--plan-file", type=Path, required=True); a.add_argument("--expected-plan-sha256", required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "plan": result = build_closure_plan(ClosureRequest(args.repository, args.worktree, args.pr_number, json.loads(args.verify_evidence_json.read_text()), args.dispatcher_task_id), executor=executor)
+        if args.command == "plan": result = build_closure_plan(ClosureRequest(args.repository, args.worktree, args.pr_number, json.loads(args.verify_evidence_json.read_text()), args.dispatcher_task_id, args.coordination_mode, args.fallback_reason, args.coordination_evidence), executor=executor)
         else: result = apply_closure_plan(json.loads(args.plan_file.read_text()), expected_plan_sha256=args.expected_plan_sha256, executor=executor)
     except ClosureError as exc:
         print(canonical_json({"ok": False, "outcome": exc.outcome, "reason": exc.reason, "returncode": exc.result.returncode if exc.result else None}), file=sys.stderr); return exc.result.returncode if exc.result else (4 if exc.outcome in {"unknown", "incomplete"} else 3)
