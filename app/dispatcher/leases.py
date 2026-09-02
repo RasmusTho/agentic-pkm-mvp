@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping
 
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
@@ -35,6 +36,120 @@ def _expires_at(ttl_seconds: int, *, now: str | None = None) -> str:
     current = datetime.now(timezone.utc) if now is None else _parse_rfc3339(now)
     expires = current + timedelta(seconds=ttl_seconds)
     return expires.isoformat(timespec="seconds")
+
+
+_CLEANUP_GUARD_PREFIX = "cleanup-guard:task:"
+
+
+def _cleanup_guard_key(task_id: str) -> str:
+    return f"{_CLEANUP_GUARD_PREFIX}{task_id}"
+
+
+def _read_cleanup_guard(
+    conn: Any, task_id: str, now: str
+) -> dict[str, str] | None:
+    row = conn.execute(
+        "SELECT value FROM dispatcher_meta WHERE key = ?",
+        (_cleanup_guard_key(task_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        value = json.loads(row["value"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cleanup guard for task {task_id} is malformed") from exc
+    if (
+        not isinstance(value, Mapping)
+        or value.get("task_id") != task_id
+        or not isinstance(value.get("owner"), str)
+        or not value["owner"]
+        or not isinstance(value.get("token"), str)
+        or not value["token"]
+        or not isinstance(value.get("expires_at"), str)
+    ):
+        raise ValueError(f"Cleanup guard for task {task_id} is malformed")
+    if _parse_rfc3339(value["expires_at"]) <= _parse_rfc3339(now):
+        conn.execute(
+            "DELETE FROM dispatcher_meta WHERE key = ?",
+            (_cleanup_guard_key(task_id),),
+        )
+        return None
+    return {
+        "task_id": task_id,
+        "owner": value["owner"],
+        "token": value["token"],
+        "expires_at": value["expires_at"],
+    }
+
+
+def acquire_cleanup_guard(
+    store: SqliteStore,
+    task_id: str,
+    owner: str,
+    ttl_seconds: int = 900,
+) -> dict[str, str]:
+    """Reserve a task resource so dispatcher claims cannot race cleanup.
+
+    The reservation lives in the existing dispatcher metadata table and shares
+    the write transaction used by :func:`claim`. It is coordination state, not
+    a task lease or lifecycle transition.
+    """
+    if not task_id or not owner or ttl_seconds <= 0:
+        raise ValueError("Cleanup guard identity and positive TTL are required")
+    now = _utc_now()
+    expires = _expires_at(ttl_seconds, now=now)
+    token = f"guard-{uuid.uuid4().hex}"
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = _read_cleanup_guard(conn, task_id, now)
+        if existing is not None:
+            if existing["owner"] == owner:
+                conn.commit()
+                return existing
+            raise ValueError(f"Cleanup guard for task {task_id} is held by another owner")
+        task = conn.execute(
+            "SELECT status, lease_id FROM dispatcher_tasks WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if task is not None and (task["status"] == "claimed" or task["lease_id"] is not None):
+            raise ValueError(f"Cannot acquire cleanup guard for task {task_id}: active dispatcher lease")
+        guard = {
+            "task_id": task_id,
+            "owner": owner,
+            "token": token,
+            "expires_at": expires,
+        }
+        conn.execute(
+            "INSERT INTO dispatcher_meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_cleanup_guard_key(task_id), json.dumps(guard, sort_keys=True)),
+        )
+        conn.commit()
+    return guard
+
+
+def release_cleanup_guard(
+    store: SqliteStore,
+    task_id: str,
+    owner: str,
+    token: str,
+) -> None:
+    """Release only the exact cleanup reservation owner and token."""
+    if not task_id or not owner or not token:
+        raise ValueError("Cleanup guard identity is required")
+    now = _utc_now()
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        guard = _read_cleanup_guard(conn, task_id, now)
+        if guard is None or guard["owner"] != owner or guard["token"] != token:
+            raise ValueError(f"Cleanup guard for task {task_id} is not held by this owner")
+        deleted = conn.execute(
+            "DELETE FROM dispatcher_meta WHERE key = ?",
+            (_cleanup_guard_key(task_id),),
+        )
+        if deleted.rowcount != 1:
+            raise ValueError(f"Cleanup guard for task {task_id} changed concurrently")
+        conn.commit()
 
 
 def claim(
@@ -69,6 +184,9 @@ def claim(
 
         if task_row is None:
             raise ValueError(f"Task {task_id} not found")
+
+        if _read_cleanup_guard(conn, task_id, now) is not None:
+            raise ValueError(f"Cannot claim task {task_id}: cleanup guard is active")
 
         existing_lease_id = task_row["lease_id"]
         if existing_lease_id is not None:

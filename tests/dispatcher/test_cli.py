@@ -130,6 +130,51 @@ def test_claim_json_output(tmp_env, store):
     assert data["lease"]["holder"] == "codex"
 
 
+def test_cleanup_guard_blocks_claim_until_exact_release(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    code, data = _run(
+        [
+            "cleanup-guard",
+            "acquire",
+            "--task-id",
+            ready.task_id,
+            "--owner",
+            "closure-test",
+            "--json",
+        ]
+    )
+    assert code == 0
+    assert data["ok"] is True
+    token = data["guard"]["token"]
+
+    code, data = _run(["claim", ready.task_id, "--agent", "other", "--json"])
+    assert code == 1
+    assert data["ok"] is False
+    assert "cleanup guard" in data["error"]
+
+    code, data = _run(
+        [
+            "cleanup-guard",
+            "release",
+            "--task-id",
+            ready.task_id,
+            "--owner",
+            "closure-test",
+            "--token",
+            token,
+            "--json",
+        ]
+    )
+    assert code == 0
+    assert data["released"] is True
+    code, data = _run(["claim", ready.task_id, "--agent", "other", "--json"])
+    assert code == 0
+    assert data["task"]["status"] == "claimed"
+
+
 def test_claim_conflict_returns_error(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)

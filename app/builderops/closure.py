@@ -1105,6 +1105,56 @@ def _reject_dispatcher_lease_for_fallback(
         raise ClosureError("incomplete", "dispatcher fallback task retains lease identity")
 
 
+def _dispatcher_cleanup_guard(
+    executor: CommandExecutor,
+    cwd: Path,
+    *,
+    action: str,
+    task_id: str,
+    owner: str,
+    token: str | None = None,
+) -> str | None:
+    argv = [
+        sys.executable,
+        "-m",
+        "app.dispatcher",
+        "cleanup-guard",
+        action,
+        "--task-id",
+        task_id,
+        "--owner",
+        owner,
+    ]
+    if action == "acquire":
+        argv.extend(["--ttl-seconds", "900"])
+    elif token is not None:
+        argv.extend(["--token", token])
+    else:
+        raise ClosureError("unknown", "dispatcher cleanup guard release token is missing")
+    argv.append("--json")
+    result = _run(executor, cwd, argv)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "dispatcher cleanup guard was not JSON", result) from exc
+    if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+        raise ClosureError("unknown", "dispatcher cleanup guard response was malformed", result)
+    if action == "acquire":
+        guard = payload.get("guard")
+        if (
+            not isinstance(guard, Mapping)
+            or guard.get("task_id") != task_id
+            or guard.get("owner") != owner
+            or not isinstance(guard.get("token"), str)
+            or not guard["token"]
+        ):
+            raise ClosureError("unknown", "dispatcher cleanup guard identity was malformed", result)
+        return guard["token"]
+    if payload.get("released") is not True or payload.get("task_id") != task_id:
+        raise ClosureError("unknown", "dispatcher cleanup guard release was not confirmed", result)
+    return None
+
+
 def _closed_event_evidence(
     executor: CommandExecutor, cwd: Path, repository: str, number: int
 ) -> list[dict[str, Any]]:
@@ -1731,7 +1781,57 @@ def _complete_dispatcher_after_merge(
     return state
 
 
-def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner: CommandExecutor, cwd: Path, *, reconciled: bool, merge_sha: str | None = None) -> dict[str, Any]:
+def _finish_cleanup(
+    value: Mapping[str, Any],
+    current: Mapping[str, Any],
+    runner: CommandExecutor,
+    cwd: Path,
+    *,
+    reconciled: bool,
+    merge_sha: str | None = None,
+) -> dict[str, Any]:
+    coordination = value.get("coordination")
+    if not isinstance(coordination, Mapping) or coordination.get("mode") != DEGRADED_MODE:
+        return _finish_cleanup_effects(
+            value,
+            current,
+            runner,
+            cwd,
+            reconciled=reconciled,
+            merge_sha=merge_sha,
+        )
+    task_id = github_issue_task_id(str(value["repository"]), int(value["governing_issue"]))
+    owner = f"closure-cleanup:{value['repository']}:{value['pr_number']}:{value['plan_sha256']}"
+    token = _dispatcher_cleanup_guard(
+        runner,
+        cwd,
+        action="acquire",
+        task_id=task_id,
+        owner=owner,
+    )
+    if token is None:
+        raise ClosureError("unknown", "dispatcher cleanup guard acquisition returned no token")
+    try:
+        return _finish_cleanup_effects(
+            value,
+            current,
+            runner,
+            cwd,
+            reconciled=reconciled,
+            merge_sha=merge_sha,
+        )
+    finally:
+        _dispatcher_cleanup_guard(
+            runner,
+            cwd,
+            action="release",
+            task_id=task_id,
+            owner=owner,
+            token=token,
+        )
+
+
+def _finish_cleanup_effects(value: Mapping[str, Any], current: Mapping[str, Any], runner: CommandExecutor, cwd: Path, *, reconciled: bool, merge_sha: str | None = None) -> dict[str, Any]:
     closed = current["issue"]
     dispatcher = value["post_merge"].get("dispatcher")
     coordination = value.get("coordination")

@@ -89,6 +89,10 @@ class Fake:
         self.claim_dispatcher_during_pr_readback = False
         self.release_dispatcher_lease_during_pr_readback = False
         self.claim_dispatcher_after_merge = False
+        self.claim_dispatcher_during_label_cleanup = False
+        self.cleanup_guard_active = False
+        self.cleanup_guard_claim_blocked = False
+        self.cleanup_guard_token = "guard-token"
         self.dispatcher_lease_released_at: str | None = None
         self.dispatcher_release_events: list[dict[str, object]] = []
         self.dispatcher_claim_events: list[dict[str, object]] = [
@@ -178,6 +182,18 @@ class Fake:
             if self.fail_merge: return CommandResult(args, 1, "", "transport")
             self.merged = True; return self._json(args, {"sha": MERGE, "merged": True})
         if "/issues/5245/labels/" in endpoint and "DELETE" in args:
+            if self.claim_dispatcher_during_label_cleanup:
+                if self.cleanup_guard_active:
+                    self.cleanup_guard_claim_blocked = True
+                else:
+                    self.dispatcher_status = "claimed"
+                    self.dispatcher_task.update(
+                        {
+                            "claimed_by": "other-agent",
+                            "lease_id": "replacement-lease",
+                            "lease_expires_at": "2099-01-03T00:00:00+00:00",
+                        }
+                    )
             label = endpoint.rsplit("/", 1)[-1].replace("%3A", ":")
             if label in self.labels:
                 self.labels.remove(label)
@@ -187,6 +203,29 @@ class Fake:
                 self.labels.append("prio:high")
             return self._json(args, {})
         if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
+            if args[3] == "cleanup-guard":
+                assert args[5:7] == ("--task-id", self.dispatcher_task["task_id"])
+                if args[4] == "acquire":
+                    self.cleanup_guard_active = True
+                    return self._json(
+                        args,
+                        {
+                            "ok": True,
+                            "guard": {
+                                "task_id": self.dispatcher_task["task_id"],
+                                "owner": args[8],
+                                "token": self.cleanup_guard_token,
+                                "expires_at": "2099-01-04T00:00:00+00:00",
+                            },
+                        },
+                    )
+                assert args[4] == "release"
+                assert self.cleanup_guard_active is True
+                assert args[7] == "--owner"
+                assert args[9] == "--token"
+                assert args[10] == self.cleanup_guard_token
+                self.cleanup_guard_active = False
+                return self._json(args, {"ok": True, "released": True, "task_id": self.dispatcher_task["task_id"]})
             if args[3] == "show":
                 if self.dispatcher_status == "absent":
                     return CommandResult(
@@ -545,6 +584,18 @@ def test_closure_apply_fences_post_merge_replacement_before_label_cleanup(
     with pytest.raises(ClosureError, match="dispatcher|current dispatcher lease"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert not any("DELETE" in call for call in fake.calls)
+
+
+def test_closure_apply_holds_fallback_cleanup_guard_during_label_mutation(
+    tmp_path: Path,
+) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.claim_dispatcher_during_label_cleanup = True
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["outcome"] == "success"
+    assert fake.cleanup_guard_claim_blocked is True
+    assert fake.cleanup_guard_active is False
 
 
 @pytest.mark.parametrize("already_merged", [False, True])

@@ -45,7 +45,7 @@ from app.dispatcher.sync_github import (
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
-    "export-signboard", "signboard-validate", "backup", "mode",
+    "cleanup-guard", "export-signboard", "signboard-validate", "backup", "mode",
 ])
 
 
@@ -364,6 +364,31 @@ def _cmd_complete(args: argparse.Namespace, store: SqliteStore) -> int:
             expected_lease_id=args.lease_id,
         )
         _emit({"ok": True, "task": _compact_task(task)}, args.json)
+        return 0
+    except ValueError as exc:
+        return _emit_error(str(exc), args.json)
+
+
+def _cmd_cleanup_guard(args: argparse.Namespace, store: SqliteStore) -> int:
+    try:
+        if args.action == "acquire":
+            guard = lease_module.acquire_cleanup_guard(
+                store,
+                task_id=args.task_id,
+                owner=args.owner,
+                ttl_seconds=args.ttl_seconds,
+            )
+            _emit({"ok": True, "guard": guard}, args.json)
+        else:
+            if args.token is None:
+                return _emit_error("cleanup-guard release requires --token", args.json)
+            lease_module.release_cleanup_guard(
+                store,
+                task_id=args.task_id,
+                owner=args.owner,
+                token=args.token,
+            )
+            _emit({"ok": True, "released": True, "task_id": args.task_id}, args.json)
         return 0
     except ValueError as exc:
         return _emit_error(str(exc), args.json)
@@ -1172,6 +1197,7 @@ _COMMAND_MAP = {
     "move": _cmd_move,
     "block": _cmd_block,
     "complete": _cmd_complete,
+    "cleanup-guard": _cmd_cleanup_guard,
     "events": _cmd_events,
     "link-pr": _cmd_link_pr,
     "status": _cmd_status,
@@ -1259,6 +1285,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("task_id")
     p.add_argument("--agent", required=True)
     p.add_argument("--lease-id", default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("cleanup-guard", help="Reserve a task resource during governed cleanup")
+    p.add_argument("action", choices=("acquire", "release"))
+    p.add_argument("--task-id", required=True)
+    p.add_argument("--owner", required=True)
+    p.add_argument("--token", default=None)
+    p.add_argument("--ttl-seconds", type=int, default=900)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("events", help="Show recent events")
