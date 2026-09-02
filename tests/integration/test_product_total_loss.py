@@ -207,6 +207,32 @@ def test_product_readiness_loads_canonical_identity_map_once_per_inventory(
     }
 
 
+def test_product_readiness_uses_objects_boundary_for_identity_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.rebuildability import product_total_loss
+
+    calls: list[str] = []
+    binding = SimpleNamespace(
+        backend="pg",
+        store=SimpleNamespace(vault_binding_id="binding-for-test"),
+    )
+
+    monkeypatch.setattr(product_total_loss, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(
+        product_total_loss,
+        "retained_vault_uuid_to_canonical_id_map",
+        lambda *, vault_binding_id: calls.append(vault_binding_id) or {"vault-1": "object-1"},
+    )
+
+    assert product_total_loss._canonical_object_ids_for_sources(["vault-1"]) == {
+        "vault-1": "object-1"
+    }
+    assert calls == ["binding-for-test"]
+
+
 def test_product_readiness_ignores_ingest_excluded_files(tmp_path: Path) -> None:
     """The retained inventory is the same candidate set as vault-alpha ingest."""
     vault_root = tmp_path / "vault"

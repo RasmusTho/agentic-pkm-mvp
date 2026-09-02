@@ -18,7 +18,10 @@ import yaml
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
-from app.stores import resolve_object_store_port
+from app.objects import (
+    retained_vault_uuid_to_canonical_id_map,
+    resolve_object_store_port,
+)
 
 PRODUCT_REPLAY_RECIPE_VERSION = "product-object-replay-v1"
 ProductReadinessState = Literal["ready", "empty", "refused", "not_selected"]
@@ -146,7 +149,6 @@ def _canonical_object_ids_for_sources(vault_uuids: Iterable[str]) -> dict[str, s
     binding = resolve_object_store_port()
     if binding.backend != "pg":
         return {value: value for value in values}
-    from app.stores.pg import retained_vault_uuid_to_canonical_id_map
 
     binding_id = str(getattr(binding.store, "vault_binding_id", COMPATIBILITY_BINDING_ID))
     loaded = retained_vault_uuid_to_canonical_id_map(vault_binding_id=binding_id)
