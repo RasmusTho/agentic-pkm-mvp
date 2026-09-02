@@ -501,7 +501,7 @@ def _update_path_only(
         cur.execute(
             """
             update objects
-            set payload = coalesce(payload, '{}'::jsonb) || %s::jsonb
+            set payload = (coalesce(payload::jsonb, '{}'::jsonb) || %s::jsonb)::json
             where vault_binding_id = %s and (id = %s or uuid = %s)
             """,
             (json.dumps(payload), binding_id, canonical_object_id, uuid_value),
@@ -621,7 +621,7 @@ def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = Non
                     cur.execute(
                         """
                         update objects
-                        set payload = coalesce(payload, '{}'::jsonb) || %s::jsonb
+                        set payload = (coalesce(payload::jsonb, '{}'::jsonb) || %s::jsonb)::json
                         where vault_binding_id = %s and (id = %s or uuid = %s)
                         """,
                         (
