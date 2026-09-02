@@ -161,7 +161,10 @@ Delivery depth follows `AGENTS.md :: Proportional delivery` and
   and no explicitly requested review round. The complete merge gate is: current SHA truth intact;
   required checks and repo-standard checks covering the changed surface green on the head SHA;
   every closing issue's `Verify:` targets self-verified on that SHA; no scope drift; the PR body
-  declares `Final-Review-Rounds: 0`. Then merge directly with the normal closing-keyword body —
+  declares `Final-Review-Rounds: 0`. `scripts/closure.py plan/apply` may execute this already-admitted
+  ordinary path only after a hash-bound plan re-reads the same current authority; unsupported,
+  ambiguous, or drifting state remains on this skill's exception route. Then merge directly with the
+  normal closing-keyword body —
   GitHub-native closure closes the single governing issue. After merge: verify the issue actually
   closed, remove `agent:*` labels, optionally repair the `Done` projection when that work is in
   scope, and run `post-merge-owner-doc` when shipped behavior or contracts changed. `Running the local
