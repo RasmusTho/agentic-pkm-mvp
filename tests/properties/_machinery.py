@@ -106,14 +106,10 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 588): (
-        "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
-        "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
-        "emits its own ingest event upstream of this call in the same run. Line drifted "
-        "527 -> 555 -> 582 -> 558 (site unchanged); re-pinned by #3180 (ERE-05) -- round-3 "
-        "extracted the episode_ref helper into app/ingest/episode_ref.py, shifting this line "
-        "back up. The census gate only fires when this machinery is touched, so the drift "
-        "surfaces on the first PR to edit this file."
+    ("app/ingest/vault_alpha.py", 618): (
+        "Legacy vault-alpha compatibility save; the alpha ingest pipeline emits the "
+        "corresponding ingest event upstream in the same run, so this mirror suppresses "
+        "a duplicate."
     ),
 }
 
