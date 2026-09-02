@@ -334,12 +334,27 @@ case "$*" in
     ;;
   *"/api/health"*)
     if [ "${FAKE_REQUIRED_HEALTH:-pass}" = "fail" ]; then
-      printf '{"ok":true,"required_ok":false,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}"
+      printf '{"ok":false,"required_ok":false,"version":{"git_sha":"%s"},"checks":{"embedding_index":{"ok":false,"required":true,"status":"rebuild_required"}},"runtime":{"api":{"ok":true}}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}"
     else
       printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}"
     fi
     ;;
+  *"/status"*)
+    if [ "${FAKE_PRODUCT_READINESS:-pass}" = "fail" ]; then
+      printf '{"state":"running","product_readiness":{"ready":false,"state":"refused","reason":"product projection refused"}}\\n'
+    else
+      printf '{"state":"running","product_readiness":{"ready":true,"state":"ready","reason":"source-bound Product projection verified"}}\\n'
+    fi
+    ;;
   *"/readyz"*)
+    if [[ "$*" == *"-w"* ]]; then
+      if [ "${FAKE_READINESS:-pass}" = "fail" ]; then
+        printf '503'
+      else
+        printf '200'
+      fi
+      exit 0
+    fi
     if [ "${FAKE_READINESS:-pass}" = "fail" ]; then
       exit 22
     fi
@@ -1528,6 +1543,7 @@ def test_acknowledged_embedding_cutover_stages_compose_before_transition_smoke(
 
 def test_acknowledged_embedding_cutover_allows_transitional_health(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_READINESS"] = "fail"
     env["FAKE_REQUIRED_HEALTH"] = "fail"
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
@@ -1545,6 +1561,7 @@ def test_acknowledged_embedding_cutover_keeps_independent_readiness_failure_bloc
     root, env, sha = _deploy_harness(tmp_path)
     env["FAKE_READINESS"] = "fail"
     env["FAKE_REQUIRED_HEALTH"] = "fail"
+    env["FAKE_PRODUCT_READINESS"] = "fail"
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
