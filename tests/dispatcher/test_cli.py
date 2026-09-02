@@ -263,6 +263,40 @@ def test_cleanup_guard_bootstraps_missing_db_before_claim(tmp_env):
     assert data["task"]["status"] == "claimed"
 
 
+def test_cleanup_guard_missing_db_is_scoped_per_task(tmp_env):
+    from app.dispatcher import leases
+    from app.dispatcher.models import TaskRecord
+
+    paths = load_paths(tmp_env)
+    store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    first = leases.acquire_cleanup_guard(store, "task-a", "closure-a", ttl_seconds=60)
+    second = leases.acquire_cleanup_guard(store, "task-b", "closure-b", ttl_seconds=60)
+    assert first["token"] != second["token"]
+    assert not paths.db_path.exists()
+
+    leases.release_cleanup_guard(store, "task-b", "closure-b", second["token"])
+    store.initialize()
+    for task_id in ("task-a", "task-b"):
+        store.upsert_task(
+            TaskRecord(
+                task_id=task_id,
+                issue_number=7,
+                title=task_id,
+                status="ready",
+                priority="high",
+                source_anchor_refs=[],
+                created_at="2026-09-02T00:00:00+00:00",
+                updated_at="2026-09-02T00:00:00+00:00",
+            )
+        )
+
+    with pytest.raises(ValueError, match="cleanup guard"):
+        leases.claim(store, "task-a", "other")
+    task, _lease = leases.claim(store, "task-b", "other")
+    assert task.status == "claimed"
+    leases.release_cleanup_guard(store, "task-a", "closure-a", first["token"])
+
+
 def test_claim_conflict_returns_error(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)

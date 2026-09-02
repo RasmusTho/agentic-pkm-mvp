@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -47,7 +48,7 @@ def _expires_at(ttl_seconds: int, *, now: str | None = None) -> str:
 
 
 _CLEANUP_GUARD_PREFIX = "cleanup-guard:task:"
-_CLEANUP_GUARD_RECORD_NAME = ".dispatcher.cleanup.guard.json"
+_CLEANUP_GUARD_RECORD_PREFIX = ".dispatcher.cleanup.guard."
 _CLEANUP_GUARD_LOCK_NAME = ".dispatcher.cleanup.guard.lock"
 
 
@@ -55,8 +56,9 @@ def _cleanup_guard_key(task_id: str) -> str:
     return f"{_CLEANUP_GUARD_PREFIX}{task_id}"
 
 
-def _cleanup_guard_record_path(store: SqliteStore) -> Path:
-    return store.db_path.with_name(_CLEANUP_GUARD_RECORD_NAME)
+def _cleanup_guard_record_path(store: SqliteStore, task_id: str) -> Path:
+    task_digest = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+    return store.db_path.with_name(f"{_CLEANUP_GUARD_RECORD_PREFIX}{task_digest}.json")
 
 
 @contextmanager
@@ -96,7 +98,7 @@ def _validated_cleanup_guard(value: object, task_id: str) -> dict[str, str]:
 def _read_cleanup_guard_file(
     store: SqliteStore, task_id: str, now: str
 ) -> dict[str, str] | None:
-    path = _cleanup_guard_record_path(store)
+    path = _cleanup_guard_record_path(store, task_id)
     try:
         if path.is_symlink():
             raise ValueError(f"Cleanup guard for task {task_id} is a symlink")
@@ -118,7 +120,7 @@ def _read_cleanup_guard_file(
 
 
 def _write_cleanup_guard_file(store: SqliteStore, guard: Mapping[str, str]) -> None:
-    path = _cleanup_guard_record_path(store)
+    path = _cleanup_guard_record_path(store, guard["task_id"])
     if path.is_symlink():
         raise ValueError(f"Cleanup guard for task {guard['task_id']} is a symlink")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +137,7 @@ def _write_cleanup_guard_file(store: SqliteStore, guard: Mapping[str, str]) -> N
 
 
 def _remove_cleanup_guard_file(store: SqliteStore, task_id: str) -> None:
-    path = _cleanup_guard_record_path(store)
+    path = _cleanup_guard_record_path(store, task_id)
     if path.is_symlink():
         raise ValueError(f"Cleanup guard for task {task_id} is a symlink")
     path.unlink(missing_ok=True)

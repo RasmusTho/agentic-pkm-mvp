@@ -34,6 +34,7 @@ ISSUE_BODY = (
 class Fake:
     def __init__(self, worktree: Path) -> None:
         self.worktree = worktree
+        self.timeout_seconds: float | None = 120.0
         target_file = worktree / "tests/scripts/test_closure.py"
         target_file.parent.mkdir(parents=True, exist_ok=True)
         target_file.write_text("# fixture for Verify target resolution\n", encoding="utf-8")
@@ -631,6 +632,19 @@ def test_closure_apply_preserves_database_missing_fallback_cleanup(tmp_path: Pat
     assert any("DELETE" in call for call in fake.calls)
     assert fake.cleanup_guard_active is False
     assert fake.cleanup_guard_refreshes > 0
+
+
+@pytest.mark.parametrize("timeout_seconds", [None, 901.0])
+def test_closure_apply_rejects_unsafe_fallback_executor_before_mutation(
+    tmp_path: Path, timeout_seconds: float | None,
+) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.timeout_seconds = timeout_seconds
+    with pytest.raises(ClosureError, match="bounded command timeout"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert fake.merged is False
+    assert not any("DELETE" in call for call in fake.calls)
 
 
 @pytest.mark.parametrize("already_merged", [False, True])

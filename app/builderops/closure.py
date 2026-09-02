@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 import uuid
@@ -34,6 +35,8 @@ PR_CONTRACT_NAME = "pr-contract"
 DISPATCHER_MODE = "dispatcher-backed"
 DEGRADED_MODE = "github-label-only-fallback"
 CHECK_CONCLUSIONS_ACCEPTED = {"success", "neutral"}
+CLEANUP_GUARD_TTL_SECONDS = 900
+CLEANUP_GUARD_MAX_COMMAND_SECONDS = CLEANUP_GUARD_TTL_SECONDS / 2
 PICKUP_RECEIPT_RE = re.compile(
     r"Pickup intent receipt: agent=(?P<agent>\S+) session=(?P<session>\S+) "
     r"branch=(?P<branch>\S+) worktree=(?P<worktree>.+?) "
@@ -1127,7 +1130,7 @@ def _dispatcher_cleanup_guard(
         owner,
     ]
     if action in {"acquire", "refresh"}:
-        argv.extend(["--ttl-seconds", "900"])
+        argv.extend(["--ttl-seconds", str(CLEANUP_GUARD_TTL_SECONDS)])
     if action in {"refresh", "release"} and token is not None:
         argv.extend(["--token", token])
     elif action == "release":
@@ -1156,6 +1159,22 @@ def _dispatcher_cleanup_guard(
     if payload.get("released") is not True or payload.get("task_id") != task_id:
         raise ClosureError("unknown", "dispatcher cleanup guard release was not confirmed", result)
     return None
+
+
+def _require_bounded_cleanup_executor(executor: CommandExecutor) -> None:
+    """Refuse degraded cleanup unless every guarded command ends before expiry."""
+    timeout_seconds = getattr(executor, "timeout_seconds", None)
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+        or timeout_seconds > CLEANUP_GUARD_MAX_COMMAND_SECONDS
+    ):
+        raise ClosureError(
+            "unsupported",
+            "degraded cleanup requires a bounded command timeout below the cleanup guard safety window",
+        )
 
 
 def _closed_event_evidence(
@@ -1558,6 +1577,7 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     task_id = dispatcher.get("task_id") if isinstance(dispatcher, Mapping) else None
     coordination = value["coordination"]
     if coordination["mode"] == DEGRADED_MODE:
+        _require_bounded_cleanup_executor(runner)
         current_coordination = _degraded_coordination_snapshot(
             runner,
             cwd,
@@ -1850,6 +1870,7 @@ def _finish_cleanup_effects(
 ) -> dict[str, Any]:
     def refresh_guard() -> None:
         if cleanup_guard is not None:
+            _require_bounded_cleanup_executor(runner)
             task_id, owner, token = cleanup_guard
             _dispatcher_cleanup_guard(
                 runner,
