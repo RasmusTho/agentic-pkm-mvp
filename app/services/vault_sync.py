@@ -43,6 +43,7 @@ from app.events.types import (
 )
 from app.ingest.episode_ref import EPISODE_REF_SENTINELS, episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
+from app.rebuildability import canonical_product_source_text, product_replay_provenance
 from app.objects import (
     canonical_event_identity,
     DomainObject,
@@ -50,7 +51,7 @@ from app.objects import (
     save_object_in_transaction,
     update_object_source_ref_in_transaction,
 )
-from app.write_guard import DEFAULT_WRITE_GUARD
+from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
 from app.services.inbox import append_change, append_conflict
 from app.domain.state_axes import normalize_artifact_state_axes
 from app.config.database import runtime_database_is_named
@@ -175,10 +176,16 @@ def _read_note(path: Path) -> tuple[dict[str, Any], str]:
     return frontmatter, body
 
 
-def _write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
+def _write_note(
+    path: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+    *,
+    action: str = "vault sync note write",
+) -> None:
     fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
     rendered = f"---\n{fm_dump}\n---\n\n{body}" if body else f"---\n{fm_dump}\n---\n"
-    DEFAULT_WRITE_GUARD.assert_writes_allowed("vault sync note write")
+    DEFAULT_WRITE_GUARD.assert_writes_allowed(action)
     resolved = path.resolve()
     root = default_vault_root_for_path(resolved)
     write_note_from_absolute(resolved, rendered, vault_root=root)
@@ -265,6 +272,7 @@ def _canonical_note_payload(
     review_state: str,
     maturity: Any,
     content: str,
+    replay: dict[str, str],
 ) -> dict[str, Any]:
     """Build the canonical payload shared by every filesystem vault-sync writer."""
     return {
@@ -274,7 +282,18 @@ def _canonical_note_payload(
         "content": content,
         "frontmatter": frontmatter,
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
+        "replay": replay,
     }
+
+
+def canonical_note_replay(note_path: Path, *, vault_root: Path | None = None) -> dict[str, str]:
+    """Build the Product replay tuple for the vault-sync canonical producer."""
+    path = note_path.expanduser().resolve()
+    root = (vault_root or default_vault_root_for_path(path)).expanduser().resolve()
+    return product_replay_provenance(
+        source_identity=path.relative_to(root).as_posix(),
+        source_text=canonical_product_source_text(path.read_text(encoding="utf-8")),
+    )
 
 
 def _object_materialization_state(
@@ -655,6 +674,7 @@ def upsert_object_from_note(
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = frontmatter.get("title") or note_path.stem
+    replay = canonical_note_replay(note_path)
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )
@@ -679,6 +699,7 @@ def upsert_object_from_note(
                 review_state=review_state,
                 maturity=normalized_frontmatter.get("maturity"),
                 content=body,
+                replay=replay,
             )
             payload_json = json.dumps(canonical_payload)
             try:
@@ -772,10 +793,11 @@ def sync_markdown(path: str) -> dict[str, Any]:
     is_active = active_edit(note_path)
     if "uuid" not in frontmatter or not frontmatter.get("uuid"):
         frontmatter["uuid"] = str(uuid.uuid4())
-        _write_note(note_path, frontmatter, body)
+        _write_note(note_path, frontmatter, body, action=SOURCE_BACKED_REBUILD_ACTION)
         is_active = False
 
     uuid_value = frontmatter["uuid"]
+    replay = canonical_note_replay(note_path)
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )
@@ -835,6 +857,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 review_state=normalized_frontmatter["review_state"],
                 maturity=normalized_frontmatter.get("maturity"),
                 content=body,
+                replay=replay,
             )
             _update_path_only(
                 conn,
@@ -889,6 +912,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
             "path": str(note_path),
             "frontmatter": normalized_frontmatter,
             "episode_ref": episode_ref_from_frontmatter(normalized_frontmatter),
+            "replay": replay,
         }
 
         topic = (
@@ -911,6 +935,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 review_state=obj_payload["review_state"],
                 maturity=obj_payload["maturity"],
                 content=obj_payload["content"],
+                replay=replay,
             )
         )
         wrote = False
@@ -1024,6 +1049,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
+    replay = canonical_note_replay(new)
     binding_id = _binding_id()
     with _conn() as conn:
         _prepare(conn)
@@ -1045,6 +1071,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
                 review_state=normalized_frontmatter["review_state"],
                 maturity=normalized_frontmatter.get("maturity"),
                 content=body,
+                replay=replay,
             ),
             fm_hash=fm_hash,
             body_hash=body_hash,

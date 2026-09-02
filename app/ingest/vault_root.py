@@ -15,6 +15,7 @@ from app.observability.ingest_meta import record_ingest_failure, record_ingest_s
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store
+from app.rebuildability import canonical_product_source_text, product_replay_provenance
 from app.stores.provider import get_stores
 
 logger = logging.getLogger(__name__)
@@ -38,12 +39,25 @@ def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[P
     return files
 
 
-def _ingest_file(path: Path, *, trace_id: str) -> str:
+def product_replay_for_vault_note(note_path: Path, *, vault_root: Path) -> dict[str, str]:
+    """Build the Product replay tuple for a vault-root producer note."""
+    root = vault_root.expanduser().resolve()
+    path = note_path.expanduser().resolve()
+    source_identity = path.relative_to(root).as_posix()
+    return product_replay_provenance(
+        source_identity=source_identity,
+        source_text=canonical_product_source_text(path.read_text(encoding="utf-8")),
+    )
+
+
+def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -> str:
     from scripts.yaml_roundtrip import load_frontmatter
 
     text = path.read_text(encoding="utf-8")
     frontmatter, _body = load_frontmatter(text)
     stripped_text = strip_ai_panels(text)
+    root = (vault_root or path.parent).expanduser().resolve()
+    replay = product_replay_for_vault_note(path, vault_root=root)
     normalize_res = normalize_run(str(path), trace_id=trace_id)
     sanitize_normalize = dict(normalize_res)
     payload_copy = dict(normalize_res.get("payload") or {})
@@ -73,6 +87,7 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
         "origin": "vault",
         "source": str(path),
         "episode_ref": ep_ref,
+        "replay": replay,
     }
     # canonical_payload also lands in the canonical store_objects table: objects_store.upsert ->
     # PgObjects.upsert -> PgObjectStore.put, a full-overwrite of the store_objects payload column
@@ -84,6 +99,7 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
         **payload_copy,
         "core6": normalize_res.get("core6") or {},
         "episode_ref": ep_ref,
+        "replay": replay,
     }
     objects_store, _ = get_stores()
     upsert_kwargs = dict(kind="note", payload=canonical_payload, source_ref=str(path), path=str(path))

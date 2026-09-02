@@ -36,7 +36,7 @@ from app.services.companion_note import (
 )
 from app.services.note_uuid import ensure_note_uuid
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
-from app.rebuildability import product_replay_provenance
+from app.rebuildability import canonical_product_source_text, product_replay_provenance
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
@@ -424,6 +424,40 @@ def _select_candidates(
     return candidates, included_folders
 
 
+def select_source_backed_rebuild_candidates(vault_root: Path) -> list[Path]:
+    """Return the retained note set eligible for vault-alpha reconstruction.
+
+    Product readiness must inventory exactly the source set that the canonical
+    vault-alpha producer can materialize.  Keeping this wrapper here avoids a
+    second, subtly divergent interpretation of companion, draft, ignore-glob,
+    test-note, and layout inclusion rules.
+    """
+    root = vault_root.expanduser().resolve()
+    # Readiness must never create the layout note that ordinary alpha ingest
+    # provisions before selection. A missing/invalid layout therefore refuses
+    # Product readiness through the caller's retained-source failure path.
+    ingest_config = resolve_ingest_config(root, create_layout=False)
+    candidates, _included_folders = _select_candidates(
+        root,
+        include_folders=ingest_config.include_folders,
+        ignore_glob=ingest_config.ignore_glob,
+        include_test_note=False,
+        max_notes=0,
+    )
+    return candidates
+
+
+def product_replay_for_vault_note(note_path: Path, *, vault_root: Path) -> dict[str, str]:
+    """Build the Product replay tuple for the vault-alpha canonical producer."""
+    root = vault_root.expanduser().resolve()
+    path = note_path.expanduser().resolve()
+    return product_replay_provenance(
+        source_identity=path.relative_to(root).as_posix(),
+        source_text=canonical_product_source_text(path.read_text(encoding="utf-8")),
+        allow_empty_source=True,
+    )
+
+
 def _store_object_count(store: ObjectStore) -> int:
     try:
         objs = getattr(store, "_objects", None)
@@ -570,11 +604,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         **producer_fields,
-        "replay": product_replay_provenance(
-            source_identity=rel_path.as_posix(),
-            source_text=stripped_text,
-            allow_empty_source=True,
-        ),
+        "replay": product_replay_for_vault_note(path, vault_root=vault_root),
     }
 
     obj = DomainObject(
@@ -617,11 +647,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         **producer_fields,
-        "replay": product_replay_provenance(
-            source_identity=rel_path.as_posix(),
-            source_text=stripped_text,
-            allow_empty_source=True,
-        ),
+        "replay": product_replay_for_vault_note(path, vault_root=vault_root),
     }
 
     try:
