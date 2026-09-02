@@ -179,6 +179,31 @@ def test_vault_root_replay_admits_empty_retained_note(tmp_path: Path) -> None:
     assert replay["source_generation"]
 
 
+def test_vault_root_rejects_malformed_frontmatter_before_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_path = tmp_path / "malformed.md"
+    original = "---\ntitle: [unterminated\n---\n\nRecoverable body.\n"
+    note_path.write_text(original, encoding="utf-8")
+    reached: list[str] = []
+    monkeypatch.setattr(
+        vault_root,
+        "normalize_run",
+        lambda *_args, **_kwargs: reached.append("normalize"),
+    )
+    monkeypatch.setattr(
+        vault_root,
+        "get_stores",
+        lambda: reached.append("canonical-store"),
+    )
+
+    with pytest.raises(ValueError, match="malformed frontmatter"):
+        vault_root._ingest_file(note_path, trace_id="trace", vault_root=tmp_path)
+
+    assert reached == []
+    assert note_path.read_text(encoding="utf-8") == original
+
+
 @pytest.mark.parametrize(
     "identity_key,identity_value",
     [

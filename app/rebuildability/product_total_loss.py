@@ -198,8 +198,11 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
         try:
             relative = path.resolve().relative_to(root).as_posix()
             raw_text = path.read_text(encoding="utf-8")
-            frontmatter, body = parse_markdown_text(raw_text)
-            text = _canonical_source_text(raw_text)
+            frontmatter, body, frontmatter_error = parse_bounded_frontmatter(raw_text)
+            if frontmatter_error is not None:
+                failures.append(f"{relative}:malformed-frontmatter")
+                continue
+            text = canonical_product_body_text(body)
             replay = ProductReplayTuple(
                 **product_replay_provenance(
                     source_identity=relative,

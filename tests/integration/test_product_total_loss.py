@@ -154,6 +154,36 @@ def test_retained_sources_reproduce_canonical_meaning_after_total_loss(tmp_path:
     assert source_identity in refused.refused_source_identities
 
 
+def test_product_readiness_refuses_malformed_retained_frontmatter(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    (vault_root / source_identity).write_text(
+        "---\ntitle: [unterminated\n---\n\nRecoverable body.\n",
+        encoding="utf-8",
+    )
+    stale_projection = {
+        "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
+        "kind": "note",
+        "source_ref": source_identity,
+        "payload": {
+            "title": "Recoverable body.",
+            "review_state": "provisional",
+            "episode_ref": "unbound",
+            "text": "Recoverable body.",
+            "replay": product_replay_provenance(
+                source_identity=source_identity,
+                source_text="Recoverable body.",
+            ),
+        },
+    }
+
+    result = evaluate_product_store_readiness(vault_root, [stale_projection])
+
+    assert result.ready is False
+    assert result.state == "refused"
+    assert f"{source_identity}:malformed-frontmatter" in result.refused_source_identities
+
+
 def test_missing_replay_tuple_refuses_without_fallback(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     source_identity = _write_source(vault_root)

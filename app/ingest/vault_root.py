@@ -80,7 +80,9 @@ def product_replay_for_vault_note(
 
 def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -> str:
     text = path.read_text(encoding="utf-8")
-    frontmatter, _body, _error = parse_bounded_frontmatter(text)
+    frontmatter, _body, frontmatter_error = parse_bounded_frontmatter(text)
+    if frontmatter_error is not None:
+        raise ValueError("malformed frontmatter")
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
     replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)
