@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,6 +76,32 @@ def test_targeted_ingest_uses_layout_admission_before_materializing(
 
     assert summary.scanned == 0
     assert captured["candidates"] == []
+
+
+def test_source_backed_rebuild_ignores_ordinary_note_cap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_select(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["max_notes"] = kwargs["max_notes"]
+        return [], ["Notes"]
+
+    def fake_ingest_candidates(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        return VaultAlphaSummary(scanned=0, ingested=0, included_folders=kwargs["included_folders"])
+
+    monkeypatch.setattr(vault_alpha, "ensure_vault_layout", lambda _root: None)
+    monkeypatch.setattr(
+        vault_alpha,
+        "resolve_ingest_config",
+        lambda _root: SimpleNamespace(include_folders=["Notes"], ignore_glob=[]),
+    )
+    monkeypatch.setattr(vault_alpha, "_select_candidates", fake_select)
+    monkeypatch.setattr(vault_alpha, "_ingest_candidates", fake_ingest_candidates)
+
+    vault_alpha.run_vault_alpha_ingest(tmp_path, max_notes=1, source_backed_rebuild=True)
+
+    assert captured["max_notes"] == 0
 
 
 def test_source_backed_uuid_repair_uses_named_guard_action(

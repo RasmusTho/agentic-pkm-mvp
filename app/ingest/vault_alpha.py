@@ -723,7 +723,11 @@ def run_vault_alpha_ingest(
         include_folders=ingest_config.include_folders,
         ignore_glob=ingest_config.ignore_glob,
         include_test_note=include_test_note,
-        max_notes=max_notes,
+        # Product readiness inventories the complete retained source set.
+        # Recovery must therefore not inherit the ordinary bounded bootstrap
+        # prefix, or the first partial run can make later starts skip the
+        # remaining sources once objects exist.
+        max_notes=0 if source_backed_rebuild else max_notes,
     )
     return _ingest_candidates(
         vault_root,
