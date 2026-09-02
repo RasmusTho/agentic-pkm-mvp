@@ -39,6 +39,10 @@ FULL_SUITE_REASONS = (
 )
 
 FULL_SUITE_EXACT = {
+    # CI Smoke owns the shared PR unit-test runtime. A change to its execution
+    # contract must prove the broad not-pg lane rather than only the workflow
+    # contract tests routed by the governance branch.
+    ".github/workflows/ci-smoke.yaml",
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli.py",
