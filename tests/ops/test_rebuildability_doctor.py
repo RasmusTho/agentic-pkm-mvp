@@ -8,7 +8,6 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.rebuildability.mirror_doctor import (
-    CURRENT_PRODUCT_RECIPE_VERSION,
     DurablePath,
     DurablePathClass,
     MirrorFindingCode,
@@ -16,6 +15,7 @@ from app.rebuildability.mirror_doctor import (
     SourceRecord,
     diagnose_mirror_corruption,
 )
+from app.rebuildability.product_total_loss import PRODUCT_REPLAY_RECIPE_VERSION
 
 
 def _inventory() -> list[DurablePath]:
@@ -44,7 +44,7 @@ def _projection(**changes: object) -> ProjectionRecord:
         "projection_id": "object-row-1",
         "source_identity": "Notes/product.md",
         "source_generation": "source-generation",
-        "recipe_version": "product-object-replay-v1",
+        "recipe_version": PRODUCT_REPLAY_RECIPE_VERSION,
         "index_identity": "test:test-model:3",
         "expected_index_identity": "test:test-model:3",
         "db_source_generation": "source-generation",
@@ -125,7 +125,7 @@ def test_doctor_rejects_unsupported_recipe_version_but_accepts_current() -> None
         projections=[_projection(recipe_version="product-object-replay-v0")],
     )
 
-    assert CURRENT_PRODUCT_RECIPE_VERSION == "product-object-replay-v1"
+    assert PRODUCT_REPLAY_RECIPE_VERSION == "product-object-replay-v1"
     assert healthy.healthy is True
     assert {finding.code for finding in stale.findings} == {
         MirrorFindingCode.RECIPE_VERSION_MISMATCH

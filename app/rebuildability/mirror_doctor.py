@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
+from .product_total_loss import PRODUCT_REPLAY_RECIPE_VERSION
+
 
 class DurablePathClass(str, Enum):
     """The bounded inventory classes accepted by the rebuildability doctor."""
@@ -36,9 +38,6 @@ class MirrorFindingCode(str, Enum):
     CONFLICTING_SOURCE_GENERATION = "conflicting_source_generation"
     MISSING_IDENTITY = "missing_identity"
     RECIPE_VERSION_MISMATCH = "recipe_version_mismatch"
-
-
-CURRENT_PRODUCT_RECIPE_VERSION = "product-object-replay-v1"
 
 
 @dataclass(frozen=True)
@@ -218,7 +217,7 @@ def diagnose_mirror_corruption(
             findings.append(MirrorFinding(MirrorFindingCode.INDEX_IDENTITY_DRIFT, subject))
         if (
             not _missing(projection.recipe_version)
-            and projection.recipe_version != CURRENT_PRODUCT_RECIPE_VERSION
+            and projection.recipe_version != PRODUCT_REPLAY_RECIPE_VERSION
         ):
             findings.append(MirrorFinding(MirrorFindingCode.RECIPE_VERSION_MISMATCH, subject))
         if projection.sole_meaning_authority or projection.sole_action_authority:
@@ -228,7 +227,6 @@ def diagnose_mirror_corruption(
 
 
 __all__ = [
-    "CURRENT_PRODUCT_RECIPE_VERSION",
     "DurablePath",
     "DurablePathClass",
     "MirrorDoctorReport",
