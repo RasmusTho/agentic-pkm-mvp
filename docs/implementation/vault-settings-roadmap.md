@@ -34,8 +34,9 @@ the bounded child Issues and the owner document:
 - **External Obsidian edits and validation recovery** → SETTINGS-01 / #3159 and the delivered
   watcher-fed ingestion contract; the current owner and degradation rules are in
   `docs/SETTINGS.md`.
-- **Extract configurable hardcoded values** → SETTINGS-07A..07C / #4796..#4798 and their
-  validation hub #3165; no new extraction should be inferred from this old row.
+- **Extract configurable hardcoded values** → SETTINGS-07A..07C / #4948, #4797, and #4798
+  (with #4948 replacing historical #4796) and their validation hub #3165; no new extraction
+  should be inferred from this old row.
 - **Central SettingsService** → the scoped foundation and target contract; full consumer convergence
   remains part of the open Settings Spine parent #3156. The single documentation owner is
   `docs/SETTINGS.md`, not this roadmap.
