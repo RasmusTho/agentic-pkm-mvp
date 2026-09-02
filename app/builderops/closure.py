@@ -695,6 +695,7 @@ def _dispatcher_snapshot(
     repository: str,
     issue_number: int,
     pr_number: int,
+    allow_expired: bool = False,
 ) -> dict[str, str] | None:
     if task_id is None:
         return None
@@ -718,7 +719,8 @@ def _dispatcher_snapshot(
         raise ClosureError("incomplete", "dispatcher task has no active lease-holder identity")
     if not isinstance(lease_expires_at, str):
         raise ClosureError("incomplete", "dispatcher lease expiry is unavailable")
-    if _parse_timestamp(lease_expires_at, "dispatcher lease") <= datetime.now(timezone.utc):
+    lease_expiry = _parse_timestamp(lease_expires_at, "dispatcher lease")
+    if not allow_expired and lease_expiry <= datetime.now(timezone.utc):
         raise ClosureError("incomplete", "dispatcher lease is expired")
     if str(linked_pr) != str(pr_number):
         raise ClosureError("incomplete", "dispatcher task is not linked to the exact PR")
@@ -741,6 +743,7 @@ def _dispatcher_completion(
     repository: str,
     issue_number: int,
     pr_number: int,
+    allow_expired_claim: bool = False,
 ) -> dict[str, str]:
     task_id = dispatcher.get("task_id")
     if not isinstance(task_id, str) or not task_id:
@@ -767,6 +770,7 @@ def _dispatcher_completion(
             repository=repository,
             issue_number=issue_number,
             pr_number=pr_number,
+            allow_expired=allow_expired_claim,
         )
         if active != dispatcher:
             raise ClosureError("drift", "dispatcher task or lease-holder drifted")
@@ -940,9 +944,8 @@ def _closure_evidence(
     issue_number: int,
     events: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    if any(event.get("event") == "closed" and event.get("commit_id") is None for event in events):
-        return _closed_event_evidence(executor, cwd, repository, issue_number)
-    return []
+    del events
+    return _closed_event_evidence(executor, cwd, repository, issue_number)
 
 
 def _validate_closure_attribution(
@@ -966,8 +969,6 @@ def _validate_closure_attribution(
         if event_issue is not None and not isinstance(event_issue, Mapping):
             continue
         matches.append(event)
-    if len(matches) == 1:
-        return "GitHub-native closing keyword and exact merge event"
     if len(closed_evidence) != 1:
         raise ClosureError(
             "incomplete",
@@ -979,6 +980,27 @@ def _validate_closure_attribution(
     if not isinstance(authoritative_actor, str) or not authoritative_actor or not isinstance(authoritative_created_at, str):
         raise ClosureError("incomplete", "current authoritative close lacks actor or timestamp")
     authoritative_time = _parse_timestamp(authoritative_created_at, "GitHub closed event")
+    authoritative_closer = authoritative.get("closer")
+    exact_pr_closer = isinstance(authoritative_closer, Mapping) and (
+        authoritative_closer.get("type") == "PullRequest"
+        and authoritative_closer.get("number") == pr_number
+        and authoritative_closer.get("repository") == repository
+        and authoritative_closer.get("merge_sha") == merge_sha
+        and isinstance(authoritative_closer.get("merged_at"), str)
+        and _parse_timestamp(authoritative_closer["merged_at"], "GitHub closer merge") <= authoritative_time
+    )
+    if len(matches) == 1:
+        current_merge = matches[0]
+        current_actor = current_merge.get("actor")
+        current_actor_login = current_actor.get("login") if isinstance(current_actor, Mapping) else None
+        current_created_at = current_merge.get("created_at")
+        if (
+            exact_pr_closer
+            and current_actor_login == authoritative_actor
+            and isinstance(current_created_at, str)
+            and _parse_timestamp(current_created_at, "REST closed event") == authoritative_time
+        ):
+            return "GitHub-native closing keyword and exact merge event"
     current_null_close: list[Mapping[str, Any]] = []
     for event in events:
         if event.get("event") != "closed" or event.get("commit_id") is not None:
@@ -994,20 +1016,8 @@ def _validate_closure_attribution(
         ):
             current_null_close.append(event)
     if len(current_null_close) != 1:
-        raise ClosureError("incomplete", "current authoritative null-commit close is unavailable or ambiguous")
-    close_time = authoritative_time
-    matches = []
-    closer = authoritative.get("closer")
-    if isinstance(closer, Mapping) and (
-        closer.get("type") == "PullRequest"
-        and closer.get("number") == pr_number
-        and closer.get("repository") == repository
-        and closer.get("merge_sha") == merge_sha
-        and isinstance(closer.get("merged_at"), str)
-        and _parse_timestamp(closer["merged_at"], "GitHub closer merge") <= close_time
-    ):
-        matches.append(authoritative)
-    if len(matches) == 1:
+        raise ClosureError("incomplete", "exact closing Issue attribution is unavailable or ambiguous")
+    if exact_pr_closer:
         return "GitHub-native exact PR closer attribution"
     raise ClosureError("incomplete", "exact closing Issue attribution was not proven")
 
@@ -1365,6 +1375,7 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
             repository=str(value["repository"]),
             issue_number=int(value["governing_issue"]),
             pr_number=int(value["pr_number"]),
+            allow_expired_claim=True,
         )
         if state["status"] == "claimed":
             completed = runner.run([sys.executable, "-m", "app.dispatcher", "complete", str(dispatcher["task_id"]), "--agent", str(dispatcher["lease_holder"]), "--json"], cwd=cwd)
@@ -1377,6 +1388,7 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
                 repository=str(value["repository"]),
                 issue_number=int(value["governing_issue"]),
                 pr_number=int(value["pr_number"]),
+                allow_expired_claim=True,
             )
         dispatcher = state
     merge_sha = merge_sha or current["pr"].get("merge_commit_sha")

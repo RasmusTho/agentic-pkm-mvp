@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
 import pytest
 
+import app.builderops.closure as closure
 from app.builderops.closure import (
     ClosureError,
     ClosureRequest,
@@ -49,6 +51,7 @@ class Fake:
         self.cleanup_issue_state_open = False
         self.reopen_during_cleanup = False
         self.previous_null_close = False
+        self.stale_merge_close = False
         self.event_pages: list[list[dict[str, object]]] | None = None
         self.coordination_comment = {
             "id": 700,
@@ -122,7 +125,12 @@ class Fake:
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
             current = {"event": "closed", "commit_id": self.events_commit_id, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}
             previous = {"event": "closed", "commit_id": None, "created_at": "2026-09-01T00:00:10Z", "actor": {"login": self.close_actor}}
-            events = [previous, current] if self.previous_null_close else [current]
+            if self.stale_merge_close:
+                stale_merge = {"event": "closed", "commit_id": MERGE, "created_at": "2026-09-01T00:00:10Z", "actor": {"login": "github-actions"}}
+                current = {"event": "closed", "commit_id": None, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}
+                events = [stale_merge, current]
+            else:
+                events = [previous, current] if self.previous_null_close else [current]
             return self._json(args, self.event_pages if self.event_pages is not None else [events])
         if endpoint.endswith("/issues/5245/timeline") and "GET" in args:
             return self._json(args, self.timeline)
@@ -263,6 +271,49 @@ def test_closure_apply_completes_exact_dispatcher_task_with_lease_holder(tmp_pat
     assert complete[4:7] == (task_id, "--agent", "codex-slice-implementer")
 
 
+def test_closure_apply_recovers_planned_dispatcher_after_post_merge_lease_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = Fake(tmp_path)
+    fake.dispatcher_task["lease_expires_at"] = "2026-09-02T00:00:30+00:00"
+    real_datetime = datetime
+
+    class Clock(real_datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            del tz
+            second = 40 if fake.merged else 20
+            return real_datetime(2026, 9, 2, 0, 0, second, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(closure, "datetime", Clock)
+    task_id = fake.dispatcher_task["task_id"]
+    plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["cleanup"]["dispatcher"]["status"] == "completed"
+
+
+@pytest.mark.parametrize("already_merged", [False, True])
+def test_closure_apply_rejects_stale_merge_event_after_manual_reclose(
+    tmp_path: Path, already_merged: bool
+) -> None:
+    fake = Fake(tmp_path)
+    fake.stale_merge_close = True
+    fake.close_actor = "manual-user"
+    fake.closed_evidence = [
+        {
+            "__typename": "ClosedEvent",
+            "createdAt": fake.close_created_at,
+            "actor": {"login": "manual-user"},
+            "closer": None,
+        }
+    ]
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.merged = already_merged
+    with pytest.raises(ClosureError, match="attribution"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any("DELETE" in call for call in fake.calls)
+
+
 def test_closure_plan_binds_repository_required_check_authority(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     plan = build_closure_plan(request(tmp_path), executor=fake)
@@ -372,7 +423,7 @@ def test_closure_apply_paginates_issue_events_before_attribution(tmp_path: Path)
     fake = Fake(tmp_path)
     fake.event_pages = [
         [{"event": "commented", "created_at": "2026-09-01T00:00:00Z"}],
-        [{"event": "closed", "commit_id": MERGE, "created_at": fake.close_created_at}],
+        [{"event": "closed", "commit_id": MERGE, "created_at": fake.close_created_at, "actor": {"login": fake.close_actor}}],
     ]
     plan = build_closure_plan(request(tmp_path), executor=fake)
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
