@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-08-30
+Last reviewed: 2026-08-31
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
@@ -508,7 +508,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   schema, projections, promotion gateway, and boundary layer with CLI and API surfaces, covered by
   `tests/builderops/`, `tests/cli/test_builderops_cli.py`, and `tests/api/test_builderops_api.py`.
   BuilderOps also includes local dry-run epic coordination helpers for `deliver-issue-set`, including
-  runtime-neutral Codex/Claude dispatch context packs, TCD launch-decision summaries, and
+  active Codex dispatch context packs plus retained non-operational Claude compatibility/provenance
+  serialization, TCD launch-decision summaries, and
   claim/review/done lifecycle transition plans plus an explicit child-issue ready-repair batch
   planner, PR CI-monitor handoff records for locally validated PRs waiting on GitHub Actions, a
   read-only CI stall classifier for REST check-run payloads, a PR-body generator for local lane
