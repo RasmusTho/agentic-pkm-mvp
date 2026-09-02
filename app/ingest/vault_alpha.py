@@ -354,7 +354,15 @@ def _derive_note_uuid(
     if companion_uuid:
         return companion_uuid
     if invalid_frontmatter:
-        return uuid.uuid4().hex
+        # Invalid declared identity is a repair candidate, not a fresh identity on every
+        # source-backed replay. Keep the candidate stable for this retained source path so
+        # repeated recovery passes reconcile one projection instead of accumulating UUID4 rows.
+        return str(
+            uuid.uuid5(
+                _VAULT_NOTE_UUID_NAMESPACE,
+                f"invalid-frontmatter:{rel_path.as_posix()}",
+            )
+        )
     return str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
@@ -506,7 +514,8 @@ def _ingest_single(
     frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
     if frontmatter_invalid:
         click.echo(
-            f"Warning: {rel_path} has invalid frontmatter uuid {frontmatter_uuid_raw}; generating a new uuid.",
+            f"Warning: {rel_path} has invalid frontmatter uuid {frontmatter_uuid_raw}; "
+            "using a stable recovery candidate.",
             err=True,
         )
     companion = read_companion(vault_root, frontmatter_uuid) if frontmatter_uuid else None

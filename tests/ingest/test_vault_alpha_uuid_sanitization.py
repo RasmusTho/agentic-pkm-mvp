@@ -20,7 +20,9 @@ class _DummyStore:
         self.payloads.append(dict(kwargs.get("payload") or {}))
 
 
-def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_invalid_frontmatter_uuid_is_stable_for_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     # Explicit memory backend (KERNEL-03, #2765): the DomainObject facade write
     # in _ingest_single fails loud on an unconfigured pg backend; this test
     # exercises uuid sanitization, not the store backend.
@@ -41,12 +43,25 @@ def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(vault_alpha, "index_ingest_object", lambda **_kwargs: None)
     monkeypatch.setattr(vault_alpha, "classify_run", lambda *args, **_kwargs: {})
 
-    note_uuid = vault_alpha._ingest_single(note_path, vault_root=vault_root, trace_id="test", raw_text=content)
+    first_uuid = vault_alpha._ingest_single(
+        note_path,
+        vault_root=vault_root,
+        trace_id="test",
+        raw_text=content,
+        write_companion_record=False,
+    )
+    second_uuid = vault_alpha._ingest_single(
+        note_path,
+        vault_root=vault_root,
+        trace_id="test-2",
+        raw_text=content,
+        write_companion_record=False,
+    )
 
-    parsed = uuid.UUID(note_uuid)
-    assert parsed.version == 4
-    assert dummy_store.put_calls
-    assert dummy_store.put_calls[0] == uuid.UUID(note_uuid)
+    parsed = uuid.UUID(first_uuid)
+    assert parsed.version == 5
+    assert first_uuid == second_uuid
+    assert dummy_store.put_calls == [uuid.UUID(first_uuid), uuid.UUID(second_uuid)]
 
 
 def test_vault_alpha_uses_resolved_canonical_id_for_all_durable_producers(

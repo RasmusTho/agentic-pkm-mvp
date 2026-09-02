@@ -74,6 +74,7 @@ def product_replay_for_vault_note(
         source_text=canonical_product_source_text(
             source_text if source_text is not None else path.read_text(encoding="utf-8")
         ),
+        allow_empty_source=True,
     )
 
 
@@ -85,7 +86,15 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
     replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)
-    normalize_res = normalize_run(str(path), trace_id=trace_id)
+    # normalize_run normally persists its freshly allocated UUID. This producer owns a
+    # stable retained-source identity on PG, so suppress the normalizer's transient
+    # persistence there; the canonical upsert below is the only projection row. The
+    # explicit memory backend has no shared canonical provider behind get_stores(),
+    # so retain the legacy normalizer row there for classifier compatibility.
+    store_backend = resolve_store_backend()
+    normalize_res = normalize_run(
+        str(path), trace_id=trace_id, persist=store_backend != "pg"
+    )
     sanitize_normalize = dict(normalize_res)
     payload_copy = dict(normalize_res.get("payload") or {})
     if "raw_text" in payload_copy:
@@ -101,7 +110,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
         raise RuntimeError("normalize did not return object_id")
     object_id = (
         _stable_vault_root_object_id(path, vault_root=root, frontmatter=frontmatter)
-        if resolve_store_backend() == "pg"
+        if store_backend == "pg"
         else normalized_object_id
     )
     core6 = dict(normalize_res.get("core6") or {})

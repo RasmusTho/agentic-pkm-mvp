@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.normalizer import agent as normalizer_agent
 from app.ingest import vault_alpha, vault_root
 from app.ingest.vault_root import ingest_vault_root, iter_vault_root_markdown
 from app.observability.ingest_meta import reset_ingest_meta
@@ -100,7 +101,8 @@ def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
         def put(self, object_id, **_kwargs):  # type: ignore[no-untyped-def]
             stored_ids.append(object_id)
 
-    def fake_normalize(_path, *, trace_id):  # type: ignore[no-untyped-def]
+    def fake_normalize(_path, *, trace_id, persist):  # type: ignore[no-untyped-def]
+        assert persist is False
         fresh_id = str(uuid.uuid4())
         return {
             "object_id": fresh_id,
@@ -125,6 +127,56 @@ def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
     assert upserted_ids[0] == upserted_ids[1]
     assert len(stored_ids) == 2
     assert stored_ids[0] == stored_ids[1]
+
+
+def test_vault_root_suppresses_transient_normalizer_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root_path = tmp_path / "vault"
+    vault_root_path.mkdir()
+    note_path = vault_root_path / "root-note.md"
+    note_path.write_text("# Root\nMeaning-bearing body", encoding="utf-8")
+    transient_saves: list[str] = []
+
+    class TrackingNormalizerStore:
+        def save_object(self, obj, **_kwargs):  # type: ignore[no-untyped-def]
+            transient_saves.append(str(obj.uuid))
+
+    class FakeObjects:
+        def upsert(self, *, id=None, **_kwargs):  # type: ignore[no-untyped-def]
+            return {"id": id}
+
+    class FakeStore:
+        def put(self, _object_id, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(normalizer_agent, "ObjectStore", TrackingNormalizerStore)
+    monkeypatch.setattr(normalizer_agent, "audit_event", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_root, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_root, "get_stores", lambda: (FakeObjects(), None))
+    monkeypatch.setattr(vault_root, "get_object_store", lambda: FakeStore())
+    monkeypatch.setattr(vault_root, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_root, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_root, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    vault_root._ingest_file(note_path, trace_id="trace", vault_root=vault_root_path)
+
+    assert transient_saves == []
+
+
+def test_vault_root_replay_admits_empty_retained_note(tmp_path: Path) -> None:
+    vault_root_path = tmp_path / "vault"
+    vault_root_path.mkdir()
+    note_path = vault_root_path / "empty.md"
+    note_path.write_text("---\ntitle: Empty\n---\n", encoding="utf-8")
+
+    replay = vault_root.product_replay_for_vault_note(
+        note_path, vault_root=vault_root_path
+    )
+
+    assert replay["source_identity"] == "empty.md"
+    assert replay["source_generation"]
 
 
 @pytest.mark.parametrize(
