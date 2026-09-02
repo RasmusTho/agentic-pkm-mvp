@@ -41,7 +41,7 @@ from app.events.types import (
     INGEST_OBJECT_METADATA,
     INGEST_OBJECT_UPDATED,
 )
-from app.ingest.episode_ref import EPISODE_REF_SENTINELS, episode_ref_from_frontmatter
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.rebuildability import (
     canonical_product_body_text,
@@ -246,15 +246,13 @@ def _merge_canonical_payload(
     if not isinstance(existing, dict):
         existing = {}
     merged = {**existing, **updates}
-    updated_ref = updates.get("episode_ref")
     existing_ref = existing.get("episode_ref")
-    # A real binding is a list of episode ids; only the string sentinels defer
-    # to an established value (same isinstance guard as episode_ref_from_frontmatter).
+    # A real binding replaces the prior value. An explicit ``unbound`` is also
+    # authoritative and must clear a prior binding; only an omitted field defers
+    # to established vault-canonical state.
     if (
-        isinstance(updated_ref, str)
-        and updated_ref in EPISODE_REF_SENTINELS
+        "episode_ref" not in updates
         and existing_ref is not None
-        and not (isinstance(existing_ref, str) and existing_ref in EPISODE_REF_SENTINELS)
     ):
         # ERE-03: episode_ref is vault-canonical, but a watcher pass whose
         # frontmatter carries no binding must not blind-drop an established

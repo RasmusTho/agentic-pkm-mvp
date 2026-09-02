@@ -54,6 +54,32 @@ def _verified_row(source_identity: str, text: str) -> dict[str, object]:
     }
 
 
+def test_readiness_rejects_persisted_locator_that_disagrees_with_replay(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    row = _verified_row(source_identity, "Meaning-bearing Product note.")
+    row["source_ref"] = "Notes/other.md"
+
+    result = evaluate_product_store_readiness(vault_root, [row])
+
+    assert result.ready is False
+
+
+def test_readiness_normalizes_legacy_review_state(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root, "Meaning-bearing Product note.")
+    (vault_root / source_identity).write_text(
+        "---\ntitle: Product\nreview_state: evergreen\n---\n\nMeaning-bearing Product note.\n",
+        encoding="utf-8",
+    )
+    row = _verified_row(source_identity, "Meaning-bearing Product note.")
+    row["payload"]["review_state"] = "evergreen"  # type: ignore[index]
+
+    result = evaluate_product_store_readiness(vault_root, [row])
+
+    assert result.ready is True
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("title", "Wrong title"), ("review_state", "approved"), ("episode_ref", ["episode-1"])],

@@ -34,6 +34,36 @@ OBJECT_UUID = str(UUID(int=1))
 DELETE_UUID = str(UUID(int=2))
 
 
+def test_merge_canonical_payload_explicit_unbound_clears_binding() -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            return None
+
+        def fetchone(self):
+            return {"payload": {"episode_ref": ["episode:old"], "title": "Note"}}
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    original = vault_sync._binding_id
+    vault_sync._binding_id = lambda: "binding"  # type: ignore[assignment]
+    try:
+        merged = vault_sync._merge_canonical_payload(
+            Connection(), object_id="object", updates={"episode_ref": "unbound"}
+        )
+    finally:
+        vault_sync._binding_id = original
+
+    assert merged["episode_ref"] == "unbound"
+
+
 # --- Recording fake connection: logs the ORDER of store writes vs commits -----
 
 

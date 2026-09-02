@@ -18,6 +18,7 @@ import yaml
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
 from app.ingest.episode_ref import episode_ref_from_frontmatter
+from app.domain.state_axes import normalize_artifact_state_axes, normalize_review_state
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.objects import (
     retained_vault_uuid_to_canonical_id_map,
@@ -216,7 +217,9 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
             _RetainedSource(
                 replay=replay,
                 title=_frontmatter_title(frontmatter) or _derive_title(body, path),
-                review_state=str(frontmatter.get("review_state") or "provisional"),
+                review_state=normalize_artifact_state_axes(
+                    frontmatter, default_review_state="provisional"
+                )["review_state"],
                 episode_ref=episode_ref_from_frontmatter(frontmatter),
                 text=text,
                 vault_uuid=note_identity.note_uuid,
@@ -325,7 +328,9 @@ def _row_projection_metadata(payload: dict[str, Any]) -> tuple[Any, Any, Any]:
     core6 = payload.get("core6")
     core6 = core6 if isinstance(core6, dict) else {}
     title = payload.get("title", core6.get("title"))
-    review_state = payload.get("review_state", core6.get("review_state"))
+    raw_review_state = payload.get("review_state", core6.get("review_state"))
+    normalized_review_state = normalize_review_state(raw_review_state)
+    review_state = normalized_review_state or raw_review_state
     episode_ref = payload.get("episode_ref")
     return title, review_state, episode_ref
 
@@ -360,7 +365,7 @@ def evaluate_product_store_readiness(
         return ProductReadiness("refused", False, "projection has no retained source set", 0, len(rows))
 
     retained_identities = {source.replay.source_identity for source in sources}
-    by_identity: dict[str, list[tuple[ProductReplayTuple, dict[str, Any], str]]] = {}
+    by_identity: dict[str, list[tuple[ProductReplayTuple, dict[str, Any], str, str]]] = {}
     corrupt: list[str] = []
     for row in rows:
         payload = _row_payload(row)
@@ -376,7 +381,7 @@ def evaluate_product_store_readiness(
         if replay.source_identity not in retained_identities:
             continue
         by_identity.setdefault(replay.source_identity, []).append(
-            (replay, payload, _row_object_id(row))
+            (replay, payload, _row_object_id(row), _row_source_identity(row, vault_root=vault_root))
         )
 
     refused: list[str] = list(corrupt)
@@ -395,6 +400,7 @@ def evaluate_product_store_readiness(
             or observed_review_state != source.review_state
             or observed_episode_ref != source.episode_ref
             or observed[0][2] != source.object_id
+            or bool(observed[0][3]) and observed[0][3] != source.replay.source_identity
         ):
             refused.append(source.replay.source_identity)
     if refused:

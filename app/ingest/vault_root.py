@@ -10,6 +10,7 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.episode_ref import episode_ref_from_frontmatter
+from app.domain.state_axes import normalize_artifact_state_axes
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
 from app.observability.log import with_trace_id
@@ -120,7 +121,15 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     except Exception:
         object_uuid = uuid.uuid4()
 
-    title = (normalize_res.get("core6") or {}).get("title")
+    from app.ingest.vault_alpha import _derive_title, _frontmatter_title
+
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
+    title = _frontmatter_title(frontmatter) or _derive_title(_body, path)
+    review_state = normalized_frontmatter["review_state"]
+    core6["title"] = title
+    core6["review_state"] = review_state
     # Carry the note's vault-canonical episode_ref into the DB projection (ERE-03/ERE-05,
     # invariant->producers): index_ingest_object + store.put below full-overwrite the payload
     # column, so an absent episode_ref would blind-drop a stamped binding on reingest (round-3
@@ -128,6 +137,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     ep_ref = episode_ref_from_frontmatter(frontmatter)
     payload = {
         "title": title,
+        "review_state": review_state,
         "origin": "vault",
         "source": str(path),
         "episode_ref": ep_ref,
