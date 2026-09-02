@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
@@ -157,6 +158,54 @@ def test_source_backed_rebuild_is_reachable_while_unready() -> None:
         pass
     else:  # pragma: no cover - guard regression diagnostic
         raise AssertionError("ordinary write must remain guarded while Product is unready")
+
+
+def test_sync_markdown_requires_explicit_source_backed_rebuild_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production sync seam guards ordinary UUID repair but admits recovery explicitly."""
+    from app.services import vault_sync
+    from app.write_guard import SOURCE_BACKED_REBUILD_ACTION
+
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "Notes" / "product.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("---\ntitle: Product\n---\n\nBody\n", encoding="utf-8")
+
+    blocked_guard = WriteGuard(
+        snapshot_fn=lambda: {"state": "unhealthy", "reason": "product projection unready"}
+    )
+    monkeypatch.setattr(vault_sync, "DEFAULT_WRITE_GUARD", blocked_guard)
+
+    with pytest.raises(WritesBlockedError):
+        vault_sync.sync_markdown(str(note_path), vault_root=vault_root)
+    assert "uuid:" not in note_path.read_text(encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_write_note_from_absolute(
+        path: Path | str, content: str, *, vault_root: Path, action: str
+    ) -> None:
+        captured.update(vault_root=vault_root, action=action)
+        Path(path).write_text(content, encoding="utf-8")
+
+    class RecoveryReached(RuntimeError):
+        pass
+
+    monkeypatch.setattr(vault_sync, "write_note_from_absolute", fake_write_note_from_absolute)
+    monkeypatch.setattr(
+        vault_sync,
+        "canonical_note_replay",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RecoveryReached),
+    )
+
+    with pytest.raises(RecoveryReached):
+        vault_sync.sync_markdown_source_backed_rebuild(
+            str(note_path), vault_root=vault_root
+        )
+
+    assert captured["action"] == SOURCE_BACKED_REBUILD_ACTION
+    assert "uuid:" in note_path.read_text(encoding="utf-8")
 
 
 def test_canonical_ingest_producers_stamp_replay_tuple(tmp_path: Path) -> None:
