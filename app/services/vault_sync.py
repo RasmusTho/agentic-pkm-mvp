@@ -793,7 +793,12 @@ def active_edit(path: Path) -> bool:
     return delta < grace
 
 
-def sync_markdown(path: str, *, vault_root: Path | None = None) -> dict[str, Any]:
+def _sync_markdown(
+    path: str,
+    *,
+    vault_root: Path | None,
+    missing_uuid_action: str,
+) -> dict[str, Any]:
     note_path = Path(path).resolve()
     selected_root = (vault_root or default_vault_root_for_path(note_path)).expanduser().resolve()
     frontmatter, body = _read_note(note_path)
@@ -804,7 +809,7 @@ def sync_markdown(path: str, *, vault_root: Path | None = None) -> dict[str, Any
             note_path,
             frontmatter,
             body,
-            action=SOURCE_BACKED_REBUILD_ACTION,
+            action=missing_uuid_action,
             vault_root=selected_root,
         )
         is_active = False
@@ -1049,6 +1054,31 @@ def sync_markdown(path: str, *, vault_root: Path | None = None) -> dict[str, Any
     return result
 
 
+def sync_markdown(path: str, *, vault_root: Path | None = None) -> dict[str, Any]:
+    """Synchronize an ordinary note through the normal write guard."""
+    return _sync_markdown(
+        path,
+        vault_root=vault_root,
+        missing_uuid_action="vault sync note write",
+    )
+
+
+def sync_markdown_source_backed_rebuild(
+    path: str, *, vault_root: Path | None = None
+) -> dict[str, Any]:
+    """Synchronize a retained note through the explicit recovery admission.
+
+    This entrypoint is reserved for Product source-backed reconstruction.  It
+    allows only the prerequisite UUID write to use the named bootstrap action;
+    ordinary ``sync_markdown`` callers remain guarded while Product is unready.
+    """
+    return _sync_markdown(
+        path,
+        vault_root=vault_root,
+        missing_uuid_action=SOURCE_BACKED_REBUILD_ACTION,
+    )
+
+
 def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     old = Path(old_path).resolve()
     new = Path(new_path).resolve()
@@ -1098,6 +1128,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
 
 __all__ = [
     "sync_markdown",
+    "sync_markdown_source_backed_rebuild",
     "handle_rename",
     "update_path",
     "delete_note",

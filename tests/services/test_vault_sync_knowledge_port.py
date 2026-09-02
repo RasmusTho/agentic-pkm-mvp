@@ -179,7 +179,9 @@ def test_sync_markdown_forwards_source_backed_rebuild_action(
     monkeypatch.setattr(vault_sync, "canonical_note_replay", fake_canonical_note_replay)
 
     try:
-        vault_sync.sync_markdown(str(note_path), vault_root=vault_root)
+        vault_sync.sync_markdown_source_backed_rebuild(
+            str(note_path), vault_root=vault_root
+        )
     except ReplayReached:
         pass
     else:  # pragma: no cover - the replay seam must run before database access
