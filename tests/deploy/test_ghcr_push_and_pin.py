@@ -68,7 +68,8 @@ def test_compose_image_uses_pinned_tag_and_mount_is_flagged() -> None:
     assert "COMPOSE_FILE=\"$(COMPOSE_DEV_FILES)\"" in makefile
     assert "-f $(APP_CODE_BIND_COMPOSE)" in makefile
     assert 'APP_CODE_BIND_MOUNT:-1' in start_full_system
-    assert '_pkm_deploy_pin_file="config/deploy/${_pkm_deploy_pin_channel}.env"' in start_full_system
+    assert '_pkm_deploy_pin_file="config/deploy/${_pkm_resolved_channel}.env"' in start_full_system
+    assert 'preflight_instance_state_deployment_legacy_settings \\' in start_full_system
     assert 'load_env_defaults_file "${_pkm_deploy_pin_file}"' in start_full_system
     assert 'compose_up_build_args=("--build")' in start_full_system
     assert "compose_up_build_args=()" in start_full_system

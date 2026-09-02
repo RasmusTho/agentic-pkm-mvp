@@ -16,7 +16,7 @@ import shlex
 import sys
 from pathlib import Path
 
-pattern = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+pattern = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     line = raw_line.strip()
     if not line or line.startswith("#"):

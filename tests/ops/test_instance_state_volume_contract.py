@@ -2198,7 +2198,7 @@ def test_real_deployment_wrapper_reads_channel_legacy_settings_before_init(
     host_path = "/Users/operator/agentic-pkm/app-local.md"
     channel_env.write_text(
         "APP_IMAGE_TAG=fixture\n"
-        f"  DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        f"  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
         encoding="utf-8",
     )
     harness = tmp_path / "run-wrapper.sh"
@@ -2250,7 +2250,7 @@ def test_real_deployment_wrapper_rejects_duplicate_channel_legacy_settings(
     host_path = "/Volumes/legacy/agentic-pkm/app-local.md"
     channel_env.write_text(
         "  DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
-        f"\tDESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        f"\t export DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
         encoding="utf-8",
     )
     harness = tmp_path / "run-wrapper.sh"
@@ -4735,12 +4735,34 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     assert deploy.index("prepare_instance_state_deployment compose") < deploy.index(
         'run_postmutation_gate "service recreate/liveness gate failed"'
     )
-    assert start.index("\npreflight_instance_state_deployment_legacy_settings") < start.index(
+    selector = "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
+    assert start.index('source "scripts/lib/instance_state_deployment.sh"') < start.index(
+        "_pkm_resolved_channel="
+    )
+    preflight_marker = (
+        '\n    preflight_instance_state_deployment_legacy_settings \\\n'
+        '      "${_pkm_resolved_channel}" "${_pkm_deploy_pin_file}"'
+    )
+    preflight_position = start.index(preflight_marker)
+    assert preflight_position < start.index(
         "\nrun_preflight\nensure_prod_instance_state_volume"
     )
-    selector = "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
+    assert (
+        '  *)\n    preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}"'
+        in start
+    )
+    assert start.index('load_env_defaults_file "${_pkm_deploy_pin_file}"') > preflight_position
+    assert preflight_position < start.index("\nunset _pkm_deploy_pin_file")
+    for mutation_marker in (
+        'mkdir -p "$ROOT/tmp"',
+        "prepare_instance_ownership_host_state_dir",
+        "scripts/start_builderops_services.sh",
+        'flight_recorder_log_path="$ROOT/tmp/',
+        "runtime_env_path=",
+    ):
+        assert preflight_position < start.index(mutation_marker)
     assert f'_pkm_resolved_channel="{selector}"' in start
-    assert 'preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}"' in start
+    assert preflight_marker in start
     assert 'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"' in start
     for selector_name in ("ENVIRONMENT", "CHANNEL", "PKM_CHANNEL"):
         assert f"${{{selector_name}:-" in selector

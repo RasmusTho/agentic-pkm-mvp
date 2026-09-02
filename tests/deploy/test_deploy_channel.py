@@ -1530,7 +1530,7 @@ def test_deploy_preflights_duplicate_legacy_settings_before_pin_or_compose_mutat
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
         f"APP_IMAGE_TAG={sha}\n"
         "  DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
-        "\tDESIGN_HANDOFF_APP_LOCAL_SETTINGS=/Users/operator/agentic-pkm/app-local.md\n"
+        "\texport DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/Users/operator/agentic-pkm/app-local.md\n"
     )
     pin_path.write_text(pin_before, encoding="utf-8")
 
@@ -1554,7 +1554,7 @@ def test_deploy_passes_configured_canonical_legacy_settings_to_init(
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
         f"APP_IMAGE_TAG={sha}\n"
-        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n",
+        "export DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n",
         encoding="utf-8",
     )
 

@@ -170,6 +170,7 @@ _instance_state_deployment_env_value() {
     {
       line = $0
       sub(/^[[:space:]]+/, "", line)
+      sub(/^export[[:space:]]+/, "", line)
     }
     index(line, key "=") == 1 {
       matches += 1

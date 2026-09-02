@@ -15,6 +15,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 source "scripts/lib/load_env_defaults.sh"
+source "scripts/lib/instance_state_deployment.sh"
 
 # Load channel-specific local env override BEFORE base defaults so that
 # per-channel vault paths (which may contain spaces) take precedence.
@@ -46,6 +47,11 @@ _pkm_resolved_channel="$(printf '%s' "${_pkm_resolved_channel}" | tr '[:upper:]'
 case "${_pkm_resolved_channel:-}" in
   dev|test|prod)
     _pkm_deploy_pin_file="config/deploy/${_pkm_resolved_channel}.env"
+    # Read the channel file directly while the shell still contains only
+    # caller/base defaults. This preserves duplicate detection and Compose's
+    # effective-value semantics before loading the file into the environment.
+    preflight_instance_state_deployment_legacy_settings \
+      "${_pkm_resolved_channel}" "${_pkm_deploy_pin_file}" || exit $?
     load_env_defaults_file "${_pkm_deploy_pin_file}"
     # The channel file, not ambient shell state, owns whether this topology is
     # proven loopback-local. Pin it exactly as deploy_channel.sh does so both
@@ -62,6 +68,9 @@ case "${_pkm_resolved_channel:-}" in
         exit 78
         ;;
     esac
+    ;;
+  *)
+    preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}" || exit $?
     ;;
 esac
 unset _pkm_deploy_pin_file _pkm_mvr03_loopback_listener
@@ -84,7 +93,6 @@ source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/worker_heartbeat_probe.sh"
 source "scripts/lib/pinned_image_guard.sh"
 source "scripts/lib/start_full_system_env.sh"
-source "scripts/lib/instance_state_deployment.sh"
 source "scripts/lib/heimdal_cold_volume_preflight.sh"
 apply_start_full_system_defaults
 heimdal_cold_volume_preflight_effective "$ROOT"
@@ -1211,7 +1219,6 @@ if collisions:
 PY
 }
 
-preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}" || exit $?
 run_preflight
 ensure_prod_instance_state_volume
 if prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"; then
