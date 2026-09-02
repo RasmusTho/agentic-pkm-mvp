@@ -39,8 +39,25 @@ class Fake:
         self.body = "Governing-Issue: #5245\n\nFixes #5245\n\nFinal-Review-Rounds: 0\n"
         self.issue_title = "builder: make light-path closure deterministic with plan/apply"
         self.issue_body = ISSUE_BODY
-        self.labels = ["agent:in-progress", "lane:governance"]
+        self.labels = ["agent:in-progress", "action:repair-contract", "lane:governance"]
         self.events_commit_id = MERGE
+        self.close_created_at = "2026-09-02T00:00:10Z"
+        self.close_actor = "github-actions"
+        self.cleanup_issue_state_open = False
+        self.reopen_during_cleanup = False
+        self.closed_evidence: list[dict[str, object]] = [
+            {
+                "createdAt": self.close_created_at,
+                "actor": {"login": self.close_actor},
+                "closer": {
+                    "__typename": "PullRequest",
+                    "number": 99,
+                    "mergedAt": "2026-09-02T00:00:09Z",
+                    "mergeCommit": {"oid": MERGE},
+                    "repository": {"nameWithOwner": REPO},
+                },
+            }
+        ]
         self.timeline: list[object] = []
         self.closing_references = [5245]
         self.add_label_during_cleanup = False
@@ -53,6 +70,8 @@ class Fake:
         self.dispatcher_status = "claimed"
         self.dispatcher_task = {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
+            "issue_number": 5245,
+            "repo": REPO,
             "claimed_by": "codex-slice-implementer",
             "lease_id": "lease-1",
             "linked_pr": "99",
@@ -82,14 +101,16 @@ class Fake:
                 },
             )
         if endpoint.endswith("/issues/5245") and "GET" in args:
-            return self._json(args, {"number": 5245, "state": "closed" if self.merged else "open", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
+            return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
-            return self._json(args, [{"event": "closed", "commit_id": self.events_commit_id}])
+            return self._json(args, [{"event": "closed", "commit_id": self.events_commit_id, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}])
         if endpoint.endswith("/issues/5245/timeline") and "GET" in args:
             return self._json(args, self.timeline)
         if endpoint.endswith("/branches/main/protection") and "GET" in args:
             return self._json(args, self.required_checks)
         if "graphql" in args:
+            if any("timelineItems" in part for part in args):
+                return self._json(args, {"data": {"repository": {"issue": {"state": "CLOSED", "closedAt": self.close_created_at, "timelineItems": {"nodes": self.closed_evidence}}}}})
             return self._json(args, {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [{"number": number, "repository": {"nameWithOwner": REPO}} for number in self.closing_references], "pageInfo": {"hasNextPage": False}}}}}})
         if endpoint.endswith("check-runs"):
             return self._json(args, {"check_runs": self.check_runs})
@@ -102,12 +123,14 @@ class Fake:
             label = endpoint.rsplit("/", 1)[-1].replace("%3A", ":")
             if label in self.labels:
                 self.labels.remove(label)
+            if self.reopen_during_cleanup:
+                self.cleanup_issue_state_open = True
             if self.add_label_during_cleanup and "prio:high" not in self.labels:
                 self.labels.append("prio:high")
             return self._json(args, {})
         if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
             if args[3] == "show":
-                task = {"task_id": self.dispatcher_task["task_id"], "status": self.dispatcher_status, "linked_pr": "99"}
+                task = {"task_id": self.dispatcher_task["task_id"], "status": self.dispatcher_status, "issue_number": 5245, "repo": REPO, "linked_pr": "99"}
                 if self.dispatcher_status == "claimed":
                     task.update(self.dispatcher_task)
                 return self._json(args, {"ok": True, "task": task})
@@ -217,6 +240,30 @@ def test_closure_plan_preserves_name_bound_required_check_authority(tmp_path: Pa
     assert plan["required_checks"] == [{"kind": "check", "name": "CI", "app_id": None}]
 
 
+def test_closure_plan_unions_duplicate_required_check_context_and_check_by_name(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.required_checks = {
+        "required_status_checks": {
+            "contexts": ["CI", "CI"],
+            "checks": [{"context": "CI", "app_id": 7}],
+        }
+    }
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    assert plan["required_checks"] == [{"kind": "check", "name": "CI", "app_id": 7}]
+
+
+def test_closure_plan_rejects_conflicting_duplicate_required_check_identities(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.required_checks = {
+        "required_status_checks": {
+            "contexts": ["CI"],
+            "checks": [{"context": "CI", "app_id": 7}, {"context": "CI", "app_id": 8}],
+        }
+    }
+    with pytest.raises(ClosureError, match="required-check authority is ambiguous"):
+        build_closure_plan(request(tmp_path), executor=fake)
+
+
 def test_closure_apply_recovers_completed_dispatcher_from_governed_completion_event(tmp_path: Path) -> None:
     fake = Fake(tmp_path); task_id = fake.dispatcher_task["task_id"]
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
@@ -226,14 +273,36 @@ def test_closure_apply_recovers_completed_dispatcher_from_governed_completion_ev
     assert not any(len(call) >= 4 and call[3] == "complete" for call in fake.calls)
 
 
+def test_closure_plan_requires_dispatcher_repository_and_issue_binding(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.dispatcher_task["repo"] = "other/repository"
+    with pytest.raises(ClosureError, match="governing repository and Issue"):
+        build_closure_plan(request(tmp_path, fake.dispatcher_task["task_id"]), executor=fake)
+
+
 def test_closure_apply_requires_pr_specific_attribution_when_closed_event_has_no_commit(tmp_path: Path) -> None:
-    fake = Fake(tmp_path); fake.events_commit_id = None
+    fake = Fake(tmp_path); fake.events_commit_id = None; fake.closed_evidence = []
     plan = build_closure_plan(request(tmp_path), executor=fake)
-    with pytest.raises(ClosureError, match="attribution"):
+    with pytest.raises(ClosureError, match="attribution|closed-event evidence"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
-    fake = Fake(tmp_path); fake.events_commit_id = None
+    fake = Fake(tmp_path); fake.events_commit_id = None; fake.closed_evidence = []
     fake.timeline = [{"event": "cross-referenced", "source": {"issue": {"number": 99, "pull_request": {"url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/pulls/99"}}}}]
     plan = build_closure_plan(request(tmp_path), executor=fake)
+    with pytest.raises(ClosureError, match="attribution|closed-event evidence"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    fake.closed_evidence = [
+        {
+            "createdAt": fake.close_created_at,
+            "actor": {"login": fake.close_actor},
+            "closer": {
+                "__typename": "PullRequest",
+                "number": 99,
+                "mergedAt": "2026-09-02T00:00:09Z",
+                "mergeCommit": {"oid": MERGE},
+                "repository": {"nameWithOwner": REPO},
+            },
+        }
+    ]
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["issue"]["closure_attribution"] == "GitHub-native exact PR closer attribution"
 
@@ -359,8 +428,22 @@ def test_closure_cleanup_deletes_only_observed_agent_labels(tmp_path: Path) -> N
     plan = build_closure_plan(request(tmp_path), executor=fake)
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["cleanup"]["removed_agent_labels"] == ["agent:in-progress"]
+    assert receipt["cleanup"]["removed_action_labels"] == ["action:repair-contract"]
     assert "lane:governance" in receipt["cleanup"]["remaining_labels"]
     assert "prio:high" in receipt["cleanup"]["remaining_labels"]
+    assert not any(
+        label.startswith(("agent:", "action:"))
+        for label in receipt["cleanup"]["remaining_labels"]
+    )
+    assert receipt["issue"]["state"] == "closed"
+
+
+def test_closure_cleanup_requires_closed_issue_readback(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.reopen_during_cleanup = True
+    with pytest.raises(ClosureError, match="does not prove closed state"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
 
 
 def test_closure_reconciliation_rechecks_pr_body_authority(tmp_path: Path) -> None:
