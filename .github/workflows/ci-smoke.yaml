@@ -803,8 +803,8 @@ jobs:
         if: steps.changes.outputs.code == 'true'
         run: mypy app
 
-      - name: Run not-pg unit tests
-        if: steps.changes.outputs.code == 'true'
+      - name: Run shared not-pg unit tests in process shards
+        if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite == 'true'
         shell: bash
         timeout-minutes: 22
         env:
@@ -815,6 +815,95 @@ jobs:
           # no test name. 120s is ~20-40x the slowest legitimate single test yet
           # leaves the whole suite (~5 min) untouched, so a hang fails fast AND
           # prints the offending test's nodeid + full traceback. See #2259.
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+        run: |
+          set -euo pipefail
+          echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
+          echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
+          # xdist workers are separate pytest processes, but this suite also
+          # contains tests that inspect host-wide process state and tests whose
+          # fixtures intentionally retain process-global state. Run each
+          # directory (or root-level test module) in its own serial process,
+          # with bounded concurrency, then run the host/Fd-sensitive boundary
+          # tests after every shard has exited.
+          marker='not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime'
+          shard_root="$(mktemp -d)"
+          shard_list="$shard_root/shards"
+          status_file="$shard_root/status"
+          log_dir="$shard_root/logs"
+          mkdir -p "$log_dir"
+          trap 'rm -rf "$shard_root"' EXIT
+
+          find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
+            while IFS= read -r path; do
+              case "$path" in
+                tests/*/*) printf '%s\n' "${path%/*}" ;;
+                tests/*) printf '%s\n' "$path" ;;
+              esac
+            done |
+            LC_ALL=C sort -u |
+            while IFS= read -r shard; do
+              case "$shard" in
+                tests/ops|tests/e2e|tests/e2e/*) continue ;;
+              esac
+              printf '%s\n' "$shard"
+            done > "$shard_list"
+
+          expected_shards="$(wc -l < "$shard_list")"
+          if (( expected_shards == 0 )); then
+            echo "No collectible not-pg process shards discovered" >&2
+            exit 1
+          fi
+
+          export marker log_dir status_file
+          set +e
+          xargs -r -n 1 -P 4 bash -c '
+            shard="$1"
+            safe="${shard//\//_}"
+            log="$log_dir/$safe.log"
+            python -m pytest -q -m "$marker" "$shard" \
+              --ignore=tests/invariants/test_vault_multiwriter.py > "$log" 2>&1
+            rc=$?
+            if [[ "$rc" -eq 5 ]] && ! grep -Eq "FAILED|ERROR" "$log" && \
+              grep -Eq "no tests ran|[0-9]+ deselected" "$log"; then
+              rc=0
+            fi
+            printf "%s %s\n" "$rc" "$shard" >> "$status_file"
+            exit 0
+          ' _ < "$shard_list"
+          xargs_status=$?
+          set -e
+
+          actual_shards="$(wc -l < "$status_file" 2>/dev/null || true)"
+          if (( xargs_status != 0 || actual_shards != expected_shards )); then
+            echo "Process-shard runner incomplete (xargs=$xargs_status, expected=$expected_shards, actual=$actual_shards)" >&2
+            exit 1
+          fi
+
+          : > pytest-not-pg.log
+          failed=0
+          while IFS=' ' read -r rc shard; do
+            cat "$log_dir/${shard//\//_}.log" >> pytest-not-pg.log
+            if (( rc != 0 )); then
+              echo "SHARD FAILED ($rc): $shard" >&2
+              cat "$log_dir/${shard//\//_}.log" >&2
+              failed=1
+            fi
+          done < "$status_file"
+          if (( failed != 0 )); then
+            exit 1
+          fi
+
+          # These tests must observe an otherwise-quiescent host and exact
+          # descriptor state; run them only after all parallel processes exit.
+          python -m pytest -q -m "$marker" \
+            tests/ops tests/invariants/test_vault_multiwriter.py | tee -a pytest-not-pg.log
+
+      - name: Run scoped not-pg unit tests
+        if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'
+        shell: bash
+        timeout-minutes: 22
+        env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
           set -o pipefail
