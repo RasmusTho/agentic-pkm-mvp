@@ -26,14 +26,21 @@ def _stable_vault_root_object_id(
     path: Path, *, vault_root: Path, frontmatter: dict
 ) -> str:
     """Resolve one canonical Product identity for a root-ingested retained note."""
-    from app.ingest.vault_alpha import _VAULT_NOTE_UUID_NAMESPACE
+    from app.ingest.vault_alpha import (
+        _derive_note_uuid,
+        _normalize_uuid,
+        _sanitize_uuid,
+    )
 
     source_identity = path.resolve().relative_to(vault_root.resolve()).as_posix()
-    raw_uuid = str(frontmatter.get("uuid") or "").strip()
-    try:
-        vault_uuid = str(uuid.UUID(raw_uuid))
-    except (ValueError, AttributeError):
-        vault_uuid = str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity))
+    raw_uuid = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
+    frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(raw_uuid)
+    vault_uuid = _derive_note_uuid(
+        frontmatter_uuid,
+        "",
+        Path(source_identity),
+        invalid_frontmatter=frontmatter_invalid,
+    )
     return resolve_canonical_object_id(vault_uuid)
 
 

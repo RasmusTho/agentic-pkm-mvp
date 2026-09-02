@@ -2,6 +2,9 @@ import os
 import uuid
 from pathlib import Path
 
+import pytest
+
+from app.ingest import vault_alpha, vault_root
 from app.ingest.vault_root import ingest_vault_root, iter_vault_root_markdown
 from app.observability.ingest_meta import reset_ingest_meta
 from app.observability.status_service import get_system_status
@@ -122,3 +125,92 @@ def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
     assert upserted_ids[0] == upserted_ids[1]
     assert len(stored_ids) == 2
     assert stored_ids[0] == stored_ids[1]
+
+
+@pytest.mark.parametrize(
+    "identity_key,identity_value",
+    [
+        ("id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        ("uuid", ["[[bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb]]"]),
+    ],
+)
+def test_vault_root_and_vault_alpha_resolve_declared_identity_the_same_way(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_key: str,
+    identity_value: object,
+) -> None:
+    vault_root_path = tmp_path / "vault"
+    vault_root_path.mkdir()
+    note_path = vault_root_path / "root-note.md"
+    note_path.write_text(
+        f"---\n{identity_key}: {identity_value!r}\n---\n\nMeaning-bearing body.\n",
+        encoding="utf-8",
+    )
+    root_ids: list[str] = []
+
+    class FakeObjects:
+        def upsert(self, *, id=None, **_kwargs):  # type: ignore[no-untyped-def]
+            root_ids.append(str(id))
+            return {"id": id}
+
+    class FakeStore:
+        def put(self, object_id, **_kwargs):  # type: ignore[no-untyped-def]
+            del object_id
+
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_root, "get_stores", lambda: (FakeObjects(), None))
+    monkeypatch.setattr(vault_root, "get_object_store", lambda: FakeStore())
+    monkeypatch.setattr(
+        vault_root,
+        "normalize_run",
+        lambda *_args, **_kwargs: {
+            "object_id": str(uuid.uuid4()),
+            "core6": {"title": "Root"},
+            "payload": {},
+        },
+    )
+    monkeypatch.setattr(vault_root, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_root, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_root, "append_jsonl", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_alpha, "read_companion", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, "_find_companion_by_fingerprint", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        vault_alpha,
+        "load_companion_settings",
+        lambda *_args, **_kwargs: type(
+            "Settings",
+            (),
+            {"rename_cooldown_seconds": 0.0, "create_cooldown_seconds": 0.0},
+        )(),
+    )
+    monkeypatch.setattr(
+        vault_alpha,
+        "check_companion_eligibility",
+        lambda *_args, **_kwargs: type(
+            "Eligibility",
+            (),
+            {"eligible": False, "reason": "system_path", "next_check_after": None},
+        )(),
+    )
+    monkeypatch.setattr(
+        vault_alpha,
+        "ObjectStore",
+        lambda: type("LegacyStore", (), {"save_object": lambda self, *args, **kwargs: None})(),
+    )
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_alpha, "get_object_store", lambda: FakeStore())
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    vault_root._ingest_file(note_path, trace_id="trace", vault_root=vault_root_path)
+    alpha_id = vault_alpha._ingest_single(
+        note_path,
+        vault_root=vault_root_path,
+        trace_id="trace",
+        write_companion_record=False,
+    )
+
+    assert root_ids == [alpha_id]

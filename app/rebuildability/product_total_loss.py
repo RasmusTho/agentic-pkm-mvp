@@ -153,7 +153,11 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
             raw_text = path.read_text(encoding="utf-8")
             text = _canonical_source_text(raw_text)
             replay = ProductReplayTuple(
-                **product_replay_provenance(source_identity=relative, source_text=text)
+                **product_replay_provenance(
+                    source_identity=relative,
+                    source_text=text,
+                    allow_empty_source=True,
+                )
             )
         except Exception as exc:
             failures.append(f"{path.name}:{type(exc).__name__}")
@@ -171,6 +175,20 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
 def _row_payload(row: Any) -> dict[str, Any] | None:
     payload = row.get("payload") if isinstance(row, dict) else getattr(row, "payload", None)
     return payload if isinstance(payload, dict) else None
+
+
+def _row_source_identity(row: Any, *, vault_root: Path) -> str:
+    """Normalize a row locator for matching replay-less retained projections."""
+    raw_source = row.get("source_ref") if isinstance(row, dict) else getattr(row, "source_ref", None)
+    if not isinstance(raw_source, str) or not raw_source.strip():
+        return ""
+    candidate = Path(raw_source).expanduser()
+    if candidate.is_absolute():
+        try:
+            return candidate.resolve().relative_to(vault_root.resolve()).as_posix()
+        except ValueError:
+            return ""
+    return raw_source.strip().replace("\\", "/").lstrip("./")
 
 
 def _is_product_row(row: Any) -> bool:
@@ -244,16 +262,21 @@ def evaluate_product_store_readiness(
     if not sources:
         return ProductReadiness("refused", False, "projection has no retained source set", 0, len(rows))
 
+    retained_identities = {source.replay.source_identity for source in sources}
     by_identity: dict[str, list[tuple[ProductReplayTuple, dict[str, Any]]]] = {}
     corrupt: list[str] = []
     for row in rows:
         payload = _row_payload(row)
         if payload is None:
-            corrupt.append("projection-row")
+            if _row_source_identity(row, vault_root=vault_root) in retained_identities:
+                corrupt.append("projection-row")
             continue
         replay = _row_replay(payload)
         if replay is None:
-            corrupt.append("projection-row")
+            if _row_source_identity(row, vault_root=vault_root) in retained_identities:
+                corrupt.append("projection-row")
+            continue
+        if replay.source_identity not in retained_identities:
             continue
         by_identity.setdefault(replay.source_identity, []).append((replay, payload))
 

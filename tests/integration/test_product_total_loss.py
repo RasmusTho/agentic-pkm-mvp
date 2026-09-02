@@ -121,6 +121,42 @@ def test_missing_replay_tuple_refuses_without_fallback(tmp_path: Path) -> None:
         raise AssertionError("empty source must not receive a replay tuple")
 
 
+def test_product_readiness_ignores_replayless_non_retained_rows(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    retained = _verified_row(source_identity, "Meaning-bearing Product note.")
+    unrelated = {
+        "kind": "note",
+        "source_ref": str(vault_root / "Legacy" / "old.md"),
+        "payload": {"text": "Legacy projection without replay provenance."},
+    }
+
+    result = evaluate_product_store_readiness(vault_root, [retained, unrelated])
+
+    assert result.ready is True
+
+
+def test_product_readiness_accepts_admitted_empty_source_projection(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root, "")
+    row = {
+        "kind": "note",
+        "source_ref": source_identity,
+        "payload": {
+            "text": "",
+            "replay": product_replay_provenance(
+                source_identity=source_identity,
+                source_text="",
+                allow_empty_source=True,
+            ),
+        },
+    }
+
+    result = evaluate_product_store_readiness(vault_root, [row])
+
+    assert result.ready is True
+
+
 def test_product_readiness_ignores_ingest_excluded_files(tmp_path: Path) -> None:
     """The retained inventory is the same candidate set as vault-alpha ingest."""
     vault_root = tmp_path / "vault"

@@ -492,3 +492,11 @@ wait_for_watcher_heartbeat
         assert "capture" in combined
         assert "debug" in combined
         assert "watcher heartbeat not detected at /app/tmp-test/watcher_heartbeat.json" in combined
+
+    def test_start_full_system_rebuilds_unready_product_with_existing_objects(self) -> None:
+        script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+        assert 'product_rebuild_required=0' in script
+        assert '*"product replay refused:"*) product_rebuild_required=1' in script
+        bootstrap_block = script.split('object_count="$objects_before"', 1)[1]
+        condition = bootstrap_block.split('then', 1)[0]
+        assert '[ "$objects_before" -le 0 ] || [ "$product_rebuild_required" -eq 1 ]' in condition

@@ -2201,6 +2201,10 @@ except Exception as exc:
     sys.exit(0)
 PY
 )
+product_rebuild_required=0
+case "$readiness_state" in
+  *"product replay refused:"*) product_rebuild_required=1 ;;
+esac
 
 api_health_payload=$(curl -sS "$API_BASE_URL/api/health" || true)
 update_health_state() {
@@ -2349,7 +2353,9 @@ object_count="$objects_before"
 vector_count="$vectors_before"
 ingest_summary_json="{}"
 ingest_status=0
-if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
+if [ "$NO_VAULT_MODE" -ne 1 ] && {
+  [ "$objects_before" -le 0 ] || [ "$product_rebuild_required" -eq 1 ]
+}; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     set +e
