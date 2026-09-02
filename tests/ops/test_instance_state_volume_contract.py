@@ -2132,6 +2132,59 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     assert produce_index < begin_index < stop_index < proof_index < validate_index < finish_index
 
 
+@pytest.mark.parametrize(
+    "legacy_path",
+    (
+        "/Users/operator/agentic-pkm/app-local.md",
+        "/Volumes/legacy/agentic-pkm/app-local.md",
+    ),
+)
+def test_real_deployment_wrapper_rejects_host_legacy_settings_before_init(
+    tmp_path: Path, legacy_path: str
+) -> None:
+    """A host-side legacy override cannot be mistaken for an absent source."""
+
+    event_log = tmp_path / "events.log"
+    harness = tmp_path / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() { printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"; }\n"
+        "prepare_instance_state_deployment fake_compose prod\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    ownership_root = tmp_path / "instance-ownership"
+    ownership_root.mkdir(mode=0o700)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DESIGN_HANDOFF_APP_LOCAL_SETTINGS", "MVR03_PRINCIPAL_CUTOVER"}
+    }
+    env.update(
+        {
+            "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": legacy_path,
+            "EVENT_LOG": str(event_log),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "MVR03_PRINCIPAL_CUTOVER": "0",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78, result.stderr
+    assert "configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert "refusing before initialization" in result.stderr
+    assert not event_log.exists()
+    assert not any(ownership_root.iterdir())
+
+
 def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
     tmp_path,
 ) -> None:

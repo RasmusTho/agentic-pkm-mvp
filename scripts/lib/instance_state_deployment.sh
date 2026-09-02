@@ -223,6 +223,23 @@ prepare_instance_state_deployment() {
     echo "instance state deployment: INSTANCE_OWNERSHIP_HOST_STATE_DIR must be resolved before prepare_instance_state_deployment runs" >&2
     return 78
   fi
+
+  # The ordinary one-shot has no host-root mount. An explicitly configured
+  # host-side legacy source must therefore not be allowed to look absent and
+  # trigger an empty-registry initialization. A bounded handoff for that
+  # source is not available on this path, so refuse before producing an
+  # inventory or invoking instance-state-init. The default /app path remains
+  # the receipt-only/container-visible compatibility path.
+  if [ -n "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}" ]; then
+    case "${legacy_path}" in
+      /app/*) ;;
+      *)
+        echo "instance state deployment: configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS is outside the instance-state-init container namespace; refusing before initialization" >&2
+        return 78
+        ;;
+    esac
+  fi
+
   quiescence_inventory_host_target_path="$(
     _instance_state_deployment_host_ownership_path "${quiescence_inventory_path}"
   )" || {
