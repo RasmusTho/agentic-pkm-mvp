@@ -170,7 +170,7 @@ def _required_check_authority(
         if not isinstance(check, Mapping) or not isinstance(check.get("context"), str) or not check["context"]:
             raise ClosureError("incomplete", "required-check authority is malformed")
         app_id = check.get("app_id")
-        if not isinstance(app_id, int) or isinstance(app_id, bool) or app_id <= 0:
+        if app_id is not None and (not isinstance(app_id, int) or isinstance(app_id, bool)):
             raise ClosureError("incomplete", "required-check authority is malformed")
         required.append({"kind": "check", "name": check["context"], "app_id": app_id})
     canonical = sorted(required, key=canonical_json)
@@ -202,7 +202,10 @@ def _required_check_evidence(
                 for check in checks
                 if check.get("name") == requirement["name"]
                 and isinstance(check.get("app"), Mapping)
-                and check["app"].get("id") == requirement["app_id"]
+                and (
+                    requirement["app_id"] is None
+                    or check["app"].get("id") == requirement["app_id"]
+                )
             ]
             if requirement["kind"] == "check"
             else [status for status in statuses if status.get("context") == requirement["name"]]

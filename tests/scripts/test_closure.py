@@ -172,6 +172,13 @@ def test_closure_plan_binds_repository_required_check_authority(tmp_path: Path) 
         build_closure_plan(request(tmp_path), executor=fake)
 
 
+def test_closure_plan_preserves_name_bound_required_check_authority(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.required_checks = {"required_status_checks": {"contexts": [], "checks": [{"context": "CI", "app_id": None}]}}
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    assert plan["required_checks"] == [{"kind": "check", "name": "CI", "app_id": None}]
+
+
 def test_closure_apply_recovers_completed_dispatcher_from_governed_completion_event(tmp_path: Path) -> None:
     fake = Fake(tmp_path); task_id = fake.dispatcher_task["task_id"]
     plan = build_closure_plan(request(tmp_path, task_id), executor=fake)
