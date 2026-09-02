@@ -1132,7 +1132,18 @@ def _dispatcher_cleanup_guard(
     else:
         raise ClosureError("unknown", "dispatcher cleanup guard release token is missing")
     argv.append("--json")
-    result = _run(executor, cwd, argv)
+    try:
+        result = _run(executor, cwd, argv)
+    except ClosureError as exc:
+        if action == "acquire" and exc.result is not None:
+            try:
+                payload = json.loads(exc.result.stdout)
+            except json.JSONDecodeError:
+                payload = None
+            error = payload.get("error") if isinstance(payload, Mapping) else None
+            if isinstance(error, str) and error.startswith("dispatcher not initialised"):
+                return None
+        raise
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -1810,7 +1821,14 @@ def _finish_cleanup(
         owner=owner,
     )
     if token is None:
-        raise ClosureError("unknown", "dispatcher cleanup guard acquisition returned no token")
+        return _finish_cleanup_effects(
+            value,
+            current,
+            runner,
+            cwd,
+            reconciled=reconciled,
+            merge_sha=merge_sha,
+        )
     try:
         return _finish_cleanup_effects(
             value,

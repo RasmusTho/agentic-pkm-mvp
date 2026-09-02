@@ -93,6 +93,7 @@ class Fake:
         self.cleanup_guard_active = False
         self.cleanup_guard_claim_blocked = False
         self.cleanup_guard_token = "guard-token"
+        self.dispatcher_uninitialized = False
         self.dispatcher_lease_released_at: str | None = None
         self.dispatcher_release_events: list[dict[str, object]] = []
         self.dispatcher_claim_events: list[dict[str, object]] = [
@@ -204,6 +205,13 @@ class Fake:
             return self._json(args, {})
         if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
             if args[3] == "cleanup-guard":
+                if self.dispatcher_uninitialized:
+                    return CommandResult(
+                        args,
+                        1,
+                        json.dumps({"ok": False, "error": "dispatcher not initialised — run: make dispatcher-init"}),
+                        "",
+                    )
                 assert args[5:7] == ("--task-id", self.dispatcher_task["task_id"])
                 if args[4] == "acquire":
                     self.cleanup_guard_active = True
@@ -596,6 +604,15 @@ def test_closure_apply_holds_fallback_cleanup_guard_during_label_mutation(
     assert receipt["outcome"] == "success"
     assert fake.cleanup_guard_claim_blocked is True
     assert fake.cleanup_guard_active is False
+
+
+def test_closure_apply_preserves_database_missing_fallback_cleanup(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.dispatcher_uninitialized = True
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["outcome"] == "success"
+    assert any("DELETE" in call for call in fake.calls)
 
 
 @pytest.mark.parametrize("already_merged", [False, True])

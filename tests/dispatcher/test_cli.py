@@ -175,6 +175,25 @@ def test_cleanup_guard_blocks_claim_until_exact_release(tmp_env, store):
     assert data["task"]["status"] == "claimed"
 
 
+def test_cleanup_guard_same_owner_refreshes_expiry(tmp_env, store, monkeypatch):
+    from app.dispatcher import leases
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    timestamps = iter([
+        "2026-09-02T00:00:00+00:00",
+        "2026-09-02T00:00:30+00:00",
+        "2026-09-02T00:00:31+00:00",
+    ])
+    monkeypatch.setattr(leases, "_utc_now", lambda: next(timestamps))
+    first = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    second = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    assert second["token"] == first["token"]
+    assert second["expires_at"] > first["expires_at"]
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", second["token"])
+
+
 def test_claim_conflict_returns_error(tmp_env, store):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
