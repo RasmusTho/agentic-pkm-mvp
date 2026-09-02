@@ -49,6 +49,13 @@ HTTP_ADAPTER_KIND = "http"
 MODEL_INQUIRY_XHIGH_TIMEOUT_SECONDS = 1200.0
 MODEL_INQUIRY_SUBSCRIPTION_TIMEOUT_SECONDS = 1500.0
 OPERATIONAL_SUBSCRIPTION_MODE_ENV = "BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION"
+_OPERATIONAL_TRANSPORT_PROVIDERS = {
+    # The local bridge invokes the host's Codex subscription command.  Keep
+    # this compatibility registry separate from target selection so a future
+    # provider cannot be routed through an incompatible transport by profile
+    # metadata alone.
+    "codex_subscription": frozenset({"openai"}),
+}
 
 # Conventional exit codes the still-permitted interactive command path uses to
 # report the real cause. Without them an expired session and a genuine command
@@ -662,12 +669,17 @@ def load_operational_adapters(
     value alone cannot silently select the subscription bridge or an API path.
     """
     source = dict(os.environ if env is None else env)
-    selected, config, _resolution = resolve_inquiry_target(source, resolver=resolver)
+    selected, config, resolution = resolve_inquiry_target(source, resolver=resolver)
     transport = selected.model_inquiry_profile(config.channel).operational_transport
     loaders = {"codex_subscription": load_operational_subscription_adapters}
     loader = loaders.get(transport)
     if loader is None:
         raise AdapterUnavailableError("declared Model Inquiry transport has no enabled adapter")
+    allowed_providers = _OPERATIONAL_TRANSPORT_PROVIDERS.get(transport)
+    if allowed_providers is not None and resolution.provider not in allowed_providers:
+        raise AdapterUnavailableError(
+            "declared Model Inquiry provider is incompatible with transport"
+        )
     return loader(source, resolver=selected)
 
 

@@ -1,5 +1,7 @@
-State: BMI-01 through BMI-05 are implemented; Model Inquiry acceptance is permanently configured
-as a Sol single-target run, and parent end-to-end acceptance remains pending. The
+State: BMI-01 through BMI-05 are implemented; parent acceptance remains pending under #3288. The
+durable Model Inquiry contract is provider-neutral and capability-resolved. The current operational
+profile enables only the Codex subscription transport; future provider/model changes require
+declared configuration plus an explicitly registered compatible transport. The
 configured remote host owns its subscription session and host-specific launcher settings. Under
 ADR-0064's 2026-07-30 owner-cost ruling, that subscription-backed session is the sanctioned
 operational auth for host-local Builder model inquiry. The provider-free intent, declared
@@ -17,7 +19,7 @@ Source of truth: ADR-0010, BuilderOps Vault contracts, and this directory for ta
 # BuilderOps Model Inquiry
 
 BuilderOps Model Inquiry turns one development question into a bounded, pre-ticket collaboration
-between two neutral review perspectives over one configured capability target. Current operational
+between two neutral review perspectives over one resolver-selected capability target. Current operational
 configuration enables only Codex subscription transport; durable selection remains provider-neutral
 and configuration-resolved. It stores the question, context packets, model turns, synthesis,
 readiness outcome, and promotion evidence in the BuilderOps plane. It does not make a GitHub Issue
@@ -32,9 +34,14 @@ its advisory claim files never guarantee exclusive ownership.
 
 ## Scope
 
+The inquiry intent and workflow roles stay provider-neutral. The declared capability boundary
+resolves the current Codex-only profile; a future provider/model is not executable until a compatible
+transport is explicitly registered and selected through declared configuration. Fable/GPT references
+remain compatibility/provenance only and cannot reactivate a provider, transport, or acceptance target.
+
 - one command/API request creates an `inquiry_id` before any ticket or Issue exists;
 - the neutral `synthesis` and `verification` perspectives receive structured context packets over
-  the same configured resolved target; this is explicit single-target acceptance, not independent
+  the same resolver-selected target; this is explicit single-target acceptance, not independent
   consensus and not a fallback claim;
 - every model turn is traceable to its input artifacts, model identity, run, and content hash;
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
@@ -60,7 +67,7 @@ BMI-02 stores its durable record graph under
 
 BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and read-only;
 provider-enabled mode uses explicit neutral perspective adapters, strict response validation,
-durable terminal receipts, and one target resolved from the configured Sol capability. The
+durable terminal receipts, and one target resolved from the configured Model Inquiry capability. The
 subscription path may retry an eligible failed command for that same resolved target, but it never
 selects a second provider/model or claims independent consensus.
 
@@ -70,7 +77,7 @@ perspective adapters, subscription session, and durable artifacts; its authentic
 remain outside Git. The current host-local operational path uses the sanctioned subscription-backed
 session through `yggdrasil-model-inquiry` under the owner-cost ruling. The versioned provider-API
 path remains a separate dormant mechanism under `yggdrasil-model-inquiry-provider-api`:
-it submits provider-free intent, resolves the configured Sol capability through the Builder census, and requires
+it submits provider-free intent, resolves the configured Model Inquiry capability through the Builder census, and requires
 explicit `xhigh` reasoning, but intentionally absent metered credentials produce a durable typed
 `credential_unavailable` receipt before any adapter call. That failure does not select a subscription
 or cross-provider fallback. The explicit Model Inquiry subscription exception is confined to this
@@ -109,7 +116,7 @@ is delivered. No task is ready to make a Product/Runtime write.
 5. **Traceability survives partial failure.** Each completed turn is persisted before a successor
    call. A worker restart can resume from the latest committed turn without replaying an accepted
    provider call. Duplicate command retries use idempotency keys. Legacy v1 records remain readable;
-   only the v2 permanent Sol path is executable after the migration boundary.
+   only the v2 current configured path is executable after the migration boundary.
 
 Partial failure examples:
 
@@ -117,7 +124,7 @@ Partial failure examples:
   an untraceable run.
 - If a provider call succeeds but receipt persistence fails, the run remains incomplete and the
   provider output is not treated as an accepted turn.
-- If the configured Sol target is unavailable, the run ends with a typed provider failure and cannot
+- If the configured target is unavailable, the run ends with a typed provider failure and cannot
   be promoted. A successful run ends `single_target_acceptance` with `independence: false`; it never
   becomes `consensus` merely because both neutral perspectives agree.
 - If the models reach their round limit without a common accepted artifact hash, the inquiry ends
@@ -144,7 +151,7 @@ Partial failure examples:
 - [x] The operational subscription runner uses one resolved target for both neutral perspectives and
   records truthful single-target acceptance. Verify:
   `tests/builderops/test_model_inquiry_runner.py::test_single_target_acceptance_is_truthful_and_receipted`.
-- [x] The configured Model Inquiry profile binds the Sol capability without provider/model selection
+- [x] The configured Model Inquiry profile binds the Model Inquiry capability without provider/model selection
   in the inquiry intent, and API/subscription adapters consume the same resolved target. Verify:
   `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
   and `tests/builderops/test_model_inquiry_adapters.py::test_subscription_adapter_uses_resolved_target_profile`.
