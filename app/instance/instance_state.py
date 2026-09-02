@@ -936,6 +936,7 @@ class InstanceStateBackup:
         ledger: OwnershipLedger,
         global_live_owners: Sequence[LegacyOwner],
         require_materialized_owner_roots: bool = True,
+        pending_legacy_owners: Sequence[LegacyOwner] = (),
     ) -> LedgerSnapshot:
         try:
             return ledger.require_registry_consistency(
@@ -968,6 +969,7 @@ class InstanceStateBackup:
                 ),
                 global_live_owners=global_live_owners,
                 require_materialized_roots=require_materialized_owner_roots,
+                pending_legacy_owners=pending_legacy_owners,
             )
         except LedgerError as exc:
             raise InstanceStatePreflightError(

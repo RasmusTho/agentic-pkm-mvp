@@ -3002,6 +3002,8 @@ def _finish_instance_state_deployment_locked(
         quiescence_proof=quiescence_proof,
     )
     if established is not None and established.legacy_bootstrap_complete:
+        pending_legacy_owners: list[LegacyOwner] = []
+        recovery_failed = False
         try:
             # Only pending registrations need the recovery transition here.
             # Active leases must reach the canonical consistency check below
@@ -3033,15 +3035,19 @@ def _finish_instance_state_deployment_locked(
                     ledger.recover_or_require_active_from_host_receipt(
                         pending_owner,
                         channel_id=channel,
+                        persist=False,
                         _capability=_STORAGE_MUTATION_CAPABILITY,
                     )
+                    pending_legacy_owners.append(pending_owner)
             owners = list(ledger.resolve_live_owner_bindings(owners, skip_unadopted=True))
         except (FilesystemIdentityError, LedgerError):
-            # deployment-finish must not expose a host-only path from a
-            # mount-blind recovery failure or its exception chain.
+            recovery_failed = True
+        if recovery_failed:
+            # Raise after leaving the handler so Python cannot retain a
+            # mount-only recovery exception in __context__.
             raise InstanceStatePreflightError(
                 "host-validated legacy-owner binding or lease recovery is invalid"
-            ) from None
+            )
     else:
         owners = [
             owner
@@ -3064,6 +3070,7 @@ def _finish_instance_state_deployment_locked(
             ledger=ledger,
             global_live_owners=tuple(owners),
             require_materialized_owner_roots=False,
+            pending_legacy_owners=tuple(pending_legacy_owners),
         )
     except InstanceStatePreflightError as exc:
         if established is not None and established.legacy_bootstrap_complete:

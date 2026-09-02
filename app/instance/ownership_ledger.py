@@ -424,6 +424,7 @@ class OwnershipLedger:
         transfer_lineage: Sequence[Mapping[str, str]],
         global_live_owners: Sequence[LegacyOwner],
         require_materialized_roots: bool = True,
+        pending_legacy_owners: Sequence[LegacyOwner] = (),
     ) -> LedgerSnapshot:
         """Authenticate one channel registry and the complete host-global ledger."""
 
@@ -456,6 +457,43 @@ class OwnershipLedger:
                     current,
                     key,
                     require_complete_legacy_chain=False,
+                )
+
+            pending_lease_updates: dict[str, OwnershipLease] = {}
+            seen_pending_bindings: set[str] = set()
+            for owner in pending_legacy_owners:
+                binding_id = owner.vault_binding_id
+                if (
+                    owner.channel_id != channel_id
+                    or not binding_id
+                    or binding_id in seen_pending_bindings
+                ):
+                    raise LedgerError(
+                        "pending host receipt contains an invalid ownership binding"
+                    )
+                seen_pending_bindings.add(binding_id)
+                lease = current.leases.get(binding_id)
+                if (
+                    lease is None
+                    or lease.channel_id != channel_id
+                    or lease.vault_binding_id != binding_id
+                    or not self._matches_host_validated_identity(lease, owner, key)
+                ):
+                    raise LedgerError(
+                        "pending host receipt does not authenticate its ownership lease"
+                    )
+                if lease.state == "pending":
+                    pending_lease_updates[binding_id] = OwnershipLease(
+                        **(asdict(lease) | {"state": "active"})
+                    )
+                elif lease.state != "active":
+                    raise LedgerError(
+                        "pending host receipt targets an unrecoverable lease"
+                    )
+            if pending_lease_updates:
+                current = self._replace(
+                    current,
+                    leases={**current.leases, **pending_lease_updates},
                 )
 
             ledger_live_owners: set[tuple[str, str]] = set()
@@ -720,10 +758,11 @@ class OwnershipLedger:
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"
                     )
-            if needs_legacy_migration:
+            if needs_legacy_migration or pending_lease_updates:
                 self._write_ledger_locked(current, key)
-                self.rotation_path.unlink(missing_ok=True)
-                _fsync_directory(self.root)
+                if needs_legacy_migration:
+                    self.rotation_path.unlink(missing_ok=True)
+                    _fsync_directory(self.root)
             return current
 
     def recover_or_require_active(
@@ -765,13 +804,16 @@ class OwnershipLedger:
         owner: LegacyOwner,
         *,
         channel_id: str,
+        persist: bool = True,
         _capability: _StorageMutationCapability | None = None,
     ) -> OwnershipLease:
         """Recover a committed pending lease from opaque host receipt evidence.
 
         Deployment-finish may run without the host content-root mount.  This
         path therefore authenticates the receipt's identity fingerprints and
-        never opens, resolves, or checks ``owner.root``.
+        never opens, resolves, or checks ``owner.root``.  With ``persist=False``
+        it only validates and returns the candidate active lease; the caller
+        must persist that candidate only after its complete consistency check.
         """
 
         _require_storage_mutation_capability(_capability)
@@ -796,6 +838,8 @@ class OwnershipLedger:
             if lease.state != "pending":
                 raise LedgerError("registered binding ownership is not recoverable")
             active = OwnershipLease(**(asdict(lease) | {"state": "active"}))
+            if not persist:
+                return active
             leases = dict(current.leases)
             leases[owner.vault_binding_id] = active
             self._write_ledger_locked(self._replace(current, leases=leases), key)

@@ -5278,7 +5278,82 @@ def test_deployment_finish_redacts_pending_recovery_filesystem_identity_errors(
             quiescence_proof=proof,
         )
     assert raw_path not in str(excinfo.value)
-    assert raw_path not in repr(excinfo.value.__cause__)
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__context__ is None
+
+
+def test_deployment_finish_keeps_pending_lease_when_consistency_rejects_missing_lease(
+    tmp_path,
+) -> None:
+    """A failed consistency check must not commit pending lease activation."""
+
+    host_global_root = tmp_path / "host-global"
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    vault_root = tmp_path / "prod-vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger_payload = json.loads(runtime.ledger.path.read_text(encoding="utf-8"))
+    ledger_payload["leases"][registration.vault_binding_id]["state"] = "pending"
+    runtime.ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    os.chmod(runtime.ledger.path, 0o600)
+
+    missing_root = tmp_path / "missing-registered-vault"
+    missing_root.mkdir()
+    runtime.registry.register(
+        VaultRegistration(
+            "missing-lease-binding",
+            f"path:{missing_root}",
+            str(missing_root),
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(vault_root),
+            },
+            {
+                "channel_id": "prod",
+                "vault_binding_id": "missing-lease-binding",
+                "root": str(missing_root),
+            },
+        ],
+    )
+    missing_root.rename(tmp_path / "missing-registered-vault-unmounted")
+
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="backup registry/ledger consistency verification failed",
+    ):
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=host_global_root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=owner_receipt,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+
+    assert runtime.ledger.load().leases[registration.vault_binding_id].state == "pending"
+    assert "missing-lease-binding" not in runtime.ledger.load().leases
 
 
 def test_staged_backup_binds_materialized_owner_after_root_leaves_scratch_view(
