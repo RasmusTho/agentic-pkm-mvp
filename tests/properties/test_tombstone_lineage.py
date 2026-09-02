@@ -50,6 +50,7 @@ this test pins.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -522,7 +523,9 @@ def test_delete_leaves_anchored_tombstone(monkeypatch: pytest.MonkeyPatch) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_reingest_mints_new_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reingest_mints_new_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Re-ingesting a new note at the SAME path after a delete gets a NEW
     object_id -- no identity resurrection of the tombstoned row.
 
@@ -535,7 +538,10 @@ def test_reingest_mints_new_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     tombstoned one.
     """
     old_object_id = str(uuid4())
-    path = "/vault/notes/property-note.md"
+    note_path = tmp_path / "vault" / "notes" / "property-note.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("---\ntitle: Property Note\n---\n\nNew body\n", encoding="utf-8")
+    path = str(note_path)
 
     conn = _FakeConn()
     _seed_note(conn, object_id=old_object_id, path=path)
