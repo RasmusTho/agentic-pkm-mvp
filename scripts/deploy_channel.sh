@@ -709,8 +709,13 @@ wait_json_required_ok() {
 
 health_gate() {
   wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
-  wait_http_success "http://127.0.0.1:${api_port}/readyz" || return 1
-  wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
+  # The acknowledged rebuild smoke is the sole admission contract while the
+  # embedding index is rebuilding; ordinary deploys and every rollback remain
+  # bound to readiness and required-health predicates.
+  if [ "${action}" != "deploy" ] || [ "${ack_embedding_rebuild_required}" != "1" ]; then
+    wait_http_success "http://127.0.0.1:${api_port}/readyz" || return 1
+    wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
+  fi
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
