@@ -125,7 +125,7 @@ final capability/closure receipt remain authoritative for lifecycle state.
 ## Relationship to GitHub issues
 
 Parent feature issue #3156; delivered children #3159 (01), #3160 (02), #3161 (03), #3162 (04),
-#3164 (06), #3165 (07 validation hub), #4796 (07A),
+#3164 (06), #3165 (07 validation hub), #4948 (07A; replacement for historical #4796),
 #4797 (07B), #4798 (07C), and #3166 (08) — delivered child map and
 lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
 Reconciliation (do not duplicate): task 5 builds the live rebind that #3119's closing fix

@@ -38,3 +38,26 @@ def test_settings_spine_pointer_preserves_open_parent() -> None:
     assert "does not claim that the parent is closed" in " ".join(task.split())
     assert "parent #3156 remains open" in index
     assert "parent acceptance remains with #3156" in index
+
+
+def test_deleted_settings_schema_has_no_operational_references() -> None:
+    deleted_schema = ROOT / "docs/schema/system-settings.schema.json"
+    assert not deleted_schema.exists()
+
+    excluded_provenance = {
+        Path("docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md"),
+        Path("docs/SETTINGS_SPINE/CONSOLIDATE_SETTINGS_OWNER_DOCS.md"),
+    }
+    stale_references: list[str] = []
+    for relative_root in ("docs", "app", "schemas"):
+        for path in (ROOT / relative_root).rglob("*"):
+            if not path.is_file() or path.relative_to(ROOT) in excluded_provenance:
+                continue
+            try:
+                contents = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            if "docs/schema/system-settings.schema.json" in contents:
+                stale_references.append(path.relative_to(ROOT).as_posix())
+
+    assert stale_references == []
