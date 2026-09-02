@@ -135,15 +135,21 @@ def diagnose_mirror_corruption(
     source_generations: dict[str, str] = {}
     conflicting_source_identities: set[str] = set()
     for source in sources:
-        if not _missing(source.identity) and not _missing(source.generation):
-            if source.identity in conflicting_source_identities:
-                continue
-            previous_generation = source_generations.get(source.identity)
-            if previous_generation is not None and previous_generation != source.generation:
-                conflicting_source_identities.add(source.identity)
-                del source_generations[source.identity]
-            else:
-                source_generations[source.identity] = source.generation
+        source_subject = _digest("source", source.identity, source.generation)
+        if _missing(source.identity):
+            findings.append(MirrorFinding(MirrorFindingCode.MISSING_IDENTITY, source_subject))
+        if _missing(source.generation):
+            findings.append(MirrorFinding(MirrorFindingCode.MISSING_PROVENANCE, source_subject))
+        if _missing(source.identity) or _missing(source.generation):
+            continue
+        if source.identity in conflicting_source_identities:
+            continue
+        previous_generation = source_generations.get(source.identity)
+        if previous_generation is not None and previous_generation != source.generation:
+            conflicting_source_identities.add(source.identity)
+            del source_generations[source.identity]
+        else:
+            source_generations[source.identity] = source.generation
     for source_identity in conflicting_source_identities:
         findings.append(
             MirrorFinding(

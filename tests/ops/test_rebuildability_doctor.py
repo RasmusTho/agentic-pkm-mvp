@@ -270,6 +270,22 @@ def test_doctor_reports_missing_projection_identity() -> None:
     assert MirrorFindingCode.MISSING_IDENTITY in {finding.code for finding in report.findings}
 
 
+def test_doctor_reports_unreferenced_malformed_source_records() -> None:
+    report = diagnose_mirror_corruption(
+        inventory=_inventory(),
+        sources=[
+            SourceRecord(identity=" ", generation="generation"),
+            SourceRecord(identity="Notes/product.md", generation=" "),
+        ],
+        projections=[],
+    )
+
+    assert {finding.code for finding in report.findings} == {
+        MirrorFindingCode.MISSING_IDENTITY,
+        MirrorFindingCode.MISSING_PROVENANCE,
+    }
+
+
 def test_doctor_reports_missing_path_identity() -> None:
     report = diagnose_mirror_corruption(
         inventory=[
