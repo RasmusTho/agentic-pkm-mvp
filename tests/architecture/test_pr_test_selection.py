@@ -116,6 +116,15 @@ def test_product_total_loss_has_store_ingest_test_ownership() -> None:
     assert "tests/integration/test_product_total_loss.py" in selection.targets
 
 
+def test_product_source_backed_write_guard_has_store_ingest_test_ownership() -> None:
+    selection = select_tests(["app/write_guard.py"])
+
+    assert not selection.unowned_paths
+    assert "store_ingest" in selection.subsystems
+    assert "tests/integration/test_product_total_loss.py" in selection.targets
+    assert "tests/services/test_write_guard.py" in selection.targets
+
+
 def test_product_projection_rebuild_has_store_ingest_test_ownership() -> None:
     selection = select_tests(["app/rebuildability/product_projection_rebuild.py"])
 
