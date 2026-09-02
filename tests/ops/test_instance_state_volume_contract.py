@@ -2198,7 +2198,7 @@ def test_real_deployment_wrapper_reads_channel_legacy_settings_before_init(
     host_path = "/Users/operator/agentic-pkm/app-local.md"
     channel_env.write_text(
         "APP_IMAGE_TAG=fixture\n"
-        f"DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        f"  DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
         encoding="utf-8",
     )
     harness = tmp_path / "run-wrapper.sh"
@@ -2249,8 +2249,8 @@ def test_real_deployment_wrapper_rejects_duplicate_channel_legacy_settings(
     channel_env = tmp_path / "prod.env"
     host_path = "/Volumes/legacy/agentic-pkm/app-local.md"
     channel_env.write_text(
-        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
-        f"DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        "  DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
+        f"\tDESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
         encoding="utf-8",
     )
     harness = tmp_path / "run-wrapper.sh"
@@ -4738,6 +4738,13 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     assert start.index("\npreflight_instance_state_deployment_legacy_settings") < start.index(
         "\nrun_preflight\nensure_prod_instance_state_volume"
     )
+    selector = "${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
+    assert f'_pkm_resolved_channel="{selector}"' in start
+    assert 'preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}"' in start
+    assert 'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"' in start
+    for selector_name in ("ENVIRONMENT", "CHANNEL", "PKM_CHANNEL"):
+        assert f"${{{selector_name}:-" in selector
+    assert "unset _pkm_resolved_channel" not in start
     assert start.index("prepare_instance_state_deployment run_docker_compose") < start.index(
         'start_startup_watchdog "$STARTUP_TIMEOUT_SECONDS"'
     )

@@ -167,9 +167,13 @@ _instance_state_deployment_env_value() {
   local key="${2:?env key required}"
   [ -f "${env_file}" ] || return 0
   awk -v key="${key}" '
-    index($0, key "=") == 1 {
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+    }
+    index(line, key "=") == 1 {
       matches += 1
-      value = substr($0, length(key) + 2)
+      value = substr(line, length(key) + 2)
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
       if (length(value) >= 2) {

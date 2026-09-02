@@ -38,14 +38,14 @@ unset _pkm_initial_channel _pkm_initial_channel_lower
 
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
-# This launcher already passes an unset channel to the deployment wrapper as
-# `dev` below. Resolve the MVR-03 topology declaration from that same implicit
-# channel so an explicit cutover cannot arrive with an undeclared listener.
-_pkm_deploy_pin_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
-_pkm_deploy_pin_channel="$(printf '%s' "${_pkm_deploy_pin_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_deploy_pin_channel}")"
-case "${_pkm_deploy_pin_channel:-}" in
+# Resolve the launcher channel once, using the same precedence and normalization
+# for MVR-03 loading, legacy-settings preflight, and instance-state preparation.
+# This keeps an explicit test-channel selector from being re-defaulted to dev.
+_pkm_resolved_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
+_pkm_resolved_channel="$(printf '%s' "${_pkm_resolved_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_resolved_channel}")"
+case "${_pkm_resolved_channel:-}" in
   dev|test|prod)
-    _pkm_deploy_pin_file="config/deploy/${_pkm_deploy_pin_channel}.env"
+    _pkm_deploy_pin_file="config/deploy/${_pkm_resolved_channel}.env"
     load_env_defaults_file "${_pkm_deploy_pin_file}"
     # The channel file, not ambient shell state, owns whether this topology is
     # proven loopback-local. Pin it exactly as deploy_channel.sh does so both
@@ -64,7 +64,7 @@ case "${_pkm_deploy_pin_channel:-}" in
     esac
     ;;
 esac
-unset _pkm_deploy_pin_channel _pkm_deploy_pin_file _pkm_mvr03_loopback_listener
+unset _pkm_deploy_pin_file _pkm_mvr03_loopback_listener
 
 if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -eq 0 ]; then
   # A bare start with no caller- or channel-selected vault must stay in the
@@ -1211,10 +1211,10 @@ if collisions:
 PY
 }
 
-preflight_instance_state_deployment_legacy_settings "${PKM_ENVIRONMENT:-dev}" || exit $?
+preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}" || exit $?
 run_preflight
 ensure_prod_instance_state_volume
-if prepare_instance_state_deployment run_docker_compose "${PKM_ENVIRONMENT:-dev}"; then
+if prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"; then
   :
 else
   instance_state_rc=$?
