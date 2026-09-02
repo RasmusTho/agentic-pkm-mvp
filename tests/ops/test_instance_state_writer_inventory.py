@@ -20,6 +20,7 @@ identifier for it -- while still never emitting the raw host path.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -42,8 +43,10 @@ ENV = ["PKM_ENVIRONMENT=dev", "PATH=/usr/local/bin"]
 
 
 def test_writer_direct_entrypoint_loads_shared_parser_from_outside_repo(tmp_path) -> None:
+    script = tmp_path / "instance_state_writer_inventory.py"
+    shutil.copy(Path(writer_inventory.__file__).resolve(), script)
     result = subprocess.run(
-        [sys.executable, str(Path(writer_inventory.__file__).resolve()), "--help"],
+        [sys.executable, str(script), "--help"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

@@ -28,9 +28,52 @@ from typing import Sequence
 try:
     from scripts.compose_env import compose_env_value as _compose_env_value
 except ModuleNotFoundError:
-    # Direct launcher invocations put scripts/, rather than the repo root, on
-    # sys.path; keep the shared parser usable without mutating sys.path.
-    from compose_env import compose_env_value as _compose_env_value
+    try:
+        # Direct launcher invocations put scripts/, rather than the repo root,
+        # on sys.path; keep the shared parser usable without mutating it.
+        from compose_env import compose_env_value as _compose_env_value
+    except ModuleNotFoundError:
+        # Minimal synthetic launcher fixtures may copy only this entrypoint.
+        def _compose_env_value(raw_value: str) -> str:
+            value = raw_value.strip()
+            if value[:1] in {"'", '"'}:
+                quote = value[0]
+                escaped = False
+                for index in range(1, len(value)):
+                    character = value[index]
+                    if quote == '"' and escaped:
+                        escaped = False
+                        continue
+                    if quote == '"' and character == "\\":
+                        escaped = True
+                        continue
+                    if character != quote:
+                        continue
+                    suffix = value[index + 1 :].lstrip()
+                    if not suffix or suffix.startswith("#"):
+                        quoted = value[1:index]
+                        decoded: list[str] = []
+                        escaped = False
+                        for item in quoted:
+                            if escaped:
+                                if item in {'"', "\\"}:
+                                    decoded.append(item)
+                                else:
+                                    decoded.extend(("\\", item))
+                                escaped = False
+                            elif item == "\\":
+                                escaped = True
+                            else:
+                                decoded.append(item)
+                        if escaped:
+                            decoded.append("\\")
+                        return "".join(decoded)
+                    break
+                return value
+            comment = re.search(r"[ \t]+#", value)
+            if comment:
+                value = value[: comment.start()].rstrip()
+            return value
 
 INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
