@@ -2353,7 +2353,7 @@ if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --source-backed-rebuild --json)
     ingest_status=$?
     set -e
     if [ "$ingest_status" -ne 0 ]; then
@@ -2363,7 +2363,7 @@ if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
     fi
   else
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --source-backed-rebuild --json)
     ingest_status=$?
     set -e
     if [ "$ingest_status" -ne 0 ]; then

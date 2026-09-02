@@ -52,6 +52,7 @@ def test_fingerprint_skip_when_content_hash_matches(tmp_path: Path, _mock_env: N
     """Second ingest with identical content should be skipped (ingested==0)."""
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    _write_layout(vault_root)
     note_uuid = "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee"
     note_path = vault_root / "Notes" / "skip-me.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,6 +80,7 @@ def test_fingerprint_skip_not_triggered_when_content_changes(tmp_path: Path, _mo
     """If content changes, ingest should NOT be skipped."""
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    _write_layout(vault_root)
     note_uuid = "bbbb2222-cccc-dddd-eeee-ffffffffffff"
     note_path = vault_root / "Notes" / "change-me.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,6 +206,7 @@ def test_ai_status_callout_does_not_change_content_hash(tmp_path: Path, _mock_en
     """
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    _write_layout(vault_root)
     note_uuid = "eeee5555-ffff-aaaa-bbbb-cccccccccccc"
     note_path = vault_root / "Notes" / "receipt.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)

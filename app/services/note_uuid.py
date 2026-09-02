@@ -21,7 +21,13 @@ def _new_note_uuid() -> str:
     return str(uuid.uuid4())
 
 
-def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str | None = None) -> str:
+def ensure_note_uuid(
+    path: Path,
+    *,
+    vault_root: Path | str,
+    preferred_uuid: str | None = None,
+    write_action: str = "ensure uuid",
+) -> str:
     resolved = Path(path).resolve()
     root = Path(vault_root).expanduser().resolve()
     resolved.relative_to(root)
@@ -35,11 +41,12 @@ def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str 
     if not candidate:
         candidate = _new_note_uuid()
     frontmatter["uuid"] = candidate
-    DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
+    DEFAULT_WRITE_GUARD.assert_writes_allowed(write_action)
     write_note_from_absolute(
         resolved,
         dump_frontmatter(frontmatter, body),
         vault_root=root,
+        action=write_action,
         expected_version=expected_version,
     )
     return candidate
