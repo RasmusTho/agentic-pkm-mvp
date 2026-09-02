@@ -128,7 +128,14 @@ class FilesystemVaultAdapter:
     ) -> None:
         if not self.backend_writes_enabled:
             return
-        upsert_object_from_note(str(Path(path).resolve()), frontmatter, body, fm_changed, body_changed)
+        upsert_object_from_note(
+            str(Path(path).resolve()),
+            frontmatter,
+            body,
+            fm_changed,
+            body_changed,
+            vault_root=self.vault_root,
+        )
 
     def append_inbox_item(self, message: str, *, vault_path: Path | None = None, uri: str | None = None) -> None:
         append_change(message, vault_path=vault_path, uri=uri)

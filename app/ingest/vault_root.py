@@ -39,14 +39,18 @@ def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[P
     return files
 
 
-def product_replay_for_vault_note(note_path: Path, *, vault_root: Path) -> dict[str, str]:
+def product_replay_for_vault_note(
+    note_path: Path, *, vault_root: Path, source_text: str | None = None
+) -> dict[str, str]:
     """Build the Product replay tuple for a vault-root producer note."""
     root = vault_root.expanduser().resolve()
     path = note_path.expanduser().resolve()
     source_identity = path.relative_to(root).as_posix()
     return product_replay_provenance(
         source_identity=source_identity,
-        source_text=canonical_product_source_text(path.read_text(encoding="utf-8")),
+        source_text=canonical_product_source_text(
+            source_text if source_text is not None else path.read_text(encoding="utf-8")
+        ),
     )
 
 
@@ -57,7 +61,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     frontmatter, _body = load_frontmatter(text)
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
-    replay = product_replay_for_vault_note(path, vault_root=root)
+    replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)
     normalize_res = normalize_run(str(path), trace_id=trace_id)
     sanitize_normalize = dict(normalize_res)
     payload_copy = dict(normalize_res.get("payload") or {})

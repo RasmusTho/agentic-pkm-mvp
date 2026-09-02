@@ -447,13 +447,17 @@ def select_source_backed_rebuild_candidates(vault_root: Path) -> list[Path]:
     return candidates
 
 
-def product_replay_for_vault_note(note_path: Path, *, vault_root: Path) -> dict[str, str]:
+def product_replay_for_vault_note(
+    note_path: Path, *, vault_root: Path, source_text: str | None = None
+) -> dict[str, str]:
     """Build the Product replay tuple for the vault-alpha canonical producer."""
     root = vault_root.expanduser().resolve()
     path = note_path.expanduser().resolve()
     return product_replay_provenance(
         source_identity=path.relative_to(root).as_posix(),
-        source_text=canonical_product_source_text(path.read_text(encoding="utf-8")),
+        source_text=canonical_product_source_text(
+            source_text if source_text is not None else path.read_text(encoding="utf-8")
+        ),
         allow_empty_source=True,
     )
 
@@ -514,6 +518,9 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     domain = str(frontmatter.get("domain") or "").strip() or "unscoped"
     stripped_body = strip_ai_status_block(strip_ai_panels(body))
     stripped_text = stripped_body.strip()
+    replay = product_replay_for_vault_note(
+        path, vault_root=vault_root, source_text=raw_text
+    )
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
     text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")
     producer_fields = {
@@ -604,7 +611,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         **producer_fields,
-        "replay": product_replay_for_vault_note(path, vault_root=vault_root),
+        "replay": replay,
     }
 
     obj = DomainObject(
@@ -647,7 +654,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
         "vault_uuid": note_uuid,
         **producer_fields,
-        "replay": product_replay_for_vault_note(path, vault_root=vault_root),
+        "replay": replay,
     }
 
     try:

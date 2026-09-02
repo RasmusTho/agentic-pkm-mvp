@@ -292,13 +292,20 @@ def _canonical_note_payload(
     return payload
 
 
-def canonical_note_replay(note_path: Path, *, vault_root: Path | None = None) -> dict[str, str]:
+def canonical_note_replay(
+    note_path: Path,
+    *,
+    vault_root: Path | None = None,
+    source_text: str | None = None,
+) -> dict[str, str]:
     """Build the Product replay tuple for the vault-sync canonical producer."""
     path = note_path.expanduser().resolve()
     root = (vault_root or default_vault_root_for_path(path)).expanduser().resolve()
     return product_replay_provenance(
         source_identity=path.relative_to(root).as_posix(),
-        source_text=canonical_product_source_text(path.read_text(encoding="utf-8")),
+        source_text=canonical_product_source_text(
+            source_text if source_text is not None else path.read_text(encoding="utf-8")
+        ),
     )
 
 
@@ -674,13 +681,21 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
 
 
 def upsert_object_from_note(
-    path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool
+    path: str,
+    frontmatter: dict[str, Any],
+    body: str,
+    fm_changed: bool,
+    body_changed: bool,
+    *,
+    vault_root: Path | None = None,
 ) -> None:
     note_path = Path(path).resolve()
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = frontmatter.get("title") or note_path.stem
-    replay = canonical_note_replay(note_path)
+    replay = canonical_note_replay(
+        note_path, vault_root=vault_root, source_text=body
+    )
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )
@@ -815,7 +830,9 @@ def _sync_markdown(
         is_active = False
 
     uuid_value = frontmatter["uuid"]
-    replay = canonical_note_replay(note_path, vault_root=selected_root)
+    replay = canonical_note_replay(
+        note_path, vault_root=selected_root, source_text=body
+    )
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )
@@ -1092,7 +1109,7 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
-    replay = canonical_note_replay(new)
+    replay = canonical_note_replay(new, source_text=body)
     binding_id = _binding_id()
     with _conn() as conn:
         _prepare(conn)
