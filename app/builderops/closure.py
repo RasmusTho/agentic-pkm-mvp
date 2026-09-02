@@ -1587,6 +1587,27 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         or current["coordination"] != value["coordination"]
     ):
         raise ClosureError("drift", "required-check authority or evidence drifted before merge")
+    if coordination["mode"] == DEGRADED_MODE:
+        _reject_dispatcher_lease_for_fallback(
+            runner,
+            cwd,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
+    else:
+        current_dispatcher = _dispatcher_snapshot(
+            runner,
+            cwd,
+            task_id,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
+        if current_dispatcher != dispatcher:
+            raise ClosureError(
+                "drift", "dispatcher task or lease-holder drifted immediately before merge"
+            )
     merge = value["merge"]
     result = runner.run(["gh", "api", "--hostname", GITHUB_HOST, "--method", "PUT", f"repos/{value['repository']}/pulls/{value['pr_number']}/merge", "-f", f"sha={value['head_sha']}", "-f", f"merge_method={merge['method']}", "-f", f"commit_title={merge['commit_title']}", "-f", f"commit_message={merge['commit_message']}"], cwd=cwd)
     if result.returncode:

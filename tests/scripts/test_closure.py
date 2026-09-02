@@ -86,6 +86,7 @@ class Fake:
             }
         }
         self.dispatcher_status = "absent"
+        self.claim_dispatcher_during_pr_readback = False
         self.dispatcher_release_events: list[dict[str, object]] = []
         self.dispatcher_claim_events: list[dict[str, object]] = [
             {
@@ -115,7 +116,7 @@ class Fake:
         args = tuple(argv); self.calls.append(args); self.inputs.append(input_text)
         endpoint = next((part for part in args if part.startswith("repos/")), "") if args[:2] == ("gh", "api") else ""
         if endpoint.endswith("/pulls/99") and "GET" in args:
-            return self._json(
+            result = self._json(
                 args,
                 {
                     "number": 99,
@@ -129,6 +130,9 @@ class Fake:
                     "head": {"sha": HEAD, "repo": {"full_name": REPO}},
                 },
             )
+            if self.claim_dispatcher_during_pr_readback and not self.merged:
+                self.dispatcher_status = "claimed"
+            return result
         if endpoint.endswith("/issues/5245") and "GET" in args:
             return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
         if endpoint.startswith(f"repos/{REPO}/issues/5245/comments") and "GET" in args:
@@ -478,6 +482,15 @@ def test_closure_apply_rejects_fallback_when_dispatcher_lease_is_current(
     fake = Fake(tmp_path)
     plan = build_closure_plan(request(tmp_path), executor=fake)
     fake.dispatcher_status = "claimed"
+    with pytest.raises(ClosureError, match="current dispatcher lease"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any(any(part.endswith("/merge") for part in call) for call in fake.calls)
+
+
+def test_closure_apply_rechecks_fallback_dispatcher_before_merge(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.claim_dispatcher_during_pr_readback = True
     with pytest.raises(ClosureError, match="current dispatcher lease"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert not any(any(part.endswith("/merge") for part in call) for call in fake.calls)
