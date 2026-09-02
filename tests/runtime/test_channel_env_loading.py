@@ -56,7 +56,7 @@ def test_load_env_defaults_file_accepts_compose_export_prefix() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         env_file = Path(tmpdir) / ".env.dev.local"
         env_file.write_text(
-            "  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n",
+            "  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = /app/tmp/agentic-pkm/app-local.md\n",
             encoding="utf-8",
         )
         out = _bash_ok(

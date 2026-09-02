@@ -160,8 +160,8 @@ recover_lost_instance_state_lease() {
 # the deployer's shell. Compose treats a non-empty shell value as the winner
 # over --env-file, so the caller must resolve that same precedence before any
 # deployment mutation. This parser intentionally accepts only the simple
-# KEY=value form used by config/deploy/*.env and strips the optional matching
-# quote pair handled by load_env_defaults_file.
+# simple dotenv assignment form used by config/deploy/*.env and strips the
+# optional matching quote pair handled by load_env_defaults_file.
 _instance_state_deployment_env_value() {
   local env_file="${1:?env file required}"
   local key="${2:?env key required}"
@@ -172,9 +172,9 @@ _instance_state_deployment_env_value() {
       sub(/^[[:space:]]+/, "", line)
       sub(/^export[[:space:]]+/, "", line)
     }
-    index(line, key "=") == 1 {
+    match(line, "^" key "[[:space:]]*=") == 1 {
       matches += 1
-      value = substr(line, length(key) + 2)
+      value = substr(line, RSTART + RLENGTH)
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
       if (length(value) >= 2) {

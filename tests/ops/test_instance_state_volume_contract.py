@@ -2198,7 +2198,7 @@ def test_real_deployment_wrapper_reads_channel_legacy_settings_before_init(
     host_path = "/Users/operator/agentic-pkm/app-local.md"
     channel_env.write_text(
         "APP_IMAGE_TAG=fixture\n"
-        f"  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        f"  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = {host_path}\n",
         encoding="utf-8",
     )
     harness = tmp_path / "run-wrapper.sh"
@@ -2250,7 +2250,7 @@ def test_real_deployment_wrapper_rejects_duplicate_channel_legacy_settings(
     host_path = "/Volumes/legacy/agentic-pkm/app-local.md"
     channel_env.write_text(
         "  DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
-        f"\t export DESIGN_HANDOFF_APP_LOCAL_SETTINGS={host_path}\n",
+        f"\t export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = {host_path}\n",
         encoding="utf-8",
     )
     harness = tmp_path / "run-wrapper.sh"
