@@ -158,7 +158,7 @@ def _live_closing_issues(value: object, *, repository: str) -> tuple[int, ...]:
     return tuple(sorted(numbers))
 
 
-def _body_digest(body: str) -> str:
+def verified_merge_body_sha256(body: str) -> str:
     """Digest the GitHub PR-body form used by verified-merge authority.
 
     GitHub may persist a body without one terminal LF that was present when the
@@ -170,11 +170,28 @@ def _body_digest(body: str) -> str:
     return hashlib.sha256(canonical_body.encode("utf-8")).hexdigest()
 
 
+def canonicalize_neutralized_body_transport(body: str) -> str:
+    """Return the sole neutralized body representation sent to GitHub.
+
+    The planner emits an LF-less transport value so a GitHub boundary that
+    stores one terminal LF converges on the same digest.  A body already in
+    transport form is idempotent.  CR bytes and a second terminal LF are never
+    transport equivalences and therefore fail before any body edit.
+    """
+
+    if "\r" in body or body.endswith("\n\n"):
+        raise ValueError("neutralized PR body transport is noncanonical")
+    canonical_body = body[:-1] if body.endswith("\n") else body
+    if resolve_neutralized_issue_authority(canonical_body) is None:
+        raise ValueError("neutralized PR body transport is malformed")
+    return canonical_body
+
+
 def _raw_terminal_lf_digest(body: str) -> str:
     return hashlib.sha256((body + "\n").encode("utf-8")).hexdigest()
 
 
-def _matches_stored_body_digest(
+def verified_merge_body_matches_digest(
     body: str,
     stored_digest: object,
     *,
@@ -182,7 +199,7 @@ def _matches_stored_body_digest(
 ) -> bool:
     """Accept a canonical digest or the one pre-#4010 stored LF form.
 
-    New receipts use :func:`_body_digest`.  A historical receipt may instead
+    New receipts use :func:`verified_merge_body_sha256`. A historical receipt may instead
     have stored the raw digest of a body ending in exactly one LF, while GitHub
     now returns that same body without the LF.  Do not turn this into trimming:
     a second LF, whitespace, CRLF, and interior changes remain distinct.
@@ -195,7 +212,7 @@ def _matches_stored_body_digest(
         return False
     # Always preserve the normal #4010 canonical path first. In particular,
     # an unchanged body ending in two LFs canonicalizes to one terminal LF.
-    if _body_digest(body) == stored_digest:
+    if verified_merge_body_sha256(body) == stored_digest:
         return True
     if (
         not allow_legacy_terminal_lf
@@ -204,6 +221,32 @@ def _matches_stored_body_digest(
     ):
         return False
     return _raw_terminal_lf_digest(body) == stored_digest
+
+
+def neutralized_body_matches_digest(
+    body: str,
+    stored_digest: object,
+    *,
+    allow_legacy_terminal_lf: bool = False,
+) -> bool:
+    """Match only the governed neutralized GitHub representation.
+
+    Normal merge authority accepts an LF-less body or that exact body with one
+    terminal LF.  A second LF, any CR byte, or any other byte drift is never
+    allowed into a prepared or merge phase.  The separately authenticated
+    restoration path may classify the historical stranded two-LF transport
+    shape, but it cannot use this predicate to grant merge authority.
+    """
+
+    return bool(
+        "\r" not in body
+        and not body.endswith("\n\n")
+        and verified_merge_body_matches_digest(
+            body,
+            stored_digest,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+    )
 
 
 def _legacy_terminal_lf_provenance(comment: Mapping[str, object]) -> bool:
@@ -299,6 +342,27 @@ def _body_authority(body: object) -> IssueAuthority | None:
     return resolve_issue_authority(body) or resolve_neutralized_issue_authority(body)
 
 
+def _live_body_matches_authority_receipt(
+    body: str,
+    receipt: Mapping[str, object],
+    *,
+    allow_legacy_terminal_lf: bool = False,
+) -> bool:
+    if resolve_neutralized_issue_authority(body) is not None:
+        return neutralized_body_matches_digest(
+            body,
+            receipt.get("neutralized_body_sha256"),
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+    if resolve_issue_authority(body) is not None:
+        return verified_merge_body_matches_digest(
+            body,
+            receipt.get("body_sha256"),
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+    return False
+
+
 def _complete_merged_identity(pr: Mapping[str, object]) -> bool:
     merge_commit_sha = pr.get("merge_commit_sha")
     return bool(
@@ -375,16 +439,10 @@ def _valid_authority_receipt(
         authority is None
         or receipt.get("governing_issue") != authority.governing_issue
         or not isinstance(body, str)
-        or not any(
-            _matches_stored_body_digest(
-                body,
-                digest,
-                allow_legacy_terminal_lf=allow_legacy_terminal_lf,
-            )
-            for digest in (
-                receipt.get("body_sha256"),
-                receipt.get("neutralized_body_sha256"),
-            )
+        or not _live_body_matches_authority_receipt(
+            body,
+            receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
         )
     ):
         return False
@@ -468,18 +526,12 @@ def resolve_verified_merge_authority_receipt(
             valid_entries.extend(
                 (dict(receipt), comment)
                 for receipt, comment in entries
-                if not any(
-                    _matches_stored_body_digest(
-                        body,
-                        digest,
-                        allow_legacy_terminal_lf=_legacy_terminal_lf_provenance(
-                            comment
-                        ),
-                    )
-                    for digest in (
-                        receipt.get("body_sha256"),
-                        receipt.get("neutralized_body_sha256"),
-                    )
+                if not _live_body_matches_authority_receipt(
+                    body,
+                    receipt,
+                    allow_legacy_terminal_lf=_legacy_terminal_lf_provenance(
+                        comment
+                    ),
                 )
                 and not any(
                     not body.endswith("\n")
@@ -511,16 +563,10 @@ def resolve_verified_merge_authority_receipt(
     ):
         return None
     body = pr.get("body")
-    if isinstance(body, str) and not any(
-        _matches_stored_body_digest(
-            body,
-            digest,
-            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
-        )
-        for digest in (
-            authority_receipt.get("body_sha256"),
-            authority_receipt.get("neutralized_body_sha256"),
-        )
+    if isinstance(body, str) and not _live_body_matches_authority_receipt(
+        body,
+        authority_receipt,
+        allow_legacy_terminal_lf=allow_legacy_terminal_lf,
     ):
         if resolve_verified_merge_phase(
             comments,
@@ -556,6 +602,102 @@ def _resolve_merge_state(pr: Mapping[str, object]) -> str:
     return "unknown"
 
 
+def _resolve_same_head_stranded_transport(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    neutralized: IssueAuthority,
+    body: str,
+    head_sha: str,
+    pr_number: int,
+    expected_run_id: str | None,
+) -> dict[str, object] | None:
+    """Authenticate the historical two-LF transport deadlock for restoration.
+
+    This is deliberately not a merge-body equivalence.  It recognizes only an
+    exact-head authority receipt whose canonical neutralized body becomes the
+    live body after one additional terminal LF, and only before any phase
+    receipt can indicate that a merge request may be in flight.
+    """
+
+    if (
+        "\r" in body
+        or not body.endswith("\n\n")
+        or body.endswith("\n\n\n")
+    ):
+        return None
+    canonical_candidate = body[:-1]
+    candidates: list[dict[str, object]] = []
+    for receipt, _comment in _comment_receipt_entries(
+        comments, VERIFIED_MERGE_AUTHORITY_MARKER
+    ):
+        if (
+            not _valid_authority_receipt(
+                receipt,
+                pr=pr,
+                repository=repository,
+                expected_run_id=expected_run_id,
+                require_live_body=False,
+            )
+            or receipt.get("governing_issue") != neutralized.governing_issue
+            or receipt.get("closing_issues") != list(neutralized.closing_issues)
+            or receipt.get("live_supporting_issues")
+            != list(neutralized.supporting_issues)
+            or not neutralized_body_matches_digest(
+                canonical_candidate,
+                receipt.get("neutralized_body_sha256"),
+            )
+        ):
+            continue
+        candidates.append(dict(receipt))
+    if not candidates:
+        return None
+    identities = {_canonical_digest(receipt) for receipt in candidates}
+    restore_targets = {receipt["body_sha256"] for receipt in candidates}
+    neutralized_targets = {
+        receipt["neutralized_body_sha256"] for receipt in candidates
+    }
+    if (
+        len(identities) != 1
+        or len(restore_targets) != 1
+        or len(neutralized_targets) != 1
+    ):
+        return None
+    authority_receipt = candidates[-1]
+    authority_sha256 = _canonical_digest(authority_receipt)
+    if any(
+        comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_PHASE_MARKER in str(comment["body"])
+        and (
+            authority_sha256 in str(comment["body"])
+            or (
+                head_sha in str(comment["body"])
+                and str(authority_receipt["run_id"]) in str(comment["body"])
+            )
+        )
+        for comment in comments
+    ):
+        return None
+    return {
+        "closing_issues": list(neutralized.closing_issues),
+        "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
+        "governing_issue": neutralized.governing_issue,
+        "head_sha": head_sha,
+        "matching_attempts": len(candidates),
+        "neutralized_body_sha256": authority_receipt[
+            "neutralized_body_sha256"
+        ],
+        "neutralized_head_sha": head_sha,
+        "pr_number": pr_number,
+        "reason": "neutralized-body-transport-stranded",
+        "repository": repository,
+        "restore_body_sha256": authority_receipt["body_sha256"],
+        "run_id": authority_receipt["run_id"],
+    }
+
+
 def resolve_neutralized_body_restoration(
     comments: Sequence[Mapping[str, object]],
     *,
@@ -563,7 +705,7 @@ def resolve_neutralized_body_restoration(
     repository: str,
     expected_run_id: str | None = None,
 ) -> dict[str, object] | None:
-    """Surface a neutralized PR body that outlived its own merge attempt.
+    """Surface a neutralized PR body stranded by its head or GitHub transport.
 
     A neutralized body is only valid while the exact head it was prepared for is
     still the head being merged. When a further commit lands, the exact-head
@@ -571,12 +713,12 @@ def resolve_neutralized_body_restoration(
     ``Verified-Closing-Issues``; ``pr-contract`` then fails deterministically on
     every later head until the canonical body is restored.
 
-    Return the bounded restoration state for that condition, or ``None`` when it
-    does not hold or the evidence is not unambiguous. This is detection only: it
-    performs no writes, does not grant merge authority, never relaxes the
-    exact-head binding, and deliberately does not accept the pre-#4010 legacy
-    terminal-LF digest form, so an ambiguous case fails closed instead of naming
-    a restore target it cannot prove.
+    The same recovery result is available on the receipt's exact head when the
+    old transport emitted one LF and GitHub stored exactly one additional LF.
+    That historical two-LF shape is restoration evidence only: normal authority,
+    phase, and merge predicates reject it. Return ``None`` when neither recovery
+    condition is proven unambiguously. This function performs no writes, grants
+    no merge authority, and never relaxes exact-head or body identity.
     """
 
     body = pr.get("body")
@@ -588,6 +730,7 @@ def resolve_neutralized_body_restoration(
         or not _positive_int(pr_number)
     ):
         return None
+    assert isinstance(pr_number, int) and not isinstance(pr_number, bool)
     head_sha = head.get("sha")
     if not isinstance(head_sha, str) or _SHA_PATTERN.fullmatch(head_sha) is None:
         return None
@@ -609,6 +752,18 @@ def resolve_neutralized_body_restoration(
         is not None
     ):
         return None
+    stranded_transport = _resolve_same_head_stranded_transport(
+        comments,
+        pr=pr,
+        repository=repository,
+        neutralized=neutralized,
+        body=body,
+        head_sha=head_sha,
+        pr_number=pr_number,
+        expected_run_id=expected_run_id,
+    )
+    if stranded_transport is not None:
+        return stranded_transport
     # Any trusted authority evidence naming the live head means a merge for this
     # attempt may still be in flight, so an older head must never name a restore
     # target that could race it. Scan the raw comment text rather than only
@@ -649,7 +804,7 @@ def resolve_neutralized_body_restoration(
             or not isinstance(body_digest, str)
             or _DIGEST_PATTERN.fullmatch(body_digest) is None
             or body_digest == receipt.get("neutralized_body_sha256")
-            or not _matches_stored_body_digest(
+            or not neutralized_body_matches_digest(
                 body, receipt.get("neutralized_body_sha256")
             )
         ):
@@ -764,7 +919,7 @@ def restored_body_matches_authority(
     if (
         not isinstance(body, str)
         or restoration.get("contract") != NEUTRALIZED_BODY_RESTORATION_CONTRACT
-        or not _matches_stored_body_digest(
+        or not verified_merge_body_matches_digest(
             body, restoration.get("restore_body_sha256")
         )
     ):
@@ -893,10 +1048,18 @@ def build_verified_merge_phase(
         or not isinstance(head, Mapping)
         or pr.get("number") != authority_receipt.get("pr_number")
         or head.get("sha") != authority_receipt.get("head_sha")
-        or not _matches_stored_body_digest(
-            body,
-            expected_body_digest,
-            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        or not (
+            verified_merge_body_matches_digest(
+                body,
+                expected_body_digest,
+                allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            )
+            if phase == "restored"
+            else neutralized_body_matches_digest(
+                body,
+                expected_body_digest,
+                allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            )
         )
         or (
             merged_phase
@@ -1034,16 +1197,10 @@ def resolve_verified_merge_phase(
     )
     if (
         not isinstance(current_body, str)
-        or not any(
-            _matches_stored_body_digest(
-                current_body,
-                digest,
-                allow_legacy_terminal_lf=allow_legacy_terminal_lf,
-            )
-            for digest in (
-                authority_receipt.get("body_sha256"),
-                authority_receipt.get("neutralized_body_sha256"),
-            )
+        or not _live_body_matches_authority_receipt(
+            current_body,
+            authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
         )
     ) and not (allow_merged_body_drift and _complete_merged_identity(pr)):
         return None
@@ -1151,18 +1308,20 @@ def prepare_verified_merge(
     # snapshot is internally consistent.
     _assert_neutralization_precondition(merge_readiness, head_sha=head_sha)
 
-    neutralized_body = neutralize_closing_issue_references(body, authority)
+    neutralized_body = canonicalize_neutralized_body_transport(
+        neutralize_closing_issue_references(body, authority)
+    )
     if resolve_neutralized_issue_authority(neutralized_body) != authority:
         raise ValueError("verified merge neutralized authority is malformed")
     receipt = {
         "authenticated_supporting_issues": list(supporting),
-        "body_sha256": _body_digest(body),
+        "body_sha256": verified_merge_body_sha256(body),
         "closing_issues": list(closing),
         "contract": VERIFIED_MERGE_AUTHORITY_CONTRACT,
         "governing_issue": governing_issue,
         "head_sha": head_sha,
         "live_supporting_issues": list(authority.supporting_issues),
-        "neutralized_body_sha256": _body_digest(neutralized_body),
+        "neutralized_body_sha256": verified_merge_body_sha256(neutralized_body),
         "pr_number": pr_number,
         "repair_budget": dict(repair_budget),
         "repository": repository,
@@ -1245,7 +1404,7 @@ def _prepare_issue_free_reviewed_lane_merge(
 
     _assert_neutralization_precondition(merge_readiness, head_sha=head_sha)
     receipt = {
-        "body_sha256": _body_digest(body),
+        "body_sha256": verified_merge_body_sha256(body),
         "contract": ISSUE_FREE_REVIEWED_LANE_RECEIPT_CONTRACT,
         "head_sha": head_sha,
         "pr_number": pr_number,

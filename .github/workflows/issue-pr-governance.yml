@@ -540,6 +540,8 @@ jobs:
               return allowLegacy && !body.endsWith("\n") && !body.includes("\r") &&
                 rawTerminalLfDigest(body) === storedDigest;
             };
+            const neutralizedBodyTransportCanonical = body =>
+              typeof body === "string" && !body.includes("\r") && !body.endsWith("\n\n");
             const trustedAuthorityReceipts = comments => {
               const escaped = AUTHORITY_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
               const pattern = new RegExp(`${escaped}\\s*\`\`\`json\\s*([\\s\\S]*?)\\s*\`\`\``, "gm");
@@ -587,6 +589,7 @@ jobs:
                   typeof receipt.neutralized_body_sha256 === "string" &&
                   /^[0-9a-f]{64}$/.test(receipt.neutralized_body_sha256) &&
                   receipt.body_sha256 !== receipt.neutralized_body_sha256 &&
+                  neutralizedBodyTransportCanonical(liveBody) &&
                   matchesStoredBodyDigest(
                     liveBody, receipt.neutralized_body_sha256, {allowLegacy}
                   )

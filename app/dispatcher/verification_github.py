@@ -28,6 +28,7 @@ from app.dispatcher.verified_merge import (
     fixed_verified_merge_commit_title,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
+    verified_merge_body_sha256,
 )
 
 _DEFAULT_MANIFEST_PATH = ".builderops/delivery-manifest.json"
@@ -470,6 +471,12 @@ class GitHubProtectedRepositoryAuthority:
             raise MergeAuthorityError(
                 "real merge requires one authenticated authority receipt"
             )
+        assert isinstance(body, str)
+        observed_body_sha256 = verified_merge_body_sha256(body)
+        if observed_body_sha256 != authority.get("neutralized_body_sha256"):
+            raise MergeAuthorityError(
+                "real merge neutralized body digest did not converge"
+            )
         phase = resolve_verified_merge_phase(
             comments,
             authority_receipt=authority,
@@ -505,9 +512,7 @@ class GitHubProtectedRepositoryAuthority:
             "head_sha": head_sha,
             "governing_issue": authority.get("governing_issue"),
             "closing_issues": authority.get("closing_issues"),
-            "neutralized_body_sha256": authority.get(
-                "neutralized_body_sha256"
-            ),
+            "neutralized_body_sha256": observed_body_sha256,
             "authority_sha256": digest(authority),
             "phase_sha256": digest(phase),
             "closing_reference_count": 0,
