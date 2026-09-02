@@ -182,13 +182,14 @@ def _write_note(
     body: str,
     *,
     action: str = "vault sync note write",
+    vault_root: Path | None = None,
 ) -> None:
     fm_dump = yaml.safe_dump(frontmatter, sort_keys=False).strip()
     rendered = f"---\n{fm_dump}\n---\n\n{body}" if body else f"---\n{fm_dump}\n---\n"
     DEFAULT_WRITE_GUARD.assert_writes_allowed(action)
     resolved = path.resolve()
-    root = default_vault_root_for_path(resolved)
-    write_note_from_absolute(resolved, rendered, vault_root=root)
+    root = (vault_root or default_vault_root_for_path(resolved)).expanduser().resolve()
+    write_note_from_absolute(resolved, rendered, vault_root=root, action=action)
 
 
 def _get_state_by_path(
@@ -792,17 +793,24 @@ def active_edit(path: Path) -> bool:
     return delta < grace
 
 
-def sync_markdown(path: str) -> dict[str, Any]:
+def sync_markdown(path: str, *, vault_root: Path | None = None) -> dict[str, Any]:
     note_path = Path(path).resolve()
+    selected_root = (vault_root or default_vault_root_for_path(note_path)).expanduser().resolve()
     frontmatter, body = _read_note(note_path)
     is_active = active_edit(note_path)
     if "uuid" not in frontmatter or not frontmatter.get("uuid"):
         frontmatter["uuid"] = str(uuid.uuid4())
-        _write_note(note_path, frontmatter, body, action=SOURCE_BACKED_REBUILD_ACTION)
+        _write_note(
+            note_path,
+            frontmatter,
+            body,
+            action=SOURCE_BACKED_REBUILD_ACTION,
+            vault_root=selected_root,
+        )
         is_active = False
 
     uuid_value = frontmatter["uuid"]
-    replay = canonical_note_replay(note_path)
+    replay = canonical_note_replay(note_path, vault_root=selected_root)
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )

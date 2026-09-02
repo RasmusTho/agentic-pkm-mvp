@@ -194,6 +194,8 @@ def _tail_after(log: list[str], marker: str) -> list[str]:
 
 def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch) -> None:
     conn = _RecConn()
+    note_path = tmp_path / "new.md"
+    note_path.write_text("---\nuuid: test-uuid\n---\n\nbody\n", encoding="utf-8")
 
     def _ok(payload, topic, trace_id=None, *, conn=None, observation=None):  # type: ignore[no-untyped-def]
         conn.log.append("enqueue")
@@ -201,7 +203,7 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
     captured = _install(monkeypatch, conn, _ok)
 
     vault_sync.upsert_object_from_note(
-        str(tmp_path / "new.md"),
+        str(note_path),
         {"uuid": OBJECT_UUID, "title": "T"},
         "body",
         fm_changed=False,
@@ -222,6 +224,8 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
 
 def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch) -> None:
     conn = _RecConn()
+    note_path = tmp_path / "new.md"
+    note_path.write_text("---\nuuid: test-uuid\n---\n\nbody\n", encoding="utf-8")
 
     def _boom(payload, topic, trace_id=None, *, conn=None, observation=None):  # type: ignore[no-untyped-def]
         conn.log.append("enqueue_attempt")
@@ -231,7 +235,7 @@ def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch
 
     with pytest.raises(RuntimeError, match="enqueue crash"):
         vault_sync.upsert_object_from_note(
-            str(tmp_path / "new.md"),
+            str(note_path),
             {"uuid": OBJECT_UUID, "title": "T"},
             "body",
             fm_changed=False,
