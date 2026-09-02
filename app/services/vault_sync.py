@@ -46,6 +46,7 @@ from app.knowledge.write_ops import default_vault_root_for_path, write_note_from
 from app.rebuildability import (
     canonical_product_body_text,
     canonical_product_source_text,
+    parse_bounded_frontmatter,
     product_replay_provenance,
 )
 from app.objects import (
@@ -168,15 +169,7 @@ def _hash_text(text: str) -> str:
 
 def _read_note(path: Path) -> tuple[dict[str, Any], str]:
     raw = path.read_text(encoding="utf-8") if path.exists() else ""
-    if raw.startswith("---"):
-        _, fm_block, remainder = raw.split("---", 2)
-        frontmatter = yaml.safe_load(fm_block) or {}
-        body = remainder.lstrip("\n")
-    else:
-        frontmatter = {}
-        body = raw
-    if not isinstance(frontmatter, dict):
-        frontmatter = {}
+    frontmatter, body, _error = parse_bounded_frontmatter(raw)
     return frontmatter, body
 
 
@@ -501,6 +494,19 @@ def _update_path_only(
         ),
     )
 
+    # The legacy watcher mirror is read by lifecycle and readiness paths. A
+    # rename event can carry an edited snapshot, so persist all captured note
+    # fields there, not only the new path.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            update objects
+            set payload = coalesce(payload, '{}'::jsonb) || %s::jsonb
+            where vault_binding_id = %s and (id = %s or uuid = %s)
+            """,
+            (json.dumps(payload), binding_id, canonical_object_id, uuid_value),
+        )
+
     # Step 2: write/normalize file_state last (so it isn’t poisoned by a prior error)
     with conn.cursor() as cur:
         cur.execute(
@@ -547,13 +553,25 @@ def _enqueue(
 def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = None) -> None:
     resolved_path = str(Path(new_path).resolve())
     replay: dict[str, str] | None = None
+    rename_payload: dict[str, Any] | None = None
     resolved_note_path = Path(resolved_path)
     if resolved_note_path.exists():
-        _frontmatter, body = _read_note(resolved_note_path)
+        frontmatter, body = _read_note(resolved_note_path)
         replay = canonical_note_replay(
             resolved_note_path,
             vault_root=vault_root,
             source_body=body,
+        )
+        normalized_frontmatter = normalize_artifact_state_axes(
+            frontmatter, default_review_state="provisional"
+        )
+        rename_payload = _canonical_note_payload(
+            frontmatter=normalized_frontmatter,
+            title=frontmatter.get("title") or resolved_note_path.stem,
+            review_state=normalized_frontmatter["review_state"],
+            maturity=normalized_frontmatter.get("maturity"),
+            content=body,
+            replay=replay,
         )
     binding_id = _binding_id()
     with _conn() as conn:
@@ -575,7 +593,7 @@ def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = Non
                 source_ref=resolved_path,
                 allow_missing_parent=state is not None,
             )
-            if replay is not None:
+            if rename_payload is not None:
                 canonical_exists, mirror_exists, _ = _object_materialization_state(
                     conn,
                     uuid_value=uuid_value,
@@ -591,15 +609,15 @@ def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = Non
                             payload=_merge_canonical_payload(
                                 conn,
                                 object_id=canonical_object_id,
-                                updates={"replay": replay},
+                                updates=rename_payload,
                             ),
                             source_ref=resolved_path,
                             created_at=datetime.now(timezone.utc),
                         ),
                     )
-                    # The legacy mirror is still read by lifecycle and
-                    # migration paths. Keep its replay tuple aligned with the
-                    # canonical row in the same transaction as the rename.
+                    # Keep the legacy mirror's captured body/frontmatter and
+                    # replay tuple aligned with the canonical row in the same
+                    # transaction as the rename.
                     cur.execute(
                         """
                         update objects
@@ -607,7 +625,7 @@ def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = Non
                         where vault_binding_id = %s and (id = %s or uuid = %s)
                         """,
                         (
-                            json.dumps({"replay": replay}),
+                            json.dumps(rename_payload),
                             binding_id,
                             canonical_object_id,
                             uuid_value,

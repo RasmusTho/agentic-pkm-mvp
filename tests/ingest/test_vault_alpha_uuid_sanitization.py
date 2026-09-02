@@ -64,6 +64,30 @@ def test_invalid_frontmatter_uuid_is_stable_for_recovery(
     assert dummy_store.put_calls == [uuid.UUID(first_uuid), uuid.UUID(second_uuid)]
 
 
+def test_alpha_and_product_replay_share_whole_line_frontmatter_boundaries() -> None:
+    raw_text = (
+        '---\n'
+        'title: "Inline --- scalar"\n'
+        'uuid: 11111111-1111-4111-8111-111111111111\n'
+        '---\n'
+        'Body before the rule.\n'
+        '---\n'
+        'Body after the rule.\n'
+    )
+
+    frontmatter, body, malformed = vault_alpha._load_frontmatter_with_reporting(
+        raw_text, Path("inline.md")
+    )
+    from app.rebuildability import parse_markdown_text
+
+    readiness_frontmatter, readiness_body = parse_markdown_text(raw_text)
+
+    assert malformed is False
+    assert frontmatter == readiness_frontmatter
+    assert body == "Body before the rule.\n---\nBody after the rule.\n"
+    assert readiness_body == body.strip()
+
+
 def test_vault_alpha_uses_resolved_canonical_id_for_all_durable_producers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

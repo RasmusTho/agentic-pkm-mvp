@@ -15,7 +15,11 @@ from app.observability.ingest_meta import record_ingest_failure, record_ingest_s
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store, resolve_store_backend
-from app.rebuildability import canonical_product_source_text, product_replay_provenance
+from app.rebuildability import (
+    canonical_product_source_text,
+    parse_bounded_frontmatter,
+    product_replay_provenance,
+)
 from app.stores.provider import get_stores
 from app.objects import resolve_canonical_object_id
 
@@ -74,10 +78,8 @@ def product_replay_for_vault_note(
 
 
 def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -> str:
-    from scripts.yaml_roundtrip import load_frontmatter
-
     text = path.read_text(encoding="utf-8")
-    frontmatter, _body = load_frontmatter(text)
+    frontmatter, _body, _error = parse_bounded_frontmatter(text)
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
     replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)

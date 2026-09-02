@@ -8,6 +8,8 @@ from .product_total_loss import (
     canonical_product_body_text,
     canonical_product_source_text,
     evaluate_product_store_readiness,
+    parse_bounded_frontmatter,
+    parse_markdown_text,
     product_replay_provenance,
 )
 from .product_projection_rebuild import (
@@ -33,6 +35,8 @@ __all__ = [
     "canonical_product_body_text",
     "canonical_product_source_text",
     "evaluate_product_store_readiness",
+    "parse_bounded_frontmatter",
+    "parse_markdown_text",
     "product_replay_provenance",
     "DurableProjectionWork",
     "ProjectionRelation",

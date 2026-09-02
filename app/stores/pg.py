@@ -941,6 +941,83 @@ def update_object_source_ref_with_connection(
             )
 
 
+def _assert_recovery_alias_cleanup_is_safe(
+    conn,
+    *,
+    vault_binding_id: str,
+    kind: str,
+    vault_uuid: str,
+    source_ref: str,
+    source_identity: str,
+) -> None:
+    """Refuse an ambiguous UUID-keyed cleanup before changing durable state.
+
+    Recovery may remove a stale projection keyed by a retained UUID only when
+    that row is proven to belong to the recovered source.  A canonical
+    ``objects.id`` owner for the same UUID is evidence that the key belongs to
+    another object, so leave both rows untouched and fail closed.  The row is
+    locked on the caller's recovery transaction so the proof and subsequent
+    cleanup observe one stable state.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_ref, payload,
+                   EXISTS (
+                       SELECT 1
+                       FROM objects
+                       WHERE vault_binding_id = %s AND id = %s
+                   ) AS canonical_owner_exists
+            FROM store_objects
+            WHERE vault_binding_id = %s
+              AND kind = %s
+              AND object_id = %s
+            FOR UPDATE
+            """,
+            (vault_binding_id, vault_uuid, vault_binding_id, kind, vault_uuid),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return
+    if isinstance(row, dict):
+        row_source_ref = row.get("source_ref")
+        row_payload = row.get("payload")
+        canonical_owner_exists = bool(row.get("canonical_owner_exists"))
+    else:
+        row_source_ref, row_payload, canonical_owner_exists = row
+
+    if canonical_owner_exists:
+        raise RuntimeError(
+            "ambiguous recovery UUID-keyed projection; a canonical object owns the supplied "
+            "vault UUID key, so recovery refuses to delete it"
+        )
+
+    if isinstance(row_payload, str):
+        try:
+            row_payload = json.loads(row_payload)
+        except json.JSONDecodeError:
+            row_payload = None
+    if not isinstance(row_payload, dict):
+        row_payload = {}
+    replay = row_payload.get("replay")
+    replay_source_identity = replay.get("source_identity") if isinstance(replay, dict) else None
+    frontmatter = row_payload.get("frontmatter")
+    frontmatter_uuid = frontmatter.get("uuid") if isinstance(frontmatter, dict) else None
+    row_vault_uuid = row_payload.get("vault_uuid")
+    source_evidence = (
+        row_source_ref == source_ref
+        or replay_source_identity == source_identity
+        or row_vault_uuid == vault_uuid
+        or frontmatter_uuid == vault_uuid
+    )
+    if not source_evidence:
+        raise RuntimeError(
+            "ambiguous recovery UUID-keyed projection; source and retained UUID provenance do "
+            "not identify it as the recovered projection"
+        )
+
+
 class PgObjectStore(ObjectStore):
     rebuild_source = "vault ingest (vault notes → app/ingest/vault_alpha.py → store_objects)"
     _OBJECTS_TABLE = "store_objects"
@@ -1009,6 +1086,15 @@ class PgObjectStore(ObjectStore):
                         vault_binding_id=self.vault_binding_id,
                     )
                 )
+                if resolved_object_id != object_id:
+                    _assert_recovery_alias_cleanup_is_safe(
+                        conn,
+                        vault_binding_id=self.vault_binding_id,
+                        kind=kind,
+                        vault_uuid=vault_uuid,
+                        source_ref=source_ref,
+                        source_identity=source_identity,
+                    )
             reconciled_payload = dict(payload)
             if resolved_object_id != object_id:
                 reconciled_payload["artifact_id"] = str(resolved_object_id)

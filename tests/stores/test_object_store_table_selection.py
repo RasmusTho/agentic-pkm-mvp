@@ -190,6 +190,7 @@ def test_source_backed_recovery_resolves_cross_key_identity_before_cleanup(monke
     class FakeCursor:
         def __init__(self):
             self.executions: list[tuple[str, object]] = []
+            self.last_statement = ""
 
         def __enter__(self):
             return self
@@ -198,9 +199,16 @@ def test_source_backed_recovery_resolves_cross_key_identity_before_cleanup(monke
             return False
 
         def execute(self, statement, params=()):  # type: ignore[no-untyped-def]
-            self.executions.append((str(statement), params))
+            self.last_statement = str(statement)
+            self.executions.append((self.last_statement, params))
 
         def fetchone(self):  # type: ignore[no-untyped-def]
+            if "FROM store_objects" in self.last_statement and "FOR UPDATE" in self.last_statement:
+                return {
+                    "source_ref": "/vault/Notes/old-name.md",
+                    "payload": {"vault_uuid": str(vault_uuid)},
+                    "canonical_owner_exists": False,
+                }
             return {"id": str(canonical_id), "match_count": 1}
 
     class FakeConnection:
@@ -233,12 +241,16 @@ def test_source_backed_recovery_resolves_cross_key_identity_before_cleanup(monke
     )
 
     assert result == str(canonical_id)
-    assert len(connection.cursor_instance.executions) == 3
+    assert len(connection.cursor_instance.executions) == 4
     resolver_sql, resolver_params = connection.cursor_instance.executions[0]
-    insert_sql, insert_params = connection.cursor_instance.executions[1]
-    delete_sql, delete_params = connection.cursor_instance.executions[2]
+    guard_sql, guard_params = connection.cursor_instance.executions[1]
+    insert_sql, insert_params = connection.cursor_instance.executions[2]
+    delete_sql, delete_params = connection.cursor_instance.executions[3]
     assert "FROM objects" in resolver_sql
     assert resolver_params == ("binding", str(vault_uuid))
+    assert "FROM store_objects" in guard_sql
+    assert "FOR UPDATE" in guard_sql
+    assert guard_params == ("binding", str(vault_uuid), "binding", "note", str(vault_uuid))
     assert "INSERT INTO store_objects" in insert_sql
     assert insert_params[1] == canonical_id
     assert '"id": "' + str(canonical_id) + '"' in str(insert_params[4])
@@ -246,6 +258,72 @@ def test_source_backed_recovery_resolves_cross_key_identity_before_cleanup(monke
     assert "object_id = %s" in delete_sql
     assert delete_params[2] == canonical_id
     assert delete_params[-1] == vault_uuid
+
+
+def test_source_backed_recovery_fails_closed_for_legitimate_cross_key_projection(monkeypatch):
+    """A canonical owner under the retained UUID must never be deleted."""
+    from app.stores import pg
+    import pytest
+
+    canonical_id = uuid4()
+    vault_uuid = uuid4()
+
+    class FakeCursor:
+        def __init__(self):
+            self.executions: list[tuple[str, object]] = []
+            self.last_statement = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params=()):  # type: ignore[no-untyped-def]
+            self.last_statement = str(statement)
+            self.executions.append((self.last_statement, params))
+
+        def fetchone(self):  # type: ignore[no-untyped-def]
+            if "FROM store_objects" in self.last_statement and "FOR UPDATE" in self.last_statement:
+                return {
+                    "source_ref": "/vault/Other/legitimate.md",
+                    "payload": {"vault_uuid": str(uuid4())},
+                    "canonical_owner_exists": True,
+                }
+            return {"id": str(canonical_id), "match_count": 1}
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return self.cursor_instance
+
+    connection = FakeConnection()
+    monkeypatch.setattr(pg, "_ensure_tables", lambda: None)
+    monkeypatch.setattr(pg, "_connect", lambda: connection)
+    store = pg.PgObjectStore.__new__(pg.PgObjectStore)
+    store.vault_binding_id = "binding"
+
+    with pytest.raises(RuntimeError, match="canonical object owns"):
+        store.put_and_reconcile_source_backed(
+            vault_uuid,
+            kind="note",
+            source_ref="/vault/Notes/recovered.md",
+            source_identity="Notes/recovered.md",
+            payload={"vault_uuid": str(vault_uuid)},
+            vault_uuid=str(vault_uuid),
+        )
+
+    assert len(connection.cursor_instance.executions) == 2
+    assert all("INSERT INTO store_objects" not in sql for sql, _ in connection.cursor_instance.executions)
+    assert all("DELETE FROM store_objects" not in sql for sql, _ in connection.cursor_instance.executions)
 
 def test_postgres_reads_ignore_stale_process_memory(monkeypatch):
     from app import objects as legacy

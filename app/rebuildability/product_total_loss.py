@@ -125,20 +125,38 @@ def canonical_product_body_text(body: str) -> str:
     return strip_ai_status_block(strip_ai_panels(body)).strip()
 
 
-def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
-    """Parse one note using the same bounded frontmatter shape as ingest."""
+def parse_bounded_frontmatter(
+    raw_text: str,
+) -> tuple[dict[str, Any], str, yaml.YAMLError | None]:
+    """Parse frontmatter using whole-line delimiters shared by all producers.
 
-    lines = raw_text.splitlines()
+    Splitting on the ``---`` token is unsafe because that token can occur in a
+    valid YAML scalar. The opening and closing delimiters are therefore
+    recognized only as complete lines; the body is returned without reparsing
+    it as Markdown frontmatter.
+    """
+    lines = raw_text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
-        return {}, raw_text.strip()
-    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
-    if end is None:
-        return {}, raw_text.strip()
+        return {}, raw_text, None
+    closing = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        None,
+    )
+    if closing is None:
+        return {}, raw_text, None
+    body = "".join(lines[closing + 1 :]).lstrip("\n")
     try:
-        frontmatter = yaml.safe_load("\n".join(lines[1:end])) or {}
-    except yaml.YAMLError:
-        frontmatter = {}
-    return (frontmatter if isinstance(frontmatter, dict) else {}), "\n".join(lines[end + 1 :]).strip()
+        frontmatter = yaml.safe_load("".join(lines[1:closing])) or {}
+    except yaml.YAMLError as exc:
+        return {}, body, exc
+    return (frontmatter if isinstance(frontmatter, dict) else {}), body, None
+
+
+def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
+    """Parse one note using the shared bounded frontmatter parser."""
+
+    frontmatter, body, _error = parse_bounded_frontmatter(raw_text)
+    return frontmatter, body.strip()
 
 
 def _canonical_object_ids_for_sources(vault_uuids: Iterable[str]) -> dict[str, str]:
@@ -364,5 +382,7 @@ __all__ = [
     "canonical_product_body_text",
     "canonical_product_source_text",
     "evaluate_product_store_readiness",
+    "parse_bounded_frontmatter",
+    "parse_markdown_text",
     "product_replay_provenance",
 ]

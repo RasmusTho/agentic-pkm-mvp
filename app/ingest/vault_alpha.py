@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Iterable, List, Sequence, Set, Tuple
 
 import click
-import yaml
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
@@ -36,7 +35,11 @@ from app.services.companion_note import (
 )
 from app.services.note_uuid import ensure_note_uuid
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
-from app.rebuildability import canonical_product_source_text, product_replay_provenance
+from app.rebuildability import (
+    canonical_product_source_text,
+    parse_bounded_frontmatter,
+    product_replay_provenance,
+)
 from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
@@ -437,21 +440,11 @@ def _load_frontmatter_with_reporting(raw_text: str, path: Path) -> tuple[dict, s
     """
     Safe frontmatter loader that logs malformed YAML and returns a flag.
     """
-    if not raw_text.startswith("---"):
-        return {}, raw_text, False
-    parts = raw_text.split("---", 2)
-    if len(parts) < 3:
-        return {}, raw_text, False
-    fm_block = parts[1]
-    body = parts[2]
-    try:
-        data = yaml.safe_load(fm_block) or {}
-        if not isinstance(data, dict):
-            data = {}
-        return data, body.lstrip("\n"), False
-    except yaml.YAMLError as exc:
-        click.echo(f"Warning: Malformed frontmatter in {path}: {exc}", err=True)
-        return {}, body.lstrip("\n"), True
+    data, body, error = parse_bounded_frontmatter(raw_text)
+    if error is not None:
+        click.echo(f"Warning: Malformed frontmatter in {path}: {error}", err=True)
+        return {}, body, True
+    return data, body, False
 
 
 
