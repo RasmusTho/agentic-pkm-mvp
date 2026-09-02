@@ -68,6 +68,48 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITER_INVENTORY_HELPER = REPO_ROOT / "scripts/instance_state_writer_inventory.py"
 
 
+def _compose_volume_source(volume: str | dict[str, object]) -> str:
+    if isinstance(volume, str):
+        return volume.split(":", 1)[0]
+    source = volume.get("source")
+    assert isinstance(source, str)
+    return source
+
+
+def _render_effective_instance_state_init_volumes(overlay_name: str) -> list[str | dict[str, object]]:
+    """Return the one-shot mount list after the deploy-selected overlay.
+
+    Compose adds service volumes from an overlay unless a later declaration
+    replaces the same target. This narrow renderer is sufficient for the two
+    vault overlays: it preserves base mounts and includes any overlay mounts
+    declared specifically for ``instance-state-init``.
+    """
+
+    base = _load_compose(REPO_ROOT / "docker-compose.yaml")
+    overlay = _load_compose(REPO_ROOT / overlay_name)
+    volumes = list(base["services"]["instance-state-init"]["volumes"])
+    init_overlay = overlay.get("services", {}).get("instance-state-init", {})
+    volumes.extend(init_overlay.get("volumes", []))
+    return volumes
+
+
+def test_instance_state_init_effective_compose_rejects_broad_and_selected_vault_mounts() -> None:
+    """#5249: deploy-selected overlays cannot widen the one-shot boundary."""
+
+    for overlay_name, selected_source in (
+        ("docker-compose.full-host-vault.yml", "DEPLOY_VAULT_CONTAINER_ROOT"),
+        ("docker-compose.legacy-vault.yml", "VAULT_HOST_ROOT"),
+    ):
+        sources = {
+            _compose_volume_source(volume)
+            for volume in _render_effective_instance_state_init_volumes(overlay_name)
+        }
+
+        assert "/Users" not in sources
+        assert "/Volumes" not in sources
+        assert not any(selected_source in source for source in sources)
+
+
 def _legacy_owner_inventory_payload(
     owners: list[dict[str, str]],
     *,

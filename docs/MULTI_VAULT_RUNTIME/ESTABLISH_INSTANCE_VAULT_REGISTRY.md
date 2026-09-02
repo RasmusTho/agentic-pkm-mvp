@@ -281,7 +281,8 @@ must not expose or re-resolve the raw path.
 into `instance-state-init` so its existing `root.is_dir()` check can succeed. That would widen the
 filesystem exposure of the deployment-authority one-shot and make mount topology, rather than the
 host producer's already-fenced proof, the authority for this check. It is rejected for this repair;
-the one-shot's intentionally small mount set remains unchanged.
+the one-shot's intentionally small mount set excludes `/Users`, `/Volumes`,
+and every selected-vault mount, including through deploy-selected overlays.
 
 **Current-state boundary:** the bounded receipt handoff repair shipped in PR #5244 for #5235.
 The host producer now emits the bound proof, and the deployment consumer validates that proof
