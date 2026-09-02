@@ -1027,6 +1027,14 @@ class PgObjectStore(ObjectStore):
                 payload=reconciled_payload,
                 vault_binding_id=self.vault_binding_id,
             )
+            cleanup_predicates = [
+                "source_ref = %s",
+                "payload -> 'replay' ->> 'source_identity' = %s",
+            ]
+            cleanup_params: list[object] = [source_ref, source_identity]
+            if vault_uuid is not None:
+                cleanup_predicates.append("object_id = %s")
+                cleanup_params.append(UUID(vault_uuid))
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -1034,17 +1042,14 @@ class PgObjectStore(ObjectStore):
                     WHERE vault_binding_id = %s
                       AND kind = %s
                       AND object_id <> %s
-                      AND (
-                          source_ref = %s
-                          OR payload -> 'replay' ->> 'source_identity' = %s
-                      )
-                    """,
+                      AND ("""
+                    + " OR ".join(cleanup_predicates)
+                    + ")",
                     (
                         self.vault_binding_id,
                         kind,
                         resolved_object_id,
-                        source_ref,
-                        source_identity,
+                        *cleanup_params,
                     ),
                 )
         return str(resolved_object_id)

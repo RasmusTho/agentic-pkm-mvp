@@ -243,7 +243,9 @@ def test_source_backed_recovery_resolves_cross_key_identity_before_cleanup(monke
     assert insert_params[1] == canonical_id
     assert '"id": "' + str(canonical_id) + '"' in str(insert_params[4])
     assert "DELETE FROM store_objects" in delete_sql
+    assert "object_id = %s" in delete_sql
     assert delete_params[2] == canonical_id
+    assert delete_params[-1] == vault_uuid
 
 def test_postgres_reads_ignore_stale_process_memory(monkeypatch):
     from app import objects as legacy
