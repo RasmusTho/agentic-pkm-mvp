@@ -146,6 +146,14 @@ def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
+def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
+    selection = select_tests([".github/workflows/ci-smoke.yaml"])
+
+    assert selection.full_suite is True
+    assert selection.reason == "shared CI/test/runtime configuration changed"
+    assert selection.unowned_paths == ()
+
+
 def test_governance_docs_change_selects_governance_tests() -> None:
     selection = select_tests(["docs/development/TEST_STRATEGY_HOT_PATH.md"])
 

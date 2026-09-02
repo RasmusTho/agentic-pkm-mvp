@@ -96,7 +96,11 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "Select subsystem-scoped pytest targets" in job
     assert "scripts/select_pr_tests.py" in job
     assert "steps.select-tests.outputs.pytest_args" in job
-    assert 'pytest ${{ steps.select-tests.outputs.pytest_args }} | tee pytest-not-pg.log' in job
+    assert "Run shared not-pg unit tests in process shards" in job
+    assert "xargs -r -n 1 -P 4 bash -c" in job
+    assert "tests/invariants/test_vault_multiwriter.py" in job
+    assert "tests/ops tests/invariants/test_vault_multiwriter.py" in job
+    assert "Run scoped not-pg unit tests" in job
     assert "mypy app" in job
     assert "tests/eval/test_classification_golden.py" in job
 
@@ -106,7 +110,7 @@ def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:
 
     install_start = job.index("- name: Install Linux ACL tools")
     install_end = job.index("- name: Install dependencies", install_start)
-    selected_test_run = job.index("- name: Run not-pg unit tests")
+    selected_test_run = job.index("- name: Run shared not-pg unit tests in process shards")
     install_step = job[install_start:install_end]
 
     assert "runs-on: ubuntu-latest" in job
