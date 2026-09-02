@@ -266,6 +266,24 @@ def test_vault_sync_replay_canonicalizes_extracted_thematic_body(tmp_path: Path)
     )
 
 
+def test_readiness_preserves_watcher_extracted_body_semantics(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root, "---\nA thematic section\n---\n\nMeaning-bearing suffix.")
+    body = "---\nA thematic section\n---\n\nMeaning-bearing suffix."
+    row = {
+        "kind": "note",
+        "payload": {
+            "content": body,
+            "replay": product_replay_provenance(
+                source_identity=source_identity,
+                source_text=body,
+            ),
+        },
+    }
+
+    assert evaluate_product_store_readiness(vault_root, [row]).ready is True
+
+
 def test_selected_postgres_health_refuses_unverified_product_projection(
     tmp_path: Path, monkeypatch
 ) -> None:

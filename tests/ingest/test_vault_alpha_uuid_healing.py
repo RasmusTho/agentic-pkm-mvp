@@ -129,3 +129,49 @@ def test_source_backed_uuid_repair_uses_named_guard_action(
     note.write_text("Body\n", encoding="utf-8")
     with pytest.raises(WritesBlockedError):
         note_uuid.ensure_note_uuid(note, vault_root=tmp_path, preferred_uuid="ordinary-uuid")
+
+
+def test_source_backed_rebuild_forces_projection_reconciliation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(vault_alpha, "ensure_vault_layout", lambda _root: None)
+    monkeypatch.setattr(
+        vault_alpha,
+        "resolve_ingest_config",
+        lambda _root: SimpleNamespace(include_folders=["Notes"], ignore_glob=[]),
+    )
+    monkeypatch.setattr(vault_alpha, "_select_candidates", lambda *_args, **_kwargs: ([], ["Notes"]))
+
+    def fake_ingest_candidates(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return vault_alpha.VaultAlphaSummary(scanned=0, ingested=0, included_folders=[])
+
+    monkeypatch.setattr(vault_alpha, "_ingest_candidates", fake_ingest_candidates)
+
+    vault_alpha.run_vault_alpha_ingest(tmp_path, source_backed_rebuild=True)
+
+    assert captured["force"] is True
+
+
+def test_source_backed_locked_retry_forwards_recovery_admission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(vault_alpha, "ensure_vault_layout", lambda _root: None)
+    monkeypatch.setattr(vault_alpha, "_read_locked_paths", lambda: ["Notes/retry.md"])
+
+    def fake_paths(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return vault_alpha.VaultAlphaSummary(
+            scanned=1, ingested=1, included_folders=["Notes"], processed_notes=["Notes/retry.md"]
+        )
+
+    monkeypatch.setattr(vault_alpha, "run_vault_alpha_ingest_paths", fake_paths)
+    monkeypatch.setattr(vault_alpha, "_write_locked_paths", lambda _paths: None)
+
+    vault_alpha.run_vault_alpha_ingest_locked_only(tmp_path, source_backed_rebuild=True)
+
+    assert captured["source_backed_rebuild"] is True
+    assert captured["force"] is True

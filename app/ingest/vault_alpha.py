@@ -488,7 +488,14 @@ def _store_object_count(store: ObjectStore) -> int:
     return 0
 
 
-def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str | None = None) -> str:
+def _ingest_single(
+    path: Path,
+    *,
+    vault_root: Path,
+    trace_id: str,
+    raw_text: str | None = None,
+    write_companion_record: bool = True,
+) -> str:
     rel_path = path.relative_to(vault_root)
     if raw_text is None:
         raw_text = _decode_note_text(path.read_bytes())
@@ -556,7 +563,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         raw_body=stripped_text,
         cooldown_seconds=cooldown,
     )
-    if eligibility.eligible:
+    if eligibility.eligible and write_companion_record:
         try:
             write_companion(
                 vault_root,
@@ -579,7 +586,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
                 )
             else:
                 raise
-    else:
+    elif not eligibility.eligible:
         click.echo(
             f"Companion deferred for {rel_path}: {eligibility.reason}"
             + (f" (retry after {eligibility.next_check_after})" if eligibility.next_check_after else ""),
@@ -733,14 +740,21 @@ def run_vault_alpha_ingest(
         vault_root,
         candidates=candidates,
         included_folders=included_folders,
-        force=force,
+        # Recovery must reconcile every retained source even when an older,
+        # corrupt projection still has a matching ingest fingerprint.
+        force=force or source_backed_rebuild,
         resume_from=resume_from,
         uuid_write_action=(SOURCE_BACKED_REBUILD_ACTION if source_backed_rebuild else "ensure uuid"),
     )
 
 
 def run_vault_alpha_ingest_paths(
-    vault_root: Path, paths: Sequence[Path], *, force: bool = False, resume_from: Iterable[str] | None = None
+    vault_root: Path,
+    paths: Sequence[Path],
+    *,
+    force: bool = False,
+    resume_from: Iterable[str] | None = None,
+    source_backed_rebuild: bool = False,
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
     ensure_vault_layout(vault_root)
@@ -782,12 +796,15 @@ def run_vault_alpha_ingest_paths(
         vault_root,
         candidates=candidates,
         included_folders=included_folders,
-        force=force,
+        force=force or source_backed_rebuild,
         resume_from=resume_from,
+        uuid_write_action=(SOURCE_BACKED_REBUILD_ACTION if source_backed_rebuild else "ensure uuid"),
     )
 
 
-def run_vault_alpha_ingest_locked_only(vault_root: Path, *, force: bool = False) -> VaultAlphaSummary:
+def run_vault_alpha_ingest_locked_only(
+    vault_root: Path, *, force: bool = False, source_backed_rebuild: bool = False
+) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
     ensure_vault_layout(vault_root)
     locked_paths = _read_locked_paths()
@@ -796,8 +813,9 @@ def run_vault_alpha_ingest_locked_only(vault_root: Path, *, force: bool = False)
     summary = run_vault_alpha_ingest_paths(
         vault_root,
         [Path(path) for path in locked_paths],
-        force=force,
+        force=force or source_backed_rebuild,
         resume_from=None,
+        source_backed_rebuild=source_backed_rebuild,
     )
     remaining = [path for path in locked_paths if path not in summary.processed_notes]
     _write_locked_paths(remaining)
@@ -952,7 +970,13 @@ def _ingest_candidates(
 
             trace_id = with_trace_id(None)
             try:
-                _ingest_single(path, vault_root=vault_root, trace_id=trace_id, raw_text=raw_text)
+                _ingest_single(
+                    path,
+                    vault_root=vault_root,
+                    trace_id=trace_id,
+                    raw_text=raw_text,
+                    write_companion_record=uuid_write_action != SOURCE_BACKED_REBUILD_ACTION,
+                )
             except TypeError:
                 _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1

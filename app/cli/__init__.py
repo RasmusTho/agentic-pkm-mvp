@@ -809,7 +809,11 @@ def vault_alpha_ingest(
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
     if locked_only:
-        summary = run_vault_alpha_ingest_locked_only(resolved, force=force)
+        summary = run_vault_alpha_ingest_locked_only(
+            resolved,
+            force=force,
+            source_backed_rebuild=source_backed_rebuild,
+        )
     else:
         summary = run_vault_alpha_ingest(
             resolved,

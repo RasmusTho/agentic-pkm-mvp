@@ -251,10 +251,17 @@ def evaluate_product_store_readiness(
     refused: list[str] = list(corrupt)
     for source in sources:
         observed = by_identity.get(source.replay.source_identity, [])
+        observed_payload = observed[0][1] if len(observed) == 1 else None
+        observed_text = (
+            canonical_product_body_text(str(observed_payload["content"]))
+            if isinstance(observed_payload, dict)
+            and isinstance(observed_payload.get("content"), str)
+            else _canonical_source_text(_payload_text(observed_payload or {}))
+        )
         if (
             len(observed) != 1
             or observed[0][0] != source.replay
-            or _canonical_source_text(_payload_text(observed[0][1])) != source.text
+            or observed_text != source.text
         ):
             refused.append(source.replay.source_identity)
     if refused:
