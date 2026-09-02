@@ -13,9 +13,17 @@ from app.rebuildability import (
     evaluate_product_store_readiness,
     product_replay_provenance,
 )
+from app.write_guard import WriteGuard, WritesBlockedError
 
 
 def _write_source(vault_root: Path, text: str = "Meaning-bearing Product note.") -> str:
+    layout = vault_root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir(parents=True, exist_ok=True)
+    layout.write_text(
+        "---\nsystem_folder: ⚙️ System\ninbox_folder: 📥 Inbox\ndesk_folder: 🛠️ Workbench\n"
+        "include_folders:\n  - Notes\n---\n\nProduct total-loss fixture layout.\n",
+        encoding="utf-8",
+    )
     path = vault_root / "Notes" / "product.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\ntitle: Product\n---\n\n{text}\n", encoding="utf-8")
@@ -110,6 +118,64 @@ def test_missing_replay_tuple_refuses_without_fallback(tmp_path: Path) -> None:
         assert "meaning-bearing" in str(exc)
     else:  # pragma: no cover - defensive assertion for the typed refusal contract
         raise AssertionError("empty source must not receive a replay tuple")
+
+
+def test_product_readiness_ignores_ingest_excluded_files(tmp_path: Path) -> None:
+    """The retained inventory is the same candidate set as vault-alpha ingest."""
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    (vault_root / "⚙️ System" / "companions").mkdir(parents=True)
+    (vault_root / "⚙️ System" / "companions" / "note.meta.md").write_text(
+        "companion", encoding="utf-8"
+    )
+    (vault_root / "⚙️ System" / "drafts").mkdir(parents=True)
+    (vault_root / "⚙️ System" / "drafts" / "candidate.md").write_text(
+        "draft", encoding="utf-8"
+    )
+    (vault_root / "Test").mkdir()
+    (vault_root / "Test" / "Alpha-HumanFlows.md").write_text("test note", encoding="utf-8")
+
+    result = evaluate_product_store_readiness(
+        vault_root,
+        [_verified_row(source_identity, "Meaning-bearing Product note.")],
+    )
+
+    assert result.ready is True
+    assert result.source_count == 1
+
+
+def test_source_backed_rebuild_is_reachable_while_unready() -> None:
+    """Only the named source-backed reconstruction admission bypasses the guard."""
+    from app.write_guard import SOURCE_BACKED_REBUILD_ACTION
+
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "unhealthy", "reason": "unready"})
+
+    guard.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
+    try:
+        guard.assert_writes_allowed("ordinary.unrelated_write")
+    except WritesBlockedError:
+        pass
+    else:  # pragma: no cover - guard regression diagnostic
+        raise AssertionError("ordinary write must remain guarded while Product is unready")
+
+
+def test_canonical_ingest_producers_stamp_replay_tuple(tmp_path: Path) -> None:
+    """The three bounded canonical producer payload builders share one valid tuple shape."""
+    from app.ingest.vault_alpha import product_replay_for_vault_note as alpha_replay
+    from app.ingest.vault_root import product_replay_for_vault_note
+    from app.services.vault_sync import canonical_note_replay
+
+    vault_root = tmp_path / "vault"
+    note = vault_root / "Notes" / "product.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("Meaning-bearing Product note.", encoding="utf-8")
+    expected = product_replay_provenance(
+        source_identity="Notes/product.md", source_text="Meaning-bearing Product note."
+    )
+
+    assert alpha_replay(note, vault_root=vault_root) == expected
+    assert product_replay_for_vault_note(note, vault_root=vault_root) == expected
+    assert canonical_note_replay(note, vault_root=vault_root) == expected
 
 
 def test_selected_postgres_health_refuses_unverified_product_projection(

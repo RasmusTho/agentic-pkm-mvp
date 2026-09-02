@@ -17,7 +17,6 @@ import yaml
 
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
-from app.vault.manager import iter_vault_markdown_files
 
 PRODUCT_REPLAY_RECIPE_VERSION = "product-object-replay-v1"
 ProductReadinessState = Literal["ready", "empty", "refused", "not_selected"]
@@ -124,10 +123,19 @@ def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
 
 
 def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str]]:
+    # Imported lazily because vault-alpha stamps this module's replay tuple.
+    # The selected candidates are its production source admission policy.
+    from app.ingest.vault_alpha import select_source_backed_rebuild_candidates
+
+    root = vault_root.expanduser().resolve()
+    try:
+        candidates = select_source_backed_rebuild_candidates(root)
+    except Exception as exc:
+        return [], [f"retained-source-selection:{type(exc).__name__}"]
+
     sources: list[_RetainedSource] = []
     failures: list[str] = []
-    root = vault_root.expanduser().resolve()
-    for path in iter_vault_markdown_files(root):
+    for path in candidates:
         try:
             relative = path.resolve().relative_to(root).as_posix()
             raw_text = path.read_text(encoding="utf-8")
