@@ -35,7 +35,8 @@ def _write_layout(vault_root: Path, system_folder: str = "⚙️ System") -> Non
     layout_path.parent.mkdir(parents=True, exist_ok=True)
     layout_path.write_text(
         f"---\nversion: '1'\nsystem_folder: '{system_folder}'\n"
-        "inbox_folder: '📥 Inbox'\ndesk_folder: '🛠️ Workbench'\n---\n",
+        "inbox_folder: '📥 Inbox'\ndesk_folder: '🛠️ Workbench'\n"
+        "include_folders:\n  - '.'\n---\n",
         encoding="utf-8",
     )
 

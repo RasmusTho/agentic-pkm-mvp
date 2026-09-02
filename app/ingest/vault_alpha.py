@@ -41,6 +41,7 @@ from app.stores import get_object_store
 from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
 from app.vault.manager import iter_vault_markdown_files
+from app.write_guard import SOURCE_BACKED_REBUILD_ACTION
 
 #: Sentinel written to created_by_instance when runtime identity is unavailable.
 _UNKNOWN_INSTANCE = "unknown"
@@ -712,6 +713,7 @@ def run_vault_alpha_ingest(
     include_test_note: bool = False,
     force: bool = False,
     resume_from: Iterable[str] | None = None,
+    source_backed_rebuild: bool = False,
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
     ensure_vault_layout(vault_root)
@@ -729,6 +731,7 @@ def run_vault_alpha_ingest(
         included_folders=included_folders,
         force=force,
         resume_from=resume_from,
+        uuid_write_action=(SOURCE_BACKED_REBUILD_ACTION if source_backed_rebuild else "ensure uuid"),
     )
 
 
@@ -737,7 +740,7 @@ def run_vault_alpha_ingest_paths(
 ) -> VaultAlphaSummary:
     vault_root = vault_root.expanduser().resolve()
     ensure_vault_layout(vault_root)
-    candidates: List[Path] = []
+    requested: List[Path] = []
     included_folders: List[str] = []
 
     for raw in paths:
@@ -749,11 +752,27 @@ def run_vault_alpha_ingest_paths(
             rel_path = resolved.relative_to(vault_root)
         except ValueError:
             raise click.BadParameter(f"Path {resolved} is outside vault root {vault_root}")
-        candidates.append(resolved)
+        requested.append(resolved)
         if rel_path.parts:
             top = rel_path.parts[0]
             if top not in included_folders:
                 included_folders.append(top)
+
+    # Targeted watcher ingestion must obey the same retained-source admission
+    # policy as the full vault-alpha scan. Otherwise an excluded edit can still
+    # materialize a replay-stamped Product row that readiness will refuse.
+    ingest_config = resolve_ingest_config(vault_root)
+    eligible, _ = _select_candidates(
+        vault_root,
+        include_folders=ingest_config.include_folders,
+        ignore_glob=ingest_config.ignore_glob,
+        include_test_note=False,
+        max_notes=0,
+    )
+    eligible_paths = {path.expanduser().resolve() for path in eligible}
+    # Preserve missing requested paths so the existing per-path error report
+    # remains truthful; admission applies to materialized source files.
+    candidates = [path for path in requested if not path.exists() or path in eligible_paths]
 
     return _ingest_candidates(
         vault_root,
@@ -789,6 +808,7 @@ def _ingest_candidates(
     force: bool,
     resume_from: Iterable[str] | None,
     record_locked: bool = True,
+    uuid_write_action: str = "ensure uuid",
 ) -> VaultAlphaSummary:
     store = get_object_store()
 
@@ -872,7 +892,12 @@ def _ingest_candidates(
                 note_uuid = _derive_note_uuid(frontmatter_uuid, companion_uuid or fingerprint_uuid, rel_path)
             if needs_uuid_write and note_uuid:
                 try:
-                    ensure_note_uuid(path, vault_root=vault_root, preferred_uuid=note_uuid)
+                    ensure_note_uuid(
+                        path,
+                        vault_root=vault_root,
+                        preferred_uuid=note_uuid,
+                        write_action=uuid_write_action,
+                    )
                 except OSError as exc:
                     if _is_locked_error(exc) or _is_permission_denied_error(exc):
                         click.echo(
