@@ -45,7 +45,7 @@ from app.dispatcher.sync_github import (
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
-    "export-signboard", "signboard-validate", "backup", "mode",
+    "cleanup-guard", "export-signboard", "signboard-validate", "backup", "mode",
 ])
 
 
@@ -58,6 +58,7 @@ def _compact_task(task: TaskRecord) -> dict[str, Any]:
     return {
         "task_id": task.task_id,
         "issue_number": task.issue_number,
+        "repo": task.repo,
         "title": task.title,
         "status": task.status,
         "priority": task.priority,
@@ -199,6 +200,71 @@ def _cmd_next(args: argparse.Namespace, store: SqliteStore) -> int:
 
 
 def _cmd_show(args: argparse.Namespace, store: SqliteStore) -> int:
+    if args.with_events:
+        try:
+            with store._connect() as conn:
+                conn.execute("BEGIN")
+                task_row = conn.execute(
+                    "SELECT * FROM dispatcher_tasks WHERE task_id = ?", (args.task_id,)
+                ).fetchone()
+                if task_row is None:
+                    return _emit_error(f"Task {args.task_id} not found", args.json)
+                event_rows = conn.execute(
+                    "SELECT * FROM dispatcher_events WHERE task_id = ? "
+                    "ORDER BY timestamp, event_id",
+                    (args.task_id,),
+                ).fetchall()
+                lease_row = None
+                if task_row["lease_id"] is not None:
+                    lease_row = conn.execute(
+                        "SELECT * FROM dispatcher_leases WHERE lease_id = ?",
+                        (task_row["lease_id"],),
+                    ).fetchone()
+                task_payload = {
+                    "task_id": task_row["task_id"],
+                    "issue_number": task_row["issue_number"],
+                    "repo": task_row["repo"],
+                    "title": task_row["title"],
+                    "status": task_row["status"],
+                    "priority": task_row["priority"],
+                    "claimed_by": task_row["claimed_by"],
+                    "lease_id": task_row["lease_id"],
+                    "lease_expires_at": task_row["lease_expires_at"],
+                    "linked_pr": task_row["linked_pr"],
+                    "blocked_reason": task_row["blocked_reason"],
+                    "updated_at": task_row["updated_at"],
+                }
+                events = []
+                for row in event_rows:
+                    payload = json.loads(row["payload"]) if row["payload"] is not None else None
+                    if payload is not None and not isinstance(payload, dict):
+                        raise ValueError("dispatcher event payload is malformed")
+                    events.append(
+                        {
+                            "event_id": row["event_id"],
+                            "timestamp": row["timestamp"],
+                            "task_id": row["task_id"],
+                            "event_type": row["event_type"],
+                            "actor": row["actor"],
+                            "lease_id": row["lease_id"],
+                            "payload": payload,
+                        }
+                    )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            return _emit_error(str(exc), args.json)
+        lease = None
+        if lease_row is not None:
+            lease = {
+                "lease_id": lease_row["lease_id"],
+                "resource": lease_row["resource"],
+                "holder": lease_row["holder"],
+                "expires_at": lease_row["expires_at"],
+                "heartbeat_at": lease_row["heartbeat_at"],
+                "released_at": lease_row["released_at"],
+                "release_reason": lease_row["release_reason"],
+            }
+        _emit({"ok": True, "task": task_payload, "lease": lease, "events": events}, args.json)
+        return 0
     task = store.get_task(args.task_id)
     if task is None:
         return _emit_error(f"Task {args.task_id} not found", args.json)
@@ -295,6 +361,7 @@ def _cmd_complete(args: argparse.Namespace, store: SqliteStore) -> int:
             store,
             task_id=args.task_id,
             actor=args.agent,
+            expected_lease_id=args.lease_id,
         )
         _emit({"ok": True, "task": _compact_task(task)}, args.json)
         return 0
@@ -302,10 +369,46 @@ def _cmd_complete(args: argparse.Namespace, store: SqliteStore) -> int:
         return _emit_error(str(exc), args.json)
 
 
+def _cmd_cleanup_guard(args: argparse.Namespace, store: SqliteStore) -> int:
+    try:
+        if args.action == "acquire":
+            guard = lease_module.acquire_cleanup_guard(
+                store,
+                task_id=args.task_id,
+                owner=args.owner,
+                ttl_seconds=args.ttl_seconds,
+            )
+            _emit({"ok": True, "guard": guard}, args.json)
+        elif args.action == "refresh":
+            if args.token is None:
+                return _emit_error("cleanup-guard refresh requires --token", args.json)
+            guard = lease_module.refresh_cleanup_guard(
+                store,
+                task_id=args.task_id,
+                owner=args.owner,
+                token=args.token,
+                ttl_seconds=args.ttl_seconds,
+            )
+            _emit({"ok": True, "guard": guard}, args.json)
+        else:
+            if args.token is None:
+                return _emit_error("cleanup-guard release requires --token", args.json)
+            lease_module.release_cleanup_guard(
+                store,
+                task_id=args.task_id,
+                owner=args.owner,
+                token=args.token,
+            )
+            _emit({"ok": True, "released": True, "task_id": args.task_id}, args.json)
+        return 0
+    except (OSError, ValueError) as exc:
+        return _emit_error(str(exc), args.json)
+
+
 def _cmd_events(args: argparse.Namespace, store: SqliteStore) -> int:
-    events = store.list_events()
-    tail = args.tail
-    events = events[-tail:]
+    events = store.list_events(task_id=args.task_id)
+    if not args.all:
+        events = events[-args.tail:]
     _emit({
         "ok": True,
         "count": len(events),
@@ -1105,6 +1208,7 @@ _COMMAND_MAP = {
     "move": _cmd_move,
     "block": _cmd_block,
     "complete": _cmd_complete,
+    "cleanup-guard": _cmd_cleanup_guard,
     "events": _cmd_events,
     "link-pr": _cmd_link_pr,
     "status": _cmd_status,
@@ -1148,6 +1252,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("show", help="Show task details")
     p.add_argument("task_id")
+    p.add_argument("--events", dest="with_events", action="store_true", help="Read task and complete event history in one snapshot")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("claim", help="Claim a task")
@@ -1190,10 +1295,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("complete", help="Complete a task (terminal)")
     p.add_argument("task_id")
     p.add_argument("--agent", required=True)
+    p.add_argument("--lease-id", default=None)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("cleanup-guard", help="Reserve a task resource during governed cleanup")
+    p.add_argument("action", choices=("acquire", "refresh", "release"))
+    p.add_argument("--task-id", required=True)
+    p.add_argument("--owner", required=True)
+    p.add_argument("--token", default=None)
+    p.add_argument("--ttl-seconds", type=int, default=900)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("events", help="Show recent events")
     p.add_argument("--tail", type=int, default=20)
+    p.add_argument("--task-id", default=None)
+    p.add_argument("--all", action="store_true", help="Show the complete selected event history")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("link-pr", help="Link a PR to a task")
@@ -1342,10 +1458,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1
 
-    # Guard: commands requiring a DB must exit clearly if DB doesn't exist
+    paths = load_paths()
+
+    # Cleanup guard acquisition is the one coordination command that may run
+    # without an initialized DB. It persists a sidecar reservation that claim
+    # honors if the dispatcher is initialized while cleanup is in flight.
+    allow_missing_cleanup_guard = (
+        args.command == "cleanup-guard"
+        and getattr(args, "action", None) == "acquire"
+    )
     if args.command in REQUIRED_COMMANDS and args.command != "init":
-        paths = load_paths()
-        if not paths.db_path.exists():
+        if not paths.db_path.exists() and not allow_missing_cleanup_guard:
             msg = "dispatcher not initialised — run: make dispatcher-init"
             return _emit_payload(
                 {
