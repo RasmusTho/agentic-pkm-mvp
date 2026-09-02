@@ -4,8 +4,9 @@ import uuid
 from pathlib import Path
 
 from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
+from app.rebuildability.product_total_loss import parse_bounded_frontmatter
 from app.write_guard import DEFAULT_WRITE_GUARD
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter
 
 
 def _new_note_uuid() -> str:
@@ -32,7 +33,7 @@ def ensure_note_uuid(
     root = Path(vault_root).expanduser().resolve()
     resolved.relative_to(root)
     text, expected_version = read_note_text_with_version(resolved)
-    frontmatter, body = load_frontmatter(text)
+    frontmatter, body, _ = parse_bounded_frontmatter(text)
     existing = str(frontmatter.get("uuid") or "").strip()
     if existing:
         return existing

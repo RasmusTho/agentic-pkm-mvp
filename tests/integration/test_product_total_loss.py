@@ -40,6 +40,11 @@ def _verified_row(source_identity: str, text: str) -> dict[str, object]:
         "kind": "note",
         "source_ref": source_identity,
         "payload": {
+            "title": (
+                Path(source_identity).stem.replace("-", " ").title()
+            ),
+            "review_state": "provisional",
+            "episode_ref": "unbound",
             "text": text,
             "replay": product_replay_provenance(
                 source_identity=source_identity,
@@ -47,6 +52,26 @@ def _verified_row(source_identity: str, text: str) -> dict[str, object]:
             ),
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("title", "Wrong title"), ("review_state", "approved"), ("episode_ref", ["episode-1"])],
+)
+def test_product_readiness_rejects_meaningful_metadata_drift(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    row = _verified_row(source_identity, "Meaning-bearing Product note.")
+    payload = row["payload"]
+    assert isinstance(payload, dict)
+    payload[field] = value
+
+    result = evaluate_product_store_readiness(vault_root, [row])
+
+    assert result.ready is False
+    assert source_identity in result.refused_source_identities
 
 
 def test_empty_or_corrupt_store_is_unready_until_verified_rebuild(tmp_path: Path) -> None:
@@ -147,6 +172,9 @@ def test_product_readiness_accepts_admitted_empty_source_projection(tmp_path: Pa
         "kind": "note",
         "source_ref": source_identity,
         "payload": {
+            "title": "Product",
+            "review_state": "provisional",
+            "episode_ref": "unbound",
             "text": "",
             "replay": product_replay_provenance(
                 source_identity=source_identity,
@@ -440,6 +468,9 @@ def test_readiness_preserves_watcher_extracted_body_semantics(tmp_path: Path) ->
         "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
         "payload": {
+            "title": "Product",
+            "review_state": "provisional",
+            "episode_ref": "unbound",
             "content": body,
             "replay": product_replay_provenance(
                 source_identity=source_identity,
@@ -459,6 +490,9 @@ def test_readiness_preserves_vault_alpha_extracted_body_semantics(tmp_path: Path
         "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
         "payload": {
+            "title": "Product",
+            "review_state": "provisional",
+            "episode_ref": "unbound",
             "text": body,
             "replay_text_kind": "extracted_body",
             "replay": product_replay_provenance(

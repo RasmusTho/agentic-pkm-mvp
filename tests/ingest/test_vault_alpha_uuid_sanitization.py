@@ -64,6 +64,19 @@ def test_invalid_frontmatter_uuid_is_stable_for_recovery(
     assert dummy_store.put_calls == [uuid.UUID(first_uuid), uuid.UUID(second_uuid)]
 
 
+@pytest.mark.parametrize("declared", ["{11111111-1111-4111-8111-111111111111}", "11111111-1111-4111-8111-111111111111".upper()])
+def test_declared_uuid_identity_is_canonicalized(declared: str, tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    note.write_text(f"---\nuuid: {declared}\n---\nBody\n", encoding="utf-8")
+
+    identity = vault_alpha.resolve_vault_note_identity(
+        note, vault_root=tmp_path, frontmatter={"uuid": declared}, body="Body\n"
+    )
+
+    assert identity.frontmatter_uuid == "11111111-1111-4111-8111-111111111111"
+    assert identity.note_uuid == identity.frontmatter_uuid
+
+
 def test_alpha_and_product_replay_share_whole_line_frontmatter_boundaries() -> None:
     raw_text = (
         '---\n'

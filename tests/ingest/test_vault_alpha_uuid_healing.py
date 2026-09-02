@@ -47,6 +47,22 @@ def test_ingest_writes_uuid_for_notes_without_one(tmp_path: Path, monkeypatch: p
     uuid.UUID(note_uuid)
 
 
+def test_uuid_repair_preserves_inline_frontmatter_scalars(tmp_path: Path) -> None:
+    note = tmp_path / "inline.md"
+    note.write_text(
+        '---\ntitle: "Inline --- scalar"\n---\nBody\n', encoding="utf-8"
+    )
+
+    note_uuid.ensure_note_uuid(note, vault_root=tmp_path, preferred_uuid="11111111-1111-4111-8111-111111111111")
+
+    repaired = note.read_text(encoding="utf-8")
+    assert 'title: Inline --- scalar' in repaired or 'title: "Inline --- scalar"' in repaired
+    from app.rebuildability import parse_markdown_text
+
+    frontmatter, _ = parse_markdown_text(repaired)
+    assert frontmatter["uuid"] == "11111111-1111-4111-8111-111111111111"
+
+
 def test_targeted_ingest_uses_layout_admission_before_materializing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

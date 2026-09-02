@@ -339,10 +339,10 @@ def _sanitize_uuid(raw: str) -> tuple[str, bool]:
     if not raw:
         return "", False
     try:
-        uuid.UUID(raw)
+        canonical = str(uuid.UUID(raw))
     except Exception:
         return "", True
-    return raw, False
+    return canonical, False
 
 
 def _derive_note_uuid(

@@ -17,6 +17,7 @@ import yaml
 
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.objects import (
     retained_vault_uuid_to_canonical_id_map,
@@ -53,6 +54,8 @@ class ProductReplayTuple:
 class _RetainedSource:
     replay: ProductReplayTuple
     title: str
+    review_state: str
+    episode_ref: str | list[str]
     text: str
     vault_uuid: str
     object_id: str
@@ -177,6 +180,8 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
     # Imported lazily because vault-alpha stamps this module's replay tuple.
     # The selected candidates are its production source admission policy.
     from app.ingest.vault_alpha import (
+        _derive_title,
+        _frontmatter_title,
         resolve_vault_note_identity,
         select_source_backed_rebuild_candidates,
     )
@@ -210,7 +215,9 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
         sources.append(
             _RetainedSource(
                 replay=replay,
-                title=path.stem,
+                title=_frontmatter_title(frontmatter) or _derive_title(body, path),
+                review_state=str(frontmatter.get("review_state") or "provisional"),
+                episode_ref=episode_ref_from_frontmatter(frontmatter),
                 text=text,
                 vault_uuid=note_identity.note_uuid,
                 object_id="",
@@ -236,6 +243,8 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
             _RetainedSource(
                 replay=source.replay,
                 title=source.title,
+                review_state=source.review_state,
+                episode_ref=source.episode_ref,
                 text=source.text,
                 vault_uuid=source.vault_uuid,
                 object_id=object_ids.get(source.vault_uuid, source.vault_uuid),
@@ -311,6 +320,16 @@ def _canonical_payload_text(payload: dict[str, Any]) -> str:
     return _canonical_source_text(_payload_text(payload))
 
 
+def _row_projection_metadata(payload: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """Read the canonical note metadata carried by Product projections."""
+    core6 = payload.get("core6")
+    core6 = core6 if isinstance(core6, dict) else {}
+    title = payload.get("title", core6.get("title"))
+    review_state = payload.get("review_state", core6.get("review_state"))
+    episode_ref = payload.get("episode_ref")
+    return title, review_state, episode_ref
+
+
 def evaluate_product_store_readiness(
     vault_root: Path | None,
     projection_rows: Iterable[Any],
@@ -365,10 +384,16 @@ def evaluate_product_store_readiness(
         observed = by_identity.get(source.replay.source_identity, [])
         observed_payload = observed[0][1] if len(observed) == 1 else None
         observed_text = _canonical_payload_text(observed_payload or {})
+        observed_title, observed_review_state, observed_episode_ref = _row_projection_metadata(
+            observed_payload or {}
+        )
         if (
             len(observed) != 1
             or observed[0][0] != source.replay
             or observed_text != source.text
+            or observed_title != source.title
+            or observed_review_state != source.review_state
+            or observed_episode_ref != source.episode_ref
             or observed[0][2] != source.object_id
         ):
             refused.append(source.replay.source_identity)
