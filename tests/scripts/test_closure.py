@@ -88,6 +88,7 @@ class Fake:
         self.dispatcher_status = "absent"
         self.claim_dispatcher_during_pr_readback = False
         self.release_dispatcher_lease_during_pr_readback = False
+        self.claim_dispatcher_after_merge = False
         self.dispatcher_lease_released_at: str | None = None
         self.dispatcher_release_events: list[dict[str, object]] = []
         self.dispatcher_claim_events: list[dict[str, object]] = [
@@ -139,6 +140,15 @@ class Fake:
                 self.dispatcher_lease_released_at = "2026-09-02T00:00:02+00:00"
             return result
         if endpoint.endswith("/issues/5245") and "GET" in args:
+            if self.claim_dispatcher_after_merge and self.merged:
+                self.dispatcher_status = "claimed"
+                self.dispatcher_task.update(
+                    {
+                        "claimed_by": "other-agent",
+                        "lease_id": "replacement-lease",
+                        "lease_expires_at": "2099-01-03T00:00:00+00:00",
+                    }
+                )
             return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
         if endpoint.startswith(f"repos/{REPO}/issues/5245/comments") and "GET" in args:
             return self._json(args, [self.pickup_comments])
@@ -519,6 +529,22 @@ def test_closure_apply_rechecks_dispatcher_lease_row_before_merge(tmp_path: Path
     with pytest.raises(ClosureError, match="lease row"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert not any(any(part.endswith("/merge") for part in call) for call in fake.calls)
+
+
+@pytest.mark.parametrize("dispatcher_backed", [False, True])
+def test_closure_apply_fences_post_merge_replacement_before_label_cleanup(
+    tmp_path: Path, dispatcher_backed: bool
+) -> None:
+    fake = Fake(tmp_path)
+    if dispatcher_backed:
+        fake.dispatcher_status = "claimed"
+        plan = build_closure_plan(request(tmp_path, fake.dispatcher_task["task_id"]), executor=fake)
+    else:
+        plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.claim_dispatcher_after_merge = True
+    with pytest.raises(ClosureError, match="dispatcher|current dispatcher lease"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any("DELETE" in call for call in fake.calls)
 
 
 @pytest.mark.parametrize("already_merged", [False, True])

@@ -1667,8 +1667,84 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     return _finish_cleanup(value, {"pr": merged, "issue": closed, "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher, "closure_attribution": attribution}, runner, cwd, reconciled=False, merge_sha=merge_sha)
 
 
+def _complete_dispatcher_after_merge(
+    value: Mapping[str, Any],
+    dispatcher: Mapping[str, Any],
+    runner: CommandExecutor,
+    cwd: Path,
+) -> dict[str, str]:
+    state = _dispatcher_completion(
+        runner,
+        cwd,
+        dispatcher,
+        repository=str(value["repository"]),
+        issue_number=int(value["governing_issue"]),
+        pr_number=int(value["pr_number"]),
+        allow_expired_claim=True,
+    )
+    if state["status"] == "released":
+        dispatcher = _dispatcher_reclaim(
+            runner,
+            cwd,
+            dispatcher,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
+        state = _dispatcher_completion(
+            runner,
+            cwd,
+            dispatcher,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
+    if state["status"] == "claimed":
+        completed = runner.run(
+            [
+                sys.executable,
+                "-m",
+                "app.dispatcher",
+                "complete",
+                str(dispatcher["task_id"]),
+                "--agent",
+                str(dispatcher["lease_holder"]),
+                "--lease-id",
+                str(dispatcher["lease_id"]),
+                "--json",
+            ],
+            cwd=cwd,
+        )
+        if completed.returncode:
+            raise ClosureError("incomplete", "merge succeeded but dispatcher completion failed", completed)
+        state = _dispatcher_completion(
+            runner,
+            cwd,
+            dispatcher,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+            allow_expired_claim=True,
+        )
+    if state["status"] != "completed":
+        raise ClosureError("incomplete", "post-merge dispatcher completion is not final")
+    return state
+
+
 def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner: CommandExecutor, cwd: Path, *, reconciled: bool, merge_sha: str | None = None) -> dict[str, Any]:
     closed = current["issue"]
+    dispatcher = value["post_merge"].get("dispatcher")
+    coordination = value.get("coordination")
+    if isinstance(dispatcher, Mapping):
+        dispatcher = _complete_dispatcher_after_merge(value, dispatcher, runner, cwd)
+    elif isinstance(coordination, Mapping) and coordination.get("mode") == DEGRADED_MODE:
+        _reject_dispatcher_lease_for_fallback(
+            runner,
+            cwd,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
     labels = [str(item.get("name") if isinstance(item, dict) else item) for item in closed.get("labels", [])]
     configured_prefixes = value.get("post_merge", {}).get("remove_label_prefixes")
     if not isinstance(configured_prefixes, list) or sorted(configured_prefixes) != ["action:", "agent:"]:
@@ -1711,9 +1787,8 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
     )
     if remaining_action_labels:
         raise ClosureError("incomplete", "terminal Issue readback retains agent/action labels")
-    dispatcher = value["post_merge"].get("dispatcher")
     if isinstance(dispatcher, Mapping):
-        state = _dispatcher_completion(
+        dispatcher = _dispatcher_completion(
             runner,
             cwd,
             dispatcher,
@@ -1722,51 +1797,14 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
             pr_number=int(value["pr_number"]),
             allow_expired_claim=True,
         )
-        if state["status"] == "released":
-            dispatcher = _dispatcher_reclaim(
-                runner,
-                cwd,
-                dispatcher,
-                repository=str(value["repository"]),
-                issue_number=int(value["governing_issue"]),
-                pr_number=int(value["pr_number"]),
-            )
-            state = _dispatcher_completion(
-                runner,
-                cwd,
-                dispatcher,
-                repository=str(value["repository"]),
-                issue_number=int(value["governing_issue"]),
-                pr_number=int(value["pr_number"]),
-            )
-        if state["status"] == "claimed":
-            completed = runner.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "app.dispatcher",
-                    "complete",
-                    str(dispatcher["task_id"]),
-                    "--agent",
-                    str(dispatcher["lease_holder"]),
-                    "--lease-id",
-                    str(dispatcher["lease_id"]),
-                    "--json",
-                ],
-                cwd=cwd,
-            )
-            if completed.returncode:
-                raise ClosureError("incomplete", "merge succeeded but dispatcher completion failed", completed)
-            state = _dispatcher_completion(
-                runner,
-                cwd,
-                dispatcher,
-                repository=str(value["repository"]),
-                issue_number=int(value["governing_issue"]),
-                pr_number=int(value["pr_number"]),
-                allow_expired_claim=True,
-            )
-        dispatcher = state
+    elif isinstance(coordination, Mapping) and coordination.get("mode") == DEGRADED_MODE:
+        _reject_dispatcher_lease_for_fallback(
+            runner,
+            cwd,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            pr_number=int(value["pr_number"]),
+        )
     merge_sha = merge_sha or current["pr"].get("merge_commit_sha")
     receipt = {"schema": RECEIPT_SCHEMA, "outcome": "success", "reconciled": reconciled, "plan_sha256": value["plan_sha256"], "repository": value["repository"], "pr_number": value["pr_number"], "head_sha": value["head_sha"], "merge_sha": merge_sha, "issue": {"number": value["governing_issue"], "state": "closed", "closure_attribution": current.get("closure_attribution", "GitHub-native closing keyword and exact merge event")}, "cleanup": {"removed_agent_labels": [label for label in removable_labels if label.startswith("agent:")], "removed_action_labels": [label for label in removable_labels if label.startswith("action:")], "remaining_labels": sorted(set(final_labels)), "dispatcher": dispatcher, "project_projection": "optional/unmodified"}, "remaining_action": "post-merge-owner-doc"}
     receipt["receipt_sha256"] = _digest(receipt)
