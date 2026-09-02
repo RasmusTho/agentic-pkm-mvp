@@ -609,7 +609,12 @@ def _ingest_single(
     }
 
     note_uuid = identity.note_uuid
-    canonical_object_id = resolve_canonical_object_id(note_uuid)
+    # Recovery resolves the authoritative objects.id inside the atomic PG
+    # reconciliation transaction below.  Ordinary ingestion retains the
+    # collision-checked resolver and must not inherit recovery's narrow escape.
+    canonical_object_id = (
+        note_uuid if reconcile_existing_projection else resolve_canonical_object_id(note_uuid)
+    )
 
     companion_settings = load_companion_settings(vault_root)
     is_rename = companion is not None and companion.source_ref != str(rel_path)
@@ -687,10 +692,6 @@ def _ingest_single(
         source_ref=str(path),
         created_at=datetime.now(timezone.utc),
     )
-    try:
-        classify_res = classify_run(canonical_object_id, trace_id=trace_id)
-    except Exception:
-        classify_res = {}
 
     try:
         object_uuid = uuid.UUID(canonical_object_id)
@@ -727,13 +728,21 @@ def _ingest_single(
         # Recovery must perform the canonical upsert and duplicate cleanup
         # in one durable transaction.  A failure is intentionally loud so
         # bootstrap cannot claim a partial reconstruction.
-        reconcile(
+        reconciled_id = reconcile(
             object_uuid,
             kind="note",
             source_ref=str(path),
             source_identity=replay["source_identity"],
             payload=store_payload,
+            vault_uuid=note_uuid,
         )
+        if reconciled_id is not None:
+            canonical_object_id = str(reconciled_id)
+            object_uuid = uuid.UUID(canonical_object_id)
+            core6["id"] = canonical_object_id
+            store_payload["artifact_id"] = canonical_object_id
+            store_payload["stable_id"] = canonical_object_id
+            obj.uuid = canonical_object_id
     else:
         # Legacy ObjectStore keeps classifier/normalizer flows working with memory fallback during tests.
         ObjectStore().save_object(obj, emit_outbox=False, trace_id=trace_id)
@@ -747,6 +756,11 @@ def _ingest_single(
             )
         except Exception:
             pass
+
+    try:
+        classify_res = classify_run(canonical_object_id, trace_id=trace_id)
+    except Exception:
+        classify_res = {}
 
     try:
         # Durable write only (KERNEL-05, I-D3): the retrieval cache is never

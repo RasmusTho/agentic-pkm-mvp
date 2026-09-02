@@ -173,6 +173,40 @@ def test_product_readiness_rejects_wrong_canonical_object_id(tmp_path: Path) -> 
     assert source_identity in result.refused_source_identities
 
 
+def test_product_readiness_loads_canonical_identity_map_once_per_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.rebuildability import product_total_loss
+
+    vault_root = tmp_path / "vault"
+    first_identity = _write_source(vault_root, "First retained note.")
+    second = vault_root / "Notes" / "second.md"
+    second.write_text("---\ntitle: Second\n---\n\nSecond retained note.\n", encoding="utf-8")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_map(vault_uuids):  # type: ignore[no-untyped-def]
+        values = tuple(vault_uuids)
+        calls.append(values)
+        return {value: value for value in values}
+
+    monkeypatch.setattr(product_total_loss, "_canonical_object_ids_for_sources", fake_map)
+
+    result = evaluate_product_store_readiness(
+        vault_root,
+        [
+            _verified_row(first_identity, "First retained note."),
+            _verified_row("Notes/second.md", "Second retained note."),
+        ],
+    )
+
+    assert result.ready is True
+    assert len(calls) == 1
+    assert set(calls[0]) == {
+        str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, first_identity)),
+        str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, "Notes/second.md")),
+    }
+
+
 def test_product_readiness_ignores_ingest_excluded_files(tmp_path: Path) -> None:
     """The retained inventory is the same candidate set as vault-alpha ingest."""
     vault_root = tmp_path / "vault"
@@ -385,8 +419,8 @@ def test_selected_postgres_health_refuses_unverified_product_projection(
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
     monkeypatch.setattr(
-        "app.rebuildability.product_total_loss.resolve_canonical_object_id",
-        lambda value: value,
+        "app.rebuildability.product_total_loss._canonical_object_ids_for_sources",
+        lambda values: {value: value for value in values},
     )
     monkeypatch.setattr("app.health_contract.resolve_store_backend", lambda: "pg")
     monkeypatch.setattr("app.health_contract.get_object_store", lambda: FakeStore())

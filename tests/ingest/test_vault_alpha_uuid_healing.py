@@ -162,15 +162,23 @@ def test_source_backed_ingest_uses_atomic_projection_reconciliation(
     note_path.parent.mkdir(parents=True)
     note_path.write_text("---\ntitle: Recovered\n---\n\nBody\n", encoding="utf-8")
     captured: dict[str, object] = {}
+    authoritative_id = uuid.uuid4()
 
     class RecoveryStore:
         def put_and_reconcile_source_backed(self, object_id, **kwargs):  # type: ignore[no-untyped-def]
             captured.update(object_id=object_id, **kwargs)
+            return str(authoritative_id)
 
         def put(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
             raise AssertionError("source-backed recovery must use the atomic seam")
 
-    monkeypatch.setattr(vault_alpha, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(
+        vault_alpha,
+        "resolve_canonical_object_id",
+        lambda _value: (_ for _ in ()).throw(
+            AssertionError("source-backed recovery must not use ordinary alias resolution")
+        ),
+    )
     monkeypatch.setattr(vault_alpha, "get_object_store", lambda: RecoveryStore())
     monkeypatch.setattr(vault_alpha, "read_companion", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(vault_alpha, "_find_companion_by_fingerprint", lambda *_args, **_kwargs: "")
@@ -193,9 +201,11 @@ def test_source_backed_ingest_uses_atomic_projection_reconciliation(
         write_companion_record=False,
     )
 
-    assert str(captured["object_id"]) == object_id
+    assert object_id == str(authoritative_id)
+    assert str(captured["object_id"]) != object_id
     assert captured["source_identity"] == "Notes/recovered.md"
     assert captured["source_ref"] == str(note_path)
+    assert captured["vault_uuid"] != object_id
 
 
 def test_source_backed_locked_retry_forwards_recovery_admission(

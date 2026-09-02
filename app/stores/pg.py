@@ -18,7 +18,9 @@ from app.db.errors import StoreSchemaMissingError
 from app.embedding_config import coerce_floats, l2_normalize
 from app.index.artifact_metadata import canonicalize_indexable_text
 from app.objects.identity import (
+    resolve_vault_uuid_for_recovery_with_connection as _resolve_vault_uuid_for_recovery_with_connection,
     resolve_vault_uuid_with_connection as _resolve_vault_uuid_with_connection,
+    retained_vault_uuid_to_canonical_id_map_with_connection as _retained_vault_uuid_to_canonical_id_map_with_connection,
     retained_vault_uuid_with_connection as _retained_vault_uuid_with_connection,
     vault_uuid_to_canonical_id_map_with_connection as _vault_uuid_to_canonical_id_map_with_connection,
 )
@@ -865,6 +867,15 @@ def resolve_vault_uuid_with_connection(
     return _resolve_vault_uuid_with_connection(conn, vault_uuid, vault_binding_id=vault_binding_id)
 
 
+def resolve_vault_uuid_for_recovery_with_connection(
+    conn, vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> str:
+    """Resolve retained identity without alias rejection on a recovery transaction."""
+    return _resolve_vault_uuid_for_recovery_with_connection(
+        conn, vault_uuid, vault_binding_id=vault_binding_id
+    )
+
+
 def resolve_vault_uuid(vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> str:
     """Resolve retained identity through a fresh collision-checked snapshot."""
     with _connect() as conn:
@@ -878,6 +889,25 @@ def vault_uuid_to_canonical_id_map_with_connection(
 ) -> dict[str, str]:
     """Return retained vault UUID -> canonical id from the shared identity join."""
     return _vault_uuid_to_canonical_id_map_with_connection(conn, vault_binding_id=vault_binding_id)
+
+
+def retained_vault_uuid_to_canonical_id_map_with_connection(
+    conn, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
+    """Load the retained UUID -> canonical ID map on one existing connection."""
+    return _retained_vault_uuid_to_canonical_id_map_with_connection(
+        conn, vault_binding_id=vault_binding_id
+    )
+
+
+def retained_vault_uuid_to_canonical_id_map(
+    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
+    """Load one binding-scoped retained UUID -> canonical ID map."""
+    with _connect() as conn:
+        return retained_vault_uuid_to_canonical_id_map_with_connection(
+            conn, vault_binding_id=vault_binding_id
+        )
 
 
 def retained_vault_uuid_with_connection(
@@ -958,7 +988,8 @@ class PgObjectStore(ObjectStore):
         source_ref: str,
         source_identity: str,
         payload: dict,
-    ) -> None:
+        vault_uuid: str | None = None,
+    ) -> str:
         """Atomically upsert one retained projection and remove its duplicates.
 
         A prior producer may have persisted a transient identity or an older
@@ -969,12 +1000,31 @@ class PgObjectStore(ObjectStore):
         """
         _ensure_tables()
         with _connect() as conn:
+            resolved_object_id = object_id
+            if vault_uuid is not None:
+                resolved_object_id = UUID(
+                    resolve_vault_uuid_for_recovery_with_connection(
+                        conn,
+                        vault_uuid,
+                        vault_binding_id=self.vault_binding_id,
+                    )
+                )
+            reconciled_payload = dict(payload)
+            if resolved_object_id != object_id:
+                reconciled_payload["artifact_id"] = str(resolved_object_id)
+                reconciled_payload["stable_id"] = str(resolved_object_id)
+                core6 = reconciled_payload.get("core6")
+                if isinstance(core6, dict):
+                    reconciled_payload["core6"] = {
+                        **core6,
+                        "id": str(resolved_object_id),
+                    }
             put_object_with_connection(
                 conn,
-                object_id=object_id,
+                object_id=resolved_object_id,
                 kind=kind,
                 source_ref=source_ref,
-                payload=payload,
+                payload=reconciled_payload,
                 vault_binding_id=self.vault_binding_id,
             )
             with conn.cursor() as cur:
@@ -992,11 +1042,12 @@ class PgObjectStore(ObjectStore):
                     (
                         self.vault_binding_id,
                         kind,
-                        object_id,
+                        resolved_object_id,
                         source_ref,
                         source_identity,
                     ),
                 )
+        return str(resolved_object_id)
 
     def put_if_absent(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> bool:
         _ensure_tables()

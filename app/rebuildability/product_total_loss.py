@@ -17,7 +17,8 @@ import yaml
 
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
-from app.objects import resolve_canonical_object_id
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.stores import resolve_object_store_port
 
 PRODUCT_REPLAY_RECIPE_VERSION = "product-object-replay-v1"
 ProductReadinessState = Literal["ready", "empty", "refused", "not_selected"]
@@ -50,6 +51,7 @@ class _RetainedSource:
     replay: ProductReplayTuple
     title: str
     text: str
+    vault_uuid: str
     object_id: str
 
 
@@ -136,6 +138,21 @@ def parse_markdown_text(raw_text: str) -> tuple[dict[str, Any], str]:
     return (frontmatter if isinstance(frontmatter, dict) else {}), "\n".join(lines[end + 1 :]).strip()
 
 
+def _canonical_object_ids_for_sources(vault_uuids: Iterable[str]) -> dict[str, str]:
+    """Resolve retained identities with one binding-scoped inventory lookup."""
+    values = tuple(dict.fromkeys(str(value) for value in vault_uuids))
+    if not values:
+        return {}
+    binding = resolve_object_store_port()
+    if binding.backend != "pg":
+        return {value: value for value in values}
+    from app.stores.pg import retained_vault_uuid_to_canonical_id_map
+
+    binding_id = str(getattr(binding.store, "vault_binding_id", COMPATIBILITY_BINDING_ID))
+    loaded = retained_vault_uuid_to_canonical_id_map(vault_binding_id=binding_id)
+    return {value: loaded.get(value, value) for value in values}
+
+
 def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str]]:
     # Imported lazily because vault-alpha stamps this module's replay tuple.
     # The selected candidates are its production source admission policy.
@@ -167,7 +184,6 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
             note_identity = resolve_vault_note_identity(
                 path, vault_root=root, frontmatter=frontmatter, body=body
             )
-            object_id = resolve_canonical_object_id(note_identity.note_uuid)
         except Exception as exc:
             failures.append(f"{path.name}:{type(exc).__name__}")
             continue
@@ -176,9 +192,26 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
                 replay=replay,
                 title=path.stem,
                 text=text,
-                object_id=object_id,
+                vault_uuid=note_identity.note_uuid,
+                object_id="",
             )
         )
+    if sources:
+        try:
+            object_ids = _canonical_object_ids_for_sources(source.vault_uuid for source in sources)
+        except Exception as exc:
+            failures.append(f"canonical-object-id-map:{type(exc).__name__}")
+            return sources, failures
+        sources = [
+            _RetainedSource(
+                replay=source.replay,
+                title=source.title,
+                text=source.text,
+                vault_uuid=source.vault_uuid,
+                object_id=object_ids.get(source.vault_uuid, source.vault_uuid),
+            )
+            for source in sources
+        ]
     return sources, failures
 
 

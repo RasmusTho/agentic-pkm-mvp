@@ -75,6 +75,44 @@ def resolve_vault_uuid_with_connection(
     )
 
 
+def resolve_vault_uuid_for_recovery_with_connection(
+    conn: Any,
+    vault_uuid: str,
+    *,
+    vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+) -> str:
+    """Resolve retained identity for an atomic recovery upsert.
+
+    Recovery is the one path allowed to repair a historical cross-key collision:
+    the requested vault UUID may still exist as a stale ``store_objects`` key
+    while ``objects.uuid`` points at the authoritative ``objects.id``.  Do not
+    apply the ordinary alias rejection here; the caller must reconcile that
+    duplicate in the same transaction after this lookup.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id::text, count(*) OVER () AS match_count
+            FROM objects
+            WHERE vault_binding_id = %s AND uuid = %s
+            ORDER BY id
+            LIMIT 1
+            """,
+            (vault_binding_id, vault_uuid),
+        )
+        row = cur.fetchone()
+    if not row:
+        return str(vault_uuid)
+    object_id = row.get("id") if isinstance(row, dict) else row[0]
+    match_count = row.get("match_count") if isinstance(row, dict) else row[1]
+    if int(match_count or 0) > 1:
+        raise RuntimeError(
+            "ambiguous retained vault UUID mapping; reconcile duplicate objects.uuid rows "
+            "before retrying"
+        )
+    return str(object_id or vault_uuid)
+
+
 def vault_uuid_to_canonical_id_map_with_connection(
     conn: Any, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
 ) -> dict[str, str]:
@@ -112,6 +150,43 @@ def vault_uuid_to_canonical_id_map_with_connection(
             match_count=int(match_count or 0),
             canonical_alias_exists=bool(canonical_alias_exists),
         )
+    return result
+
+
+def retained_vault_uuid_to_canonical_id_map_with_connection(
+    conn: Any, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
+    """Load one binding-scoped retained UUID -> canonical ID inventory map.
+
+    This map intentionally starts at the retained ``objects`` table rather
+    than ``store_objects`` so readiness can derive an expected canonical ID
+    even when the Product projection is absent.  Alias cleanup is a recovery
+    concern; readiness must observe duplicate projections and refuse them.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT uuid::text AS vault_uuid,
+                   id::text AS object_id,
+                   count(*) OVER (PARTITION BY uuid) AS match_count
+            FROM objects
+            WHERE vault_binding_id = %s AND uuid IS NOT NULL
+            ORDER BY uuid, id
+            """,
+            (vault_binding_id,),
+        )
+        rows = cur.fetchall()
+    result: dict[str, str] = {}
+    for row in rows:
+        vault_uuid = str(row["vault_uuid"] if isinstance(row, dict) else row[0])
+        object_id = str(row["object_id"] if isinstance(row, dict) else row[1])
+        match_count = row["match_count"] if isinstance(row, dict) else row[2]
+        if int(match_count or 0) > 1:
+            raise RuntimeError(
+                "ambiguous retained vault UUID mapping; reconcile duplicate objects.uuid rows "
+                "before retrying"
+            )
+        result[vault_uuid] = object_id
     return result
 
 

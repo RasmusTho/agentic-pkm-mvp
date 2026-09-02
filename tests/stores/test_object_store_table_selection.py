@@ -181,6 +181,70 @@ def test_source_backed_store_reconciles_duplicates_in_one_transaction(monkeypatc
         "Notes/recovered.md",
     )
 
+
+def test_source_backed_recovery_resolves_cross_key_identity_before_cleanup(monkeypatch):
+    from app.stores import pg
+
+    canonical_id = uuid4()
+
+    class FakeCursor:
+        def __init__(self):
+            self.executions: list[tuple[str, object]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params=()):  # type: ignore[no-untyped-def]
+            self.executions.append((str(statement), params))
+
+        def fetchone(self):  # type: ignore[no-untyped-def]
+            return {"id": str(canonical_id), "match_count": 1}
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return self.cursor_instance
+
+    connection = FakeConnection()
+    monkeypatch.setattr(pg, "_ensure_tables", lambda: None)
+    monkeypatch.setattr(pg, "_connect", lambda: connection)
+    store = pg.PgObjectStore.__new__(pg.PgObjectStore)
+    store.vault_binding_id = "binding"
+    vault_uuid = uuid4()
+
+    result = store.put_and_reconcile_source_backed(
+        vault_uuid,
+        kind="note",
+        source_ref="/vault/Notes/recovered.md",
+        source_identity="Notes/recovered.md",
+        payload={"core6": {"id": str(vault_uuid)}, "artifact_id": str(vault_uuid)},
+        vault_uuid=str(vault_uuid),
+    )
+
+    assert result == str(canonical_id)
+    assert len(connection.cursor_instance.executions) == 3
+    resolver_sql, resolver_params = connection.cursor_instance.executions[0]
+    insert_sql, insert_params = connection.cursor_instance.executions[1]
+    delete_sql, delete_params = connection.cursor_instance.executions[2]
+    assert "FROM objects" in resolver_sql
+    assert resolver_params == ("binding", str(vault_uuid))
+    assert "INSERT INTO store_objects" in insert_sql
+    assert insert_params[1] == canonical_id
+    assert '"id": "' + str(canonical_id) + '"' in str(insert_params[4])
+    assert "DELETE FROM store_objects" in delete_sql
+    assert delete_params[2] == canonical_id
+
 def test_postgres_reads_ignore_stale_process_memory(monkeypatch):
     from app import objects as legacy
 
