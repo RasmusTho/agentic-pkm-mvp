@@ -332,7 +332,34 @@ case "$*" in
     fi
     printf '{"git_sha":"%s"}\\n' "${FAKE_VERSION_SHA:-$FAKE_SHA}"
     ;;
-  *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}" ;;
+  *"/api/health"*)
+    if [ "${FAKE_REQUIRED_HEALTH:-pass}" = "fail" ]; then
+      printf '{"ok":false,"required_ok":false,"version":{"git_sha":"%s"},"checks":{"embedding_index":{"ok":false,"required":true,"status":"rebuild_required"}},"runtime":{"api":{"ok":true}}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}"
+    else
+      printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "${FAKE_HEALTH_VERSION_SHA:-$FAKE_SHA}"
+    fi
+    ;;
+  *"/status"*)
+    if [ "${FAKE_PRODUCT_READINESS:-pass}" = "fail" ]; then
+      printf '{"state":"running","product_readiness":{"ready":false,"state":"refused","reason":"product projection refused"}}\\n'
+    else
+      printf '{"state":"running","product_readiness":{"ready":true,"state":"ready","reason":"source-bound Product projection verified"}}\\n'
+    fi
+    ;;
+  *"/readyz"*)
+    if [[ "$*" == *"-w"* ]]; then
+      if [ "${FAKE_READINESS:-pass}" = "fail" ]; then
+        printf '503'
+      else
+        printf '200'
+      fi
+      exit 0
+    fi
+    if [ "${FAKE_READINESS:-pass}" = "fail" ]; then
+      exit 22
+    fi
+    printf '{"ok":true}\\n'
+    ;;
   *"/healthz"*)
     if [ "${FAKE_API_LIVENESS:-pass}" = "fail" ]; then
       if [ -n "${FAKE_REMOVE_SETTINGS_REBIND_RECEIPT:-}" ]; then
@@ -1455,6 +1482,121 @@ def test_deploy_preflights_companion_pytest_smoke_before_pin_or_compose_mutation
     assert not (tmp_path / "docker-called").exists()
 
 
+@pytest.mark.parametrize(
+    "legacy_path",
+    [
+        "/Users/operator/agentic-pkm/app-local.md",
+        "/Volumes/legacy/agentic-pkm/app-local.md",
+        "/app/tmp/../tmp/agentic-pkm/app-local.md",
+        "/app/tmp/agentic-pkm/legacy/app-local.md",
+        "/app/tmp/legacy-link/app-local.md",
+    ],
+)
+def test_deploy_preflights_configured_legacy_settings_before_pin_or_compose_mutation(
+    tmp_path: Path, legacy_path: str
+) -> None:
+    """The effective channel env file cannot hide a legacy host source."""
+
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_before = (
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={sha}\n"
+        f"DESIGN_HANDOFF_APP_LOCAL_SETTINGS={legacy_path}\n"
+    )
+    pin_path.write_text(pin_before, encoding="utf-8")
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert "configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert legacy_path not in result.stderr
+    assert pin_path.read_text(encoding="utf-8") == pin_before
+    assert _deploy_events(env) == ["archive-preflight dev"]
+    assert not (tmp_path / "docker-called").exists()
+    assert not (root / "config/deploy/dev.env.lock").exists()
+    assert not (root / "config/deploy/dev.previous.env").exists()
+    assert not (root / "config/deploy/dev.migration-pending.env").exists()
+
+
+def test_deploy_preflights_duplicate_legacy_settings_before_pin_or_compose_mutation(
+    tmp_path: Path,
+) -> None:
+    """A later unsafe duplicate cannot be hidden by an earlier canonical value."""
+
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_before = (
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={sha}\n"
+        "  DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md\n"
+        "\texport DESIGN_HANDOFF_APP_LOCAL_SETTINGS = /Users/operator/agentic-pkm/app-local.md\n"
+    )
+    pin_path.write_text(pin_before, encoding="utf-8")
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert "duplicate DESIGN_HANDOFF_APP_LOCAL_SETTINGS" in result.stderr
+    assert pin_path.read_text(encoding="utf-8") == pin_before
+    assert _deploy_events(env) == ["archive-preflight dev"]
+    assert not (tmp_path / "docker-called").exists()
+    assert not (root / "config/deploy/dev.env.lock").exists()
+
+
+def test_deploy_passes_configured_canonical_legacy_settings_to_init(
+    tmp_path: Path,
+) -> None:
+    """A supported channel-file path remains the init CLI value."""
+
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={sha}\n"
+        "export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = /app/tmp/agentic-pkm/app-local.md\n",
+        encoding="utf-8",
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any(
+        "instance-state-init" in event
+        and "--legacy-path /app/tmp/agentic-pkm/app-local.md" in event
+        for event in _deploy_events(env)
+    )
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md # canonical",
+        'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical',
+    ],
+)
+def test_deploy_accepts_compose_inline_comment_on_canonical_legacy_settings(
+    tmp_path: Path, assignment: str
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={sha}\n"
+        f"{assignment}\n",
+        encoding="utf-8",
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any(
+        "instance-state-init" in event
+        and "--legacy-path /app/tmp/agentic-pkm/app-local.md" in event
+        for event in _deploy_events(env)
+    )
+
+
 def test_deploy_receipt_records_embedding_cutover_acknowledgement(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
 
@@ -1514,13 +1656,60 @@ def test_acknowledged_embedding_cutover_stages_compose_before_transition_smoke(
     )
 
 
-def test_unacknowledged_deploy_keeps_strict_compose_startup(tmp_path: Path) -> None:
+def test_acknowledged_embedding_cutover_allows_transitional_health(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_READINESS"] = "fail"
+    env["FAKE_REQUIRED_HEALTH"] = "fail"
 
-    result = _run_deploy(root, env, sha)
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
 
     assert result.returncode == 0, result.stdout + result.stderr
     events = _deploy_events(env)
+    assert any("/healthz" in event for event in events)
+    assert any("/readyz" in event for event in events)
+    assert any("/api/health" in event for event in events)
+
+
+def test_acknowledged_embedding_cutover_keeps_independent_readiness_failure_blocking(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_READINESS"] = "fail"
+    env["FAKE_REQUIRED_HEALTH"] = "fail"
+    env["FAKE_PRODUCT_READINESS"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert "health gate failed" in result.stderr
+    events = _deploy_events(env)
+    assert any("/readyz" in event for event in events)
+
+
+@pytest.mark.parametrize(
+    ("action", "failure_env", "failed_endpoint"),
+    [
+        ("deploy", "FAKE_READINESS", "/readyz"),
+        ("deploy", "FAKE_REQUIRED_HEALTH", "/api/health"),
+        ("rollback", "FAKE_READINESS", "/readyz"),
+        ("rollback", "FAKE_REQUIRED_HEALTH", "/api/health"),
+    ],
+)
+def test_unacknowledged_deploy_keeps_strict_health_gates_for_deploy_and_rollback(
+    tmp_path: Path, action: str, failure_env: str, failed_endpoint: str
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env[failure_env] = "fail"
+
+    if action == "deploy":
+        result = _run_deploy(root, env, sha)
+    else:
+        result = _run_rollback(root, env, sha)
+
+    assert result.returncode == 1
+    assert "health gate failed" in result.stderr
+    events = _deploy_events(env)
+    assert any(failed_endpoint in event for event in events)
     assert any(
         event.endswith(
             "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"

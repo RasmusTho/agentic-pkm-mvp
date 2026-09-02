@@ -34,6 +34,76 @@ OBJECT_UUID = str(UUID(int=1))
 DELETE_UUID = str(UUID(int=2))
 
 
+def test_sync_markdown_rejects_malformed_frontmatter_without_rewriting(tmp_path) -> None:
+    note = tmp_path / "malformed.md"
+    original = "---\ntitle: [unterminated\n---\n\nRecoverable body.\n"
+    note.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="malformed frontmatter"):
+        vault_sync.sync_markdown(str(note), vault_root=tmp_path)
+
+    assert note.read_text(encoding="utf-8") == original
+
+
+def test_merge_canonical_payload_explicit_unbound_clears_binding() -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            return None
+
+        def fetchone(self):
+            return {"payload": {"episode_ref": ["episode:old"], "title": "Note"}}
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    original = vault_sync._binding_id
+    vault_sync._binding_id = lambda: "binding"  # type: ignore[assignment]
+    try:
+        merged = vault_sync._merge_canonical_payload(
+            Connection(), object_id="object", updates={"episode_ref": "unbound"}
+        )
+    finally:
+        vault_sync._binding_id = original
+
+    assert merged["episode_ref"] == "unbound"
+
+
+def test_merge_canonical_payload_omitted_episode_ref_preserves_binding(monkeypatch) -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            return None
+
+        def fetchone(self):
+            return {"payload": {"episode_ref": ["episode:old"], "title": "Note"}}
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr(vault_sync, "_binding_id", lambda: "binding")
+
+    merged = vault_sync._merge_canonical_payload(
+        Connection(),
+        object_id="object",
+        updates={"frontmatter": {}, "episode_ref": "unbound"},
+    )
+
+    assert merged["episode_ref"] == ["episode:old"]
+
+
 # --- Recording fake connection: logs the ORDER of store writes vs commits -----
 
 
@@ -194,6 +264,8 @@ def _tail_after(log: list[str], marker: str) -> list[str]:
 
 def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch) -> None:
     conn = _RecConn()
+    note_path = tmp_path / "new.md"
+    note_path.write_text("---\nuuid: test-uuid\n---\n\nbody\n", encoding="utf-8")
 
     def _ok(payload, topic, trace_id=None, *, conn=None, observation=None):  # type: ignore[no-untyped-def]
         conn.log.append("enqueue")
@@ -201,11 +273,12 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
     captured = _install(monkeypatch, conn, _ok)
 
     vault_sync.upsert_object_from_note(
-        str(tmp_path / "new.md"),
+        str(note_path),
         {"uuid": OBJECT_UUID, "title": "T"},
         "body",
         fm_changed=False,
         body_changed=False,
+        vault_root=tmp_path,
     )
 
     # New note (no prior state) → CREATED → emits.
@@ -222,6 +295,8 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
 
 def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch) -> None:
     conn = _RecConn()
+    note_path = tmp_path / "new.md"
+    note_path.write_text("---\nuuid: test-uuid\n---\n\nbody\n", encoding="utf-8")
 
     def _boom(payload, topic, trace_id=None, *, conn=None, observation=None):  # type: ignore[no-untyped-def]
         conn.log.append("enqueue_attempt")
@@ -231,11 +306,12 @@ def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch
 
     with pytest.raises(RuntimeError, match="enqueue crash"):
         vault_sync.upsert_object_from_note(
-            str(tmp_path / "new.md"),
+            str(note_path),
             {"uuid": OBJECT_UUID, "title": "T"},
             "body",
             fm_changed=False,
             body_changed=False,
+            vault_root=tmp_path,
         )
 
     # No commit after the store write → a real transaction rolls the object

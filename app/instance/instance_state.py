@@ -936,6 +936,7 @@ class InstanceStateBackup:
         ledger: OwnershipLedger,
         global_live_owners: Sequence[LegacyOwner],
         require_materialized_owner_roots: bool = True,
+        pending_legacy_owners: Sequence[LegacyOwner] = (),
     ) -> LedgerSnapshot:
         try:
             return ledger.require_registry_consistency(
@@ -968,6 +969,7 @@ class InstanceStateBackup:
                 ),
                 global_live_owners=global_live_owners,
                 require_materialized_roots=require_materialized_owner_roots,
+                pending_legacy_owners=pending_legacy_owners,
             )
         except LedgerError as exc:
             raise InstanceStatePreflightError(
@@ -1061,28 +1063,23 @@ class InstanceStateBackup:
                 ancestor_identities = tuple(raw_ancestors)
             if not require_materialized_owner_roots and not binding_id:
                 # Deployment-finish verifies a host-produced receipt in a
-                # mount-blind scratch namespace. Recover a binding only from
-                # one exact normalized path match in the staged registry;
-                # aliases and ambiguity remain fail-closed.
+                # mount-blind scratch namespace. Prefer an exact normalized
+                # path match in the staged registry, but leave a foreign
+                # owner blank for the authenticated ledger resolver below;
+                # the receipt's host identity proof is its authority there.
                 normalized_root = raw_root
                 matches = [
                     registration.vault_binding_id
                     for registration in registry.registrations.values()
                     if str(registration.path) == normalized_root
                 ]
-                if not matches and skip_unadopted_owners:
-                    # A fresh channel volume may be verified before its
-                    # config-derived root has been adopted into the staged
-                    # registry.  Keep that candidate out of the consistency
-                    # set; the host-side inventory and later bootstrap still
-                    # govern whether it can claim ownership.
-                    continue
-                if len(matches) != 1:
+                if len(matches) > 1:
                     raise InstanceStatePreflightError(
                         "canonical global live-owner inventory is invalid: "
-                        f"owners[{index}].vault_binding_id is missing or path is ambiguous"
+                        f"owners[{index}].vault_binding_id path is ambiguous"
                     )
-                binding_id = matches[0]
+                if matches:
+                    binding_id = matches[0]
             # Owner-root materialization is not re-checked here (#4371): the
             # host-side inventory producer proved every root twice and the
             # receipt is digest-bound to the deployment lease, while this
@@ -1114,18 +1111,16 @@ class InstanceStateBackup:
                 )
             )
         try:
-            # Config-derived inventories (materialized-roots mode) may name
-            # candidates the ledger never adopted after legacy bootstrap
-            # completed; when such a root is also invisible to this process,
-            # the verifier cannot adjudicate it and the ledger holds no lease
-            # for it, so it is excluded from lease consistency. A lease-less
-            # owner whose root is locally materialized stays fail-closed, and
-            # lease-only payloads always carry binding ids.
+            # Config-derived inventories may name candidates the ledger never
+            # adopted after legacy bootstrap completed. The resolver first
+            # binds every adopted owner using the host receipt evidence; only
+            # an unadopted, mount-blind candidate can be excluded from lease
+            # consistency. A lease-less owner whose root is locally
+            # materialized stays fail-closed, and lease-only payloads always
+            # carry binding ids.
             resolved = ledger.resolve_live_owner_bindings(
                 owners,
-                skip_unadopted=(
-                    skip_unadopted_owners and require_materialized_owner_roots
-                ),
+                skip_unadopted=skip_unadopted_owners,
             )
         except LedgerError as exc:
             raise InstanceStatePreflightError(

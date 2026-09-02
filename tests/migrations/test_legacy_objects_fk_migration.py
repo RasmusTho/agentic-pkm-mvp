@@ -853,13 +853,15 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
 
     renamed = vault / "renamed-retained-id.md"
     note.rename(renamed)
-    assert vault_sync.handle_rename(str(note), str(renamed))["updated"] is True
+    assert vault_sync.handle_rename(
+        str(note), str(renamed), vault_root=vault
+    )["updated"] is True
     renamed.unlink()
     assert vault_sync.delete_note(str(renamed), uuid_value=str(watcher_uuid)) is True
 
     with psycopg.connect(scratch_dsn) as conn:
         canonical = conn.execute(
-            "SELECT source_ref FROM store_objects WHERE object_id = %s", (canonical_id,)
+            "SELECT source_ref, payload FROM store_objects WHERE object_id = %s", (canonical_id,)
         ).fetchone()
         split_parent = conn.execute(
             "SELECT count(*) FROM store_objects WHERE object_id = %s", (watcher_uuid,)
@@ -870,7 +872,8 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
         mirror = conn.execute(
             "SELECT id, uuid FROM objects WHERE uuid = %s", (watcher_uuid,)
         ).fetchone()
-    assert canonical == (None,)
+    assert canonical[0] is None
+    assert canonical[1]["replay"]["source_identity"] == "renamed-retained-id.md"
     assert split_parent == (0,)
     assert decision == (canonical_id,)
     assert mirror == (canonical_id, watcher_uuid)

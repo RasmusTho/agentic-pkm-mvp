@@ -14,6 +14,7 @@ import pytest
 from app.dispatcher.cli import REQUIRED_COMMANDS, _COMMAND_MAP, main
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.models import EventRecord
 from app.dispatcher.singleton import fcntl, singleton_paths
 from app.dispatcher.store import SqliteStore
 
@@ -127,6 +128,173 @@ def test_claim_json_output(tmp_env, store):
     assert "lease" in data
     assert data["task"]["status"] == "claimed"
     assert data["lease"]["holder"] == "codex"
+
+
+def test_cleanup_guard_blocks_claim_until_exact_release(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    code, data = _run(
+        [
+            "cleanup-guard",
+            "acquire",
+            "--task-id",
+            ready.task_id,
+            "--owner",
+            "closure-test",
+            "--json",
+        ]
+    )
+    assert code == 0
+    assert data["ok"] is True
+    token = data["guard"]["token"]
+
+    code, data = _run(["claim", ready.task_id, "--agent", "other", "--json"])
+    assert code == 1
+    assert data["ok"] is False
+    assert "cleanup guard" in data["error"]
+
+    code, data = _run(
+        [
+            "cleanup-guard",
+            "release",
+            "--task-id",
+            ready.task_id,
+            "--owner",
+            "closure-test",
+            "--token",
+            token,
+            "--json",
+        ]
+    )
+    assert code == 0
+    assert data["released"] is True
+    code, data = _run(["claim", ready.task_id, "--agent", "other", "--json"])
+    assert code == 0
+    assert data["task"]["status"] == "claimed"
+
+
+def test_cleanup_guard_same_owner_is_invocation_exclusive(tmp_env, store, monkeypatch):
+    from app.dispatcher import leases
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    timestamps = iter([
+        "2026-09-02T00:00:00+00:00",
+        "2026-09-02T00:00:01+00:00",
+        "2026-09-02T00:00:02+00:00",
+        "2026-09-02T00:00:03+00:00",
+        "2026-09-02T00:00:04+00:00",
+    ])
+    monkeypatch.setattr(leases, "_utc_now", lambda: next(timestamps))
+    first = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    with pytest.raises(ValueError, match="already held by this invocation"):
+        leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", first["token"])
+    retry = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    assert retry["token"] != first["token"]
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", retry["token"])
+
+
+def test_cleanup_guard_refreshes_exact_invocation(tmp_env, store, monkeypatch):
+    from app.dispatcher import leases
+    from tests.dispatcher.helpers import seed_tasks
+
+    ready = next(t for t in seed_tasks(store) if t.status == "ready")
+    timestamps = iter([
+        "2026-09-02T00:00:00+00:00",
+        "2026-09-02T00:00:30+00:00",
+        "2026-09-02T00:00:31+00:00",
+    ])
+    monkeypatch.setattr(leases, "_utc_now", lambda: next(timestamps))
+    first = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    refreshed = leases.refresh_cleanup_guard(
+        store, ready.task_id, "closure-test", first["token"], ttl_seconds=60
+    )
+    assert refreshed["token"] == first["token"]
+    assert refreshed["owner"] == first["owner"]
+    assert refreshed["expires_at"] > first["expires_at"]
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", first["token"])
+
+
+def test_cleanup_guard_bootstraps_missing_db_before_claim(tmp_env):
+    from app.dispatcher import leases
+    from app.dispatcher.models import TaskRecord
+
+    task_id = "task-missing-db"
+    code, data = _run(
+        [
+            "cleanup-guard",
+            "acquire",
+            "--task-id",
+            task_id,
+            "--owner",
+            "closure-test",
+            "--json",
+        ]
+    )
+    assert code == 0
+    assert data["ok"] is True
+    token = data["guard"]["token"]
+    paths = load_paths(tmp_env)
+    assert not paths.db_path.exists()
+    store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    store.initialize()
+    store.upsert_task(
+        TaskRecord(
+            task_id=task_id,
+            issue_number=7,
+            title="task created after guard bootstrap",
+            status="ready",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-09-02T00:00:00+00:00",
+            updated_at="2026-09-02T00:00:00+00:00",
+        )
+    )
+    code, data = _run(["claim", task_id, "--agent", "other", "--json"])
+    assert code == 1
+    assert "cleanup guard" in data["error"]
+    leases.release_cleanup_guard(store, task_id, "closure-test", token)
+    code, data = _run(["claim", task_id, "--agent", "other", "--json"])
+    assert code == 0
+    assert data["task"]["status"] == "claimed"
+
+
+def test_cleanup_guard_missing_db_is_scoped_per_task(tmp_env):
+    from app.dispatcher import leases
+    from app.dispatcher.models import TaskRecord
+
+    paths = load_paths(tmp_env)
+    store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    first = leases.acquire_cleanup_guard(store, "task-a", "closure-a", ttl_seconds=60)
+    second = leases.acquire_cleanup_guard(store, "task-b", "closure-b", ttl_seconds=60)
+    assert first["token"] != second["token"]
+    assert not paths.db_path.exists()
+
+    leases.release_cleanup_guard(store, "task-b", "closure-b", second["token"])
+    store.initialize()
+    for task_id in ("task-a", "task-b"):
+        store.upsert_task(
+            TaskRecord(
+                task_id=task_id,
+                issue_number=7,
+                title=task_id,
+                status="ready",
+                priority="high",
+                source_anchor_refs=[],
+                created_at="2026-09-02T00:00:00+00:00",
+                updated_at="2026-09-02T00:00:00+00:00",
+            )
+        )
+
+    with pytest.raises(ValueError, match="cleanup guard"):
+        leases.claim(store, "task-a", "other")
+    task, _lease = leases.claim(store, "task-b", "other")
+    assert task.status == "claimed"
+    leases.release_cleanup_guard(store, "task-a", "closure-a", first["token"])
 
 
 def test_claim_conflict_returns_error(tmp_env, store):
@@ -301,6 +469,60 @@ def test_show_returns_task(tmp_env, store):
     assert code == 0
     assert data["ok"] is True
     assert data["task"]["task_id"] == tasks[0].task_id
+    assert "repo" in data["task"]
+
+
+def test_show_with_events_reads_task_and_history(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    from app.dispatcher.leases import claim
+
+    tasks = seed_tasks(store)
+    claim(store, tasks[0].task_id, "codex")
+    code, data = _run(["show", tasks[0].task_id, "--events", "--json"])
+    assert code == 0
+    assert data["ok"] is True
+    assert data["task"]["lease_id"] is not None
+    assert data["lease"]["lease_id"] == data["task"]["lease_id"]
+    assert data["lease"]["released_at"] is None
+    assert data["events"][0]["event_type"] == "task.claimed"
+
+
+def test_events_can_be_scoped_to_one_task(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    store.append_event(
+        EventRecord(
+            event_id="event-a",
+            timestamp="2026-09-02T00:00:00Z",
+            task_id=tasks[0].task_id,
+            event_type="task.completed",
+            actor="agent-a",
+        )
+    )
+    store.append_event(
+        EventRecord(
+            event_id="event-b",
+            timestamp="2026-09-02T00:00:01Z",
+            task_id=tasks[1].task_id,
+            event_type="task.completed",
+            actor="agent-b",
+        )
+    )
+    for index in range(1001):
+        store.append_event(
+            EventRecord(
+                event_id=f"event-a-noise-{index}",
+                timestamp=f"2026-09-02T00:{index // 60:02d}:{index % 60:02d}Z",
+                task_id=tasks[0].task_id,
+                event_type="task.progress",
+                actor="agent-a",
+            )
+        )
+    code, data = _run(["events", "--task-id", tasks[0].task_id, "--all", "--json"])
+    assert code == 0
+    assert len(data["events"]) == 1002
+    assert data["events"][0]["event_id"] == "event-a"
 
 
 def test_show_not_found(tmp_env, store):
@@ -652,6 +874,32 @@ def test_complete_wrong_holder(tmp_env, store):
     assert code == 1
     assert data["ok"] is False
     assert "error" in data
+
+
+def test_complete_rejects_stale_lease_id_without_mutation(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+    code, data = _run(
+        [
+            "complete",
+            ready.task_id,
+            "--agent",
+            "codex",
+            "--lease-id",
+            "stale-lease",
+            "--json",
+        ]
+    )
+    assert code == 1
+    assert data["ok"] is False
+    current = store.get_task(ready.task_id)
+    assert current is not None
+    assert current.status == "claimed"
+    assert current.lease_id != "stale-lease"
+    assert not any(event.event_type == "task.completed" for event in store.list_events(ready.task_id))
 
 
 # ---------------------------------------------------------------------------

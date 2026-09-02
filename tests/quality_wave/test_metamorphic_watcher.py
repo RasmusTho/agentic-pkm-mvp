@@ -221,9 +221,14 @@ def test_max_scanned_files_caps_processing(
 
     summary = _run_tick(monkeypatch, cfg, spec, WatcherState(), now=1_700_000_500.0)
 
-    assert summary["scanned_files"] == 10
-    assert summary["bad_tick"] is True
-    assert summary["bad_tick_reason"] == "too_many_files"
+    assert summary["scanned_files"] == max_scanned
+    assert summary["scan_progress_entries"] >= max_scanned
+    assert summary["scan_in_progress"] is True
+    assert summary["continuation_reason"] == "file_budget"
+    assert summary["observation_status"] == "catch-up"
+    assert summary["bad_tick"] is False
+    assert summary["bad_tick_reason"] is None
+    assert not cfg.stop_file.exists()
 
 
 def test_empty_vault_zero_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

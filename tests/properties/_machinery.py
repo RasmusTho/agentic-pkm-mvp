@@ -87,7 +87,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "caller drives through the promotion transition path (T-promote), which emits "
         "the promotion events; this write is the plan/graph bookkeeping half."
     ),
-    ("app/agents/normalizer/agent.py", 165): (
+    ("app/agents/normalizer/agent.py", 172): (
         "normalize_file's run(): legacy normalizer ingest shim used by classifier/"
         "normalizer test flows and the memory-backend CLI path; the object's creation "
         "event is emitted by the caller (ingest API / vault_alpha) that invokes normalize."
@@ -106,14 +106,10 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 569): (
-        "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
-        "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
-        "emits its own ingest event upstream of this call in the same run. Line drifted "
-        "527 -> 555 -> 582 -> 558 (site unchanged); re-pinned by #3180 (ERE-05) -- round-3 "
-        "extracted the episode_ref helper into app/ingest/episode_ref.py, shifting this line "
-        "back up. The census gate only fires when this machinery is touched, so the drift "
-        "surfaces on the first PR to edit this file."
+    ("app/ingest/vault_alpha.py", 768): (
+        "Legacy vault-alpha compatibility save; the alpha ingest pipeline emits the "
+        "corresponding ingest event upstream in the same run, so this mirror suppresses "
+        "a duplicate."
     ),
 }
 
@@ -452,13 +448,13 @@ from typing import Callable as _Callable  # noqa: E402
 #                      (formal-model.md §2.3), e.g. the app-local device
 #                      registry, not a Human Knowledge Artifact.
 WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/ports/filesystem_vault_adapter.py", 57): (
+    ("app/ports/filesystem_vault_adapter.py", 60): (
         "guarded: FilesystemVaultAdapter.ensure_uuid calls this class's OWN "
         "write_frontmatter method (line 78), which routes through "
         "write_note_from_absolute (the knowledge port, line 99) -- covered by "
         "the port's own guard-at-seam assertion (#2910), not the "
         "MarkdownSettingsStore primitive this census is otherwise about. "
-        "Line drifted 44 -> 45 -> 57 (site unchanged); re-pinned per this "
+        "Line drifted 44 -> 45 -> 57 -> 60 (site unchanged); re-pinned per this "
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
@@ -1460,33 +1456,43 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 569): (
+    ("app/ingest/vault_alpha.py", 768): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 604): (
+    ("app/ingest/vault_alpha.py", 771): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 618): (
+    ("app/ingest/vault_alpha.py", 790): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 91): (
+    ("app/ingest/vault_root.py", 177): (
         "carries_frontmatter: canonical_payload carries episode_ref; objects_store.upsert -> "
         "PgObjects.upsert -> PgObjectStore.put -> store_objects (round-5 finding: this IS a "
         "canonical store_objects write, not the legacy `objects` table alone)."
     ),
-    ("app/ingest/vault_root.py", 95): (
-        "carries_frontmatter: the id-less fallback of the same canonical_payload objects_store."
-        "upsert -> store_objects."
+    ("app/ingest/vault_root.py", 181): (
+        "carries_frontmatter: the TypeError fallback uses the same canonical_payload; "
+        "objects_store.upsert -> store_objects."
     ),
-    ("app/ingest/vault_root.py", 110): (
+    ("app/ingest/vault_root.py", 196): (
         "carries_frontmatter: _ingest_file payload carries episode_ref; index_ingest_object -> "
         "store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 122): (
+    ("app/ingest/vault_root.py", 208): (
         "carries_frontmatter: same payload ({**payload, 'text': ...}) -> store.put -> store_objects."
+    ),
+    ("app/rebuildability/product_projection_rebuild.py", 542): (
+        "carries_at_construction: payload=source.canonical_payload carries episode_ref from the "
+        "retained source frontmatter before rebuilding store_objects. Verified by "
+        "test_object_vector_and_relation_projections_converge_from_retained_sources."
+    ),
+    ("app/rebuildability/product_projection_rebuild.py", 548): (
+        "carries_at_construction: payload=source.canonical_payload carries episode_ref from the "
+        "retained source frontmatter before rebuilding store_vector_index. Verified by "
+        "test_object_vector_and_relation_projections_converge_from_retained_sources."
     ),
     # -- carries_unbound_default: frontmatter-less source; honest 'unbound' -----------------------
     ("app/ingest/external.py", 66): (
@@ -1576,7 +1582,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
     ),
     # -- carries_at_construction: payload built in a separate function that carries episode_ref;
     #    verified by a RUNTIME test (the payload is opaque at this call site) ---------------------
-    ("app/agents/normalizer/agent.py", 165): (
+    ("app/agents/normalizer/agent.py", 172): (
         "carries_at_construction: shim.payload = normalize_file(...)['payload'], which carries "
         "episode_ref_from_frontmatter(frontmatter) in app/agents/normalizer/agent.py::normalize_file"
         "; save_object -> store_objects. Verified by "
@@ -1588,7 +1594,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/objects/__init__.py", 120): (
+    ("app/objects/__init__.py", 121): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
         "(every save_object caller is itself a classified producer above). Line drifted 116 -> 122 "

@@ -18,7 +18,9 @@ from app.db.errors import StoreSchemaMissingError
 from app.embedding_config import coerce_floats, l2_normalize
 from app.index.artifact_metadata import canonicalize_indexable_text
 from app.objects.identity import (
+    resolve_vault_uuid_for_recovery_with_connection as _resolve_vault_uuid_for_recovery_with_connection,
     resolve_vault_uuid_with_connection as _resolve_vault_uuid_with_connection,
+    retained_vault_uuid_to_canonical_id_map_with_connection as _retained_vault_uuid_to_canonical_id_map_with_connection,
     retained_vault_uuid_with_connection as _retained_vault_uuid_with_connection,
     vault_uuid_to_canonical_id_map_with_connection as _vault_uuid_to_canonical_id_map_with_connection,
 )
@@ -865,6 +867,15 @@ def resolve_vault_uuid_with_connection(
     return _resolve_vault_uuid_with_connection(conn, vault_uuid, vault_binding_id=vault_binding_id)
 
 
+def resolve_vault_uuid_for_recovery_with_connection(
+    conn, vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> str:
+    """Resolve retained identity without alias rejection on a recovery transaction."""
+    return _resolve_vault_uuid_for_recovery_with_connection(
+        conn, vault_uuid, vault_binding_id=vault_binding_id
+    )
+
+
 def resolve_vault_uuid(vault_uuid: str, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID) -> str:
     """Resolve retained identity through a fresh collision-checked snapshot."""
     with _connect() as conn:
@@ -878,6 +889,25 @@ def vault_uuid_to_canonical_id_map_with_connection(
 ) -> dict[str, str]:
     """Return retained vault UUID -> canonical id from the shared identity join."""
     return _vault_uuid_to_canonical_id_map_with_connection(conn, vault_binding_id=vault_binding_id)
+
+
+def retained_vault_uuid_to_canonical_id_map_with_connection(
+    conn, *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
+    """Load the retained UUID -> canonical ID map on one existing connection."""
+    return _retained_vault_uuid_to_canonical_id_map_with_connection(
+        conn, vault_binding_id=vault_binding_id
+    )
+
+
+def retained_vault_uuid_to_canonical_id_map(
+    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
+    """Load one binding-scoped retained UUID -> canonical ID map."""
+    with _connect() as conn:
+        return retained_vault_uuid_to_canonical_id_map_with_connection(
+            conn, vault_binding_id=vault_binding_id
+        )
 
 
 def retained_vault_uuid_with_connection(
@@ -909,6 +939,83 @@ def update_object_source_ref_with_connection(
                 "Canonical store_objects parent is missing for vault-sync object "
                 f"{object_id}; run migrations and reconcile the legacy objects row before retrying"
             )
+
+
+def _assert_recovery_alias_cleanup_is_safe(
+    conn,
+    *,
+    vault_binding_id: str,
+    kind: str,
+    vault_uuid: str,
+    source_ref: str,
+    source_identity: str,
+) -> None:
+    """Refuse an ambiguous UUID-keyed cleanup before changing durable state.
+
+    Recovery may remove a stale projection keyed by a retained UUID only when
+    that row is proven to belong to the recovered source.  A canonical
+    ``objects.id`` owner for the same UUID is evidence that the key belongs to
+    another object, so leave both rows untouched and fail closed.  The row is
+    locked on the caller's recovery transaction so the proof and subsequent
+    cleanup observe one stable state.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_ref, payload,
+                   EXISTS (
+                       SELECT 1
+                       FROM objects
+                       WHERE vault_binding_id = %s AND id = %s
+                   ) AS canonical_owner_exists
+            FROM store_objects
+            WHERE vault_binding_id = %s
+              AND kind = %s
+              AND object_id = %s
+            FOR UPDATE
+            """,
+            (vault_binding_id, vault_uuid, vault_binding_id, kind, vault_uuid),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return
+    if isinstance(row, dict):
+        row_source_ref = row.get("source_ref")
+        row_payload = row.get("payload")
+        canonical_owner_exists = bool(row.get("canonical_owner_exists"))
+    else:
+        row_source_ref, row_payload, canonical_owner_exists = row
+
+    if canonical_owner_exists:
+        raise RuntimeError(
+            "ambiguous recovery UUID-keyed projection; a canonical object owns the supplied "
+            "vault UUID key, so recovery refuses to delete it"
+        )
+
+    if isinstance(row_payload, str):
+        try:
+            row_payload = json.loads(row_payload)
+        except json.JSONDecodeError:
+            row_payload = None
+    if not isinstance(row_payload, dict):
+        row_payload = {}
+    replay = row_payload.get("replay")
+    replay_source_identity = replay.get("source_identity") if isinstance(replay, dict) else None
+    frontmatter = row_payload.get("frontmatter")
+    frontmatter_uuid = frontmatter.get("uuid") if isinstance(frontmatter, dict) else None
+    row_vault_uuid = row_payload.get("vault_uuid")
+    source_evidence = (
+        row_source_ref == source_ref
+        or replay_source_identity == source_identity
+        or row_vault_uuid == vault_uuid
+        or frontmatter_uuid == vault_uuid
+    )
+    if not source_evidence:
+        raise RuntimeError(
+            "ambiguous recovery UUID-keyed projection; source and retained UUID provenance do "
+            "not identify it as the recovered projection"
+        )
 
 
 class PgObjectStore(ObjectStore):
@@ -949,6 +1056,89 @@ class PgObjectStore(ObjectStore):
                 payload=payload,
                 vault_binding_id=self.vault_binding_id,
             )
+
+    def put_and_reconcile_source_backed(
+        self,
+        object_id: UUID,
+        *,
+        kind: str,
+        source_ref: str,
+        source_identity: str,
+        payload: dict,
+        vault_uuid: str | None = None,
+    ) -> str:
+        """Atomically upsert one retained projection and remove its duplicates.
+
+        A prior producer may have persisted a transient identity or an older
+        identity-change row for the same retained source.  Match both the
+        durable locator and replay identity, then leave exactly the requested
+        canonical row in this vault binding.  The upsert and cleanup share one
+        transaction so a recovery pass cannot expose a half-reconciled source.
+        """
+        _ensure_tables()
+        with _connect() as conn:
+            resolved_object_id = object_id
+            if vault_uuid is not None:
+                resolved_object_id = UUID(
+                    resolve_vault_uuid_for_recovery_with_connection(
+                        conn,
+                        vault_uuid,
+                        vault_binding_id=self.vault_binding_id,
+                    )
+                )
+                if resolved_object_id != object_id:
+                    _assert_recovery_alias_cleanup_is_safe(
+                        conn,
+                        vault_binding_id=self.vault_binding_id,
+                        kind=kind,
+                        vault_uuid=vault_uuid,
+                        source_ref=source_ref,
+                        source_identity=source_identity,
+                    )
+            reconciled_payload = dict(payload)
+            if resolved_object_id != object_id:
+                reconciled_payload["artifact_id"] = str(resolved_object_id)
+                reconciled_payload["stable_id"] = str(resolved_object_id)
+                core6 = reconciled_payload.get("core6")
+                if isinstance(core6, dict):
+                    reconciled_payload["core6"] = {
+                        **core6,
+                        "id": str(resolved_object_id),
+                    }
+            put_object_with_connection(
+                conn,
+                object_id=resolved_object_id,
+                kind=kind,
+                source_ref=source_ref,
+                payload=reconciled_payload,
+                vault_binding_id=self.vault_binding_id,
+            )
+            cleanup_predicates = [
+                "source_ref = %s",
+                "payload -> 'replay' ->> 'source_identity' = %s",
+            ]
+            cleanup_params: list[object] = [source_ref, source_identity]
+            if vault_uuid is not None:
+                cleanup_predicates.append("object_id = %s")
+                cleanup_params.append(UUID(vault_uuid))
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM store_objects
+                    WHERE vault_binding_id = %s
+                      AND kind = %s
+                      AND object_id <> %s
+                      AND ("""
+                    + " OR ".join(cleanup_predicates)
+                    + ")",
+                    (
+                        self.vault_binding_id,
+                        kind,
+                        resolved_object_id,
+                        *cleanup_params,
+                    ),
+                )
+        return str(resolved_object_id)
 
     def put_if_absent(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> bool:
         _ensure_tables()

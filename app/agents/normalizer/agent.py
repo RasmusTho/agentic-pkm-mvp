@@ -144,29 +144,36 @@ class _DomainObjectShim:
     source_ref: str | None
 
 
-def run(path: str, *, trace_id: str, artifact_kind: str | None = None) -> dict[str, Any]:
+def run(
+    path: str,
+    *,
+    trace_id: str,
+    artifact_kind: str | None = None,
+    persist: bool = True,
+) -> dict[str, Any]:
     """
     End-to-end:
     - normalize file into domain_object
-    - create shim matching ObjectStore expectations
-    - save via ObjectStore (memory + DB if available)
+    - when requested, create a shim matching ObjectStore expectations and save it
+      (memory + DB if available)
     """
-    store = ObjectStore()
     dom = normalize_file(path, trace_id=trace_id, artifact_kind=artifact_kind)
 
-    shim = _DomainObjectShim(
-        uuid=dom["uuid"],
-        kind=dom["kind"],
-        payload=dom["payload"],
-        created_at=datetime.now(timezone.utc),
-        source_ref=dom.get("source_ref") or dom["payload"].get("source_path"),
-    )
+    if persist:
+        store = ObjectStore()
+        shim = _DomainObjectShim(
+            uuid=dom["uuid"],
+            kind=dom["kind"],
+            payload=dom["payload"],
+            created_at=datetime.now(timezone.utc),
+            source_ref=dom.get("source_ref") or dom["payload"].get("source_path"),
+        )
 
-    store.save_object(
-        shim,
-        emit_outbox=False,
-        trace_id=trace_id,
-    )
+        store.save_object(
+            shim,
+            emit_outbox=False,
+            trace_id=trace_id,
+        )
 
     out = {
         "event": INGEST_NORMALIZE_DONE,

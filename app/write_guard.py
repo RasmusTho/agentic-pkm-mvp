@@ -5,6 +5,8 @@ from typing import Any
 
 from app.health_contract import DEFAULT_CONTRACT, WRITE_BLOCKED_STATES
 
+SOURCE_BACKED_REBUILD_ACTION = "product.source_backed_rebuild"
+
 # Named bootstrap escape (#2877): actions that provision a brand-new vault
 # *before* a vault has been selected (T-scaffold in formal-model.md §2.3).
 # These must survive ordinary runtime health degradation
@@ -24,6 +26,11 @@ DEFAULT_BOOTSTRAP_ACTIONS: frozenset[str] = frozenset(
         # this action must short-circuit ahead of evaluation or fresh-vault
         # bootstrap deadlocks (harness-selfverify promote-to-test smoke, env -i).
         "vault.layout_ensure",
+        # Product object reconstruction writes only derived rows or the
+        # prerequisite UUID needed to address an existing retained note.  It
+        # must remain available while Product readiness correctly reports the
+        # empty projection as unready; unrelated writes still evaluate health.
+        SOURCE_BACKED_REBUILD_ACTION,
     }
 )
 
@@ -76,5 +83,6 @@ __all__ = [
     "WriteGuard",
     "DEFAULT_WRITE_GUARD",
     "DEFAULT_BOOTSTRAP_ACTIONS",
+    "SOURCE_BACKED_REBUILD_ACTION",
     "WritesBlockedError",
 ]

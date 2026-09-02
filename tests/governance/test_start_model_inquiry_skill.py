@@ -294,10 +294,10 @@ def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
     spec.loader.exec_module(module)
     monkeypatch.setattr(module.shutil, "which", lambda name: f"/fixtures/{name}")
 
-    sol_argv = module.build_argv("configured-sol-model")
+    sol_argv = module.build_argv("configured-sol-model", "high")
 
     assert module.COMMAND_TIMEOUT_SECONDS == 1200
-    assert sol_argv[sol_argv.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
+    assert sol_argv[sol_argv.index("-c") + 1] == 'model_reasoning_effort="high"'
     assert sol_argv[sol_argv.index("--model") + 1] == "configured-sol-model"
 
 
@@ -318,6 +318,8 @@ def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
             {"system_prompt": "system", "reviewed_artifact_refs": [], "phase": "draft"},
             "synthesis",
             "configured-sol-model",
+            "xhigh",
+            module.OUTPUT_SCHEMA_REF,
         )
 
     assert raised.value.code == module.TIMEOUT_EXIT_CODE

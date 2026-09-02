@@ -26,6 +26,8 @@ Give dev/test a fast snapshot/restore cycle for bug reproduction, and an on-dema
 forensic dump for prod incident investigation. This is explicitly dev-ergonomics and
 forensics — not scheduled disaster recovery.
 
+Snapshots and dumps follow the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): they are evidence/ergonomics only, never semantic authority and never a mandatory restore proof. They cannot establish readiness or replace the canonical worker queue, and this target-state task does not claim total-loss recovery.
+
 ## What This Task Does
 
 Adds three Makefile targets using `pg_dump` / `pg_restore`:

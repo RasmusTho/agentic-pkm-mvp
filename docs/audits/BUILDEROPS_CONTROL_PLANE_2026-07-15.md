@@ -1,4 +1,4 @@
-State: Advisory architecture audit snapshot, 2026-07-15. Structural evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; lifecycle reconciliation refreshed through `origin/main` at `9e45e847b8cb8bfee847c9e7364cd8f16c793bdf` and live GitHub the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
+State: Historical advisory architecture audit snapshot, 2026-07-15. Structural evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; lifecycle reconciliation refreshed through `origin/main` at `9e45e847b8cb8bfee847c9e7364cd8f16c793bdf` and live GitHub the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
 Doc role: Reference (architecture audit)
 Authority: Evidence and synthesis only. ADR-0010 owns the authority seam; accepted ADR-0062 owns the target decision; GitHub Issues own implementation work.
 Owner: BuilderOps governance / Architecture spine
@@ -249,3 +249,6 @@ only after the decision/spec contract is merged and each issue has resolvable `V
 No unresolved owner decision blocks that sequence. Authentication technology, ports, backup target
 and retention values, schema layout, and later source-repository extraction are bounded
 implementation/later-trigger decisions subject to the invariants above.
+
+The restore-first/WAL proposal in this historical audit is superseded by the current BuilderOps
+owner contracts and is not a current recovery requirement.

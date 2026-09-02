@@ -8,6 +8,8 @@ Authority: Practical dependency matrix for current code paths and environments; 
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
 
+This reference follows the [RSC-01 continuity classification](REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts are continuity authority; machine mirrors are rebuildable; and operational safety state is fenced when lineage is missing. Diagnostic JSONL, dumps, and optional backups are evidence/ergonomics only, never semantic authority and never a mandatory restore proof. They are not a scheduled disaster-recovery or readiness requirement.
+
 # Dependencies
 
 Overview of tools and libraries required in each environment.
@@ -60,7 +62,7 @@ runtime. These are **not** Python/pip dependencies; they load as ES modules.
 | --- | --- | --- | --- |
 | Local dev | `LLM_PROVIDER=mock` (or `ollama`), `STORE_BACKEND=memory`, `INDEX_OUTBOX_PATH=./tmp/index-outbox.jsonl` | Python venv, yt-dlp, ffmpeg, optional Ollama. | Health CLI proves ffmpeg/yt-dlp/outbox readiness; JSONL is audit only. |
 | CI smoke (`.github/workflows/ci-smoke.yaml`) | `LLM_PROVIDER=mock`, `STORE_BACKEND=memory`, `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` | Installs ffmpeg via apt, pip installs requirements. | No Ollama; health runs in mock mode. |
-| “Prod” workstation | `LLM_PROVIDER=ollama`, `OLLAMA_HOST`, `LLM_MODEL`, `DATABASE_URL`, `STORE_BACKEND=pg`, `INDEX_OUTBOX_PATH` on persistent storage (e.g. `~/logs/index-outbox.jsonl`) | Same as local + Ollama daemon + Postgres when `STORE_BACKEND=pg`. | DB outbox is canonical in runtime; JSONL is audit-only. Add log rotation/backups for `INDEX_OUTBOX_PATH` (see `docs/OPERATIONS.md`). |
+| “Prod” workstation | `LLM_PROVIDER=ollama`, `OLLAMA_HOST`, `LLM_MODEL`, `DATABASE_URL`, `STORE_BACKEND=pg`, `INDEX_OUTBOX_PATH` on persistent storage (e.g. `~/logs/index-outbox.jsonl`) | Same as local + Ollama daemon + Postgres when `STORE_BACKEND=pg`. | DB outbox is canonical in runtime; JSONL is audit-only. Optional log rotation may retain diagnostic evidence; it is not a scheduled disaster-recovery or readiness requirement (see `docs/OPERATIONS.md`). |
 
 ## YouTube transcripts and anti-bot notes
 - yt-dlp may be rate limited (403/429). Health only checks imports—run `yt-dlp https://youtu.be/...` manually when debugging.
