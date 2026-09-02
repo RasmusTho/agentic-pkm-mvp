@@ -8,6 +8,8 @@ Authority: Defines the eventual authority cutover and Product separation boundar
 
 Activate one BuilderOps PostgreSQL authority without reintroducing Product ownership, a second writer, or a data-rewind rollback path.
 
+This owner contract follows the [RSC-01 continuity classification](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): BuilderOps operational state is rebuildable from declared repository, image, configuration, and secret-custody sources; its journals, leases, epochs, and fences are operational safety state; and any missing lineage starts an inactive new fenced bootstrap with GitHub readback before activation. Diagnostic dumps and optional backups are evidence/ergonomics only, never semantic authority or a mandatory restore proof. The historical July 2026 restore-first/WAL proposal is superseded and not an active capability; no generalized backup/restore is shipped by this contract.
+
 ## Builder-system authority activation
 
 Before a live activation, the operator must prove an immutable source/image candidate, separate BuilderOps Docker engine/project, VM-local secret references, loopback API, Tailscale Serve private HTTPS without Funnel, scoped bearer authentication, schema/migrations, authority epoch/fencing, no dual writer, health/readiness, local disk/WAL guardrails, and a rebuild receipt. The BuilderOps database is rebuildable operational state: a failed deployment is rebuilt from repository, attested images, configuration, and secret custody. Backup or restore evidence is not an activation gate.

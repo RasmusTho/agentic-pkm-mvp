@@ -12,12 +12,13 @@ from typing import Any, Mapping
 
 GOV_REVOCATION_INVENTORY_SCHEMA = "agentic-pkm.gov-revocation-producers.v1"
 _CANONICAL_BOUNDARY_DEFINITION_DIGESTS = {
-    "_KnownBinding": "f18a5e2845440bf446103154e5026afa12bfd044a3146580ac01c386f8313f8b",
-    "RegistryBindingAuthorizer.__setattr__": "82735f84d023d6fa7579b01b314d84eca1413f05c29fdd2f8e5468f6b6c2a5c0",
-    "RegistryBindingAuthorizer.__init__": "3bbb4bb8ff2adf8790bd7730685e0f0e2a28ba5420c91ebbabc7d4a65cb55cbc",
-    "RegistryBindingAuthorizer.set_binding": "d2692318e9fc1b22f5401059a49547a70f452e89910752faeea2f13056c280ca",
-    "RegistryBindingAuthorizer.authorize": "b7b0e7cd424fab2c465f9816e7a3b2048379ce5e8cb98947997fc326a93db3ba",
+    "_KnownBinding": "e84b127bd9688a215f802a37b5f3abb0cd8995f768ab3070c5ec6a003f8ab4b7",
+    "RegistryBindingAuthorizer.__setattr__": "fb8b9b77d47f3d463676fa1eb93e7cd0bacd114c09a403677c9db55cf99e2f93",
+    "RegistryBindingAuthorizer.__init__": "8ceeab00291883c9a819ee7accc8ad404aa25764ce4ed057a5b773f3feed5be1",
+    "RegistryBindingAuthorizer.set_binding": "993a6d3de3c4151030ede5b209373cbe693fe6708c8a927d8256521cc184ade6",
+    "RegistryBindingAuthorizer.authorize": "388fa8918d08304e157cfb6b772e109966cd30c3e7eeeb4e900edd4201a26ca0",
 }
+_AST_METADATA_FIELDS = frozenset({"kind", "type_comment"})
 
 
 @dataclass(frozen=True)
@@ -46,13 +47,37 @@ def _canonical_boundary_definitions(tree: ast.Module) -> dict[str, list[ast.AST]
     return definitions
 
 
+def _canonical_ast_shape(node: ast.AST) -> Any:
+    """Return an AST shape independent of minor-version dump formatting."""
+
+    fields: dict[str, Any] = {}
+    for field in sorted(node._fields):
+        if field in _AST_METADATA_FIELDS:
+            continue
+        value = getattr(node, field, None)
+        if value is None or value == [] or value == () or value == {}:
+            continue
+        fields[field] = _canonical_ast_value(value)
+    return [type(node).__name__, fields]
+
+
+def _canonical_ast_value(value: Any) -> Any:
+    if isinstance(value, ast.AST):
+        return _canonical_ast_shape(value)
+    if isinstance(value, (list, tuple)):
+        return [_canonical_ast_value(item) for item in value]
+    return value
+
+
 def _canonical_boundary_shape_is_exact(tree: ast.Module) -> bool:
     definitions = _canonical_boundary_definitions(tree)
     for name, expected_digest in _CANONICAL_BOUNDARY_DEFINITION_DIGESTS.items():
         nodes = definitions[name]
         if len(nodes) != 1:
             return False
-        digest = hashlib.sha256(ast.dump(nodes[0], include_attributes=False).encode()).hexdigest()
+        shape = _canonical_ast_shape(nodes[0])
+        material = json.dumps(shape, ensure_ascii=True, separators=(",", ":"))
+        digest = hashlib.sha256(material.encode()).hexdigest()
         if digest != expected_digest:
             return False
     return True

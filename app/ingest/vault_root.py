@@ -10,14 +10,39 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.episode_ref import episode_ref_from_frontmatter
+from app.services.note_uuid import ensure_note_uuid
+from app.domain.state_axes import normalize_artifact_state_axes
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
-from app.stores import get_object_store
+from app.stores import get_object_store, resolve_store_backend
+from app.rebuildability import (
+    canonical_product_source_text,
+    parse_bounded_frontmatter,
+    product_replay_provenance,
+)
 from app.stores.provider import get_stores
+from app.objects import resolve_canonical_object_id
 
 logger = logging.getLogger(__name__)
+
+
+def _stable_vault_root_object_id(
+    path: Path, *, vault_root: Path, frontmatter: dict, source_body: str = ""
+) -> str:
+    """Resolve one canonical Product identity for a root-ingested retained note."""
+    from app.ingest.vault_alpha import (
+        resolve_vault_note_identity,
+    )
+
+    identity = resolve_vault_note_identity(
+        path,
+        vault_root=vault_root,
+        frontmatter=frontmatter,
+        body=source_body,
+    )
+    return resolve_canonical_object_id(identity.note_uuid)
 
 
 def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[Path]:
@@ -38,13 +63,52 @@ def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[P
     return files
 
 
-def _ingest_file(path: Path, *, trace_id: str) -> str:
-    from scripts.yaml_roundtrip import load_frontmatter
+def product_replay_for_vault_note(
+    note_path: Path, *, vault_root: Path, source_text: str | None = None
+) -> dict[str, str]:
+    """Build the Product replay tuple for a vault-root producer note."""
+    root = vault_root.expanduser().resolve()
+    path = note_path.expanduser().resolve()
+    source_identity = path.relative_to(root).as_posix()
+    return product_replay_provenance(
+        source_identity=source_identity,
+        source_text=canonical_product_source_text(
+            source_text if source_text is not None else path.read_text(encoding="utf-8")
+        ),
+        allow_empty_source=True,
+    )
 
+
+def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -> str:
     text = path.read_text(encoding="utf-8")
-    frontmatter, _body = load_frontmatter(text)
+    frontmatter, _body, frontmatter_error = parse_bounded_frontmatter(text)
+    if frontmatter_error is not None:
+        raise ValueError("malformed frontmatter")
     stripped_text = strip_ai_panels(text)
-    normalize_res = normalize_run(str(path), trace_id=trace_id)
+    root = (vault_root or path.parent).expanduser().resolve()
+    store_backend = resolve_store_backend()
+    from app.ingest.vault_alpha import resolve_vault_note_identity
+
+    note_identity = resolve_vault_note_identity(
+        path, vault_root=root, frontmatter=frontmatter, body=_body
+    )
+    if store_backend == "pg":
+        if not frontmatter.get("uuid"):
+            persisted_uuid = ensure_note_uuid(
+                path,
+                vault_root=root,
+                preferred_uuid=note_identity.note_uuid,
+            )
+            frontmatter["uuid"] = persisted_uuid
+    replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)
+    # normalize_run normally persists its freshly allocated UUID. This producer owns a
+    # stable retained-source identity on PG, so suppress the normalizer's transient
+    # persistence there; the canonical upsert below is the only projection row. The
+    # explicit memory backend has no shared canonical provider behind get_stores(),
+    # so retain the legacy normalizer row there for classifier compatibility.
+    normalize_res = normalize_run(
+        str(path), trace_id=trace_id, persist=store_backend != "pg"
+    )
     sanitize_normalize = dict(normalize_res)
     payload_copy = dict(normalize_res.get("payload") or {})
     if "raw_text" in payload_copy:
@@ -53,16 +117,35 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
     payload_copy.setdefault("source_path", str(path))
     payload_copy.setdefault("source_ref", str(path))
     sanitize_normalize["payload"] = payload_copy
-    object_id = str(normalize_res.get("object_id") or normalize_res.get("uuid") or "").strip()
-    if not object_id:
+    normalized_object_id = str(
+        normalize_res.get("object_id") or normalize_res.get("uuid") or ""
+    ).strip()
+    if not normalized_object_id:
         raise RuntimeError("normalize did not return object_id")
+    object_id = (
+        _stable_vault_root_object_id(
+            path, vault_root=root, frontmatter=frontmatter, source_body=_body
+        )
+        if store_backend == "pg"
+        else normalized_object_id
+    )
+    core6 = dict(normalize_res.get("core6") or {})
+    core6["id"] = object_id
 
     try:
         object_uuid = uuid.UUID(object_id)
     except Exception:
         object_uuid = uuid.uuid4()
 
-    title = (normalize_res.get("core6") or {}).get("title")
+    from app.ingest.vault_alpha import _derive_title, _frontmatter_title
+
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
+    title = _frontmatter_title(frontmatter) or _derive_title(_body, path)
+    review_state = normalized_frontmatter["review_state"]
+    core6["title"] = title
+    core6["review_state"] = review_state
     # Carry the note's vault-canonical episode_ref into the DB projection (ERE-03/ERE-05,
     # invariant->producers): index_ingest_object + store.put below full-overwrite the payload
     # column, so an absent episode_ref would blind-drop a stamped binding on reingest (round-3
@@ -70,9 +153,11 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
     ep_ref = episode_ref_from_frontmatter(frontmatter)
     payload = {
         "title": title,
+        "review_state": review_state,
         "origin": "vault",
         "source": str(path),
         "episode_ref": ep_ref,
+        "replay": replay,
     }
     # canonical_payload also lands in the canonical store_objects table: objects_store.upsert ->
     # PgObjects.upsert -> PgObjectStore.put, a full-overwrite of the store_objects payload column
@@ -82,8 +167,9 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
     # blind-dropped to 'unbound' on the next cold rebuild (index_rebuild reads store_objects payload).
     canonical_payload = {
         **payload_copy,
-        "core6": normalize_res.get("core6") or {},
+        "core6": core6,
         "episode_ref": ep_ref,
+        "replay": replay,
     }
     objects_store, _ = get_stores()
     upsert_kwargs = dict(kind="note", payload=canonical_payload, source_ref=str(path), path=str(path))
@@ -136,12 +222,28 @@ def ingest_vault_root(root: Path, limit: int | None = None) -> int:
     run_started = datetime.now(timezone.utc)
     processed = 0
     failures = 0
-    files = iter_vault_root_markdown(root, limit)
+    files = list(iter_vault_root_markdown(root))
+    try:
+        # Once a vault has a layout, this producer must ingest only the same
+        # retained source set used by Product readiness. Keep the historical
+        # no-layout mode for small legacy/test vaults that predate layout.
+        from app.ingest.vault_alpha import select_source_backed_rebuild_candidates
+
+        admitted = {
+            path.expanduser().resolve()
+            for path in select_source_backed_rebuild_candidates(root)
+        }
+    except FileNotFoundError:
+        admitted = None
+    if admitted is not None:
+        files = [path for path in files if path.expanduser().resolve() in admitted]
+    if limit is not None:
+        files = files[:max(limit, 0)]
     try:
         for path in files:
             trace_id = with_trace_id(None)
             try:
-                _ingest_file(path, trace_id=trace_id)
+                _ingest_file(path, trace_id=trace_id, vault_root=root)
                 processed += 1
             except Exception as exc:  # pragma: no cover - defensive logging
                 failures += 1

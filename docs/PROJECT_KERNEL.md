@@ -50,6 +50,11 @@ Audit should make the system legible: the human can see what happened, why it ha
 
 ## 3. System Principles (must always hold)
 
+Canonical routing and enforcement metadata are owned by
+`docs/DESIGN_PRINCIPLES.md :: System Design Principles`. This product-kernel summary references
+`DP-01`, `DP-02`, `DP-02A`, `DP-02B`, `DP-03`, `DP-04`, `DP-05`, `DP-06`, `DP-07`, `DP-08`,
+`DP-09`, `DP-10`, and `DP-11` as a projection only; it is not a second principle registry.
+
 - **Human-first** — The system assists; it does not replace authorship. The default posture is “propose and explain”, not “decide and overwrite”.
 - **Domain-first (operational contextual integrity)** — Every artifact and interaction is scoped to
   an operational domain (e.g., work vs creative/RPG vs private). Default retrieval, suggestions,

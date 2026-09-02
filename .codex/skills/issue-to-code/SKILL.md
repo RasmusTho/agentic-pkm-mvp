@@ -212,17 +212,32 @@ unpublished candidate head (or `none`), changed files, current validation, curre
 evidence bound to an observed time or head, budget state, blockers, residual risk, and exactly one
 next authorized action.
 
-After all non-worktree readbacks agree, the current owner must release its active worktree
+After all non-worktree readbacks agree, a dispatcher-backed handoff must transfer the exact
+dispatcher task before transferring the worktree. The current owner releases the task with
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the
+task as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the
+Issue be returned to `agent:ready`; the named successor runs the normal
+`scripts/issue_pickup_claim.sh` dispatcher-backed pickup for that same task and re-reads the task
+and lease, including task id, Issue number, status, holder, lease id/resource, future expiry, and
+`released_at: null`. The dispatcher release → successor claim/readback is part of the handoff and
+must complete before acknowledgment. A label-only fallback must authenticate the fallback receipt
+instead; it must never imply a dispatcher lease that was not observed.
+
+After the dispatcher readbacks agree, the current owner must release its active worktree
 registration with
 `python3 scripts/agent_worktree.py --cwd <repo> release --worktree <absolute-worktree> --owner <current-session>`
 and re-read it as non-active. The named successor must then register the sole receipt-named worktree
 (or the receipt-named replacement path) with
 `python3 scripts/agent_worktree.py --cwd <repo> register --worktree <absolute-worktree> --owner <successor-session>`
-and re-read its own owner, branch, and generation. A connector-only transfer may instead declare and
+and re-read its own owner, branch, and generation. Immediately after registration, the successor
+must re-read and compare the receipt-bound branch, base, unpublished candidate HEAD, and changed-file
+set against the registered worktree; a changed HEAD or file set requires a new handoff receipt and
+fresh validation, not acknowledgment. A connector-only transfer may instead declare and
 re-authenticate `writable_worktree: none`; it must not fabricate a local registration.
 
-Only after that release → successor registration → live readback sequence (or the authenticated
-connector-only `none` case) may the successor post its acknowledgment. That acknowledgment transfers
+Only after the dispatcher release → successor claim/readback → worktree release → successor
+registration/readback → candidate revalidation sequence (or the authenticated connector-only `none`
+case) may the successor post its acknowledgment. That acknowledgment transfers
 authority, and the former lifecycle owner is then read-only and must not edit, push, publish, merge,
 close, or mutate lifecycle state. If release succeeds but successor registration, readback, or
 acknowledgment fails, authority does not transfer: the current owner remains the lifecycle owner but
@@ -467,7 +482,9 @@ When continuing through anchor drift:
 5. Run the BuilderOps routing checkpoint and create any needed operational record before the context
    becomes hidden local memory.
 6. Restate the bounded outcome from the Issue.
-7. Read source-anchored docs and owning code paths.
+7. For structural changes, follow `.codex/skills/README.md :: Structural-work design packet route`
+   before reading source-anchored docs and owning code paths; a refusal preserves the explicit
+   owner-document route and all mandatory workflow reads.
 8. If anchor drift exists, resolve it using the rules above before coding.
 9. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
 10. **Test-first for behavioral ACs**: for each AC whose `Verify:` names a test, ensure that test exists in the repo and currently fails against the unchanged code path. If the test is missing, write it first from the AC; if it is present but does not fail, either the AC is already satisfied (stop and validate) or the test does not actually exercise the AC (fix the test). For enforcement ACs, keep `.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule` in view: when the AC is about runtime wiring, config, schema, ports, compose/install behavior, or service integration, the verification must reach the real production path or an integration-equivalent path, not only a stubbed dependency. If a stub is still needed for isolation, add at least one real-path assertion that proves the path under test.

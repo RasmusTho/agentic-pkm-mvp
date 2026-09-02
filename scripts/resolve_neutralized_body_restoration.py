@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect a neutralized PR body that outlived its own verified-merge attempt.
+"""Detect a neutralized PR body stranded by its head or GitHub transport.
 
 Read-only detection. It performs no GitHub writes, grants no merge authority,
 and never relaxes the exact-head authority binding.
@@ -9,8 +9,9 @@ exit ``0`` never stands in for "cannot tell":
 
 * ``0`` -- no restoration required: the live body is canonical, or a trusted
   authority receipt still covers the current head.
-* ``2`` -- restoration required: the body is neutralized, no receipt covers the
-  current head, and the durable receipt names the restore target.
+* ``2`` -- restoration required: either the body outlived its receipt head or
+  an exact-head receipt proves the historical one-extra-LF transport deadlock;
+  the durable receipt names the unique restore target.
 * ``3`` -- ambiguous: the body is neutralized on an open PR but the evidence is
   missing, untrusted, or conflicting, so no restore target can be proven. Stop
   and recover evidence; do not continue repair work.

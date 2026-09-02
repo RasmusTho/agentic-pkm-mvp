@@ -31,16 +31,18 @@ SESSION_EXPIRED_MARKERS = (
     "invalid credentials",
 )
 PERSPECTIVES = ("synthesis", "verification")
+REASONING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+OUTPUT_SCHEMA_REF = "builderops.model-turn-response.v1"
 
 
-def build_argv(model: str) -> list[str]:
+def build_argv(model: str, reasoning_effort: str) -> list[str]:
     return [
         _command_path("codex"),
         "exec",
         "--ephemeral",
         "--skip-git-repo-check",
         "-c",
-        'model_reasoning_effort="xhigh"',
+        f'model_reasoning_effort="{reasoning_effort}"',
         "--model",
         model,
         "--sandbox",
@@ -60,12 +62,14 @@ def run_perspective(
     request: Mapping[str, Any],
     perspective: str,
     model: str,
+    reasoning_effort: str,
+    output_schema_ref: str,
 ) -> dict[str, Any]:
     strict_prompt = (
         str(request["system_prompt"])
         + " Return exactly these top-level keys and no others: schema_version, stance, content, "
         "claims, risks, blocking_questions, reviewed_artifact_refs, accepted_artifact_hash. Use "
-        "schema_version=builderops.model-turn-response.v1. reviewed_artifact_refs must equal "
+        f"schema_version={output_schema_ref}. reviewed_artifact_refs must equal "
         "request.reviewed_artifact_refs exactly (an independent draft therefore uses []). For a "
         "draft use stance=draft and accepted_artifact_hash=null. For a review use stance=accept "
         "or revise; if accepting, accepted_artifact_hash must equal the artifact_hash of one of "
@@ -80,7 +84,7 @@ def run_perspective(
     )
     try:
         result = subprocess.run(
-            build_argv(model),
+            build_argv(model, reasoning_effort),
             input=prompt,
             text=True,
             capture_output=True,
@@ -126,11 +130,21 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--perspective", required=True, choices=PERSPECTIVES)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--reasoning-effort", required=True, choices=REASONING_EFFORTS)
+    parser.add_argument("--output-schema-ref", required=True)
     args = parser.parse_args()
+    if args.output_schema_ref != OUTPUT_SCHEMA_REF:
+        parser.error(f"unsupported output schema reference: {args.output_schema_ref}")
     request = json.load(sys.stdin)
     print(
         json.dumps(
-            run_perspective(request, args.perspective, args.model),
+            run_perspective(
+                request,
+                args.perspective,
+                args.model,
+                args.reasoning_effort,
+                args.output_schema_ref,
+            ),
             ensure_ascii=False,
             sort_keys=True,
         ),

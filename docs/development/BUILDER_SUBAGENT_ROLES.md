@@ -116,15 +116,24 @@ owner and session, named successor, branch and base, sole writable worktree, unp
 head (or `none`), changed files, current validation and current review/receipt evidence with head or
 time binding, blockers, residual risk, and exactly one next authorized action.
 
-After all non-worktree readbacks agree, the current owner must release its active registration and
-re-read it as non-active. The named successor must then register the sole receipt-named worktree (or
-receipt-named replacement), and re-read its own owner, branch, and generation. Only after this
-release → successor registration → live readback sequence may the successor post its acknowledgment.
-A connector-only transfer may instead authenticate `writable_worktree: none`, but must not fabricate
-a local registration. If release succeeds but successor registration, readback, or acknowledgment
-fails, authority does not transfer; the current owner remains the lifecycle owner without a writable
-worktree and may only restore its own registration or route reconciliation. Neither side may publish,
-merge, or close in that intermediate state.
+For a dispatcher-backed handoff, the current owner first releases the exact dispatcher task with
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the task
+as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the Issue
+return to `agent:ready`; the named successor runs the normal
+`scripts/issue_pickup_claim.sh` dispatcher-backed pickup for the same task and re-reads task id,
+Issue number, status, holder, lease id/resource, future expiry, and `released_at: null`. A
+label-only fallback authenticates only its fallback receipt and never fabricates a dispatcher lease.
+After the dispatcher release → successor claim/readback sequence, the current owner releases its
+active worktree registration and re-reads it as non-active. The named successor then registers the
+sole receipt-named worktree (or receipt-named replacement), re-reads its owner, branch, and
+generation, and immediately compares the registered worktree's branch, base, candidate HEAD, and
+changed-file set with the receipt. A changed candidate requires a new handoff receipt and fresh
+validation before acknowledgment. Only after this dispatcher release → successor claim/readback →
+worktree release → successor registration/readback → candidate revalidation sequence may the
+successor post its acknowledgment. A connector-only transfer may instead authenticate
+`writable_worktree: none`, but must not fabricate a local registration. If any release, claim,
+registration, readback, or acknowledgment fails, authority does not transfer; Neither side may
+publish, merge, or close in that intermediate state.
 
 The acknowledgment fences the former lifecycle owner into a read-only role: the former owner may
 supply evidence but may no longer edit, push, publish, merge, close, or mutate lifecycle state.

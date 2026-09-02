@@ -119,7 +119,7 @@ def test_vaultwide_smoke_seeds_adopted_fixture_with_same_path_identity() -> None
 
     assert 'VAULT_IDENTITY_OVERLAY_PATH="${RUNNER_TEMP}/ci-vault-identity.' in step
     assert overlay_write in step
-    assert "          services:\n            instance-state-init:\n" in step
+    assert "          services:\n            instance-state-init:\n" not in step
     assert "            watcher:\n              volumes:\n" in step
     assert '                  source: "$VAULT_ROOT"' in step
     assert '                  target: "$VAULT_ROOT"' in step

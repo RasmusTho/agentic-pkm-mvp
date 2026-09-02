@@ -27,10 +27,20 @@ def _mock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_store_backends()
 
 
+def _write_layout(vault_root: Path) -> None:
+    layout_path = vault_root / "⚙️ System" / "vault.layout.md"
+    layout_path.parent.mkdir(parents=True, exist_ok=True)
+    layout_path.write_text(
+        '---\ninclude_folders:\n  - "."\n---\n\nVault layout.\n',
+        encoding="utf-8",
+    )
+
+
 def test_ingest_writes_companion_note(tmp_path: Path, _mock_env: None) -> None:
     """After ingest the companion file must exist under _system/companions/<uuid>.md."""
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    _write_layout(vault_root)
     note_uuid = "aaaabbbb-cccc-dddd-eeee-111111111111"
     note_path = vault_root / "Concepts" / "Example.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +64,7 @@ def test_ingest_companion_lives_at_flat_uuid_path(tmp_path: Path, _mock_env: Non
     """Companion file must be at _system/companions/<uuid>.md — NOT under System/Metadata/VaultMirror."""
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    _write_layout(vault_root)
     note_uuid = "12341234-5678-5678-5678-abcdabcdabcd"
     note_path = vault_root / "Cards" / "Deep" / "nested.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,6 +90,7 @@ def test_ingest_companion_has_no_forbidden_fields(tmp_path: Path, _mock_env: Non
     """Companion must not contain review_state, maturity, or ingest_fingerprint (dict)."""
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
+    _write_layout(vault_root)
     note_uuid = "deadbeef-dead-beef-dead-beefdeadbeef"
     note_path = vault_root / "Notes" / "policy-check.md"
     note_path.parent.mkdir(parents=True, exist_ok=True)

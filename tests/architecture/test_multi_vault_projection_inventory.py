@@ -39,6 +39,8 @@ Source anchors:
 
 from __future__ import annotations
 
+import ast
+import copy
 import json
 import operator
 import re
@@ -54,6 +56,7 @@ from app.governance.binding_authority import (
     RevocationCapabilityError,
 )
 from app.instance.gov_revocation_inventory import (
+    _canonical_boundary_shape_is_exact,
     discover_gov_revocation_producer_evidence,
     discover_gov_revocation_producers,
     load_gov_revocation_inventory,
@@ -112,6 +115,44 @@ def _substantial_sentences(reason: str) -> list[str]:
         for sentence in re.split(r"(?<=[.!?])\s+", reason)
         if len(sentence.split()) >= 10
     ]
+
+
+def test_canonical_boundary_digest_is_python_minor_stable_and_semantic() -> None:
+    source = (REPO_ROOT / "app" / "governance" / "binding_authority.py").read_text(
+        encoding="utf-8"
+    )
+    canonical_tree = ast.parse(source)
+    assert _canonical_boundary_shape_is_exact(canonical_tree)
+
+    minor_variant = copy.deepcopy(canonical_tree)
+    for node in ast.walk(minor_variant):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if hasattr(node, "type_params"):
+                node.type_params = []
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and hasattr(
+                node, "type_comment"
+            ):
+                node.type_comment = "minor-version metadata"
+        if isinstance(node, ast.Constant) and hasattr(node, "kind"):
+            node.kind = "minor-version metadata"
+    assert _canonical_boundary_shape_is_exact(minor_variant)
+
+    semantic_variant = copy.deepcopy(canonical_tree)
+    authorizer = next(
+        node
+        for node in semantic_variant.body
+        if isinstance(node, ast.ClassDef) and node.name == "RegistryBindingAuthorizer"
+    )
+    authorize = next(
+        node
+        for node in authorizer.body
+        if isinstance(node, ast.FunctionDef) and node.name == "authorize"
+    )
+    for node in ast.walk(authorize):
+        if isinstance(node, ast.Constant) and node.value == "allow":
+            node.value = "changed"
+            break
+    assert not _canonical_boundary_shape_is_exact(semantic_variant)
 
 
 RELATIONS_INIT_SQL = REPO_ROOT / "app" / "db" / "sql" / "relations_init.sql"
@@ -1070,6 +1111,9 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         "app/builderops/design_run_governance.py": 1,
         "app/builderops/model_inquiry_runner.py": 1,
         "app/builderops/store.py": 1,
+        # ``dispatcher show --events`` owns one explicit read transaction
+        # whose SQL is intentionally local to the separate SQLite plane.
+        "app/dispatcher/cli.py": 1,
         "app/dispatcher/store.py": 2,
         "app/dispatcher/verification_dispatch.py": 1,
         "app/dispatcher/verification_runtime.py": 1,

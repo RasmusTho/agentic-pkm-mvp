@@ -92,6 +92,47 @@ def test_state_owning_subsystems_select_the_spine_gates() -> None:
         )
 
 
+def test_design_packet_resolver_has_exact_builder_system_test_ownership() -> None:
+    selection = select_tests(["app/governance/design_packet_resolver.py"])
+
+    assert not selection.unowned_paths
+    assert "builder_system" in selection.subsystems
+    assert "tests/governance" in selection.targets
+
+
+def test_design_boundary_doctor_has_exact_builder_system_test_ownership() -> None:
+    selection = select_tests(["app/governance/design_boundary_doctor.py"])
+
+    assert not selection.unowned_paths
+    assert "builder_system" in selection.subsystems
+    assert "tests/governance" in selection.targets
+
+
+def test_product_total_loss_has_store_ingest_test_ownership() -> None:
+    selection = select_tests(["app/rebuildability/product_total_loss.py"])
+
+    assert not selection.unowned_paths
+    assert "store_ingest" in selection.subsystems
+    assert "tests/integration/test_product_total_loss.py" in selection.targets
+
+
+def test_product_source_backed_write_guard_has_store_ingest_test_ownership() -> None:
+    selection = select_tests(["app/write_guard.py"])
+
+    assert not selection.unowned_paths
+    assert "store_ingest" in selection.subsystems
+    assert "tests/integration/test_product_total_loss.py" in selection.targets
+    assert "tests/services/test_write_guard.py" in selection.targets
+
+
+def test_product_projection_rebuild_has_store_ingest_test_ownership() -> None:
+    selection = select_tests(["app/rebuildability/product_projection_rebuild.py"])
+
+    assert not selection.unowned_paths
+    assert "store_ingest" in selection.subsystems
+    assert "tests/integration/test_projection_rebuild.py" in selection.targets
+
+
 def test_every_known_agent_state_class_is_gated_or_fail_closed() -> None:
     """Every class in `_KNOWN_AGENT_STATE_CLASSES` is either gated by its owning subsystem's PR
     selection or provably unowned (fail-closed)."""

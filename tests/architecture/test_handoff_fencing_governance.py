@@ -38,18 +38,23 @@ def test_handoff_requires_authenticated_owner_and_current_evidence() -> None:
     assert "newer blocking review evidence fail closed" in issue_to_code
 
     for surface in (issue_to_code, resume_work):
-        release = surface.index("release --worktree")
-        successor_registration = surface.index("register --worktree")
-        acknowledgment = surface.index("acknowledgment", successor_registration)
-        assert release < successor_registration < acknowledgment
         normalized = " ".join(surface.split())
-        assert "release → successor registration → live readback sequence" in normalized
+        dispatcher_release = normalized.index("dispatcher release")
+        dispatcher_claim = normalized.index("successor claim/readback", dispatcher_release)
+        release = normalized.index("release --worktree")
+        successor_registration = normalized.index("register --worktree", release)
+        candidate_revalidation = normalized.index("candidate revalidation", successor_registration)
+        acknowledgment = normalized.index("acknowledgment", candidate_revalidation)
+        assert dispatcher_release < dispatcher_claim < release
+        assert release < successor_registration < acknowledgment
+        assert successor_registration < candidate_revalidation < acknowledgment
+        assert "dispatcher release → successor claim/readback → worktree release → successor registration/readback → candidate revalidation sequence" in normalized
         assert "writable_worktree: none" in normalized
         assert "authority does not transfer" in normalized
         assert "neither side may publish" in normalized
 
     normalized_owner_doc = " ".join(owner_doc.split())
-    assert "release → successor registration → live readback sequence" in normalized_owner_doc
+    assert "dispatcher release → successor claim/readback → worktree release → successor registration/readback → candidate revalidation sequence" in normalized_owner_doc
     assert "Neither side may publish, merge, or close" in normalized_owner_doc
 
     assert "former lifecycle owner is read-only" in verification

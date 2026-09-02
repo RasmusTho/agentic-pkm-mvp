@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 import pytest
+import yaml
 
 from app.components.embeddings.legacy import _supported_embed_providers
 from app.components.llm.router import _KNOWN_PROVIDERS
@@ -12,6 +13,10 @@ from app.components.settings.providers_loader import (
     ProviderProjectionDriftError,
     assert_provider_projection,
     load_provider_census,
+)
+from app.builderops.model_access_resolver import (
+    BuilderModelAccessResolver,
+    ModelAccessResolutionError,
 )
 from app.llm.adapter import _DISPATCH_PROVIDERS as ADAPTER_DISPATCH_PROVIDERS
 from app.llm.embeddings import PROVIDER_REGISTRY
@@ -155,3 +160,17 @@ def test_model_inquiry_profiles_are_single_target_and_provider_free() -> None:
     caller = Path("app/builderops/model_inquiry.py").read_text(encoding="utf-8")
     assert "claude-fable-5" not in caller
     assert "gpt-5.6-sol" not in caller
+
+
+def test_invalid_model_inquiry_target_tier_fails_closed_as_controlled_resolution_error(
+    tmp_path: Path,
+) -> None:
+    source = yaml.safe_load(Path("docs/settings/models/providers.yaml").read_text(encoding="utf-8"))
+    source["runtime_channels"]["model_inquiry"]["dev"]["target_intent"][
+        "capability_tier"
+    ] = "not-a-capability-tier"
+    census_path = tmp_path / "providers.yaml"
+    census_path.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ModelAccessResolutionError, match="declared model access sources"):
+        BuilderModelAccessResolver.from_declared_sources(census_path=census_path)

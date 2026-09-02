@@ -17,7 +17,9 @@ Source of truth: ADR-0010, BuilderOps Vault contracts, and this directory for ta
 # BuilderOps Model Inquiry
 
 BuilderOps Model Inquiry turns one development question into a bounded, pre-ticket collaboration
-between two neutral review perspectives over one configured Sol target. It stores the question, context packets, model turns, synthesis,
+between two neutral review perspectives over one configured capability target. Current operational
+configuration enables only Codex subscription transport; durable selection remains provider-neutral
+and configuration-resolved. It stores the question, context packets, model turns, synthesis,
 readiness outcome, and promotion evidence in the BuilderOps plane. It does not make a GitHub Issue
 until the result is executable work.
 
@@ -32,7 +34,7 @@ its advisory claim files never guarantee exclusive ownership.
 
 - one command/API request creates an `inquiry_id` before any ticket or Issue exists;
 - the neutral `synthesis` and `verification` perspectives receive structured context packets over
-  the same configured Sol target; this is explicit single-target acceptance, not independent
+  the same configured resolved target; this is explicit single-target acceptance, not independent
   consensus and not a fallback claim;
 - every model turn is traceable to its input artifacts, model identity, run, and content hash;
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
@@ -97,9 +99,10 @@ is delivered. No task is ready to make a Product/Runtime write.
    blocking questions terminally record `needs_input` or `not_ready`; no model invents missing
    requirements to reach Issue-ready. An eligible unavailable, timed-out, empty, or malformed
    subscription turn may try the one alternate configured adapter only on legacy/compatibility
-   paths with distinct effective targets. Active v2 single-target execution has no same-identity
-   alternate; explicit refusal, unsafe output, credential or session failure, and persistence
-   failure never fall back. The owner-controlled
+   paths with distinct effective targets. Active v2 single-target execution has no alternate;
+   adapter or command failure is terminal `provider_error`, never `degraded_consensus`, and cannot
+   become ready or promotable. Explicit refusal, unsafe output, credential or session failure, and
+   persistence failure never fall back. The owner-controlled
    host launcher selects this fixed bridge only with
    `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1`; that boolean cannot name targets or
    secrets, and the provider-API launcher refuses to start if it is present or inherited.

@@ -22,6 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.instance.vault_dimensions import VaultDimensionService
 
 from app.instance.filesystem_identity import (
+    FilesystemIdentityError,
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
@@ -2648,8 +2649,6 @@ def _load_legacy_owner_inventory(
                 ancestor_identities,
             )
         )
-    if len({owner.vault_binding_id for owner in owners}) != len(owners):
-        raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
     represented = {owner.vault_binding_id for owner in owners if owner.channel_id == channel}
     missing_bindings = set(registry.registrations) - represented
     if missing_bindings:
@@ -3002,13 +3001,65 @@ def _finish_instance_state_deployment_locked(
         channel=channel,
         quiescence_proof=quiescence_proof,
     )
+    pending_legacy_owners: list[LegacyOwner] = []
     if established is not None and established.legacy_bootstrap_complete:
+        recovery_failed = False
         try:
-            owners = list(ledger.resolve_live_owner_bindings(owners, skip_unadopted=True))
-        except LedgerError as exc:
+            # Only pending registrations need the recovery transition here.
+            # Active leases must reach the canonical consistency check below
+            # first; otherwise a corrupted stored identity is misreported as
+            # generic recovery failure instead of the specific consistency
+            # failure that governs this finish path.
+            for registration in registry.registrations.values():
+                registration_lease = established.leases.get(
+                    registration.vault_binding_id
+                )
+                if (
+                    registration_lease is not None
+                    and registration_lease.state == "pending"
+                ):
+                    pending_owner = next(
+                        (
+                            owner
+                            for owner in owners
+                            if owner.channel_id == channel
+                            and owner.vault_binding_id
+                            == registration.vault_binding_id
+                        ),
+                        None,
+                    )
+                    if pending_owner is None:
+                        raise LedgerError(
+                            "pending registration has no host-validated owner receipt"
+                        )
+                    ledger.recover_or_require_active_from_host_receipt(
+                        pending_owner,
+                        channel_id=channel,
+                        persist=False,
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                    pending_legacy_owners.append(pending_owner)
+            # Foreign receipt owners are complete host-validated evidence,
+            # not this channel's mount-blind config candidates. Require each
+            # omitted foreign binding to resolve before the compatibility path
+            # below may skip a current-channel unadopted candidate.
+            foreign_owners_without_bindings = tuple(
+                owner
+                for owner in owners
+                if owner.channel_id != channel and not owner.vault_binding_id
+            )
+            ledger.resolve_live_owner_bindings(foreign_owners_without_bindings)
+            owners = list(
+                ledger.resolve_live_owner_bindings(owners, skip_unadopted=True)
+            )
+        except (FilesystemIdentityError, LedgerError):
+            recovery_failed = True
+        if recovery_failed:
+            # Raise after leaving the handler so Python cannot retain a
+            # mount-only recovery exception in __context__.
             raise InstanceStatePreflightError(
-                "host-validated legacy-owner binding is invalid"
-            ) from exc
+                "host-validated legacy-owner binding or lease recovery is invalid"
+            )
     else:
         owners = [
             owner
@@ -3023,12 +3074,15 @@ def _finish_instance_state_deployment_locked(
             )
             for owner in owners
         ]
+    if len({owner.vault_binding_id for owner in owners}) != len(owners):
+        raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
     try:
         ledger_snapshot = backup._require_registry_ledger_consistency(
             registry=registry,
             ledger=ledger,
             global_live_owners=tuple(owners),
             require_materialized_owner_roots=False,
+            pending_legacy_owners=tuple(pending_legacy_owners),
         )
     except InstanceStatePreflightError as exc:
         if established is not None and established.legacy_bootstrap_complete:

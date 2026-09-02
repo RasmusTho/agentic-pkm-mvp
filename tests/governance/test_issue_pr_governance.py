@@ -22,6 +22,7 @@ from app.dispatcher.verification_contract import (
     resolve_neutralized_issue_authority,
     resolve_pr_contract_final_review_rounds,
 )
+from app.dispatcher.verified_merge import verified_merge_body_sha256
 from scripts.pr_body_generator import generate_pr_body_from_mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -402,8 +403,7 @@ def test_issue_shape_workflow_keeps_normal_issue_contract_strict() -> None:
 
 
 def _verified_merge_body_digest(body: str) -> str:
-    canonical_body = body[:-1] if body.endswith("\n") else body
-    return hashlib.sha256(canonical_body.encode()).hexdigest()
+    return verified_merge_body_sha256(body)
 
 
 def _js_final_review_rounds(body: str) -> dict[str, object]:
@@ -788,7 +788,7 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
         ) is None
     assert _js_neutralized_merge_authority(
         [legacy_comment], {**pull_request, "body": body + "\n"}, str(legacy["repository"])
-    ) == legacy
+    ) is None
 
     for crlf_body in (body[:-1] + "\r", body[:-1].replace("Refs", "Refs\r", 1)):
         crlf_receipt = copy.deepcopy(legacy)
@@ -852,7 +852,7 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
     )
     assert _js_neutralized_merge_authority(
         [canonical_comment], {**pull_request, "body": double_lf}, str(receipt["repository"])
-    ) == canonical_double_lf
+    ) is None
 
 
 def test_neutralized_pr_contract_rejects_forged_stale_missing_and_conflicting_authority() -> None:
@@ -893,6 +893,7 @@ def test_production_pr_contract_authenticates_neutralized_merge_authority() -> N
         "resolveNeutralizedMergeAuthority",
         "TRUSTED_ASSOCIATIONS",
         "receipt.head_sha === pullRequest.head?.sha",
+        "neutralizedBodyTransportCanonical(liveBody)",
         "liveBody, receipt.neutralized_body_sha256, {allowLegacy}",
         "valid.map(entry => canonicalJson(entry.receipt))",
         "one trusted, non-conflicting exact-head verified-merge authority receipt",

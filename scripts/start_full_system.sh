@@ -15,6 +15,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 source "scripts/lib/load_env_defaults.sh"
+source "scripts/lib/instance_state_deployment.sh"
 
 # Load channel-specific local env override BEFORE base defaults so that
 # per-channel vault paths (which may contain spaces) take precedence.
@@ -38,14 +39,19 @@ unset _pkm_initial_channel _pkm_initial_channel_lower
 
 load_env_defaults_file ".env"
 load_env_defaults_file "config/runtime.defaults.env"
-# This launcher already passes an unset channel to the deployment wrapper as
-# `dev` below. Resolve the MVR-03 topology declaration from that same implicit
-# channel so an explicit cutover cannot arrive with an undeclared listener.
-_pkm_deploy_pin_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
-_pkm_deploy_pin_channel="$(printf '%s' "${_pkm_deploy_pin_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_deploy_pin_channel}")"
-case "${_pkm_deploy_pin_channel:-}" in
+# Resolve the launcher channel once, using the same precedence and normalization
+# for MVR-03 loading, legacy-settings preflight, and instance-state preparation.
+# This keeps an explicit test-channel selector from being re-defaulted to dev.
+_pkm_resolved_channel="${PKM_ENVIRONMENT:-${ENVIRONMENT:-${CHANNEL:-${PKM_CHANNEL:-dev}}}}"
+_pkm_resolved_channel="$(printf '%s' "${_pkm_resolved_channel}" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || printf '%s' "${_pkm_resolved_channel}")"
+case "${_pkm_resolved_channel:-}" in
   dev|test|prod)
-    _pkm_deploy_pin_file="config/deploy/${_pkm_deploy_pin_channel}.env"
+    _pkm_deploy_pin_file="config/deploy/${_pkm_resolved_channel}.env"
+    # Read the channel file directly while the shell still contains only
+    # caller/base defaults. This preserves duplicate detection and Compose's
+    # effective-value semantics before loading the file into the environment.
+    preflight_instance_state_deployment_legacy_settings \
+      "${_pkm_resolved_channel}" "${_pkm_deploy_pin_file}" || exit $?
     load_env_defaults_file "${_pkm_deploy_pin_file}"
     # The channel file, not ambient shell state, owns whether this topology is
     # proven loopback-local. Pin it exactly as deploy_channel.sh does so both
@@ -63,8 +69,11 @@ case "${_pkm_deploy_pin_channel:-}" in
         ;;
     esac
     ;;
+  *)
+    preflight_instance_state_deployment_legacy_settings "${_pkm_resolved_channel}" || exit $?
+    ;;
 esac
-unset _pkm_deploy_pin_channel _pkm_deploy_pin_file _pkm_mvr03_loopback_listener
+unset _pkm_deploy_pin_file _pkm_mvr03_loopback_listener
 
 if [ "$_pkm_caller_vault_root_set" -eq 0 ] && [ "$_pkm_channel_vault_root_set" -eq 0 ]; then
   # A bare start with no caller- or channel-selected vault must stay in the
@@ -84,7 +93,6 @@ source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/worker_heartbeat_probe.sh"
 source "scripts/lib/pinned_image_guard.sh"
 source "scripts/lib/start_full_system_env.sh"
-source "scripts/lib/instance_state_deployment.sh"
 source "scripts/lib/heimdal_cold_volume_preflight.sh"
 apply_start_full_system_defaults
 heimdal_cold_volume_preflight_effective "$ROOT"
@@ -121,6 +129,7 @@ startup_status_path="$ROOT/tmp/startup_status.json"
 mkdir -p "$ROOT/tmp"
 
 readiness_state="unknown"
+readyz_http_status="unknown"
 api_health_ok="false"
 api_health_required_ok="false"
 api_health_failed="none"
@@ -1213,7 +1222,7 @@ PY
 
 run_preflight
 ensure_prod_instance_state_volume
-if prepare_instance_state_deployment run_docker_compose "${PKM_ENVIRONMENT:-dev}"; then
+if prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"; then
   :
 else
   instance_state_rc=$?
@@ -2175,8 +2184,12 @@ if [ "$START_WATCHERS" -eq 1 ]; then
     exit 1
   fi
 fi
-ready_payload=$(curl -sS "$API_BASE_URL/readyz" || true)
-readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
+probe_product_readiness() {
+  local readyz_response
+  readyz_response=$(curl -sS -w $'\n%{http_code}' "$API_BASE_URL/readyz" || true)
+  readyz_http_status="${readyz_response##*$'\n'}"
+  ready_payload="${readyz_response%$'\n'*}"
+  readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
 import json, os, sys
 try:
     raw = os.environ.get("READY_JSON", "")
@@ -2192,7 +2205,40 @@ except Exception as exc:
     print(f"INFO: optional preflight failed: {exc}")
     sys.exit(0)
 PY
-)
+  )
+}
+
+probe_product_status() {
+  local status_response product_readiness_probe
+  status_response=$(curl -sS -w $'\n%{http_code}' "$API_BASE_URL/status" || true)
+  product_status_http_status="${status_response##*$'\n'}"
+  product_status_payload="${status_response%$'\n'*}"
+  product_readiness_probe=$(PRODUCT_STATUS_JSON="$product_status_payload" python - <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ.get("PRODUCT_STATUS_JSON", ""))
+    product_readiness = data.get("product_readiness") if isinstance(data, dict) else None
+    if not isinstance(product_readiness, dict):
+        raise ValueError("missing Product readiness")
+    ready = "1" if product_readiness.get("ready") is True else "0"
+    state = str(product_readiness.get("state") or "unknown")
+except Exception:
+    ready = "0"
+    state = "invalid-status-payload"
+print(f"{ready}|{state}")
+PY
+  )
+  IFS='|' read -r product_readiness_ready product_readiness_state \
+    <<<"$product_readiness_probe"
+}
+
+probe_product_readiness
+product_rebuild_required=0
+case "$readiness_state" in
+  *"product replay refused:"*) product_rebuild_required=1 ;;
+esac
 
 api_health_payload=$(curl -sS "$API_BASE_URL/api/health" || true)
 update_health_state() {
@@ -2341,37 +2387,20 @@ object_count="$objects_before"
 vector_count="$vectors_before"
 ingest_summary_json="{}"
 ingest_status=0
-if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
+if [ "$NO_VAULT_MODE" -ne 1 ] && {
+  [ "$objects_before" -le 0 ] || [ "$product_rebuild_required" -eq 1 ]
+}; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --source-backed-rebuild --json)
     ingest_status=$?
     set -e
-    if [ "$ingest_status" -ne 0 ]; then
-      echo "INFO: bootstrap ingest failed but will be retried after first ingest (empty system)"
-      ingest_run="no"
-      ingest_summary_json="{}"
-    fi
   else
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --source-backed-rebuild --json)
     ingest_status=$?
     set -e
-    if [ "$ingest_status" -ne 0 ]; then
-      if [ "$VERIFY_ACTIVE" -eq 1 ]; then
-        EXIT_REASON="bootstrap_ingest_failed"
-        EXIT_CODE=1
-        export EXIT_REASON EXIT_CODE
-        write_startup_status 0 "$EXIT_REASON"
-        echo "ERROR: bootstrap ingest failed" >&2
-        exit 1
-      else
-        echo "INFO: bootstrap ingest failed (ignored for fast start)" >&2
-        ingest_run="no"
-        ingest_summary_json="{}"
-      fi
-    fi
   fi
   store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
   objects_after=$(extract_stat objects)
@@ -2381,6 +2410,76 @@ if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
 fi
 
 ensure_json_or_fail "vault-alpha-ingest" "$ingest_summary_json" "vault-alpha-ingest --json" "$ingest_status"
+
+fail_product_rebuild() {
+  local reason="$1"
+  local message="$2"
+  EXIT_REASON="$reason"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: $message" >&2
+  debug_dump
+  exit 1
+}
+
+if [ "$ingest_run" = "yes" ]; then
+  if [ "$ingest_status" -ne 0 ]; then
+    fail_product_rebuild "bootstrap_ingest_failed" "source-backed vault-alpha reconstruction failed"
+  fi
+  ingest_rebuild_meta=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
+import json, os
+
+try:
+    payload = json.loads(os.environ.get("INGEST_JSON", ""))
+    values = [
+        int(payload.get("scanned") or 0),
+        int(payload.get("ingested") or 0),
+        int(payload.get("errors") or 0),
+        int(payload.get("malformed") or 0),
+        int(payload.get("skipped_locked") or 0),
+        int(payload.get("skipped_invalid") or 0),
+        0,
+    ]
+except Exception:
+    values = [0, 0, 0, 0, 0, 0, 1]
+print("|".join(str(value) for value in values))
+PY
+  )
+  IFS='|' read -r ingest_scanned_count ingest_rebuilt_count ingest_error_count \
+    ingest_malformed_count ingest_locked_count ingest_invalid_count ingest_meta_invalid \
+    <<<"$ingest_rebuild_meta"
+  ingest_scanned_count=${ingest_scanned_count:-0}
+  ingest_rebuilt_count=${ingest_rebuilt_count:-0}
+  ingest_error_count=${ingest_error_count:-0}
+  ingest_malformed_count=${ingest_malformed_count:-0}
+  ingest_locked_count=${ingest_locked_count:-0}
+  ingest_invalid_count=${ingest_invalid_count:-0}
+  ingest_meta_invalid=${ingest_meta_invalid:-1}
+  if [ "$ingest_meta_invalid" -ne 0 ] \
+    || [ "$ingest_error_count" -ne 0 ] \
+    || [ "$ingest_malformed_count" -ne 0 ] \
+    || [ "$ingest_locked_count" -ne 0 ] \
+    || [ "$ingest_invalid_count" -ne 0 ] \
+    || [ "$ingest_rebuilt_count" -ne "$ingest_scanned_count" ]; then
+    fail_product_rebuild \
+      "bootstrap_product_rebuild_incomplete" \
+      "source-backed vault-alpha reconstruction was incomplete or reported errors"
+  fi
+
+  # The ingest command can report success while the Product projection is
+  # still unready. Inspect that component directly: aggregate /readyz can stay
+  # 503 while an independent health state completes its recovery hysteresis.
+  if [ "$ingest_scanned_count" -gt 0 ] || [ "$product_rebuild_required" -eq 1 ]; then
+    probe_product_status
+    if [ "$product_status_http_status" != "200" ] \
+      || [ "$product_readiness_ready" != "1" ]; then
+      fail_product_rebuild \
+        "bootstrap_product_readiness_failed" \
+        "source-backed reconstruction completed but Product readiness is $product_status_http_status ($product_readiness_state)"
+    fi
+  fi
+fi
 
 if [ "$auto_bootstrap" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then

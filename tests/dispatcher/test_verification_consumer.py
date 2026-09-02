@@ -1249,7 +1249,7 @@ def test_open_neutralized_recovery_fails_closed_on_untrusted_evidence(
             {"author_association": "OWNER", "body": conflicting_phase}
         )
     elif corruption == "body_digest":
-        neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n"}
+        neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n\n"}
     elif corruption == "repair_budget":
         comments[0]["body"] = str(comments[0]["body"]).replace(
             '"policy_version":"v2"', '"policy_version":"v1"'
