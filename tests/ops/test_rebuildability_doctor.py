@@ -243,6 +243,33 @@ def test_doctor_requires_db_generation_evidence() -> None:
     assert {finding.code for finding in report.findings} == {MirrorFindingCode.MISSING_PROVENANCE}
 
 
+def test_doctor_rejects_conflicting_source_generations_order_independently() -> None:
+    sources = [
+        SourceRecord(identity="Notes/product.md", generation="generation-a"),
+        SourceRecord(identity="Notes/product.md", generation="generation-b"),
+    ]
+    first = diagnose_mirror_corruption(
+        inventory=_inventory(), sources=sources, projections=[_projection()]
+    )
+    reversed_sources = diagnose_mirror_corruption(
+        inventory=_inventory(), sources=list(reversed(sources)), projections=[_projection()]
+    )
+
+    assert first.healthy is False
+    assert first == reversed_sources
+    assert {
+        finding.code for finding in first.findings
+    } == {MirrorFindingCode.CONFLICTING_SOURCE_GENERATION}
+
+
+def test_doctor_reports_missing_projection_identity() -> None:
+    report = diagnose_mirror_corruption(
+        inventory=_inventory(), sources=[_source()], projections=[_projection(projection_id=" ")]
+    )
+
+    assert MirrorFindingCode.MISSING_IDENTITY in {finding.code for finding in report.findings}
+
+
 def test_doctor_reports_missing_path_identity() -> None:
     report = diagnose_mirror_corruption(
         inventory=[

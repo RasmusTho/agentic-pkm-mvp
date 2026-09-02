@@ -33,6 +33,8 @@ class MirrorFindingCode(str, Enum):
     DB_SOURCE_MISMATCH = "db_source_mismatch"
     HIDDEN_AUTHORITY = "hidden_authority"
     INCOMPLETE_SNAPSHOT = "incomplete_snapshot"
+    CONFLICTING_SOURCE_GENERATION = "conflicting_source_generation"
+    MISSING_IDENTITY = "missing_identity"
 
 
 @dataclass(frozen=True)
@@ -131,9 +133,24 @@ def diagnose_mirror_corruption(
     if not snapshot_complete:
         findings.append(MirrorFinding(MirrorFindingCode.INCOMPLETE_SNAPSHOT, _digest("snapshot")))
     source_generations: dict[str, str] = {}
+    conflicting_source_identities: set[str] = set()
     for source in sources:
         if not _missing(source.identity) and not _missing(source.generation):
-            source_generations[source.identity] = source.generation
+            if source.identity in conflicting_source_identities:
+                continue
+            previous_generation = source_generations.get(source.identity)
+            if previous_generation is not None and previous_generation != source.generation:
+                conflicting_source_identities.add(source.identity)
+                del source_generations[source.identity]
+            else:
+                source_generations[source.identity] = source.generation
+    for source_identity in conflicting_source_identities:
+        findings.append(
+            MirrorFinding(
+                MirrorFindingCode.CONFLICTING_SOURCE_GENERATION,
+                _digest("source", source_identity),
+            )
+        )
 
     for path in inventory:
         if (
@@ -153,6 +170,8 @@ def diagnose_mirror_corruption(
 
     for projection in projections:
         subject = _digest("projection", projection.projection_id)
+        if _missing(projection.projection_id):
+            findings.append(MirrorFinding(MirrorFindingCode.MISSING_IDENTITY, subject))
         if (
             _missing(projection.source_identity)
             or _missing(projection.source_generation)
@@ -161,22 +180,27 @@ def diagnose_mirror_corruption(
         ):
             findings.append(MirrorFinding(MirrorFindingCode.MISSING_PROVENANCE, subject))
         if not _missing(projection.source_identity):
-            source_identity = projection.source_identity
-            assert source_identity is not None
-            source_generation = source_generations.get(source_identity)
-            if source_generation is None:
-                findings.append(MirrorFinding(MirrorFindingCode.ORPHANED_PROJECTION, subject))
+            projection_source_identity = projection.source_identity
+            assert projection_source_identity is not None
+            if projection_source_identity in conflicting_source_identities:
+                findings.append(
+                    MirrorFinding(MirrorFindingCode.CONFLICTING_SOURCE_GENERATION, subject)
+                )
             else:
-                if (
-                    not _missing(projection.source_generation)
-                    and projection.source_generation != source_generation
-                ):
-                    findings.append(MirrorFinding(MirrorFindingCode.STALE_GENERATION, subject))
-                if (
-                    not _missing(projection.db_source_generation)
-                    and projection.db_source_generation != source_generation
-                ):
-                    findings.append(MirrorFinding(MirrorFindingCode.DB_SOURCE_MISMATCH, subject))
+                source_generation = source_generations.get(projection_source_identity)
+                if source_generation is None:
+                    findings.append(MirrorFinding(MirrorFindingCode.ORPHANED_PROJECTION, subject))
+                else:
+                    if (
+                        not _missing(projection.source_generation)
+                        and projection.source_generation != source_generation
+                    ):
+                        findings.append(MirrorFinding(MirrorFindingCode.STALE_GENERATION, subject))
+                    if (
+                        not _missing(projection.db_source_generation)
+                        and projection.db_source_generation != source_generation
+                    ):
+                        findings.append(MirrorFinding(MirrorFindingCode.DB_SOURCE_MISMATCH, subject))
         if (
             not _missing(projection.expected_index_identity)
             and projection.index_identity != projection.expected_index_identity
