@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1132,18 +1133,7 @@ def _dispatcher_cleanup_guard(
     else:
         raise ClosureError("unknown", "dispatcher cleanup guard release token is missing")
     argv.append("--json")
-    try:
-        result = _run(executor, cwd, argv)
-    except ClosureError as exc:
-        if action == "acquire" and exc.result is not None:
-            try:
-                payload = json.loads(exc.result.stdout)
-            except json.JSONDecodeError:
-                payload = None
-            error = payload.get("error") if isinstance(payload, Mapping) else None
-            if isinstance(error, str) and error.startswith("dispatcher not initialised"):
-                return None
-        raise
+    result = _run(executor, cwd, argv)
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -1812,7 +1802,10 @@ def _finish_cleanup(
             merge_sha=merge_sha,
         )
     task_id = github_issue_task_id(str(value["repository"]), int(value["governing_issue"]))
-    owner = f"closure-cleanup:{value['repository']}:{value['pr_number']}:{value['plan_sha256']}"
+    owner = (
+        f"closure-cleanup:{value['repository']}:{value['pr_number']}:{value['plan_sha256']}"
+        f":invocation-{uuid.uuid4().hex}"
+    )
     token = _dispatcher_cleanup_guard(
         runner,
         cwd,
@@ -1821,14 +1814,7 @@ def _finish_cleanup(
         owner=owner,
     )
     if token is None:
-        return _finish_cleanup_effects(
-            value,
-            current,
-            runner,
-            cwd,
-            reconciled=reconciled,
-            merge_sha=merge_sha,
-        )
+        raise ClosureError("incomplete", "dispatcher cleanup guard acquisition returned no token")
     try:
         return _finish_cleanup_effects(
             value,

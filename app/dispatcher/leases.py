@@ -109,15 +109,11 @@ def acquire_cleanup_guard(
         if task is not None and (task["status"] == "claimed" or task["lease_id"] is not None):
             raise ValueError(f"Cannot acquire cleanup guard for task {task_id}: active dispatcher lease")
         if existing is not None:
-            if existing["owner"] != owner:
-                raise ValueError(f"Cleanup guard for task {task_id} is held by another owner")
-            refreshed = {**existing, "expires_at": expires}
-            conn.execute(
-                "UPDATE dispatcher_meta SET value = ? WHERE key = ?",
-                (json.dumps(refreshed, sort_keys=True), _cleanup_guard_key(task_id)),
-            )
-            conn.commit()
-            return refreshed
+            if existing["owner"] == owner:
+                raise ValueError(
+                    f"Cleanup guard for task {task_id} is already held by this invocation"
+                )
+            raise ValueError(f"Cleanup guard for task {task_id} is held by another owner")
         guard = {
             "task_id": task_id,
             "owner": owner,

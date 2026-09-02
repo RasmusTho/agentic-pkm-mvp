@@ -175,7 +175,7 @@ def test_cleanup_guard_blocks_claim_until_exact_release(tmp_env, store):
     assert data["task"]["status"] == "claimed"
 
 
-def test_cleanup_guard_same_owner_refreshes_expiry(tmp_env, store, monkeypatch):
+def test_cleanup_guard_same_owner_is_invocation_exclusive(tmp_env, store, monkeypatch):
     from app.dispatcher import leases
     from tests.dispatcher.helpers import seed_tasks
 
@@ -183,15 +183,58 @@ def test_cleanup_guard_same_owner_refreshes_expiry(tmp_env, store, monkeypatch):
     ready = next(t for t in tasks if t.status == "ready")
     timestamps = iter([
         "2026-09-02T00:00:00+00:00",
-        "2026-09-02T00:00:30+00:00",
-        "2026-09-02T00:00:31+00:00",
+        "2026-09-02T00:00:01+00:00",
+        "2026-09-02T00:00:02+00:00",
+        "2026-09-02T00:00:03+00:00",
+        "2026-09-02T00:00:04+00:00",
     ])
     monkeypatch.setattr(leases, "_utc_now", lambda: next(timestamps))
     first = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
-    second = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
-    assert second["token"] == first["token"]
-    assert second["expires_at"] > first["expires_at"]
-    leases.release_cleanup_guard(store, ready.task_id, "closure-test", second["token"])
+    with pytest.raises(ValueError, match="already held by this invocation"):
+        leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", first["token"])
+    retry = leases.acquire_cleanup_guard(store, ready.task_id, "closure-test", ttl_seconds=60)
+    assert retry["token"] != first["token"]
+    leases.release_cleanup_guard(store, ready.task_id, "closure-test", retry["token"])
+
+
+def test_cleanup_guard_bootstraps_missing_db_before_claim(tmp_env):
+    from app.dispatcher import leases
+    from app.dispatcher.models import TaskRecord
+
+    task_id = "task-missing-db"
+    code, data = _run(
+        [
+            "cleanup-guard",
+            "acquire",
+            "--task-id",
+            task_id,
+            "--owner",
+            "closure-test",
+            "--json",
+        ]
+    )
+    assert code == 0
+    assert data["ok"] is True
+    token = data["guard"]["token"]
+    paths = load_paths(tmp_env)
+    store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    store.upsert_task(
+        TaskRecord(
+            task_id=task_id,
+            issue_number=7,
+            title="task created after guard bootstrap",
+            status="ready",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2026-09-02T00:00:00+00:00",
+            updated_at="2026-09-02T00:00:00+00:00",
+        )
+    )
+    code, data = _run(["claim", task_id, "--agent", "other", "--json"])
+    assert code == 1
+    assert "cleanup guard" in data["error"]
+    leases.release_cleanup_guard(store, task_id, "closure-test", token)
 
 
 def test_claim_conflict_returns_error(tmp_env, store):

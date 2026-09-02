@@ -1447,10 +1447,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1
 
-    # Guard: commands requiring a DB must exit clearly if DB doesn't exist
+    paths = load_paths()
+
+    # Cleanup guards are the one DB-backed coordination command that may
+    # bootstrap an absent DB.  This closes the gap between a documented
+    # fallback observation and a later dispatcher claim: acquire creates the
+    # durable guard before any task claim can proceed.  Release and all other
+    # lifecycle commands remain fail-closed when the DB is absent.
+    bootstrap_cleanup_guard = (
+        args.command == "cleanup-guard"
+        and getattr(args, "action", None) == "acquire"
+        and not paths.db_path.exists()
+    )
     if args.command in REQUIRED_COMMANDS and args.command != "init":
-        paths = load_paths()
-        if not paths.db_path.exists():
+        if not paths.db_path.exists() and not bootstrap_cleanup_guard:
             msg = "dispatcher not initialised — run: make dispatcher-init"
             return _emit_payload(
                 {
@@ -1475,6 +1485,11 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_verification_cycle(args, None)
 
     store = _make_store()
+    if bootstrap_cleanup_guard:
+        try:
+            store.initialize()
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            return _emit_error(f"cleanup guard could not initialize dispatcher: {exc}", getattr(args, "json", False))
     return handler(args, store)
 
 

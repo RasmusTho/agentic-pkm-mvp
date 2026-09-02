@@ -206,11 +206,19 @@ class Fake:
         if len(args) >= 3 and args[1:3] == ("-m", "app.dispatcher"):
             if args[3] == "cleanup-guard":
                 if self.dispatcher_uninitialized:
-                    return CommandResult(
+                    self.dispatcher_uninitialized = False
+                    self.cleanup_guard_active = True
+                    return self._json(
                         args,
-                        1,
-                        json.dumps({"ok": False, "error": "dispatcher not initialised — run: make dispatcher-init"}),
-                        "",
+                        {
+                            "ok": True,
+                            "guard": {
+                                "task_id": self.dispatcher_task["task_id"],
+                                "owner": args[8],
+                                "token": self.cleanup_guard_token,
+                                "expires_at": "2099-01-04T00:00:00+00:00",
+                            },
+                        },
                     )
                 assert args[5:7] == ("--task-id", self.dispatcher_task["task_id"])
                 if args[4] == "acquire":
@@ -613,6 +621,7 @@ def test_closure_apply_preserves_database_missing_fallback_cleanup(tmp_path: Pat
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["outcome"] == "success"
     assert any("DELETE" in call for call in fake.calls)
+    assert fake.cleanup_guard_active is False
 
 
 @pytest.mark.parametrize("already_merged", [False, True])
