@@ -220,14 +220,23 @@ def _checks(executor: CommandExecutor, cwd: Path, repository: str, sha: str) -> 
     normalized = [dict(run) for run in runs if isinstance(run, dict)]
     if len(normalized) != len(runs):
         raise ClosureError("incomplete", "current-head check evidence is malformed")
-    histories: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    histories: dict[str, list[dict[str, Any]]] = {}
     for run in normalized:
         if run.get("head_sha") != sha:
             raise ClosureError("incomplete", "current-head check evidence is foreign")
-        identity = _check_identity(run)
-        histories.setdefault(identity, []).append(run)
-    latest = [_latest_row(history, kind="check-run") for history in histories.values()]
-    if any(run.get("status") != "completed" or run.get("conclusion") != "success" for run in latest):
+        name, _ = _check_identity(run)
+        histories.setdefault(name, []).append(run)
+    latest: list[dict[str, Any]] = []
+    for history in histories.values():
+        executed = [run for run in history if run.get("conclusion") != "skipped"]
+        selected = _latest_row(executed or history, kind="check-run")
+        if selected.get("conclusion") != "skipped":
+            latest.append(selected)
+    if any(
+        run.get("status") != "completed"
+        or run.get("conclusion") not in {"success", "neutral"}
+        for run in latest
+    ):
         raise ClosureError("incomplete", "current-head checks are not all successful")
     return sorted(latest, key=lambda run: canonical_json(_check_snapshot(run)))
 
@@ -242,6 +251,8 @@ def _required_check_authority(
     contexts, checks = configured.get("contexts"), configured.get("checks")
     if not isinstance(contexts, list) or not isinstance(checks, list):
         raise ClosureError("incomplete", "required-check authority is malformed")
+    if not contexts and not checks:
+        raise ClosureError("incomplete", "required-check authority is empty")
     by_name: dict[str, dict[str, Any]] = {}
     for context in contexts:
         if not isinstance(context, str) or not context:
@@ -458,7 +469,9 @@ def _validate_verify_evidence(
         evidence.get("schema") != VERIFY_EVIDENCE_SCHEMA
         or evidence.get("verified") is not True
         or evidence.get("head_sha") != head_sha
-        or evidence.get("tier") != 2
+        or not isinstance(evidence.get("tier"), int)
+        or isinstance(evidence.get("tier"), bool)
+        or evidence.get("tier") not in (1, 2)
         or evidence.get("final_review_rounds") != 0
     ):
         raise ClosureError("incomplete", "Verify evidence is not bound to the light path")
@@ -631,7 +644,20 @@ def _dispatcher_completion(
         return {"status": "claimed", **active}
     if task.get("status") != "completed" or task.get("claimed_by") is not None or task.get("lease_id") is not None:
         raise ClosureError("incomplete", "dispatcher completion is unavailable")
-    events = _run(executor, cwd, [sys.executable, "-m", "app.dispatcher", "events", "--tail", "1000", "--json"])
+    events = _run(
+        executor,
+        cwd,
+        [
+            sys.executable,
+            "-m",
+            "app.dispatcher",
+            "events",
+            "--task-id",
+            task_id,
+            "--all",
+            "--json",
+        ],
+    )
     try:
         rows = json.loads(events.stdout).get("events", [])
     except (AttributeError, json.JSONDecodeError) as exc:
@@ -668,6 +694,7 @@ def _closed_event_evidence(
             timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) {
               nodes {
                 ... on ClosedEvent {
+                  __typename
                   createdAt
                   actor { login }
                   closer {
@@ -726,6 +753,8 @@ def _closed_event_evidence(
     for node in nodes:
         if not isinstance(node, Mapping):
             raise ClosureError("incomplete", "GitHub closed-event evidence is malformed")
+        if node.get("__typename") != "ClosedEvent":
+            raise ClosureError("incomplete", "GitHub closed-event evidence is not a ClosedEvent")
         created_at = node.get("createdAt")
         actor = node.get("actor")
         actor_login = actor.get("login") if isinstance(actor, Mapping) else None
@@ -810,36 +839,45 @@ def _validate_closure_attribution(
         matches.append(event)
     if len(matches) == 1:
         return "GitHub-native closing keyword and exact merge event"
-    null_close = [
-        event for event in events if event.get("event") == "closed" and event.get("commit_id") is None
-    ]
-    if len(null_close) != 1:
-        raise ClosureError("incomplete", "exact closing Issue attribution was not proven")
-    close_event = null_close[0]
-    close_actor = close_event.get("actor")
-    close_actor_login = close_actor.get("login") if isinstance(close_actor, Mapping) else None
-    close_created_at = close_event.get("created_at")
-    if not isinstance(close_actor_login, str) or not close_actor_login or not isinstance(close_created_at, str):
-        raise ClosureError("incomplete", "null-commit close lacks authoritative actor or timestamp")
-    close_time = _parse_timestamp(close_created_at, "REST closed event")
-    matches = []
-    for evidence in closed_evidence:
-        if evidence.get("actor") != close_actor_login or not isinstance(evidence.get("created_at"), str):
+    if len(closed_evidence) != 1:
+        raise ClosureError(
+            "incomplete",
+            "exact closing Issue attribution was not proven: current authoritative evidence is unavailable",
+        )
+    authoritative = closed_evidence[0]
+    authoritative_actor = authoritative.get("actor")
+    authoritative_created_at = authoritative.get("created_at")
+    if not isinstance(authoritative_actor, str) or not authoritative_actor or not isinstance(authoritative_created_at, str):
+        raise ClosureError("incomplete", "current authoritative close lacks actor or timestamp")
+    authoritative_time = _parse_timestamp(authoritative_created_at, "GitHub closed event")
+    current_null_close: list[Mapping[str, Any]] = []
+    for event in events:
+        if event.get("event") != "closed" or event.get("commit_id") is not None:
             continue
-        if _parse_timestamp(evidence["created_at"], "GitHub closed event") != close_time:
-            continue
-        closer = evidence.get("closer")
-        if not isinstance(closer, Mapping):
-            continue
+        close_actor = event.get("actor")
+        close_actor_login = close_actor.get("login") if isinstance(close_actor, Mapping) else None
+        close_created_at = event.get("created_at")
+        if not isinstance(close_actor_login, str) or not close_actor_login or not isinstance(close_created_at, str):
+            raise ClosureError("incomplete", "null-commit close lacks authoritative actor or timestamp")
         if (
-            closer.get("type") == "PullRequest"
-            and closer.get("number") == pr_number
-            and closer.get("repository") == repository
-            and closer.get("merge_sha") == merge_sha
-            and isinstance(closer.get("merged_at"), str)
-            and _parse_timestamp(closer["merged_at"], "GitHub closer merge") <= close_time
+            close_actor_login == authoritative_actor
+            and _parse_timestamp(close_created_at, "REST closed event") == authoritative_time
         ):
-            matches.append(evidence)
+            current_null_close.append(event)
+    if len(current_null_close) != 1:
+        raise ClosureError("incomplete", "current authoritative null-commit close is unavailable or ambiguous")
+    close_time = authoritative_time
+    matches = []
+    closer = authoritative.get("closer")
+    if isinstance(closer, Mapping) and (
+        closer.get("type") == "PullRequest"
+        and closer.get("number") == pr_number
+        and closer.get("repository") == repository
+        and closer.get("merge_sha") == merge_sha
+        and isinstance(closer.get("merged_at"), str)
+        and _parse_timestamp(closer["merged_at"], "GitHub closer merge") <= close_time
+    ):
+        matches.append(authoritative)
     if len(matches) == 1:
         return "GitHub-native exact PR closer attribution"
     raise ClosureError("incomplete", "exact closing Issue attribution was not proven")
@@ -925,7 +963,7 @@ def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | N
         "pr_body_revision": before["pr_contract"]["body_revision_updated_at"],
         "governing_issue": before["issue_number"], "closing_issues": [before["issue_number"]],
         "closing_issue": {"number": before["issue_number"], **_issue_hashes(before["issue"])},
-        "tier": 2, "final_review_rounds": 0, "verify_evidence": before["verify_evidence"],
+        "tier": before["verify_evidence"]["tier"], "final_review_rounds": 0, "verify_evidence": before["verify_evidence"],
         "checks": [_check_snapshot(item) for item in before["checks"]],
         "required_checks": before["required_checks"], "required_check_evidence": before["required_evidence"],
         "pr_contract": before["pr_contract"],

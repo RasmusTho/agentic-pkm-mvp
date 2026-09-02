@@ -58,6 +58,7 @@ def _compact_task(task: TaskRecord) -> dict[str, Any]:
     return {
         "task_id": task.task_id,
         "issue_number": task.issue_number,
+        "repo": task.repo,
         "title": task.title,
         "status": task.status,
         "priority": task.priority,
@@ -303,9 +304,9 @@ def _cmd_complete(args: argparse.Namespace, store: SqliteStore) -> int:
 
 
 def _cmd_events(args: argparse.Namespace, store: SqliteStore) -> int:
-    events = store.list_events()
-    tail = args.tail
-    events = events[-tail:]
+    events = store.list_events(task_id=args.task_id)
+    if not args.all:
+        events = events[-args.tail:]
     _emit({
         "ok": True,
         "count": len(events),
@@ -1194,6 +1195,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("events", help="Show recent events")
     p.add_argument("--tail", type=int, default=20)
+    p.add_argument("--task-id", default=None)
+    p.add_argument("--all", action="store_true", help="Show the complete selected event history")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("link-pr", help="Link a PR to a task")

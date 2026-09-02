@@ -14,6 +14,7 @@ import pytest
 from app.dispatcher.cli import REQUIRED_COMMANDS, _COMMAND_MAP, main
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.models import EventRecord
 from app.dispatcher.singleton import fcntl, singleton_paths
 from app.dispatcher.store import SqliteStore
 
@@ -301,6 +302,45 @@ def test_show_returns_task(tmp_env, store):
     assert code == 0
     assert data["ok"] is True
     assert data["task"]["task_id"] == tasks[0].task_id
+    assert "repo" in data["task"]
+
+
+def test_events_can_be_scoped_to_one_task(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    store.append_event(
+        EventRecord(
+            event_id="event-a",
+            timestamp="2026-09-02T00:00:00Z",
+            task_id=tasks[0].task_id,
+            event_type="task.completed",
+            actor="agent-a",
+        )
+    )
+    store.append_event(
+        EventRecord(
+            event_id="event-b",
+            timestamp="2026-09-02T00:00:01Z",
+            task_id=tasks[1].task_id,
+            event_type="task.completed",
+            actor="agent-b",
+        )
+    )
+    for index in range(1001):
+        store.append_event(
+            EventRecord(
+                event_id=f"event-a-noise-{index}",
+                timestamp=f"2026-09-02T00:{index // 60:02d}:{index % 60:02d}Z",
+                task_id=tasks[0].task_id,
+                event_type="task.progress",
+                actor="agent-a",
+            )
+        )
+    code, data = _run(["events", "--task-id", tasks[0].task_id, "--all", "--json"])
+    assert code == 0
+    assert len(data["events"]) == 1002
+    assert data["events"][0]["event_id"] == "event-a"
 
 
 def test_show_not_found(tmp_env, store):

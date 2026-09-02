@@ -45,8 +45,10 @@ class Fake:
         self.close_actor = "github-actions"
         self.cleanup_issue_state_open = False
         self.reopen_during_cleanup = False
+        self.previous_null_close = False
         self.closed_evidence: list[dict[str, object]] = [
             {
+                "__typename": "ClosedEvent",
                 "createdAt": self.close_created_at,
                 "actor": {"login": self.close_actor},
                 "closer": {
@@ -103,7 +105,9 @@ class Fake:
         if endpoint.endswith("/issues/5245") and "GET" in args:
             return self._json(args, {"number": 5245, "state": "open" if not self.merged or self.cleanup_issue_state_open else "closed", "title": self.issue_title, "body": self.issue_body, "updated_at": PR_UPDATED, "labels": [{"name": label} for label in self.labels]})
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
-            return self._json(args, [{"event": "closed", "commit_id": self.events_commit_id, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}])
+            current = {"event": "closed", "commit_id": self.events_commit_id, "created_at": self.close_created_at, "actor": {"login": self.close_actor}}
+            previous = {"event": "closed", "commit_id": None, "created_at": "2026-09-01T00:00:10Z", "actor": {"login": self.close_actor}}
+            return self._json(args, [previous, current] if self.previous_null_close else [current])
         if endpoint.endswith("/issues/5245/timeline") and "GET" in args:
             return self._json(args, self.timeline)
         if endpoint.endswith("/branches/main/protection") and "GET" in args:
@@ -240,6 +244,13 @@ def test_closure_plan_preserves_name_bound_required_check_authority(tmp_path: Pa
     assert plan["required_checks"] == [{"kind": "check", "name": "CI", "app_id": None}]
 
 
+def test_closure_plan_rejects_present_but_empty_required_check_authority(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.required_checks = {"required_status_checks": {"contexts": [], "checks": []}}
+    with pytest.raises(ClosureError, match="required-check authority is empty"):
+        build_closure_plan(request(tmp_path), executor=fake)
+
+
 def test_closure_plan_unions_duplicate_required_check_context_and_check_by_name(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     fake.required_checks = {
@@ -271,6 +282,8 @@ def test_closure_apply_recovers_completed_dispatcher_from_governed_completion_ev
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["reconciled"] is True
     assert not any(len(call) >= 4 and call[3] == "complete" for call in fake.calls)
+    events_call = next(call for call in fake.calls if len(call) >= 4 and call[3] == "events")
+    assert "--task-id" in events_call and task_id in events_call and "--all" in events_call
 
 
 def test_closure_plan_requires_dispatcher_repository_and_issue_binding(tmp_path: Path) -> None:
@@ -292,6 +305,7 @@ def test_closure_apply_requires_pr_specific_attribution_when_closed_event_has_no
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     fake.closed_evidence = [
         {
+            "__typename": "ClosedEvent",
             "createdAt": fake.close_created_at,
             "actor": {"login": fake.close_actor},
             "closer": {
@@ -303,6 +317,11 @@ def test_closure_apply_requires_pr_specific_attribution_when_closed_event_has_no
             },
         }
     ]
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["issue"]["closure_attribution"] == "GitHub-native exact PR closer attribution"
+
+    fake = Fake(tmp_path); fake.events_commit_id = None; fake.previous_null_close = True
+    plan = build_closure_plan(request(tmp_path), executor=fake)
     receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert receipt["issue"]["closure_attribution"] == "GitHub-native exact PR closer attribution"
 
@@ -343,7 +362,7 @@ def test_closure_plan_rejects_unbound_caller_verified_evidence(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("tier", 1),
+        ("tier", 3),
         ("final_review_rounds", 1),
         ("tcd", {"risk_surfaces": ["api"], "risk_assessment_complete": True, "stateful_fallback": False}),
         ("scope", {"repository": REPO, "pr_number": 98, "base_ref": "main", "base_sha": "c" * 40, "head_sha": HEAD, "governing_issue": 5245, "closing_issues": [5245]}),
@@ -385,6 +404,18 @@ def test_closure_plan_reconciles_failed_same_head_check_with_later_success(tmp_p
     assert {item["id"] for item in plan["checks"]} == {2, 4}
 
 
+def test_closure_plan_ignores_optional_skipped_check_runs_like_await_pr_checks(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    fake.check_runs = [
+        {"id": 1, "name": "CI", "status": "completed", "conclusion": "success", "app": {"id": 7}, "head_sha": HEAD, "started_at": "2026-09-02T00:00:01Z"},
+        {"id": 3, "name": "CI", "status": "completed", "conclusion": "skipped", "app": {"id": 7}, "head_sha": HEAD, "started_at": "2026-09-02T00:00:02Z"},
+        {"id": 4, "name": "optional-analysis", "status": "completed", "conclusion": "skipped", "app": {"id": 9}, "head_sha": HEAD, "started_at": "2026-09-02T00:00:03Z"},
+        {"id": 2, "name": "pr-contract", "status": "completed", "conclusion": "success", "app": {"id": 8}, "head_sha": HEAD, "started_at": CHECK_STARTED},
+    ]
+    plan = build_closure_plan(request(tmp_path), executor=fake)
+    assert {item["id"] for item in plan["checks"]} == {1, 2}
+
+
 def test_closure_plan_rejects_unorderable_same_head_check_history(tmp_path: Path) -> None:
     fake = Fake(tmp_path)
     fake.check_runs = [
@@ -401,6 +432,14 @@ def test_closure_plan_requires_pr_contract_after_current_body_revision(tmp_path:
     fake.check_runs[1]["started_at"] = PR_UPDATED
     with pytest.raises(ClosureError, match="predates"):
         build_closure_plan(request(tmp_path), executor=fake)
+
+
+def test_closure_plan_accepts_valid_tier_one_evidence(tmp_path: Path) -> None:
+    fake = Fake(tmp_path)
+    evidence = dict(request(tmp_path).verify_evidence)
+    evidence["tier"] = 1
+    plan = build_closure_plan(ClosureRequest(REPO, tmp_path, 99, evidence), executor=fake)
+    assert plan["tier"] == 1
 
 
 def test_closure_plan_rejects_additional_github_closing_keyword_forms(tmp_path: Path) -> None:
