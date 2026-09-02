@@ -11,9 +11,10 @@ from app.knowledge.write_ops import (
     write_note_from_absolute,
 )
 from app.ports.vault_port import EnsureUuidResult, NoteRead
+from app.rebuildability import parse_bounded_frontmatter
 from app.services.inbox import append_change
 from app.services.vault_sync import active_edit, delete_note, update_path, upsert_object_from_note
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter
 
 
 class FilesystemVaultAdapter:
@@ -26,7 +27,9 @@ class FilesystemVaultAdapter:
     def read_note(self, path: Path) -> NoteRead:
         resolved = Path(path).resolve()
         text, version = read_note_text_with_version(resolved)
-        frontmatter, body = load_frontmatter(text)
+        frontmatter, body, error = parse_bounded_frontmatter(text)
+        if error is not None:
+            raise ValueError("malformed frontmatter")
         return NoteRead(
             path=resolved,
             frontmatter=frontmatter,

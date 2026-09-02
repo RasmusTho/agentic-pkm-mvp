@@ -113,6 +113,11 @@ def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
 
     monkeypatch.setattr(vault_root, "normalize_run", fake_normalize)
     monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(
+        vault_root,
+        "ensure_note_uuid",
+        lambda _path, *, preferred_uuid, **_kwargs: preferred_uuid,
+    )
     monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
     monkeypatch.setattr(vault_root, "get_stores", lambda: (FakeObjects(), None))
     monkeypatch.setattr(vault_root, "get_object_store", lambda: FakeStore())
@@ -127,6 +132,43 @@ def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
     assert upserted_ids[0] == upserted_ids[1]
     assert len(stored_ids) == 2
     assert stored_ids[0] == stored_ids[1]
+
+
+def test_vault_root_persists_resolved_uuid_for_postgres_notes_without_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root_path = tmp_path / "vault"
+    vault_root_path.mkdir()
+    note_path = vault_root_path / "root-note.md"
+    note_path.write_text("# Root\nMeaning-bearing body", encoding="utf-8")
+    persisted: list[tuple[Path, Path, str]] = []
+
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(
+        vault_root,
+        "ensure_note_uuid",
+        lambda path, *, vault_root, preferred_uuid: persisted.append(
+            (path, vault_root, preferred_uuid)
+        )
+        or preferred_uuid,
+    )
+    monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_root, "get_stores", lambda: (type("Objects", (), {"upsert": lambda self, **kwargs: None})(), None))
+    monkeypatch.setattr(vault_root, "get_object_store", lambda: type("Store", (), {"put": lambda self, *args, **kwargs: None})())
+    monkeypatch.setattr(vault_root, "normalize_run", lambda *_args, **_kwargs: {"object_id": str(uuid.uuid4()), "payload": {}})
+    monkeypatch.setattr(vault_root, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_root, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_root, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    vault_root._ingest_file(note_path, trace_id="trace", vault_root=vault_root_path)
+
+    assert persisted == [
+        (
+            note_path.resolve(),
+            vault_root_path.resolve(),
+            str(uuid.uuid5(vault_alpha._VAULT_NOTE_UUID_NAMESPACE, "root-note.md")),
+        )
+    ]
 
 
 def test_vault_root_suppresses_transient_normalizer_projection(
@@ -153,6 +195,11 @@ def test_vault_root_suppresses_transient_normalizer_projection(
     monkeypatch.setattr(normalizer_agent, "ObjectStore", TrackingNormalizerStore)
     monkeypatch.setattr(normalizer_agent, "audit_event", lambda **_kwargs: None)
     monkeypatch.setattr(vault_root, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr(
+        vault_root,
+        "ensure_note_uuid",
+        lambda _path, *, preferred_uuid, **_kwargs: preferred_uuid,
+    )
     monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
     monkeypatch.setattr(vault_root, "get_stores", lambda: (FakeObjects(), None))
     monkeypatch.setattr(vault_root, "get_object_store", lambda: FakeStore())
@@ -236,6 +283,11 @@ def test_vault_root_and_vault_alpha_resolve_declared_identity_the_same_way(
             del object_id
 
     monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(
+        vault_root,
+        "ensure_note_uuid",
+        lambda _path, *, preferred_uuid, **_kwargs: preferred_uuid,
+    )
     monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
     monkeypatch.setattr(vault_root, "get_stores", lambda: (FakeObjects(), None))
     monkeypatch.setattr(vault_root, "get_object_store", lambda: FakeStore())

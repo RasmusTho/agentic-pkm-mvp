@@ -10,6 +10,7 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.episode_ref import episode_ref_from_frontmatter
+from app.services.note_uuid import ensure_note_uuid
 from app.domain.state_axes import normalize_artifact_state_axes
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
@@ -85,13 +86,26 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
         raise ValueError("malformed frontmatter")
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
+    store_backend = resolve_store_backend()
+    from app.ingest.vault_alpha import resolve_vault_note_identity
+
+    note_identity = resolve_vault_note_identity(
+        path, vault_root=root, frontmatter=frontmatter, body=_body
+    )
+    if store_backend == "pg":
+        if not frontmatter.get("uuid"):
+            persisted_uuid = ensure_note_uuid(
+                path,
+                vault_root=root,
+                preferred_uuid=note_identity.note_uuid,
+            )
+            frontmatter["uuid"] = persisted_uuid
     replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)
     # normalize_run normally persists its freshly allocated UUID. This producer owns a
     # stable retained-source identity on PG, so suppress the normalizer's transient
     # persistence there; the canonical upsert below is the only projection row. The
     # explicit memory backend has no shared canonical provider behind get_stores(),
     # so retain the legacy normalizer row there for classifier compatibility.
-    store_backend = resolve_store_backend()
     normalize_res = normalize_run(
         str(path), trace_id=trace_id, persist=store_backend != "pg"
     )

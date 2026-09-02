@@ -1007,7 +1007,12 @@ def _ingest_candidates(
             identity = resolve_vault_note_identity(
                 path, vault_root=vault_root, frontmatter=frontmatter, body=body
             )
-            needs_uuid_write = not bool(identity.frontmatter_uuid_raw)
+            # A legacy ``id`` is an accepted source identity, but it does not
+            # satisfy the watcher contract: the canonical ``uuid`` key must
+            # be persisted so a later watcher pass reuses this identity.
+            declared_uuid = _normalize_uuid(frontmatter.get("uuid"))
+            persisted_uuid, _invalid_uuid = _sanitize_uuid(declared_uuid)
+            needs_uuid_write = not bool(persisted_uuid)
             title = _frontmatter_title(frontmatter) or _derive_title(body, path)
             stripped_text = strip_ai_status_block(strip_ai_panels(body)).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)

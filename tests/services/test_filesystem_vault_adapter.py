@@ -38,6 +38,19 @@ def test_adapter_exposes_vault_port_lifecycle_methods(tmp_path: Path) -> None:
         assert hasattr(adapter, method)
 
 
+def test_read_note_uses_bounded_frontmatter_delimiters(tmp_path: Path) -> None:
+    note = tmp_path / "note.md"
+    note.write_text(
+        '---\ntitle: "Inline --- scalar"\n---\n\nMeaning-bearing body.\n',
+        encoding="utf-8",
+    )
+
+    read = FilesystemVaultAdapter(vault_root=tmp_path).read_note(note)
+
+    assert read.frontmatter == {"title": "Inline --- scalar"}
+    assert read.body == "Meaning-bearing body.\n"
+
+
 def test_ensure_uuid_writes_frontmatter_when_missing(monkeypatch, tmp_path: Path) -> None:
     note = tmp_path / "note.md"
     note.write_text("Body", encoding="utf-8")

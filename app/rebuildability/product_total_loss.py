@@ -270,13 +270,17 @@ def _row_source_identity(row: Any, *, vault_root: Path) -> str:
     raw_source = row.get("source_ref") if isinstance(row, dict) else getattr(row, "source_ref", None)
     if not isinstance(raw_source, str) or not raw_source.strip():
         return ""
-    candidate = Path(raw_source).expanduser()
-    if candidate.is_absolute():
-        try:
-            return candidate.resolve().relative_to(vault_root.resolve()).as_posix()
-        except ValueError:
-            return ""
-    return raw_source.strip().replace("\\", "/").lstrip("./")
+    root = vault_root.expanduser().resolve()
+    normalized = raw_source.strip().replace("\\", "/")
+    candidate = Path(normalized).expanduser()
+    try:
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        # Empty, absolute-outside, and traversal locators are all unusable
+        # source provenance. They must fail readiness rather than normalize
+        # into a different retained source identity.
+        return ""
 
 
 def _row_object_id(row: Any) -> str:
@@ -403,7 +407,7 @@ def evaluate_product_store_readiness(
             or observed_review_state != source.review_state
             or observed_episode_ref != source.episode_ref
             or observed[0][2] != source.object_id
-            or bool(observed[0][3]) and observed[0][3] != source.replay.source_identity
+            or observed[0][3] != source.replay.source_identity
         ):
             refused.append(source.replay.source_identity)
     if refused:

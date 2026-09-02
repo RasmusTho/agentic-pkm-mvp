@@ -171,6 +171,43 @@ def test_source_backed_rebuild_forces_projection_reconciliation(
     assert captured["force"] is True
 
 
+def test_source_backed_rebuild_persists_legacy_id_as_uuid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    note_path = tmp_path / "Notes" / "legacy-id.md"
+    note_path.parent.mkdir(parents=True)
+    legacy_id = "11111111-1111-4111-8111-111111111111"
+    note_path.write_text(
+        f"---\nid: {legacy_id}\ntitle: Legacy\n---\n\nBody.\n", encoding="utf-8"
+    )
+    captured: dict[str, object] = {}
+
+    class Store:
+        def get(self, _object_id):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(vault_alpha, "get_object_store", lambda: Store())
+    monkeypatch.setattr(vault_alpha, "ensure_note_uuid", lambda path, **kwargs: captured.update(kwargs) or legacy_id)
+    monkeypatch.setattr(
+        vault_alpha,
+        "_ingest_single",
+        lambda *_args, **kwargs: captured.update(reconcile=kwargs["reconcile_existing_projection"]) or legacy_id,
+    )
+
+    summary = vault_alpha._ingest_candidates(
+        tmp_path,
+        candidates=[note_path],
+        included_folders=["Notes"],
+        force=True,
+        resume_from=None,
+        uuid_write_action=SOURCE_BACKED_REBUILD_ACTION,
+    )
+
+    assert summary.ingested == 1
+    assert captured["preferred_uuid"] == legacy_id
+    assert captured["write_action"] == SOURCE_BACKED_REBUILD_ACTION
+
+
 def test_source_backed_ingest_uses_atomic_projection_reconciliation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

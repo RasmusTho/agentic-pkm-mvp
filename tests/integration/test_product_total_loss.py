@@ -65,6 +65,20 @@ def test_readiness_rejects_persisted_locator_that_disagrees_with_replay(tmp_path
     assert result.ready is False
 
 
+@pytest.mark.parametrize("source_ref", [None, "../Notes/product.md"])
+def test_readiness_rejects_missing_or_traversing_source_locator(
+    tmp_path: Path, source_ref: str | None
+) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = _write_source(vault_root)
+    row = _verified_row(source_identity, "Meaning-bearing Product note.")
+    row["source_ref"] = source_ref
+
+    result = evaluate_product_store_readiness(vault_root, [row])
+
+    assert result.ready is False
+
+
 def test_readiness_normalizes_legacy_review_state(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     source_identity = _write_source(vault_root, "Meaning-bearing Product note.")
@@ -523,6 +537,7 @@ def test_readiness_preserves_watcher_extracted_body_semantics(tmp_path: Path) ->
     row = {
         "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
+        "source_ref": source_identity,
         "payload": {
             "title": "Product",
             "review_state": "provisional",
@@ -545,6 +560,7 @@ def test_readiness_preserves_vault_alpha_extracted_body_semantics(tmp_path: Path
     row = {
         "object_id": str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity)),
         "kind": "note",
+        "source_ref": source_identity,
         "payload": {
             "title": "Product",
             "review_state": "provisional",
