@@ -72,6 +72,49 @@ Then read the two context hints, if they exist:
 - The linked Issue/PR, only if the branch maps to one and the network is up
   (`gh pr view`, `gh issue view`). Never block recovery on network.
 
+Before another session replaces an Issue's lifecycle owner, authenticate the live claim and the
+latest durable `lifecycle_handoff_receipt.v1` from the Issue or PR. The receipt must name the current
+lifecycle owner and session, the sole writable worktree, branch and base, the unpublished candidate
+head (or `none`), changed files, current validation plus current review/receipt evidence, blockers and
+residual risk, the successor, and exactly one next authorized action. Re-read the live Issue labels
+and claim receipt, worktree registration, branch/PR head, and review/receipt timestamps or head
+bindings; local scratch and a former owner's assertion are context only.
+
+After those readbacks agree, a dispatcher-backed handoff first transfers the exact dispatcher task.
+The current owner releases it with
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the task
+as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the Issue be
+returned to `agent:ready`; the named successor runs the normal `scripts/issue_pickup_claim.sh`
+dispatcher-backed pickup for that same task and re-reads task id, Issue number, status, holder, lease
+id/resource, future expiry, and `released_at: null`. The dispatcher release → successor
+claim/readback must finish before acknowledgment. A label-only fallback authenticates only its
+fallback receipt and never fabricates a dispatcher lease.
+
+After those dispatcher readbacks agree, transfer any registered writable worktree before
+acknowledging the successor. The current owner releases its active registration with
+`python3 scripts/agent_worktree.py --cwd <repo> release --worktree <absolute-worktree> --owner <current-session>`
+and re-reads it as non-active. The named successor then registers the sole receipt-named worktree
+(or the receipt-named replacement path) with
+`python3 scripts/agent_worktree.py --cwd <repo> register --worktree <absolute-worktree> --owner <successor-session>`
+and re-reads the owner, branch, and generation. Immediately after registration, the successor
+re-reads the receipt-bound branch, base, unpublished candidate HEAD, and changed-file set and
+compares them with the registered worktree; a changed HEAD or file set requires a new receipt and
+fresh validation before acknowledgment. A connector-only handoff may instead declare and
+re-authenticate `writable_worktree: none`; it must not fabricate a local registration.
+
+A handoff becomes effective only after the dispatcher release → successor claim/readback → worktree
+release → successor registration/readback → candidate revalidation sequence (or the authenticated
+connector-only `none` case) and when the named successor then records its acknowledgment. From that
+acknowledgment onward the former lifecycle owner is read-only: it may
+report evidence, but it must not edit, push, publish, merge, close, or mutate lifecycle state. If the
+release succeeds but successor registration, readback, or acknowledgment fails, authority does not
+transfer: the current owner remains the lifecycle owner but has no writable worktree and may only
+restore its own registration or route reconciliation; neither side may publish or close. If two
+owners or writable worktrees are asserted, the unpublished candidate head is omitted or disagrees,
+or current review/receipt evidence contains newer blocking review evidence, classify the recovery as
+situation 4 and fail closed. Do not publish or close until the current owner reconciles the record or
+the normal issue-maintenance/owner-authority path establishes one owner and one current head.
+
 From that, classify into one of the four situations and act.
 
 ### Rescue-stash contract gate
@@ -163,6 +206,8 @@ while work is unfinished. Progressive and opportunistic — not a report after e
   Last test:  <command + pass/fail/last result>
   ```
 
+- This scratch note never replaces or authorizes a lifecycle-owner change. A replacement still
+  requires the durable authenticated `lifecycle_handoff_receipt.v1` above.
 - Do this without asking the user. It is cheap insurance, not a checkpoint system.
 - BuilderOps Vault is available and this is `AgentWorklog` material (`app/builderops/cli.py ::
   create-worklog`). The file stays the always-on default; never block recovery on the Vault.

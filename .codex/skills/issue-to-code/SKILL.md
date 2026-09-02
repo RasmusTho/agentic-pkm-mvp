@@ -206,8 +206,47 @@ For Codex, use `.codex/agents/issue-local-helper.toml`; its read-only sandbox is
 mutation boundary. Do not substitute a general workspace-write agent for this helper role.
 
 Resume an agent only for this same Issue while its current authority remains valid. Before replacing
-it, produce a durable compact handoff with current SHA, changed files, validation/review evidence,
-budget state, blockers, residual risk, and the next authorized action.
+it, write a durable `lifecycle_handoff_receipt.v1` on the governing Issue or PR. The receipt names the
+current lifecycle owner and session, named successor, branch and base, sole writable worktree,
+unpublished candidate head (or `none`), changed files, current validation, current review/receipt
+evidence bound to an observed time or head, budget state, blockers, residual risk, and exactly one
+next authorized action.
+
+After all non-worktree readbacks agree, a dispatcher-backed handoff must transfer the exact
+dispatcher task before transferring the worktree. The current owner releases the task with
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the
+task as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the
+Issue be returned to `agent:ready`; the named successor runs the normal
+`scripts/issue_pickup_claim.sh` dispatcher-backed pickup for that same task and re-reads the task
+and lease, including task id, Issue number, status, holder, lease id/resource, future expiry, and
+`released_at: null`. The dispatcher release → successor claim/readback is part of the handoff and
+must complete before acknowledgment. A label-only fallback must authenticate the fallback receipt
+instead; it must never imply a dispatcher lease that was not observed.
+
+After the dispatcher readbacks agree, the current owner must release its active worktree
+registration with
+`python3 scripts/agent_worktree.py --cwd <repo> release --worktree <absolute-worktree> --owner <current-session>`
+and re-read it as non-active. The named successor must then register the sole receipt-named worktree
+(or the receipt-named replacement path) with
+`python3 scripts/agent_worktree.py --cwd <repo> register --worktree <absolute-worktree> --owner <successor-session>`
+and re-read its own owner, branch, and generation. Immediately after registration, the successor
+must re-read and compare the receipt-bound branch, base, unpublished candidate HEAD, and changed-file
+set against the registered worktree; a changed HEAD or file set requires a new handoff receipt and
+fresh validation, not acknowledgment. A connector-only transfer may instead declare and
+re-authenticate `writable_worktree: none`; it must not fabricate a local registration.
+
+Only after the dispatcher release → successor claim/readback → worktree release → successor
+registration/readback → candidate revalidation sequence (or the authenticated connector-only `none`
+case) may the successor post its acknowledgment. That acknowledgment transfers
+authority, and the former lifecycle owner is then read-only and must not edit, push, publish, merge,
+close, or mutate lifecycle state. If release succeeds but successor registration, readback, or
+acknowledgment fails, authority does not transfer: the current owner remains the lifecycle owner but
+has no writable worktree and may only restore its own registration or route reconciliation; neither
+side may publish, merge, or close. Conflicting owners or writable worktrees, an omitted or
+contradictory candidate head, or newer blocking review evidence fail closed: no replacement,
+publication, merge, or closure may proceed until the current owner or the normal
+issue-maintenance/owner-authority path reconciles one owner, one current candidate head, and one next
+authorized action.
 
 ## Lifecycle rules during execution
 

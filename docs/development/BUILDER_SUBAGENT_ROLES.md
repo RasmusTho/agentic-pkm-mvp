@@ -109,6 +109,57 @@ owning workflow skill or produce a truthful handoff, but its recommendation does
 handoff contract: `final_state` remains only `blocked | needs-human | handoff`; a worker must never
 self-attest `done`.
 
+A `subagent_handoff_receipt` reports work to a coordinator; it does not by itself transfer Issue
+lifecycle authority. Replacing the sole writer or lifecycle owner requires a durable
+`lifecycle_handoff_receipt.v1` on the governing Issue or PR. It records the Issue, current lifecycle
+owner and session, named successor, branch and base, sole writable worktree, unpublished candidate
+head (or `none`), changed files, current validation and current review/receipt evidence with head or
+time binding, blockers, residual risk, and exactly one next authorized action.
+
+For a dispatcher-backed handoff, the current owner first releases the exact dispatcher task with
+`python3 -m app.dispatcher release <task-id> --agent <current-agent> --json` and re-reads the task
+as unleased (`claimed_by: null`, `lease_id: null`) and ready or blocked. Only then may the Issue
+return to `agent:ready`; the named successor runs the normal
+`scripts/issue_pickup_claim.sh` dispatcher-backed pickup for the same task and re-reads task id,
+Issue number, status, holder, lease id/resource, future expiry, and `released_at: null`. A
+label-only fallback authenticates only its fallback receipt and never fabricates a dispatcher lease.
+After the dispatcher release → successor claim/readback sequence, the current owner releases its
+active worktree registration and re-reads it as non-active. The named successor then registers the
+sole receipt-named worktree (or receipt-named replacement), re-reads its owner, branch, and
+generation, and immediately compares the registered worktree's branch, base, candidate HEAD, and
+changed-file set with the receipt. A changed candidate requires a new handoff receipt and fresh
+validation before acknowledgment. Only after this dispatcher release → successor claim/readback →
+worktree release → successor registration/readback → candidate revalidation sequence may the
+successor post its acknowledgment. A connector-only transfer may instead authenticate
+`writable_worktree: none`, but must not fabricate a local registration. If any release, claim,
+registration, readback, or acknowledgment fails, authority does not transfer; Neither side may
+publish, merge, or close in that intermediate state.
+
+The acknowledgment fences the former lifecycle owner into a read-only role: the former owner may
+supply evidence but may no longer edit, push, publish, merge, close, or mutate lifecycle state.
+Contradictory owners, writable worktrees, candidate heads, or review evidence fail closed; newer
+blocking review evidence supersedes an older publish or closure recommendation. Coordination resumes
+only after the current owner or the normal maintenance/owner authority path reconciles one owner, one
+current candidate head, and one next authorized action.
+
+```yaml
+lifecycle_handoff_receipt.v1:
+  issue:                        # governing Issue number
+  current_lifecycle_owner:      # agent + session currently holding lifecycle authority
+  successor:                    # agent + session proposed to receive authority
+  branch:                       # publication branch
+  base:                         # base ref/SHA used by the candidate
+  writable_worktree:            # sole absolute writable worktree, or none for connector-only work
+  unpublished_candidate_head:   # exact commit SHA or none
+  changed_files:                # bounded intended file set
+  current_validation:           # commands/results bound to the candidate head
+  current_review_receipt_evidence: # review/receipt refs plus observed time or head binding
+  blockers:                     # active blockers or none
+  residual_risk:                # remaining risk
+  next_authorized_action:       # exactly one action
+  successor_acknowledgment:     # absent until release/register/readback makes transfer effective
+```
+
 The dry-run helper for generating these packets is:
 
 `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`
