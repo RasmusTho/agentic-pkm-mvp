@@ -230,8 +230,15 @@ _instance_state_deployment_effective_legacy_path() {
   local configured_path=""
   local parser_rc=0
 
-  if [ -n "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}" ]; then
-    printf '%s\n' "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS}"
+  # Compose's ${VAR:-default} distinguishes an explicitly empty environment
+  # value from an unset value when resolving the service's environment block:
+  # an empty override selects the canonical default rather than env_file data.
+  if [ "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS+x}" = x ]; then
+    if [ -n "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS}" ]; then
+      printf '%s\n' "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS}"
+    else
+      _instance_state_deployment_default_legacy_path "${channel}"
+    fi
     return 0
   fi
   if [ -n "${channel_env_file}" ] && [ -f "${channel_env_file}" ]; then

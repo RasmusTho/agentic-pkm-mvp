@@ -2240,6 +2240,53 @@ def test_real_deployment_wrapper_reads_channel_legacy_settings_before_init(
     assert not any(ownership_root.iterdir())
 
 
+def test_effective_legacy_path_distinguishes_empty_shell_value_from_unset(
+    tmp_path: Path,
+) -> None:
+    """Compose's empty shell override selects the canonical default path."""
+
+    channel_env = tmp_path / "prod.env"
+    channel_env.write_text(
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/Users/operator/app-local.md\n",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "read-effective-path.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "_instance_state_deployment_effective_legacy_path prod \"$1\"\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    base_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "DESIGN_HANDOFF_APP_LOCAL_SETTINGS"
+    }
+
+    unset_result = subprocess.run(
+        ["bash", str(harness), str(channel_env)],
+        env=base_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    empty_env = {**base_env, "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": ""}
+    empty_result = subprocess.run(
+        ["bash", str(harness), str(channel_env)],
+        env=empty_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert unset_result.returncode == 0, unset_result.stderr
+    assert empty_result.returncode == 0, empty_result.stderr
+    assert unset_result.stdout.strip() == "/Users/operator/app-local.md"
+    assert empty_result.stdout.strip() == "/app/tmp/agentic-pkm/app-local.md"
+
+
 def test_real_deployment_wrapper_rejects_duplicate_channel_legacy_settings(
     tmp_path: Path,
 ) -> None:
