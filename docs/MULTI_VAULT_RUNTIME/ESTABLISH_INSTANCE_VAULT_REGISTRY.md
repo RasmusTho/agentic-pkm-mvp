@@ -281,14 +281,21 @@ must not expose or re-resolve the raw path.
 into `instance-state-init` so its existing `root.is_dir()` check can succeed. That would widen the
 filesystem exposure of the deployment-authority one-shot and make mount topology, rather than the
 host producer's already-fenced proof, the authority for this check. It is rejected for this repair;
-the one-shot's intentionally small mount set excludes `/Users`, `/Volumes`,
-and every selected-vault mount, including through deploy-selected overlays.
+the one-shot's intentionally small mount set for ordinary deploy-selected Compose overlays excludes
+`/Users`, `/Volumes`, and selected-vault mounts. The explicit MVR-01C authority cutover is a
+governed exception: it intentionally mounts the already-authorized `MVR01C_ROLLBACK_VAULT_ROOT`
+read-only at `/app/selected-vault` for the one-shot's `authority-cutover` invocation. That cutover
+input is not an overlay-defined selected-vault mount and is never inferred from ordinary deployment
+selection.
 
 **Current-state boundary:** the bounded receipt handoff repair shipped in PR #5244 for #5235.
 The host producer now emits the bound proof, and the deployment consumer validates that proof
-without materializing host-only roots inside `instance-state-init`; invalid or unbound evidence
-still fails closed. #5235 owns only this receipt handoff repair; the future Mac Vault Service,
-multi-vault Settings control plane, and write queue remain separate architecture-study work.
+without materializing host-only roots inside `instance-state-init` on ordinary deploy-selected
+Compose paths; invalid or unbound evidence still fails closed. During the explicit MVR-01C authority
+cutover, the already-authorized rollback root is mounted read-only for that bounded invocation and
+used as the selected-root input. #5235 owns only this receipt handoff repair; the future Mac Vault
+Service, multi-vault Settings control plane, and write queue remain separate architecture-study
+work.
 
 **Traceability:** #4539 owns this decision and its docs writeback; #5235 is the bounded executable
 implementation issue for the selected host-side receipt approach.
