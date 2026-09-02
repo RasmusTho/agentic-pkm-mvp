@@ -1568,6 +1568,35 @@ def test_deploy_passes_configured_canonical_legacy_settings_to_init(
     )
 
 
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md # canonical",
+        'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical',
+    ],
+)
+def test_deploy_accepts_compose_inline_comment_on_canonical_legacy_settings(
+    tmp_path: Path, assignment: str
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={sha}\n"
+        f"{assignment}\n",
+        encoding="utf-8",
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any(
+        "instance-state-init" in event
+        and "--legacy-path /app/tmp/agentic-pkm/app-local.md" in event
+        for event in _deploy_events(env)
+    )
+
+
 def test_deploy_receipt_records_embedding_cutover_acknowledgement(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
 

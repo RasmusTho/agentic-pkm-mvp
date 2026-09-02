@@ -160,8 +160,8 @@ recover_lost_instance_state_lease() {
 # the deployer's shell. Compose treats a non-empty shell value as the winner
 # over --env-file, so the caller must resolve that same precedence before any
 # deployment mutation. This parser intentionally accepts only the simple
-# simple dotenv assignment form used by config/deploy/*.env and strips the
-# optional matching quote pair handled by load_env_defaults_file.
+# dotenv assignment form used by config/deploy/*.env and applies the same
+# bounded inline-comment/quote handling as load_env_defaults_file.
 _instance_state_deployment_env_value() {
   local env_file="${1:?env file required}"
   local key="${2:?env key required}"
@@ -177,12 +177,28 @@ _instance_state_deployment_env_value() {
       value = substr(line, RSTART + RLENGTH)
       sub(/^[[:space:]]+/, "", value)
       sub(/[[:space:]]+$/, "", value)
-      if (length(value) >= 2) {
-        first = substr(value, 1, 1)
-        last = substr(value, length(value), 1)
-        if ((first == "\"" && last == "\"") || (first == "\047" && last == "\047")) {
-          value = substr(value, 2, length(value) - 2)
+      first = substr(value, 1, 1)
+      if (first == "\"" || first == "\047") {
+        quote = first
+        closing = 0
+        for (pos = 2; pos <= length(value); pos++) {
+          if (substr(value, pos, 1) == quote) {
+            closing = pos
+            break
+          }
         }
+        if (closing > 0) {
+          suffix = substr(value, closing + 1)
+          sub(/^[[:space:]]+/, "", suffix)
+          if (suffix == "" || substr(suffix, 1, 1) == "#") {
+            value = substr(value, 2, closing - 2)
+          }
+        }
+      } else {
+        # Compose treats # as an inline comment in an unquoted value only
+        # when it follows whitespace; a # inside a value remains data.
+        sub(/[[:space:]]+#.*/, "", value)
+        sub(/[[:space:]]+$/, "", value)
       }
     }
     END {
