@@ -231,6 +231,33 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
 
 
+def test_closed_issue_label_cleanup_is_idempotent() -> None:
+    """The production cleanup path tolerates only the known absent-label race."""
+    text = _read(".github/workflows/issue-pr-governance.yml")
+    cleanup = text.split("  issue-agent-labels:", 1)[1].split(
+        "  issue-shape:", 1
+    )[0]
+
+    assert "const removeIssueLabel = async (name) => {" in cleanup
+    assert "if (error && error.status === 404) return;" in cleanup
+    assert "throw error;" in cleanup
+    assert "await github.rest.issues.removeLabel" in cleanup
+
+
+def test_closed_issue_label_cleanup_removes_present_labels() -> None:
+    """Both active-label collections use the production cleanup helper."""
+    text = _read(".github/workflows/issue-pr-governance.yml")
+    cleanup = text.split("  issue-agent-labels:", 1)[1].split(
+        "  issue-shape:", 1
+    )[0]
+
+    assert cleanup.count("await removeIssueLabel(name);") == 2
+    assert "for (const name of agentLabels)" in cleanup
+    assert "for (const name of actionLabels)" in cleanup
+    assert "issue.state === \"closed\" && agentLabels.length" in cleanup
+    assert "issue.state === \"closed\" && actionLabels.length" in cleanup
+
+
 def test_pr_template_includes_builderops_routing_receipt() -> None:
     text = _read(".github/pull_request_template.md")
 
@@ -243,12 +270,23 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
 
 
 def test_publication_surfaces_require_governing_issue_identity() -> None:
-    template = _read(".github/pull_request_template.md")
-    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+    publication_adapter = _read("app/builderops/publication.py")
 
-    assert "Governing-Issue: #" in template
-    assert "Governing-Issue: #<ISSUE_NUMBER>" in publish_skill
-    assert "Fixes #<ISSUE_NUMBER>" in publish_skill
+    assert 'plan.add_argument("--governing-issue", type=int, required=True)' in publication_adapter
+    assert 'values.get("issue_number") != request.governing_issue' in publication_adapter
+    assert 'argv.extend(["--issue-number", str(values["issue_number"])])' in publication_adapter
+
+
+def test_pr_hot_path_names_canonical_full_path_publication_owner() -> None:
+    hot_path = _read("docs/development/PR_HOT_PATH.md")
+    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+    full_path = _read(".codex/skills/publish-pr/FULL_PATH.md")
+
+    citation = ".codex/skills/publish-pr/FULL_PATH.md :: Procedure"
+    assert citation in hot_path
+    assert citation in publish_skill
+    assert "## Procedure" in full_path
+    assert "canonical full-path publication owner" in hot_path
 
 
 def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:

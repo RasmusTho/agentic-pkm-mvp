@@ -14,6 +14,8 @@ The system runs on Postgres, pgvector, indexes, and caches. These are essential 
 
 It is the Layer 6 detail for `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md` and the mirror-row detail for `docs/SEMANTIC_AUTHORITY_MATRIX.md`.
 
+The continuity classification is owned by [`RSC-01 continuity classification`](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts remain authority; machine mirrors remain rebuildable; diagnostics and optional backups remain evidence/ergonomics only; and missing operational lineage requires a new fenced bootstrap epoch. This contract does not claim a generalized restore program.
+
 ## Canonical authority
 
 The durable, authoritative set is the human-readable surface; machine mirrors sit beneath it.
@@ -46,6 +48,7 @@ If a structure on this list would lose information on rebuild, it is **misclassi
 
 - Every mirror must be **fully reconstructable** from the durable set (vault notes + companion notes + receipts) without loss of meaning.
 - Rebuild is a safe, repeatable operation: dropping and rebuilding a mirror must never change the system's semantics, only its performance/availability.
+- Product object projections carry a replay tuple of retained-source identity, source-content generation, and recipe version. A selected Postgres Product runtime remains unavailable when that tuple is absent, mismatched, or cannot be verified against the retained vault; an explicit empty workspace and no-vault boot remain distinct states.
 - Embeddings are provider-tagged and rebuilt under the embeddings rebuild policy; an embedding from a different provider/model is a different derived artifact, not an authoritative value (owner: `docs/EMBEDDINGS.md`).
 
 ### Indexing semantics

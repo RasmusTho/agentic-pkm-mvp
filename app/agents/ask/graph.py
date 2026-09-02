@@ -36,6 +36,10 @@ from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer
 from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.components.rerankers import get_reranker
+from app.agents.ask.orientation import (
+    derive_orientation_signals,
+    is_return_orientation_question,
+)
 from app.retrieval.capability import RetrievalRequest, retrieve
 from app.vault.manager import get_vault_manager
 
@@ -108,6 +112,32 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
     return state
 
 
+def _orientation_node(state: AgentState) -> AgentState:
+    """Attach request-time signals and filter background before ranking/context limits."""
+
+    candidates = [hit.model_dump() for hit in state.hits]
+    signals = derive_orientation_signals(candidates)
+    annotated: list[RetrievedHit] = []
+    for hit in state.hits:
+        signal = signals.get(hit.object_id) or signals.get(hit.path or "")
+        if signal is None:
+            annotated.append(hit)
+            continue
+        projected = hit.model_copy(
+            update={
+                "orientation": signal.state,
+                "orientation_provenance": signal.provenance,
+                "orientation_degradation": signal.degradation,
+            }
+        )
+        annotated.append(projected)
+    if is_return_orientation_question(state.query):
+        priority = {"active": 0, "waiting": 1, "supporting": 2, "unknown": 3, "background": 4}
+        annotated.sort(key=lambda hit: priority.get(hit.orientation, priority["unknown"]))
+    state.hits = annotated
+    return state
+
+
 def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
     if not state.hits:
         return state
@@ -122,6 +152,8 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
             self.id = id
             self.text = text
 
+    orientation_query = is_return_orientation_question(state.query)
+    orientation_priority = {"active": 0, "waiting": 1, "supporting": 2, "unknown": 3, "background": 4}
     if reranker:
         rr_items = [
             _RRItem(
@@ -133,7 +165,15 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
         try:
             results = reranker.rerank(state.query, rr_items, top_k=None)  # type: ignore[arg-type]
             order = {res.id: idx for idx, res in enumerate(results)}
-            sorted_hits = sorted(sorted_hits, key=lambda h: order.get(h.object_id, len(order)))
+            sorted_hits = sorted(
+                sorted_hits,
+                key=lambda h: (
+                    orientation_priority.get(h.orientation, orientation_priority["unknown"])
+                    if orientation_query
+                    else 0,
+                    order.get(h.object_id, len(order)),
+                ),
+            )
         except Exception:
             pass
 
@@ -184,6 +224,34 @@ def _active_recall_vault_root() -> Path | None:
     return None
 
 
+def _active_recall_vault_id(vault_root: Path | None) -> str | None:
+    if vault_root is None:
+        return None
+    resolved_root = vault_root.expanduser().resolve()
+    manager = get_vault_manager()
+    context = manager.context
+    if (
+        context.status == "selected"
+        and context.active_vault_id
+        and context.active_vault_path
+        and Path(context.active_vault_path).expanduser().resolve() == resolved_root
+    ):
+        return context.active_vault_id
+    if context.status != "selected" and not getattr(
+        manager, _ASK_LAST_ACTIVE_LOADED_ATTR, False
+    ):
+        context = manager.load_last_active()
+        setattr(manager, _ASK_LAST_ACTIVE_LOADED_ATTR, context.status == "selected")
+        if (
+            context.status == "selected"
+            and context.active_vault_id
+            and context.active_vault_path
+            and Path(context.active_vault_path).expanduser().resolve() == resolved_root
+        ):
+            return context.active_vault_id
+    return f"path:{resolved_root}"
+
+
 def _source_artifact_path(candidate: RecallCandidate, vault_root: Path | None) -> Path | None:
     if not candidate.artifact_path:
         return None
@@ -200,9 +268,18 @@ def _recall_node(
     citation_reference: str | None = None,
 ) -> AgentState:
     vault_root = _active_recall_vault_root()
-    candidates = retrieve_relevant_promoted(state.query, k=RECALL_TOP_K, vault_root=vault_root)
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
+    active_vault_id = (
+        _active_recall_vault_id(vault_root) if active_scope is not None else None
+    )
+    candidates = retrieve_relevant_promoted(
+        state.query,
+        k=RECALL_TOP_K,
+        vault_root=vault_root,
+        active_scope_id=active_scope,
+        active_vault_id=active_vault_id,
+    )
     provisional = (
         retrieve_relevant_provisional(
             state.query,
@@ -239,6 +316,7 @@ def _recall_node(
             why_now=candidate.reason,
             receipt_path=receipt_path,
             source_artifact_path=_source_artifact_path(candidate, vault_root),
+            applied_scope_id=candidate.applied_scope_id,
         )
         if guarded.may_answer:
             recalled.append(guarded.explanation)
@@ -354,7 +432,14 @@ def _hits_as_scoped_retrieval(state: AgentState) -> ScopedRetrieval:
                 "score": hit.score,
                 "snippet": hit.snippet,
                 "source_ref": hit.path,
-                "payload": dict(hit.payload or {}),
+                "payload": {
+                    **dict(hit.payload or {}),
+                    "_orientation_projection": {
+                        "state": hit.orientation,
+                        "provenance": dict(hit.orientation_provenance),
+                        "degradation": hit.orientation_degradation,
+                    },
+                },
                 "evidence_role_in_context": hit.evidence_role_in_context,
             }
         )
@@ -563,12 +648,14 @@ def build_ask_graph(ask_settings=None):
     graph.add_node(
         "retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings)
     )
+    graph.add_node("orientation", _orientation_node)
     graph.add_node("rerank", lambda s: _rerank_node(s, ask_settings=ask_settings))
     graph.add_node("recall", lambda s: _recall_node(s, ask_settings=ask_settings))
     graph.add_node("answer", lambda s: _answer_node(s, ask_settings=ask_settings))
 
     graph.add_edge(START, "retrieve")
-    graph.add_edge("retrieve", "rerank")
+    graph.add_edge("retrieve", "orientation")
+    graph.add_edge("orientation", "rerank")
     graph.add_edge("rerank", "recall")
     graph.add_edge("recall", "answer")
     graph.add_edge("answer", END)

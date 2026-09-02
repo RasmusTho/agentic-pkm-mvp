@@ -802,6 +802,31 @@ def load_registry_config(config_path: Path) -> RegistryConfig:
     return RegistryConfig.from_env(specs, config_path=config_path)
 
 
+def _adopt_idle_selected_binding(
+    cfg: RegistryConfig,
+    reconciler: DormantSettingsRebindReconciler | None,
+) -> None:
+    """Start an explicitly enabled watcher after its initial idle selection.
+
+    ``WATCHER_ENABLE=1`` with no bootstrap path is a supported running-idle
+    posture. The first picker selection is committed as ``no_lifecycle``
+    because no old root exists to bracket; the long-lived watcher then adopts
+    that durable candidate. ``WATCHER_ENABLE=0`` remains disabled.
+    """
+
+    if cfg.enable or reconciler is None:
+        return
+    if not _as_bool(env_str("WATCHER_ENABLE")):
+        return
+    if (os.getenv("WATCHER_VAULT_PATH") or "").strip():
+        return
+    record = reconciler.current_record()
+    if record.phase != "no_lifecycle" or record.candidate_binding_id is None:
+        return
+    cfg.vault_path = reconciler.candidate_vault_path(record)
+    cfg.enable = True
+
+
 def _state_path(state_dir: Path, name: str) -> Path:
     safe = "".join([c if c.isalnum() or c in {"-", "_"} else "_" for c in name])
     return state_dir / f"watcher_state_{safe}.json"
@@ -1476,6 +1501,47 @@ def _next_incremental_markdown(
     return None, True
 
 
+def _capture_settings_source_snapshot(
+    *,
+    vault_root: Path,
+    scan_roots: Iterable[Path],
+    state: WatcherState,
+) -> dict[str, tuple[float, str] | None]:
+    """Capture every physical settings source before a shared bundle reload."""
+
+    snapshot: dict[str, tuple[float, str] | None] = {}
+    source_root_names = {SETTINGS_SOURCE_DIR_NAME, LEGACY_COMPILED_DIR.name}
+    for scan_root in scan_roots:
+        try:
+            root_rel = scan_root.relative_to(vault_root)
+        except ValueError:
+            continue
+        if len(root_rel.parts) != 1 or root_rel.parts[0] not in source_root_names:
+            continue
+        if not scan_root.exists():
+            continue
+        for path in sorted(scan_root.rglob("*.md"), key=str):
+            try:
+                rel = path.relative_to(vault_root)
+                if not is_settings_source_path(rel):
+                    continue
+                mtime = path.stat().st_mtime
+                hashed = _hash_file(path)
+            except (OSError, ValueError):
+                continue
+            if hashed is not None:
+                snapshot[str(rel)] = (mtime, hashed[0])
+
+    # A source already known to the watcher may be absent at snapshot time. Keep
+    # that absence distinguishable from a path that could not be snapshotted so
+    # a deletion observed after reload start remains retryable.
+    for rel_str in state.file_paths():
+        rel = Path(rel_str)
+        if is_settings_source_path(rel):
+            snapshot.setdefault(rel_str, None)
+    return snapshot
+
+
 def _collect_changed_entries(
     cfg: RegistryConfig,
     spec: WatcherSpec,
@@ -1485,10 +1551,16 @@ def _collect_changed_entries(
     scan_roots: Iterable[Path],
     states: Mapping[str, WatcherState],
     handled_settings_sources: set[Path] | None = None,
+    settings_source_reload_results: dict[str, object] | None = None,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
     errors_before_root_normalization = state.errors
+    settings_source_reload_results = (
+        settings_source_reload_results
+        if settings_source_reload_results is not None
+        else {}
+    )
     roots = _normalized_scan_roots(cfg.vault_path, scan_roots, state=state)
     preflight_generation_error = state.errors > errors_before_root_normalization
     _begin_or_resume_scan(
@@ -1592,17 +1664,40 @@ def _collect_changed_entries(
             continue
         if is_settings_source_path(rel):
             # Settings markdown is runtime control input, never ordinary vault
-            # content. Reload it only once per registry tick, and advance each
-            # spec's observation only after that reload succeeds. A failed
-            # reload must remain retryable on the next scan generation.
-            if handled_settings_sources is not None and rel in handled_settings_sources:
-                state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            # content. Every source path maps to one full effective bundle, so
+            # a tick attempts that reload at most once even when canonical and
+            # legacy roots both contain source markdown. On success each
+            # physical path is observed; on failure none are advanced, keeping
+            # every source retryable on the next scan generation.
+            if "full_bundle" in settings_source_reload_results:
+                source_snapshot = settings_source_reload_results.get(
+                    "full_bundle_snapshot"
+                )
+                expected_observation = (
+                    source_snapshot.get(rel_str)
+                    if isinstance(source_snapshot, dict)
+                    else None
+                )
+                if (
+                    settings_source_reload_results["full_bundle"] is True
+                    and isinstance(expected_observation, tuple)
+                    and expected_observation == (mtime, digest)
+                ):
+                    state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
                 continue
+            settings_source_reload_results["full_bundle_snapshot"] = (
+                _capture_settings_source_snapshot(
+                    vault_root=cfg.vault_path,
+                    scan_roots=roots,
+                    state=state,
+                )
+            )
             source_delta = handle_settings_source_delta(
                 rel_path=rel,
                 vault_root=cfg.vault_path,
             )
             source_reload_succeeded = source_delta.reloaded and not source_delta.errors
+            settings_source_reload_results["full_bundle"] = source_reload_succeeded
             if source_reload_succeeded:
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
@@ -1925,10 +2020,16 @@ def _run_spec_tick(
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
     handled_settings_sources: set[Path] | None = None,
+    settings_source_reload_results: dict[str, object] | None = None,
     retain_unemitted_observations: int | None = None,
 ) -> dict[str, object]:
     tick_start = now
     handled_settings_sources = handled_settings_sources if handled_settings_sources is not None else set()
+    settings_source_reload_results = (
+        settings_source_reload_results
+        if settings_source_reload_results is not None
+        else {}
+    )
     state.ticks_run += 1
     errors_before = state.errors
 
@@ -2026,6 +2127,7 @@ def _run_spec_tick(
         scan_roots=scan_roots,
         states=active_states,
         handled_settings_sources=handled_settings_sources,
+        settings_source_reload_results=settings_source_reload_results,
     )
     if state.scan_generation_had_error:
         _mark_scan_incomplete(summary, reason="scan")
@@ -2113,14 +2215,22 @@ def _run_spec_tick(
         summary["settings_source_deletions_in_tick"] = len(
             removed_settings_sources
         )
-        if not handled_settings_sources:
-            if handled_settings_sources is not None:
-                handled_settings_sources.add(removed_settings_sources[0])
+        if "full_bundle" not in settings_source_reload_results:
+            if "full_bundle_snapshot" not in settings_source_reload_results:
+                settings_source_reload_results["full_bundle_snapshot"] = (
+                    _capture_settings_source_snapshot(
+                        vault_root=cfg.vault_path,
+                        scan_roots=scan_roots,
+                        state=state,
+                    )
+                )
             removed_delta = handle_settings_source_delta(
                 rel_path=removed_settings_sources[0],
                 vault_root=cfg.vault_path,
             )
-            if removed_delta.reloaded:
+            source_reload_succeeded = removed_delta.reloaded and not removed_delta.errors
+            settings_source_reload_results["full_bundle"] = source_reload_succeeded
+            if source_reload_succeeded:
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
                 )
@@ -2129,9 +2239,19 @@ def _run_spec_tick(
                 summary["settings_source_errors_in_tick"] = len(
                     removed_delta.errors
                 )
-                pending_settings_source_deletions.add(
-                    str(removed_settings_sources[0])
-                )
+        else:
+            source_reload_succeeded = settings_source_reload_results["full_bundle"] is True
+
+        source_snapshot = settings_source_reload_results.get("full_bundle_snapshot")
+        for removed_source in removed_settings_sources:
+            rel_str = str(removed_source)
+            snapshot_includes_absence = (
+                isinstance(source_snapshot, dict)
+                and rel_str in source_snapshot
+                and source_snapshot[rel_str] is None
+            )
+            if not source_reload_succeeded or not snapshot_includes_absence:
+                pending_settings_source_deletions.add(rel_str)
 
     if scan_completed and state.scan_scope_matched_files == 0:
         # The scope glob's directory exists, but the tick matched zero
@@ -2355,7 +2475,10 @@ def run_registry_once(
 ) -> dict[str, dict[str, object]]:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    _adopt_idle_selected_binding(cfg, reconciler)
     rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+    if rebind_cycle is not None and rebind_cycle.mode == "stable":
+        cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     rebind_observation_revision = (
         rebind_cycle.record.desired_revision
         if rebind_cycle is not None
@@ -2368,6 +2491,7 @@ def run_registry_once(
     }
     now = time.time()
     handled_settings_sources: set[Path] = set()
+    settings_source_reload_results: dict[str, object] = {}
     summaries = {
         spec.name: _run_spec_tick(
             cfg,
@@ -2377,6 +2501,7 @@ def run_registry_once(
             states=states,
             process_panel_notes_inline=True,
             handled_settings_sources=handled_settings_sources,
+            settings_source_reload_results=settings_source_reload_results,
             retain_unemitted_observations=rebind_observation_revision,
         )
         for spec in cfg.specs
@@ -2388,11 +2513,13 @@ def run_registry_once(
     )
     summaries["journal_review"] = _run_journal_review_tick(cfg)
     if reconciler is not None and rebind_cycle is not None:
-        reconciler.finish_cycle(
+        receipt = reconciler.finish_cycle(
             rebind_cycle,
             summaries=summaries,
             states=states,
         )
+        if receipt is not None and receipt.stage == "completed":
+            cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -2417,6 +2544,13 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
+    _adopt_idle_selected_binding(cfg, reconciler)
+    startup_rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+    if startup_rebind_cycle is not None and startup_rebind_cycle.mode == "stable":
+        # A fresh watcher process may still boot from the old environment
+        # binding.  Resolve the completed durable candidate before startup
+        # ingestion or the first scan, so restart cannot observe old-root work.
+        cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
     # `watcher run` is the production entrypoint.  Compile its bound vault at
     # boot just as API and worker do; the registry config is authoritative for
     # this process and need not depend on VAULT_ROOT being set separately.
@@ -2438,7 +2572,13 @@ def run_registry_forever(
 
     tick = 0
     while True:
-        rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        if tick != 0:
+            _adopt_idle_selected_binding(cfg, reconciler)
+        rebind_cycle = (
+            startup_rebind_cycle
+            if tick == 0
+            else (reconciler.begin_cycle(cfg) if reconciler is not None else None)
+        )
         rebind_observation_revision = (
             rebind_cycle.record.desired_revision
             if rebind_cycle is not None
@@ -2447,6 +2587,7 @@ def run_registry_forever(
         )
         now = time.time()
         handled_settings_sources: set[Path] = set()
+        settings_source_reload_results: dict[str, object] = {}
         summaries = {
             spec.name: _run_spec_tick(
                 cfg,
@@ -2455,6 +2596,7 @@ def run_registry_forever(
                 now=now,
                 states=states,
                 handled_settings_sources=handled_settings_sources,
+                settings_source_reload_results=settings_source_reload_results,
                 retain_unemitted_observations=rebind_observation_revision,
             )
             for spec in cfg.specs
@@ -2466,11 +2608,13 @@ def run_registry_forever(
         )
         summaries["journal_review"] = _run_journal_review_tick(cfg)
         if reconciler is not None and rebind_cycle is not None:
-            reconciler.finish_cycle(
+            receipt = reconciler.finish_cycle(
                 rebind_cycle,
                 summaries=summaries,
                 states=states,
             )
+            if receipt is not None and receipt.stage == "completed":
+                cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,

@@ -52,6 +52,58 @@ def test_load_env_defaults_file_handles_path_with_spaces() -> None:
         assert out == "/Users/test/Mobile Documents/iCloud~md~obsidian/Documents/Niflheim"
 
 
+def test_load_env_defaults_file_accepts_compose_export_prefix() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env_file = Path(tmpdir) / ".env.dev.local"
+        env_file.write_text(
+            "  export DESIGN_HANDOFF_APP_LOCAL_SETTINGS = /app/tmp/agentic-pkm/app-local.md\n",
+            encoding="utf-8",
+        )
+        out = _bash_ok(
+            f"source scripts/lib/load_env_defaults.sh; "
+            f"unset DESIGN_HANDOFF_APP_LOCAL_SETTINGS; "
+            f"load_env_defaults_file '{env_file}'; "
+            f"printf '%s' \"${{DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}}\""
+        )
+        assert out == "/app/tmp/agentic-pkm/app-local.md"
+
+
+def test_load_env_defaults_file_decodes_escaped_double_quote() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env_file = Path(tmpdir) / ".env.dev.local"
+        env_file.write_text(
+            'TOKEN="prefix\\"suffix" # trailing comment\n',
+            encoding="utf-8",
+        )
+        out = _bash_ok(
+            f"source scripts/lib/load_env_defaults.sh; "
+            f"unset TOKEN; "
+            f"load_env_defaults_file '{env_file}'; "
+            f"printf '%s' \"${{TOKEN:-}}\""
+        )
+        assert out == 'prefix"suffix'
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS=/app/tmp/agentic-pkm/app-local.md # canonical",
+        'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical',
+    ],
+)
+def test_load_env_defaults_file_strips_compose_inline_comments(assignment: str) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        env_file = Path(tmpdir) / ".env.dev.local"
+        env_file.write_text(f"{assignment}\n", encoding="utf-8")
+        out = _bash_ok(
+            f"source scripts/lib/load_env_defaults.sh; "
+            f"unset DESIGN_HANDOFF_APP_LOCAL_SETTINGS; "
+            f"load_env_defaults_file '{env_file}'; "
+            f"printf '%s' \"${{DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}}\""
+        )
+        assert out == "/app/tmp/agentic-pkm/app-local.md"
+
+
 def test_load_env_defaults_file_channel_specific_takes_precedence_over_base() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         dev_env = Path(tmpdir) / ".env.dev.local"

@@ -25,7 +25,8 @@ existing authority path: `proposal → WriteGuard → receipt → vault artifact
 
 - is written through `app/write_guard.py` (a vault-internal write, consistent with the owner's
   "all vault-internal writes pass WriteGuard" rule) and the companion-note / knowledge write path;
-- carries provenance frontmatter (source_refs, generated_by, promoted-from candidate id, decided_by);
+- carries provenance frontmatter (source_refs, generated_by, promoted-from candidate id, decided_by)
+  plus the candidate's explicit `scope_id` binding;
 - is labeled as agent-promoted material, distinct from and never overriding human-authored notes;
 - has a corresponding promotion receipt (`app/receipts/promotion_receipts.py`) — the receipt is the
   accountability record, the note is the durable semantic surface.
@@ -41,6 +42,27 @@ promotion stays **actionable**: the candidate remains in (or returns to) the pen
 is re-attempted when writes are allowed again. A promoted candidate must never be suppressed from
 review while no artifact exists. (Non-semantic promotions need no artifact and are terminal on
 decision.)
+
+**Scope producer invariant.** A semantic candidate must carry an explicit `scope_id` before
+materialization. The materializer refuses a missing or invalid binding before any artifact or
+transition receipt is written. It serializes the persisted `PROMOTE` decision from nonterminal state
+through a durable `materializing` reservation, note and receipt creation, and the terminal
+transition. The reservation binds the immutable scope, candidate digest, and original reviewer
+authority; once it exists, reject/revise cannot replace the decision after an indeterminate external
+write. This allows one successful materializer and prevents a revoked, changed, repeated, or
+competing materializer from writing. The persisted binding is
+written to both note and receipt; legacy unscoped artifacts remain unchanged. Bound recall denies
+unscoped artifacts fail closed and requires scope, candidate, artifact UUID, and selected vault to
+match the applied receipt; unbound recall retains its existing behavior.
+The selected vault ID is trusted only when its selected path equals the root used for recall, and
+receipt top-level artifact identity must agree with its linkage fields. If a reject or revise races
+with a durable `materializing` reservation, the store refuses it and the API restores the original
+pending queue entry (including removal of any speculative revision) before returning a conflict.
+
+Late failures are resumed idempotently. The materialization identity is stable per
+vault/channel/candidate. A retry validates and reuses an existing applied receipt plus its
+candidate-bound note, or an unreceipted candidate-bound note when receipt append was interrupted.
+Conflicting or multiple recovery artifacts fail closed instead of producing another note or receipt.
 
 ## Concretely
 
@@ -80,6 +102,16 @@ receipt → durable artifact, never silent persistence") and the writing-surface
 - [ ] The materialized note carries provenance and an agent-promoted label and does not overwrite an
   existing human-authored note.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_materialized_note_preserves_provenance_and_human_authorship`
+- [ ] Semantic materialization refuses a missing or invalid candidate scope before writing, while
+  successful materialization persists the immutable decision scope into the artifact and receipt.
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_semantic_materialization_requires_scope_before_write`
+  Verify: `tests/agent_memory/test_materialization_live_path.py::test_accept_materializes_and_marks_terminal`
+- [ ] Materialization requires a current nonterminal `PROMOTE` for the same persisted scope and
+  permits only one successful materializer.
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_materialization_refuses_intervening_same_scope_rejection`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_duplicate_materializer_refuses_after_terminal_success`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_reconciles_applied_receipt_after_late_query_failure`
+  Verify: `tests/agent_memory/test_memory_materialization.py::test_retry_reuses_candidate_note_after_receipt_append_failure`
 - [ ] Non-semantic promotions (episodic/working/preference) do not materialize a vault artifact.
   Verify: `tests/agent_memory/test_memory_materialization.py::test_non_semantic_promotion_does_not_materialize`
 

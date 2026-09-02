@@ -161,7 +161,10 @@ Delivery depth follows `AGENTS.md :: Proportional delivery` and
   and no explicitly requested review round. The complete merge gate is: current SHA truth intact;
   required checks and repo-standard checks covering the changed surface green on the head SHA;
   every closing issue's `Verify:` targets self-verified on that SHA; no scope drift; the PR body
-  declares `Final-Review-Rounds: 0`. Then merge directly with the normal closing-keyword body —
+  declares `Final-Review-Rounds: 0`. `scripts/closure.py plan/apply` may execute this already-admitted
+  ordinary path only after a hash-bound plan re-reads the same current authority; unsupported,
+  ambiguous, or drifting state remains on this skill's exception route. Then merge directly with the
+  normal closing-keyword body —
   GitHub-native closure closes the single governing issue. After merge: verify the issue actually
   closed, remove `agent:*` labels, optionally repair the `Done` projection when that work is in
   scope, and run `post-merge-owner-doc` when shipped behavior or contracts changed. `Running the local
@@ -416,15 +419,17 @@ Rules:
 
 When all prerequisites are met:
 
-Verified-merge authority and phase body digests canonicalize GitHub PR-body storage by removing at
-most one terminal LF before digest derivation or comparison. That LF is equivalent to its absence;
-every other body byte and whitespace character remains exact, and substantive body drift fails
-closed. This digest equivalence does not relax any head, title, closing-set, authority-receipt, or
+Verified-merge planning emits the neutralized PR body in one LF-less transport representation.
+Authority, GitHub adapter readback, `pr-contract`, prepared-phase validation, and convergence
+projection all derive the same digest after removing at most one terminal LF from the live body.
+The LF-less form and that exact body with one terminal LF are equivalent; a second terminal LF,
+CR/CRLF, interior whitespace, or any other body drift fails closed before `prepared` or merge.
+This digest equivalence does not relax any head, title, closing-set, authority-receipt, or
 phase-continuity gate below. For a pre-#4010 trusted authority receipt only, the stored raw digest
 of the otherwise identical body with exactly one terminal LF may authenticate when GitHub returns
 the LF-less form when the authenticated comment `created_at` and `updated_at` both precede #4010's
-`2026-07-21T16:32:11Z` merge cutoff. Check normal canonical equality first so unchanged two-LF bodies
-remain valid; the legacy fallback rejects any CR/CRLF, spaces, interior drift, post-cutoff receipt,
+`2026-07-21T16:32:11Z` merge cutoff. The legacy fallback rejects a two-LF body, any CR/CRLF,
+spaces, interior drift, post-cutoff receipt,
 or other receipt/live-state mismatch. Preserve receipt identity, phase continuity, and repair accounting.
 
 For the singular pre-#4010 immutable PR #4052 compatibility deadlock, current-main/base-side
@@ -453,9 +458,9 @@ same exact head back to the ordinary verified-merge sequence below.
    any repair, rebase, base-branch update, review-feedback fix, or other commit is still expected;
    finish those commits first and restart at step 1 on the new head. A readiness statement is never
    reusable across heads, and the planner refuses neutralization when the precondition is unmet
-3. replace the live PR body with the plan's neutralized body, which converts every authenticated
+3. replace the live PR body with the plan's LF-less neutralized transport body, which converts every authenticated
    closer to evidence-only `Refs`; immediately re-read the PR and fail closed unless the head and
-   neutralized body matches the plan under the terminal-LF-only canonical digest contract above, the
+   neutralized body match the plan under the terminal-LF-only canonical digest contract above, the
    title and body contain no canonical or malformed closing attempt, and `closingIssuesReferences`
    is empty. Because the body edit triggers
    governance again, the triggered `pr-contract` must authenticate the trusted, non-conflicting
@@ -546,6 +551,14 @@ deterministically on that head and on every head after it, because the exact-hea
 no longer covers the live head. That happened on PR #4021, where one neutralized body survived six
 later heads for about seven hours.
 
+Also restore an open neutralized PR on the receipt's exact head when the authenticated authority
+receipt proves the unique original-body digest and the live body is exactly the historical stranded
+transport form: the receipt's canonical neutralized body plus one additional terminal LF. This
+two-LF shape is never accepted by `pr-contract`, adapter convergence, `prepared`, or merge. The
+restoration classifier may use it only to name the receipt's exact restore target, and it refuses
+missing, untrusted, conflicting, body-drifted, or already-phased evidence so restoration cannot race
+an in-flight merge.
+
 Detect the state instead of relying on noticing it per head:
 
 ```bash
@@ -554,8 +567,9 @@ python3 scripts/resolve_neutralized_body_restoration.py \
 ```
 
 It is read-only and separates a positively safe state from an indeterminate one: `0` means no
-restoration is required, `2` means the body is neutralized with no receipt for the current head and
-names the durable receipt's `restore_body_sha256` as the only accepted restore target, and `3` means
+restoration is required, `2` means either the body outlived its receipt head or the exact-head
+transport-stranding proof above names the durable receipt's `restore_body_sha256` as the only
+accepted restore target, and `3` means
 the body still carries a `Verified-Closing-Issues` marker but no restore target can be proven —
 because the evidence is missing, untrusted, or conflicting, because the snapshot is incomplete, or
 because the marker survived while the body's grammar no longer parses. Treat `3` as a hard stop and
@@ -659,10 +673,14 @@ that fallback. Never infer either mode from an earlier lease, database existence
 After merging and delivering work, scan for issues blocked by the delivered Issue. Before unblocking
 each dependent, re-read its live Issue body, state, labels, and dependency evidence; do not unblock
 an Issue carrying `agent:needs-human`; form the prospective post-unblock label set by replacing
-`agent:blocked` with `agent:ready`; run the strict issue-readiness validation against that current
+`agent:blocked` with `agent:ready` and remove every `action:*` label from that prospective set; run
+the strict issue-readiness validation against that current
 body and prospective label set; and verify that this delivery actually satisfied the named
-dependency. Only then make the explicit lifecycle mutation and read it back. Do not unblock from a
-stale dependency graph, an earlier readiness report, or a successful merge alone.
+dependency. Only then make the explicit lifecycle mutation and read it back. The mutation must
+remove the action subtype as well as change the lifecycle label. The previous `blocker_action.v1`
+comment remains immutable historical evidence; it does not authorize retaining an action label on
+ready work. Do not unblock from a stale dependency graph, an earlier readiness report, or a
+successful merge alone.
 
 ## Optional Project Projection
 

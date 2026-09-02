@@ -49,25 +49,25 @@ Default rule:
 - relevant repo-standard checks that cover the changed surface must be current, even when GitHub branch protection does not require them
 - failing checks that cover the changed surface are hard stops until fixed, rerun green, or explicitly classified as unrelated by evidence; `Unit tests (not pg)` is a hard stop when red on an app/test/runtime-affecting PR
 
+## Publication Routing
+
+`.codex/skills/publish-pr/SKILL.md` owns the publication decision. Its normal command is restricted
+to a new single-Issue Tier 1/2 PR targeting `main`, with strict credential-free fetch/push repository
+identity, one live base SHA, an absent head branch, and empty all-state PR history. Every existing-PR,
+non-`main`, pre-existing-commit, remote-head/history, multi-Issue, special-lane, high-risk, or
+ambiguous-readback case routes to `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`; that file is
+the canonical full-path publication owner. Neither route owns merge, Issue closure, release, or
+deployment.
+
 ## PR Body Preparation
 
-`.codex/skills/publish-pr/SKILL.md :: Step 6` is the authoritative source of the four PR-body
-templates (implementation, docs-authoring, governance, direct-repair) actually used at publication
-time. Copy the template for the chosen lane directly from that step. Each template already carries
-the fields the `pr-contract` gate requires — a single `Final-Review-Rounds: 0` (light delivery path per `AGENTS.md :: Proportional delivery`), `1`, or `2` line, a
-filled `## BuilderOps Routing` section with no `<...>` placeholder, and, for direct repair, the
-complete `Type:` / `Reason:` / `Validation:` / `Issue required: no` block — so an agent that copies
-one of them and fills in the bracketed content satisfies the gate by construction.
-
-`scripts/pr_body_generator.py` implements the same field contract as a standalone generator
-(`--input-json` in, a complete body out) and is available for ad hoc preflight or drift-checking
-against these templates, but no skill invokes it as part of the publication path. Wiring
-`publish-pr` to the generator is deliberately out of scope for now: the generator hard-enforces the
-full 16-field `SBS Impact` block (`docs/architecture/SBS_OPERATING_MODEL.md`), and that block's
-contract is under an open owner ruling tracked outside this doc — wiring the generator in before
-that ruling lands would cement a contract that may be about to change. Revisit this section once
-the ruling lands. Whichever source is used — skill template or generator — required lane inputs must
-be concrete before any PR is opened:
+`scripts/pr_body_generator.py` is the authoritative body constructor for implementation,
+docs-authoring, governance, and direct-repair lanes. It accepts one explicit JSON mapping
+(`--input-json`) or equivalent explicit arguments and emits the complete body without writing to
+GitHub. The normal new single-Issue Tier 1/2 path invokes it through
+`scripts/publication.py plan/apply` and binds the exact generated body digest into the plan.
+Unsupported publication paths still generate and inspect the body before their owning workflow
+opens or updates a PR. Required lane inputs must be concrete:
 
 - implementation lane requires a linked issue;
 - closing authority must be declared only on a dedicated `Fixes #<id>`, `Closes #<id>`, or
@@ -77,9 +77,9 @@ be concrete before any PR is opened:
 - issue-backed and direct-repair bodies require concrete BuilderOps routing lines;
 - direct repair requires `Type`, `Reason`, `Validation`, and `Issue required: no`.
 
-Neither the skill templates nor the generator weaken `pr-contract`, infer issues silently, open PRs,
-or write to GitHub. CI remains the authority for whether the final PR body satisfies the repository
-contract.
+Neither the generator nor a publication plan weakens `pr-contract`, infers issues silently, or
+becomes PR authority. CI remains the authority for whether the final live PR body satisfies the
+repository contract.
 
 ## Multi-Issue PR Scope
 
@@ -321,7 +321,9 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 
 - current SHA truth before merge
 - issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
-  revalidates the neutralized live body/head/closing links and requires `pr-contract` to authenticate
+  publishes the neutralized body in the LF-less canonical transport form, revalidates the live
+  body/head/closing links with at most one stored terminal LF, rejects a second LF, CR/CRLF, or any
+  other whitespace drift, and requires `pr-contract` to authenticate
   its trusted exact-head authority receipt, uses a fixed non-closing merge message,
   persists trusted authority plus continuous prepared/merged/reconciled/restored phases, explicitly
   closes only the authenticated issue set, reconciles any body-race closure attributable to that PR,
@@ -333,7 +335,8 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 - a neutralized PR body may not outlive its merge attempt: neutralization requires a head-bound
   readiness statement that CI and review are green and no further commits are anticipated, and a head
   change while the body is still neutralized requires restoring the canonical body before further
-  repair work
+  repair work; an exact-head body stranded by the historical extra-LF transport is restoration-only
+  and requires the unique authenticated body/receipt proof before the original body may be restored
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

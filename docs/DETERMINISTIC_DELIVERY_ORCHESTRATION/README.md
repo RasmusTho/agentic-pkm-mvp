@@ -96,6 +96,8 @@ coordination:
 | Plan compiler | Pure scope resolution, readiness checks, dependency waves, exclusions, and typed rejection | Claims, launches, GitHub writes | Planning rules |
 | Delivery reducer | Allowed state transitions and next-effect decisions | Provider execution or authority mutation | State-machine policy |
 | Effect adapters | Claim, worker correlation, CI/review wait, merge/closure calls | Deciding whether an effect is allowed | External integration |
+| Local publication adapter | Hash-bound read-only planning plus guarded `absent -> base-reserved -> exact-commit -> exact-PR` application for the normal single-Issue Tier 1/2 `main` path | Durable orchestration, existing-PR/full-path delivery, merge, closure, deploy, or retry after ambiguous readback | Reduce ordinary V3.3 publication context while preserving Git/GitHub authority |
+| Local closure adapter | Hash-bound read-only light-path verification plan plus guarded exact-head merge, GitHub-native Issue-closure readback, and bounded label/dispatcher reconciliation | Full-path verified merge, durable orchestration, owner-doc judgment, Project authority, UI control, deploy, or retry after ambiguous merge readback | Reduce ordinary V3.4 closure context while preserving GitHub and dispatcher authority |
 | BuilderOps journal/outbox binding | Fencing, idempotency, repo-scoped delivery-lane lease, attempt/effect durability, unknown-state reconciliation | GitHub delivery authority or a second delivery state machine | Crash safety and concurrency |
 | CKM bridge | Draft, preview, authenticated initiation handoff, and receipt projection | Delivery execution or static cockpit mutation | Operator overview and initiation |
 | TCD/acceptance harness | Baseline, pilot metrics, fault tests, and capability acceptance | Runtime scheduling | Evidence and rollout |
@@ -106,6 +108,16 @@ BuilderOps reconciliation binding, and CKM bridge have supplied evidence that ei
 `PromotionIntent` semantics are sufficient or a distinct record has a lower total contract and
 migration cost. Until then, canonical initiation bytes may be transported by a bounded approval
 envelope but no transport or storage shape becomes contract authority.
+
+The delivered local `builder.publication-plan.v1` / `builder.publication-receipt.v1` seam is an
+enabling V3.3 effect adapter, not DDO-05 or a new reducer child. It binds credential-free effective
+fetch/push repository identities plus local, fetch, and GitHub `main` to one base SHA; reconstructs
+partial progress from the exact local commit, base reservation, remote head, and all-state PR
+history; and returns typed terminal/drift/`unknown` before a blind retry. GitHub REST create-ref is a
+transient atomic branch reservation at the authenticated base, followed only by an ordinary
+non-force fast-forward push. This reduces D11 coordination/context exposure and makes D12
+publication evidence explicit, but adds no durable journal, queue, repo-scoped lane fence, devUI
+control, merge, closure, or crash-safe unattended guarantee.
 
 ## Deterministic, agentic, and owner decisions
 
@@ -155,6 +167,10 @@ before exposing owner language.
   requires an actual transition from a pre-state containing `agent:ready` to a post-state without
   it, closures must observe the Issue closed, and non-mutating or failed effects cannot silently
   change the guarded Issue state.
+  The bounded local publication adapter applies the same read-before-write shape without claiming
+  durable fencing: its plan hash and live readback permit only one exact normal-path result, while a
+  conflicting remote head, mismatched/duplicate PR, or unavailable unique readback is typed
+  `unknown` and cannot authorize another external effect.
 - **INV-DDO-6a — authority is resolved, not frozen.** The immutable plan input is the origin
   authority state, not the state every later event must repeat. Structured worker and review result
   events bind the *resolved current* authority for their Issue: the plan input advanced by the

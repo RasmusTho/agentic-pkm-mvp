@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -93,6 +94,14 @@ class _FakeCursor:
             self._fetchall = [(name,) for name in ("dim", "model", "provider", "normalize")]
             return
         if normalized.startswith("update store_vector_index"):
+            return
+        if normalized.startswith("update objects set payload"):
+            payload_json, binding_id, canonical_id, uuid_value = params
+            _assert_binding_scoped(binding_id)
+            payload = json.loads(payload_json)
+            for key in {str(canonical_id), str(uuid_value)}:
+                if key in self.conn.objects_path:
+                    self.conn.objects_payload[key] = payload
             return
         if normalized.startswith("update objects set path=%s where uuid=%s"):
             new_path, uuid_value = params
@@ -250,6 +259,7 @@ class _FakeConn:
         self.objects_path: dict[str, str | None] = {}
         self.canonical_source: dict[str, str | None] = {}
         self.canonical_payload: dict[str, object] = {}
+        self.objects_payload: dict[str, dict[str, object]] = {}
 
     def __enter__(self) -> "_FakeConn":
         return self
@@ -292,6 +302,59 @@ def test_update_path_only_keeps_single_active_file_state_path() -> None:
         path for path, row in conn.file_state.items() if row.get("uuid") == UUID1
     )
     assert paths_for_uuid == ["/vault/new.md"]
+
+
+def test_update_path_only_persists_captured_rename_edit_in_watcher_mirror() -> None:
+    conn = _FakeConn()
+    conn.objects_path[UUID1] = "/vault/old.md"
+    conn.canonical_source[UUID1] = "/vault/old.md"
+    conn.objects_payload[UUID1] = {"content": "old body"}
+
+    vault_sync._update_path_only(
+        conn,
+        old_path="/vault/old.md",
+        new_path="/vault/new.md",
+        uuid_value=UUID1,
+        payload={"content": "edited body", "frontmatter": {"title": "Renamed"}},
+        fm_hash="new-fm",
+        body_hash="new-body",
+        mtime=datetime.now(timezone.utc),
+        binding_id=vault_sync._binding_id(),
+    )
+
+    assert conn.objects_payload[UUID1] == {
+        "content": "edited body",
+        "frontmatter": {"title": "Renamed"},
+    }
+
+
+def test_update_path_persists_captured_rename_edit_payload(tmp_path, monkeypatch) -> None:
+    old_path = tmp_path / "old.md"
+    new_path = tmp_path / "new.md"
+    new_path.write_text(
+        "---\ntitle: Renamed\nreview_state: reviewed\n---\n\nedited body\n",
+        encoding="utf-8",
+    )
+    conn = _FakeConn()
+    old_path_str = str(old_path.resolve())
+    new_path_str = str(new_path.resolve())
+    conn.objects_path[UUID1] = old_path_str
+    conn.canonical_source[UUID1] = old_path_str
+    conn.objects_payload[UUID1] = {"content": "old body"}
+    conn.file_state[old_path_str] = {
+        "path": old_path_str,
+        "uuid": UUID1,
+        "fm_hash": "old-fm",
+        "body_hash": "old-body",
+        "mtime": datetime.now(timezone.utc),
+    }
+    monkeypatch.setattr(vault_sync, "_conn", lambda: conn)
+    monkeypatch.setattr(vault_sync, "ensure_schema", lambda *_a, **_k: None)
+
+    vault_sync.update_path(UUID1, new_path_str, vault_root=tmp_path)
+
+    assert conn.objects_payload[UUID1]["content"] == "edited body\n"
+    assert conn.objects_payload[UUID1]["frontmatter"]["title"] == "Renamed"
 
 
 def test_delete_note_clears_file_state_and_object_path(monkeypatch) -> None:

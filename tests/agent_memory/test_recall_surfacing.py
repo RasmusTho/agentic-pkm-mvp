@@ -50,6 +50,7 @@ def _candidate(candidate_id: str) -> MemoryCandidate:
         source_refs=[f"note:{candidate_id}.md", "session:2026-06-13T09:00:00Z"],
         derived_from=f"vault:{candidate_id}.md",
         generated_by="companion_agent",
+        scope_id="scope:work/project-alpha",
     )
 
 

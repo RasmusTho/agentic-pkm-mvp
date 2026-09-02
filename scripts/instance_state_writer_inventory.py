@@ -25,6 +25,55 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+try:
+    from scripts.compose_env import compose_env_value as _compose_env_value
+except ModuleNotFoundError:
+    try:
+        # Direct launcher invocations put scripts/, rather than the repo root,
+        # on sys.path; keep the shared parser usable without mutating it.
+        from compose_env import compose_env_value as _compose_env_value
+    except ModuleNotFoundError:
+        # Minimal synthetic launcher fixtures may copy only this entrypoint.
+        def _compose_env_value(raw_value: str) -> str:
+            value = raw_value.strip()
+            if value[:1] in {"'", '"'}:
+                quote = value[0]
+                escaped = False
+                for index in range(1, len(value)):
+                    character = value[index]
+                    if quote == '"' and escaped:
+                        escaped = False
+                        continue
+                    if quote == '"' and character == "\\":
+                        escaped = True
+                        continue
+                    if character != quote:
+                        continue
+                    suffix = value[index + 1 :].lstrip()
+                    if not suffix or suffix.startswith("#"):
+                        quoted = value[1:index]
+                        decoded: list[str] = []
+                        escaped = False
+                        for item in quoted:
+                            if escaped:
+                                if item in {'"', "\\"}:
+                                    decoded.append(item)
+                                else:
+                                    decoded.extend(("\\", item))
+                                escaped = False
+                            elif item == "\\":
+                                escaped = True
+                            else:
+                                decoded.append(item)
+                        if escaped:
+                            decoded.append("\\")
+                        return "".join(decoded)
+                    break
+                return value
+            comment = re.search(r"[ \t]+#", value)
+            if comment:
+                value = value[: comment.start()].rstrip()
+            return value
 
 INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
@@ -33,6 +82,7 @@ COMPOSE_PROJECT_DOMAINS = {"pkm-dev": "dev", "pkm-prod": "prod", "pkm-test": "te
 LAUNCHER_SCRIPTS = {"deploy_channel.sh", "start_full_system.sh"}
 LAUNCHER_ROLES = {name.removesuffix(".sh") for name in LAUNCHER_SCRIPTS}
 TOKEN_RE = re.compile(r"^(?:linux|darwin|docker):[0-9a-f]{64}$")
+ENV_ASSIGNMENT_RE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$")
 PYTHON_RE = re.compile(r"^python(?:3(?:\.\d+)*)?$")
 PF_KTHREAD = 0x00200000
 LINUX_PROCESS_READ_ATTEMPTS = 3
@@ -471,16 +521,13 @@ def _read_env_bytes(raw: bytes) -> dict[str, str]:
         raise InventoryError("legacy owner config source is invalid") from exc
     for raw_line in lines:
         line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line or line.startswith("#"):
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+        match = ENV_ASSIGNMENT_RE.match(line)
+        if match is None:
             continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
+        key, raw_value = match.groups()
+        values[key] = _compose_env_value(raw_value)
     return values
 
 
@@ -655,7 +702,16 @@ def _env_list(values: object) -> dict[str, str]:
         return {}
     if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
         raise InventoryError("docker legacy owner source inventory is malformed")
-    return _read_env_bytes(("\n".join(values) + "\n").encode("utf-8"))
+    parsed: dict[str, str] = {}
+    for value in values:
+        key, separator, literal_value = value.partition("=")
+        if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            continue
+        # Docker inspect exposes already-resolved Config.Env entries.  A '#'
+        # here is literal data; only env-file source text uses Compose comment
+        # and quote parsing through _read_env_bytes.
+        parsed[key] = literal_value
+    return parsed
 
 
 def _translate_container_root(value: str, mounts: object) -> Path | None:
@@ -1013,13 +1069,15 @@ def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[s
     ancestors: set[str] = set()
     for ancestor in resolved.parents:
         try:
-            ancestor_metadata = os.stat(ancestor)
+            os.stat(ancestor)
         except OSError as exc:
             raise InventoryError(
                 "legacy owner ancestor identity is unavailable: "
                 f"domain={domain} source={source} id={redacted_id}"
             ) from exc
-        ancestors.add(f"inode:{ancestor_metadata.st_dev}:{ancestor_metadata.st_ino}")
+        # Root identity is inode-bound, but the parent chain is path-bound so
+        # the authenticated lease remains portable across container mounts.
+        ancestors.add(f"path:{ancestor}")
     return primary, frozenset(ancestors)
 
 
@@ -1050,12 +1108,12 @@ def _normalize_legacy_owners(
                 continue
             if (
                 left_primary == right_primary
-                or left_primary in right_ancestors
-                or right_primary in left_ancestors
+                or f"path:{right.root}" in left_ancestors
+                or f"path:{left.root}" in right_ancestors
             ):
                 shared_id = (
                     left_primary
-                    if left_primary == right_primary or left_primary in right_ancestors
+                    if left_primary == right_primary
                     else right_primary
                 )
                 raise InventoryError(
@@ -1070,8 +1128,9 @@ def _normalize_legacy_owners(
                 "channel_id": record.channel_id,
                 "root": record.root,
                 "identity": primary,
+                "ancestor_identities": sorted(ancestors),
             }
-            for record, primary, _ in ordered
+            for record, primary, ancestors in ordered
         ],
     )
 

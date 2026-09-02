@@ -42,7 +42,9 @@ Use when local HEAD, the tracked remote branch, and the PR head SHA do not match
 Use after merge or after verification when the delivered work unblocks other issues.
 
 - scan for issues that explicitly depend on the delivered issue
-- remove `agent:blocked` and add `agent:ready` only when the dependency is truly satisfied
+- remove `agent:blocked` and every `action:*` label, then add `agent:ready`, only when the dependency
+  is truly satisfied and the prospective label set passes strict readiness validation; preserve the
+  prior `blocker_action.v1` comment as immutable historical evidence
 - do not unblock issues whose real dependency is still missing
 
 ## 5) Owner-Doc Check

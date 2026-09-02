@@ -246,3 +246,21 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The merged Compose contract mounted the app-role password root-only while `init_roles.sh` runs as `postgres`, so its test suite did not prove the first-init secret read path.
 **Upstream artifact:** `tests/ops/test_builderops_compose_contract.py`
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent.
+
+## 2026-08-31 — #5235 (legacy-owner receipt identity compatibility)
+**Source:** deliver-issue-set convergence review
+**Diverged:** The initial implementation emitted inode-bound ancestor evidence while the existing ownership lease mechanism is path-bound, causing established multi-channel receipt validation to fail.
+**Upstream artifact:** `.codex/skills/issue-to-code/SKILL.md` and the issue/PR verification receipt contract
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
+
+## 2026-08-31 — #5253 (read-only Mac vault bridge qualification)
+**Source:** capture-learning after publish-pr gate invocation
+**Diverged:** The existing-PR review-before-CI gate was invoked without its required publication-mode flag, and the following shell command continued because the block lacked hard-exit behavior.
+**Upstream artifact:** `.codex/skills/publish-pr/SKILL.md :: Publication workflow`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
+
+## 2026-09-01 — DSP-05 (#5277 / duplicate #5278)
+**Source:** capture-learning after docs-to-issue creation
+**Diverged:** The plan had already created canonical DSP-05 Issue #5277, but a repeated create step filed identical Issue #5278 before the new Issue state was re-read.
+**Upstream artifact:** `.codex/skills/docs-to-issue/SKILL.md :: Live duplicate re-check — immediately before creation`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.

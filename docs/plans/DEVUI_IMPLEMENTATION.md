@@ -221,6 +221,20 @@ Do not add `CapabilityDeliveryIntent`; `DeliveryRequest.v1` and `DeliveryPreview
 proposal semantics. Changed source, scope, acceptance profile, or freshness invalidates preview.
 Read-only cockpit use remains available whenever the action boundary is unavailable.
 
+The Builder System now has a CLI/API-usable local publication adapter for the normal new
+single-Issue Tier 1/2 PR path: `builder.publication-plan.v1` previews the exact bounded action and
+`builder.publication-receipt.v1` reports Git/GitHub readback. A future Stage B surface may render
+that exact plan, legal next action, and receipt read-only. This does not make publication a current
+devUI command, supply authenticated control, persist run state, or authorize merge, Issue closure,
+deployment, or retry after typed `unknown`; those remain behind the separately delivered action
+boundary and existing owner workflows.
+
+The same narrow path now has a local closure adapter: `builder.closure-plan.v1` binds current-head
+checks and self-verified acceptance evidence before an exact-head GitHub merge, while its receipt
+reports GitHub-native Issue closure and bounded reconciliation. A future Stage B surface may render
+that plan and receipt read-only; it does not gain authenticated command authority, durable
+orchestration, Project authority, or an exception route.
+
 Verify: exact approval/no scope expansion, double submit, stale preview/auth, timeout/restart,
 reattach without duplicate worker/effect, typed pause/resume/cancel/supersede, owner-vs-system
 classification, and unchanged CLI/API delivery without devUI.

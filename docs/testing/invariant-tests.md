@@ -5,8 +5,8 @@ Owner: OEF — Observability, Evaluation & Fitness (registry); CES practice (rul
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (invariant → probe mapping); subordinate to the doctrine, ontology, semantic dimensions, contracts, and boundary charters it maps
-Last reviewed: 2026-07-11
-Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/boundaries/README.md, schemas/README.md
+Last reviewed: 2026-09-01
+Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/architecture/SBS_FITNESS_RULES.md, docs/contracts/STORE_PORT.md, docs/contracts/EXECUTION_REQUEST.md, docs/boundaries/README.md, schemas/README.md
 
 # Mimer Invariant Test Registry
 
@@ -67,6 +67,47 @@ blocks the structurally-expressible part, the skeleton holds the cross-field or 
 [schemas/README §Known JSON Schema limits](../../schemas/README.md) lists exactly which checks are
 declarative-schema-impossible and therefore live here as the source of truth.
 
+## Design principle routing
+
+The canonical principle kernel is `docs/DESIGN_PRINCIPLES.md :: System Design Principles`. Each
+principle owns one stable ID plus applicability, owner, required-reading, and enforcement metadata
+beside its normative prose. `docs/PROJECT_KERNEL.md` and `docs/MODULAR_ARCHITECTURE.md` are compact
+projections only; neither owns a second registry. The static checks live in
+`tests/architecture/test_design_principle_routing.py`.
+
+The routing posture is intentionally separate from the invariant enforcement categories above:
+
+| Routing posture | Meaning |
+| --- | --- |
+| `blocking` | A named current gate in the principle's required reading blocks an applicable violation. It does not claim broader mechanical coverage than that gate. |
+| `advisory` | A named decision record or structured review signal identifies applicable drift, but the signal does not itself block merge. |
+| `manual-review` | The principle and its required reading must be evaluated during review; no mechanical or advisory coverage is claimed. |
+
+The static routing test is blocking for metadata integrity and projection drift. It verifies that a
+posture is declared and resolvable; it does not upgrade a principle's substantive enforcement.
+
+### design_boundary_drift_report
+
+- **Purpose:** Make stale principle references, duplicate routing ownership, packet drift, and
+  unclassified effect declarations visible in one deterministic read-only report.
+- **Protected principle:** boundary-first design, explicit mutation authority, and the OEF rule that
+  observability reports evidence without becoming policy or repair authority.
+- **Affected boundaries:** Architecture / CES practice, OEF, GOV, and the Builder System boundary.
+- **Required fixture / data:** canonical principle routing metadata, fitness/invariant registrations,
+  the owned-effect declaration document, and an optional `design_packet.v1` snapshot.
+- **Expected failure mode:** the doctor returns a stable typed state — `healthy`,
+  `stale-reference`, `duplicate-authority`, `packet-drift`, or `unclassified-effect` — and refuses
+  invalid metadata without a partial report.
+- **Current enforcement:** `static_test` — the bounded command is exercised over healthy and
+  intentionally drifted Git fixtures and its output is compared byte-for-byte.
+- **Test path:** `tests/governance/test_design_boundary_doctor.py::test_doctor_reports_typed_boundary_drift`;
+  `tests/governance/test_design_boundary_doctor.py::test_doctor_is_read_only`;
+  `tests/governance/test_design_boundary_doctor.py::test_doctor_output_is_evidence_not_authority`.
+- **Related docs / contracts / ADRs:** `docs/architecture/SBS_FITNESS_RULES.md`;
+  `docs/DESIGN_PRINCIPLES.md`; `docs/WHOLE_SYSTEM_DESIGN_PRINCIPLES/REPORT_DESIGN_BOUNDARY_DRIFT.md`;
+  `docs/architecture/owned-effect-boundaries.json`.
+- **Related issues:** #5277; #5258 remains the parent epic.
+
 ## Registry
 
 ### one_vault_settings_location
@@ -89,6 +130,24 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Related docs / contracts / ADRs:** `docs/SETTINGS.md`;
   `docs/SETTINGS_SPINE/CANONICALIZE_SETTINGS_LOCATION.md`.
 - **Related issues:** #3156, #3161.
+
+### vault_selection_rebinds_consumers
+
+- **Purpose:** The legacy compatibility picker and separately deployed watcher follow one
+  protected `settings_rebind.v1` prepare/acknowledge/commit/drain/resume transaction.
+- **Protected principle:** No candidate-root effect before commit; no success before the
+  durable commit; the watcher changes roots only after its post-commit receipt.
+- **Expected failure mode:** stale or malformed phase/revision, unhealthy A scan, lost watcher
+  receipt, or a reload failure is visible and never silently redirects work to B.
+- **Current enforcement:** runtime tests in
+  `tests/watcher/test_ingest_binding_follows_selection.py` and
+  `tests/integration/test_watcher_cross_process_rebind.py`; health exposes phase and revisions.
+- **Runtime test path:** `tests/watcher/test_ingest_binding_follows_selection.py`;
+  `tests/integration/test_watcher_cross_process_rebind.py`.
+- **Related docs / contracts / ADRs:** `docs/SETTINGS.md :: Authority`;
+  `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md`;
+  `docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md :: Compatibility lifecycle`.
+- **Related issues:** #3156, #3163, #4969.
 
 ### inv_ef1_public_private_seam
 
@@ -303,6 +362,26 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Eventual test path:** `tests/invariants/test_authority_transition.py::test_execution_cannot_authorize_itself` (xfail).
 - **Related docs / contracts / ADRs:** [authority-transition-flow](../architecture/authority-transition-flow.md) §4, [EXE charter](../boundaries/EXE.md), [EXECUTION_REQUEST](../contracts/EXECUTION_REQUEST.md); ADR-0019, ADR-0031.
 - **Related issues:** #2547, #2550, #2552.
+
+### owned_effect_boundaries
+
+- **Purpose:** Durable and external capability effects remain visible at a named owner contract and
+  port, while pure internal computation does not acquire generic wrapper overhead.
+- **Protected principle:** explicit mutation authority and the SBS rule that effects belong to the
+  boundary that owns their semantics/mechanics.
+- **Affected boundaries:** PDM, GOV, EBF, EXE, OEF, and CES practice.
+- **Required fixture / data:** one compliant StorePort declaration, one compliant external effect
+  declaration, one hidden direct-effect declaration, and one pure computation declaration.
+- **Expected failure mode:** a capability performs or declares a durable/external effect without a
+  named owner contract/port, or a pure helper is rejected merely because it has no wrapper.
+- **Current enforcement:** `static_test` — the bounded declaration validator fails hidden direct
+  effects and missing ownership while accepting pure computation.
+- **Test path:** `tests/architecture/test_owned_effect_boundaries.py::test_durable_and_external_effects_require_named_owner_ports`;
+  `tests/architecture/test_owned_effect_boundaries.py::test_pure_internal_functions_do_not_require_generic_wrappers`.
+- **Related docs / contracts / ADRs:** `docs/architecture/SBS_FITNESS_RULES.md`;
+  `docs/contracts/STORE_PORT.md`; `docs/contracts/EXECUTION_REQUEST.md`;
+  `docs/architecture/SBS_OPERATING_MODEL.md` §4.
+- **Related issues:** #5275; #3553 remains the Governed Knowledge Effect Spine authority.
 
 ## Governed knowledge effect spine invariants
 
@@ -1083,6 +1162,8 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | projection_not_evidence | #8 | DRI/OEF/GOV | schema + xfail | `tests/invariants/test_projection_not_evidence.py` (xfail) |
 | authority_transition_required_for_durable_mutation | #9,#15 | GOV/HKA | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
 | execution_cannot_authorize_itself | #10 | CAO/GOV/EXE | schema + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
+| owned_effect_boundaries | #9,#10,#12 | PDM/GOV/EBF/EXE/OEF | static | `tests/architecture/test_owned_effect_boundaries.py` |
+| design_boundary_drift_report | #1,#4,#9,#13 | Architecture/CES/OEF/GOV/Builder System | static | `tests/governance/test_design_boundary_doctor.py` |
 | parent_aggregation_not_sibling_sharing | #11 | SFC/WSP | doc + static + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
 | sync_preserves_boundaries | #14 | SFC/WSP/GOV | schema + xfail | `tests/invariants/test_cross_scope_flow.py` (xfail) |
 | observability_not_policy | #13 | OEF/GOV | doc + xfail | `tests/invariants/test_projection_not_evidence.py` (xfail) |

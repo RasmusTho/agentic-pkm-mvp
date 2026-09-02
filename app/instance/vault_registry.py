@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Mapping, Protocol, cast
 from uuid import uuid4
 
 import yaml
@@ -505,9 +505,15 @@ class VaultRegistryStore:
                 and requested.applied_revision == existing.applied_revision
                 and requested != existing
             ):
-                raise RegistryError(
-                    "settings rebind state cannot change without a revision advance"
+                reload_only_advance = (
+                    requested.reload_revision == requested.desired_revision
+                    and requested.reload_revision != existing.reload_revision
+                    and replace(requested, reload_revision=existing.reload_revision) == existing
                 )
+                if not reload_only_advance:
+                    raise RegistryError(
+                        "settings rebind state cannot change without a revision advance"
+                    )
             if requested == existing:
                 return current
             self._validate_settings_rebind_binding(current, requested.prior_binding_id)
@@ -528,6 +534,55 @@ class VaultRegistryStore:
                 current,
                 revision=next_revision,
                 settings_rebind=requested.as_payload(),
+                extensions=extensions,
+            )
+            self._write_locked(updated)
+            return updated
+
+    def complete_settings_rebind_reload(
+        self,
+        *,
+        desired_revision: int,
+        reload_callback: Callable[[], object],
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Run one reload under the registry lock and durably record completion."""
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.settings_rebind is None:
+                raise RegistryError("settings rebind record is not installed")
+            rebind = SettingsRebindRecord.from_payload(current.settings_rebind)
+            if rebind.desired_revision != desired_revision:
+                raise RegistryError("settings rebind reload revision does not match durable authority")
+            if rebind.phase not in {"committed", "no_lifecycle"}:
+                raise RegistryError("settings rebind reload requires a committed revision")
+            if rebind.reload_revision == desired_revision:
+                return current
+            if rebind.reload_revision not in {None, 0}:
+                raise RegistryError("settings rebind reload revision cannot advance from an unexpected value")
+
+            # The lock prevents concurrent same-target callers from repeating
+            # the side effect.  If the process dies in the callback, the marker
+            # remains pending and a later caller retries from durable truth.
+            reload_callback()
+            completed = replace(rebind, reload_revision=desired_revision)
+            next_revision = current.revision + 1
+            extensions = copy.deepcopy(current.extensions)
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                scalar_floor = extensions.get("scalarRollback")
+                if not isinstance(scalar_floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                extensions["scalarRollback"] = {
+                    **scalar_floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                settings_rebind=completed.as_payload(),
                 extensions=extensions,
             )
             self._write_locked(updated)
@@ -801,6 +856,99 @@ class VaultRegistryStore:
                 extensions=extensions,
                 default_vault_binding_id=current.default_vault_binding_id,
                 default_vault_provenance=current.default_vault_provenance,
+            )
+            self._write_locked(updated)
+            return updated
+
+    def commit_settings_rebind_selection(
+        self,
+        *,
+        desired_revision: int,
+        selection: KnownVaultRef,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> RegistrySnapshot:
+        """Commit rebind state and last-active selection in one registry generation.
+
+        This is the SETTINGS-05C foreground commit seam.  The watcher has
+        already acknowledged the prepared revision (or the caller has
+        durably recorded ``no_lifecycle``); neither the compatibility binding
+        nor the picker history may be advanced independently afterward.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        from app.instance.settings_rebind import SettingsRebindRecord
+
+        with self._locked():
+            self._assert_no_scalar_rollback_session_locked()
+            current = self._read_current_locked(recover=True)
+            if current.settings_rebind is None:
+                raise RegistryError("settings rebind record is not installed")
+            rebind = SettingsRebindRecord.from_payload(current.settings_rebind)
+            if rebind.phase not in {"prepared", "no_lifecycle"} or rebind.desired_revision != desired_revision:
+                raise RegistryError(
+                    "settings rebind selection commit requires the matching prepared/no_lifecycle revision"
+                )
+            candidate_id = rebind.candidate_binding_id
+            if candidate_id is None:
+                raise RegistryError("settings rebind selection commit has no candidate binding")
+            registration = current.registrations.get(candidate_id)
+            if registration is None:
+                raise RegistryError("settings rebind candidate binding is not registered")
+            try:
+                selection_path = Path(selection.path).expanduser().resolve(strict=True)
+                registration_path = Path(registration.path).expanduser().resolve(strict=True)
+            except OSError as exc:
+                raise RegistryError("settings rebind candidate path is unavailable") from exc
+            if (
+                selection.ref != registration.ref
+                or selection_path != registration_path
+                or (
+                    registration.vault_id is not None
+                    and selection.vault_id not in (None, registration.vault_id)
+                )
+                or (
+                    registration.local_instance_id is not None
+                    and selection.local_instance_id
+                    not in (None, registration.local_instance_id)
+                )
+            ):
+                raise RegistryError("settings rebind selection identity does not match candidate")
+            registrations = copy.deepcopy(current.registrations)
+            registrations[candidate_id] = VaultRegistration(
+                vault_binding_id=registration.vault_binding_id,
+                ref=registration.ref,
+                path=registration.path,
+                vault_id=registration.vault_id,
+                local_instance_id=registration.local_instance_id,
+                vault_name=selection.vault_name,
+                last_opened_at=selection.last_opened_at,
+                extensions=copy.deepcopy(registration.extensions),
+            )
+            committed = replace(
+                rebind,
+                applied_revision=rebind.desired_revision,
+                phase="no_lifecycle" if rebind.phase == "no_lifecycle" else "committed",
+                lifecycle_posture=(
+                    "no_lifecycle" if rebind.phase == "no_lifecycle" else "watcher"
+                ),
+            )
+            next_revision = current.revision + 1
+            extensions = copy.deepcopy(current.extensions)
+            if current.authority == REGISTRY_AUTHORITY_ACTIVE:
+                scalar_floor = extensions.get("scalarRollback")
+                if not isinstance(scalar_floor, dict):
+                    raise RegistryError("active registry scalar rollback floor is invalid")
+                extensions["scalarRollback"] = {
+                    **scalar_floor,
+                    "forkRegistryRevision": next_revision,
+                }
+            updated = replace(
+                current,
+                revision=next_revision,
+                last_active_vault_ref=registration.ref,
+                registrations=registrations,
+                settings_rebind=committed.as_payload(),
+                extensions=extensions,
             )
             self._write_locked(updated)
             return updated

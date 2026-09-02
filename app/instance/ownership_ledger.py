@@ -49,6 +49,8 @@ class LegacyOwner:
     channel_id: str
     vault_binding_id: str
     root: Path
+    root_identity: str | None = None
+    ancestor_identities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -331,31 +333,34 @@ class OwnershipLedger:
                     resolved.append(owner)
                     continue
                 try:
-                    matches = [
-                        binding_id
-                        for binding_id, lease in current.leases.items()
-                        if lease.channel_id == owner.channel_id
-                        and lease.state == "active"
-                        and self._matches_complete_root_identity(lease, owner.root, key)
-                    ]
-                    if not matches:
-                        # The inventory can retain the host spelling while an
-                        # adopted lease was minted through a bind-mounted
-                        # runtime spelling.  Complete path identity is not
-                        # portable across those mount namespaces, but a
-                        # materialized root fingerprint is.  Keep the
-                        # fallback unique so it only adopts an authenticated
-                        # physical owner, never a path-like candidate.
+                    if owner.root_identity is not None:
                         matches = [
                             binding_id
                             for binding_id, lease in current.leases.items()
                             if lease.channel_id == owner.channel_id
                             and lease.state == "active"
-                            and self._matches_materialized_root(lease, owner.root, key)
+                            and self._matches_host_validated_identity(lease, owner, key)
                         ]
-                    unmaterialized = not resolve_filesystem_root_identity(
-                        owner.root
-                    ).materialized
+                        unmaterialized = True
+                    else:
+                        matches = [
+                            binding_id
+                            for binding_id, lease in current.leases.items()
+                            if lease.channel_id == owner.channel_id
+                            and lease.state == "active"
+                            and self._matches_complete_root_identity(lease, owner.root, key)
+                        ]
+                        if not matches:
+                            matches = [
+                                binding_id
+                                for binding_id, lease in current.leases.items()
+                                if lease.channel_id == owner.channel_id
+                                and lease.state == "active"
+                                and self._matches_materialized_root(lease, owner.root, key)
+                            ]
+                        unmaterialized = not resolve_filesystem_root_identity(
+                            owner.root
+                        ).materialized
                 except FilesystemIdentityError as exc:
                     raise LedgerError(
                         "cannot resolve omitted live-owner binding identity"
@@ -371,7 +376,13 @@ class OwnershipLedger:
                         "omitted live-owner binding matches no live lease"
                     )
                 resolved.append(
-                    LegacyOwner(owner.channel_id, matches[0], owner.root)
+                    LegacyOwner(
+                        owner.channel_id,
+                        matches[0],
+                        owner.root,
+                        owner.root_identity,
+                        owner.ancestor_identities,
+                    )
                 )
             return tuple(resolved)
 
@@ -413,6 +424,7 @@ class OwnershipLedger:
         transfer_lineage: Sequence[Mapping[str, str]],
         global_live_owners: Sequence[LegacyOwner],
         require_materialized_roots: bool = True,
+        pending_legacy_owners: Sequence[LegacyOwner] = (),
     ) -> LedgerSnapshot:
         """Authenticate one channel registry and the complete host-global ledger."""
 
@@ -445,6 +457,43 @@ class OwnershipLedger:
                     current,
                     key,
                     require_complete_legacy_chain=False,
+                )
+
+            pending_lease_updates: dict[str, OwnershipLease] = {}
+            seen_pending_bindings: set[str] = set()
+            for owner in pending_legacy_owners:
+                binding_id = owner.vault_binding_id
+                if (
+                    owner.channel_id != channel_id
+                    or not binding_id
+                    or binding_id in seen_pending_bindings
+                ):
+                    raise LedgerError(
+                        "pending host receipt contains an invalid ownership binding"
+                    )
+                seen_pending_bindings.add(binding_id)
+                lease = current.leases.get(binding_id)
+                if (
+                    lease is None
+                    or lease.channel_id != channel_id
+                    or lease.vault_binding_id != binding_id
+                    or not self._matches_host_validated_identity(lease, owner, key)
+                ):
+                    raise LedgerError(
+                        "pending host receipt does not authenticate its ownership lease"
+                    )
+                if lease.state == "pending":
+                    pending_lease_updates[binding_id] = OwnershipLease(
+                        **(asdict(lease) | {"state": "active"})
+                    )
+                elif lease.state != "active":
+                    raise LedgerError(
+                        "pending host receipt targets an unrecoverable lease"
+                    )
+            if pending_lease_updates:
+                current = self._replace(
+                    current,
+                    leases={**current.leases, **pending_lease_updates},
                 )
 
             ledger_live_owners: set[tuple[str, str]] = set()
@@ -497,6 +546,24 @@ class OwnershipLedger:
                 except FilesystemIdentityError as exc:
                     raise LedgerError(
                         "registry/ledger consistency cannot resolve global live-owner identity"
+                    ) from exc
+                if sorted(ledger_live_roots) != sorted(expected_live_roots):
+                    raise LedgerError(
+                        "registry/ledger consistency requires one live lease per global owner"
+                    )
+            else:
+                try:
+                    expected_live_roots = [
+                        (
+                            owner.channel_id,
+                            owner.vault_binding_id,
+                            self._lease_for_legacy_owner(owner, key=key).root_fingerprint,
+                        )
+                        for owner in global_live_owners
+                    ]
+                except (FilesystemIdentityError, LedgerError) as exc:
+                    raise LedgerError(
+                        "registry/ledger consistency requires host-validated owner identity"
                     ) from exc
                 if sorted(ledger_live_roots) != sorted(expected_live_roots):
                     raise LedgerError(
@@ -691,10 +758,11 @@ class OwnershipLedger:
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"
                     )
-            if needs_legacy_migration:
+            if needs_legacy_migration or pending_lease_updates:
                 self._write_ledger_locked(current, key)
-                self.rotation_path.unlink(missing_ok=True)
-                _fsync_directory(self.root)
+                if needs_legacy_migration:
+                    self.rotation_path.unlink(missing_ok=True)
+                    _fsync_directory(self.root)
             return current
 
     def recover_or_require_active(
@@ -728,6 +796,52 @@ class OwnershipLedger:
             active = OwnershipLease(**(asdict(lease) | {"state": "active"}))
             leases = dict(current.leases)
             leases[vault_binding_id] = active
+            self._write_ledger_locked(self._replace(current, leases=leases), key)
+            return active
+
+    def recover_or_require_active_from_host_receipt(
+        self,
+        owner: LegacyOwner,
+        *,
+        channel_id: str,
+        persist: bool = True,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        """Recover a committed pending lease from opaque host receipt evidence.
+
+        Deployment-finish may run without the host content-root mount.  This
+        path therefore authenticates the receipt's identity fingerprints and
+        never opens, resolves, or checks ``owner.root``.  With ``persist=False``
+        it only validates and returns the candidate active lease; the caller
+        must persist that candidate only after its complete consistency check.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        if owner.channel_id != channel_id or not owner.vault_binding_id:
+            raise LedgerError("host-validated legacy-owner binding is invalid")
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(owner.vault_binding_id)
+            if (
+                lease is None
+                or lease.channel_id != channel_id
+                or lease.vault_binding_id != owner.vault_binding_id
+                or not self._matches_host_validated_identity(lease, owner, key)
+            ):
+                raise LedgerError(
+                    "registered binding has no authenticated ownership reservation"
+                )
+            if lease.state == "active":
+                return lease
+            if lease.state != "pending":
+                raise LedgerError("registered binding ownership is not recoverable")
+            active = OwnershipLease(**(asdict(lease) | {"state": "active"}))
+            if not persist:
+                return active
+            leases = dict(current.leases)
+            leases[owner.vault_binding_id] = active
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
@@ -1033,13 +1147,7 @@ class OwnershipLedger:
             staged = current
             leases = dict(current.leases)
             for owner in owners:
-                candidate = self._lease_for_root(
-                    channel_id=owner.channel_id,
-                    vault_binding_id=owner.vault_binding_id,
-                    root=owner.root,
-                    key=key,
-                    state="active",
-                )
+                candidate = self._lease_for_legacy_owner(owner, key=key)
                 self._assert_no_collision(
                     staged, candidate, key=key, allow_same_channel_nested=True
                 )
@@ -1268,6 +1376,25 @@ class OwnershipLedger:
             _fingerprint(primary, key.secret),
         )
 
+    def _matches_host_validated_identity(
+        self,
+        lease: OwnershipLease,
+        owner: LegacyOwner,
+        key: _KeyMaterial,
+    ) -> bool:
+        """Compare host evidence without materializing the host path locally."""
+
+        if owner.root_identity is None or not owner.ancestor_identities:
+            return False
+        return (
+            hmac.compare_digest(
+                lease.root_fingerprint,
+                _fingerprint(owner.root_identity, key.secret),
+            )
+            and sorted(lease.ancestor_fingerprints)
+            == sorted(_fingerprint(item, key.secret) for item in owner.ancestor_identities)
+        )
+
     def _has_complete_self_identity(
         self,
         lease: OwnershipLease,
@@ -1318,6 +1445,37 @@ class OwnershipLedger:
             ancestor_fingerprints=tuple(_fingerprint(item, key.secret) for item in ancestors),
             sealed_root=self._seal_root(str(Path(root).expanduser().resolve(strict=False)), key),
             state=state,
+        )
+
+    def _lease_for_legacy_owner(
+        self,
+        owner: LegacyOwner,
+        *,
+        key: _KeyMaterial,
+    ) -> OwnershipLease:
+        if owner.root_identity is None and not owner.ancestor_identities:
+            return self._lease_for_root(
+                channel_id=owner.channel_id,
+                vault_binding_id=owner.vault_binding_id,
+                root=owner.root,
+                key=key,
+                state="active",
+            )
+        if (
+            owner.root_identity is None
+            or not owner.ancestor_identities
+            or not owner.root.is_absolute()
+        ):
+            raise LedgerError("host-validated legacy-owner identity is invalid")
+        return OwnershipLease(
+            channel_id=owner.channel_id,
+            vault_binding_id=owner.vault_binding_id,
+            root_fingerprint=_fingerprint(owner.root_identity, key.secret),
+            ancestor_fingerprints=tuple(
+                _fingerprint(item, key.secret) for item in owner.ancestor_identities
+            ),
+            sealed_root=self._seal_root(str(owner.root), key),
+            state="active",
         )
 
     def _seal_root(self, value: str, key: _KeyMaterial) -> str:
@@ -1846,11 +2004,6 @@ class OwnershipLedger:
     ) -> None:
         """Authenticate v1 owner fields before cross-namespace migration."""
 
-        if not require_materialized_roots:
-            raise LedgerError(
-                "legacy ownership migration requires materialized owner authority"
-            )
-
         live_authority = {
             (owner.channel_id, owner.vault_binding_id): owner
             for owner in global_live_owners
@@ -1861,6 +2014,35 @@ class OwnershipLedger:
         def root_matches(lease: OwnershipLease, root: Path | None) -> bool:
             if root is None:
                 return False
+            if not require_materialized_roots:
+                owner = live_authority.get((lease.channel_id, lease.vault_binding_id))
+                if owner is None or owner.root_identity is None or not owner.ancestor_identities:
+                    return False
+                try:
+                    sealed_root_text = self._open_root(lease.sealed_root, key)
+                except (LedgerError, UnicodeError, ValueError):
+                    return False
+                ancestor_match = tuple(lease.ancestor_fingerprints) == tuple(
+                    _fingerprint(item, key.secret)
+                    for item in owner.ancestor_identities
+                )
+                if not ancestor_match:
+                    try:
+                        resolved = Path(root).expanduser().resolve(strict=False)
+                        ancestor_match = (
+                            resolve_filesystem_root_identity(resolved).materialized
+                            and self._legacy_ancestor_proof_matches(lease, resolved, key)
+                        )
+                    except (FilesystemIdentityError, OSError, ValueError):
+                        ancestor_match = False
+                return (
+                    sealed_root_text == str(root)
+                    and hmac.compare_digest(
+                        lease.root_fingerprint,
+                        _fingerprint(owner.root_identity, key.secret),
+                    )
+                    and ancestor_match
+                )
             expected_root = Path(root).expanduser().resolve(strict=False)
             try:
                 sealed_root = Path(self._open_root(lease.sealed_root, key)).resolve(
@@ -1959,6 +2141,11 @@ class OwnershipLedger:
 
         for binding_id, root in registrations.items():
             registered_lease = current.leases.get(binding_id)
+            if not require_materialized_roots and registered_lease is not None:
+                owner = live_authority.get(
+                    (registered_lease.channel_id, registered_lease.vault_binding_id)
+                )
+                root = owner.root if owner is not None else None
             if (
                 registered_lease is None
                 or registered_lease.channel_id != channel_id

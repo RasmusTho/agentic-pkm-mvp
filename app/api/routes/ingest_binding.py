@@ -70,6 +70,12 @@ class IngestBindingStatus:
     watcher_heartbeat_seen: bool
     watcher_heartbeat_fresh: bool
     detail: str
+    rebind_schema: str | None = None
+    rebind_phase: str | None = None
+    rebind_desired_revision: int | None = None
+    rebind_applied_revision: int | None = None
+    rebind_lifecycle_posture: str | None = None
+    rebind_failure_posture: str | None = None
 
     @property
     def is_bound(self) -> bool:
@@ -84,6 +90,41 @@ def _read_watcher_heartbeat(heartbeat_path: Path) -> dict[str, object] | None:
     except Exception:
         return None
     return raw if isinstance(raw, dict) else None
+
+
+def _rebind_status() -> dict[str, object | None]:
+    """Read durable rebind truth without making health depend on it."""
+
+    registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    if not registry_value:
+        return {}
+    try:
+        registry_path = Path(registry_value).expanduser()
+        if not registry_path.is_file():
+            return {}
+        from app.instance.settings_rebind import SettingsRebindRecord
+        from app.instance.vault_registry import VaultRegistryStore
+
+        snapshot = VaultRegistryStore(registry_path).load()
+        if snapshot.settings_rebind is None:
+            return {}
+        record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+        return {
+            "rebind_schema": record.as_payload()["schema"],
+            "rebind_phase": record.phase,
+            "rebind_desired_revision": record.desired_revision,
+            "rebind_applied_revision": record.applied_revision,
+            "rebind_lifecycle_posture": record.lifecycle_posture,
+            "rebind_failure_posture": (
+                "awaiting_watcher"
+                if record.phase == "prepared"
+                else "awaiting_resume"
+                if record.phase == "committed"
+                else "none"
+            ),
+        }
+    except Exception:
+        return {"rebind_failure_posture": "invalid_record"}
 
 
 def ingest_binding_status(
@@ -113,6 +154,7 @@ def ingest_binding_status(
     stale_after = stale_seconds if stale_seconds is not None else _env_float(
         "WATCHER_HEARTBEAT_STALE_SECONDS", _DEFAULT_STALE_SECONDS
     )
+    rebind = _rebind_status()
 
     selected_norm = _normalized(selected_vault_path)
     if selected_norm is None:
@@ -123,6 +165,7 @@ def ingest_binding_status(
             watcher_heartbeat_seen=False,
             watcher_heartbeat_fresh=False,
             detail="no vault is selected",
+            **rebind,
         )
 
     raw = _read_watcher_heartbeat(resolved_heartbeat_path)
@@ -137,6 +180,7 @@ def ingest_binding_status(
                 "watcher has not reported a heartbeat yet; captures to this "
                 "vault will not be ingested until the watcher/worker are bound"
             ),
+            **rebind,
         )
 
     watcher_vault_path = raw.get("vault_path")
@@ -160,6 +204,7 @@ def ingest_binding_status(
                 "watcher heartbeat is stale; captures to this vault may not "
                 "be ingested until the watcher/worker are confirmed running"
             ),
+            **rebind,
         )
 
     watcher_norm = _normalized(watcher_vault_path)
@@ -176,6 +221,7 @@ def ingest_binding_status(
                 "indexed, or made findable until the watcher/worker are "
                 "rebound to this vault"
             ),
+            **rebind,
         )
 
     return IngestBindingStatus(
@@ -185,6 +231,7 @@ def ingest_binding_status(
         watcher_heartbeat_seen=True,
         watcher_heartbeat_fresh=True,
         detail="watcher/worker are bound to the selected vault",
+        **rebind,
     )
 
 

@@ -492,3 +492,46 @@ wait_for_watcher_heartbeat
         assert "capture" in combined
         assert "debug" in combined
         assert "watcher heartbeat not detected at /app/tmp-test/watcher_heartbeat.json" in combined
+
+    def test_start_full_system_rebuilds_unready_product_with_existing_objects(self) -> None:
+        script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+        assert 'product_rebuild_required=0' in script
+        assert '*"product replay refused:"*) product_rebuild_required=1' in script
+        bootstrap_block = script.split('object_count="$objects_before"', 1)[1]
+        condition = bootstrap_block.split('then', 1)[0]
+        assert '[ "$objects_before" -le 0 ] || [ "$product_rebuild_required" -eq 1 ]' in condition
+        assert '"bootstrap_product_rebuild_incomplete"' in script
+        assert 'ingest_error_count' in script
+        assert 'ingest_malformed_count' in script
+        assert 'ingest_locked_count' in script
+        assert 'ingest_invalid_count' in script
+        assert '[ "$ingest_rebuilt_count" -ne "$ingest_scanned_count" ]' in script
+        assert 'probe_product_status' in script
+        assert '"bootstrap_product_readiness_failed"' in script
+        assert '[ "$product_readiness_ready" != "1" ]' in script
+
+    def test_product_rebuild_probe_accepts_ready_product_during_health_recovery(self) -> None:
+        script = Path("scripts/start_full_system.sh").read_text(encoding="utf-8")
+        function = _extract_shell_function(script, "probe_product_status")
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                function
+                + r'''
+API_BASE_URL=http://127.0.0.1:18000
+curl() {
+  printf '%s\n%s' '{"state":"recovery","product_readiness":{"ready":true,"state":"ready"}}' 200
+}
+probe_product_status
+printf '%s|%s|%s\n' \
+  "$product_status_http_status" "$product_readiness_ready" "$product_readiness_state"
+''',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "200|1|ready"

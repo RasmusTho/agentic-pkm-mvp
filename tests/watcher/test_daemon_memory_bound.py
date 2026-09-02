@@ -186,6 +186,7 @@ def test_scoped_daemon_updates_heartbeat(tmp_path: Path, monkeypatch: pytest.Mon
         states=None,
         process_panel_notes_inline: bool = False,
         handled_settings_sources: set[Path] | None = None,
+        settings_source_reload_results: dict[str, object] | None = None,
         retain_unemitted_observations: bool = False,
     ) -> dict[str, object]:
         del (
@@ -194,6 +195,7 @@ def test_scoped_daemon_updates_heartbeat(tmp_path: Path, monkeypatch: pytest.Mon
             states,
             process_panel_notes_inline,
             handled_settings_sources,
+            settings_source_reload_results,
             retain_unemitted_observations,
         )
         state_arg.ticks_run += 1

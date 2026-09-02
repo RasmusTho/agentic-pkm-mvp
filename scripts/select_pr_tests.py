@@ -39,6 +39,10 @@ FULL_SUITE_REASONS = (
 )
 
 FULL_SUITE_EXACT = {
+    # CI Smoke owns the shared PR unit-test runtime. A change to its execution
+    # contract must prove the broad not-pg lane rather than only the workflow
+    # contract tests routed by the governance branch.
+    ".github/workflows/ci-smoke.yaml",
     # Shared CLI registration and path resolution affect many runtime
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli.py",
@@ -68,6 +72,10 @@ FULL_SUITE_PREFIXES = (
 DOCS_TARGETS = (
     "tests/docs",
     "tests/architecture",
+    # Human-need E2E scenarios are deferred to post-merge/nightly. Treat a
+    # co-changed E2E scenario as scope-neutral for a docs-only PR so the docs
+    # contract does not fall through to the fail-closed unowned path.
+    "tests/e2e",
     # test_review_before_ci_gate.py reads docs/TESTING.md content directly
     # (#4281); a docs/**-only PR must run it, not only tests/architecture.
     "tests/ops/test_review_before_ci_gate.py",
@@ -232,6 +240,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/builderops/",
             "app/dispatcher/",
+            # The design-packet resolver is Builder System/CES projection
+            # machinery. Keep this ownership exact: sibling app/governance
+            # modules are Product GOV runtime boundaries with different tests.
+            "app/governance/design_packet_resolver.py",
+            # The design-boundary doctor is Builder System/CES report machinery;
+            # keep its ownership explicit so the governance tests cannot be
+            # filtered out as an unowned app module.
+            "app/governance/design_boundary_doctor.py",
             # The TARS inventory boundary is Builder System/CES machinery.
             # It carries an inventory-only PVE token and its direct proof
             # lives in tests/proxmox; leaving this new app prefix unowned
@@ -493,19 +509,29 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/stores/",
             "app/ingest/",
+            "app/rebuildability/",
             # The object-store facade writes canonical objects through the
             # store provider seam and emits ingest lifecycle events. Keep this
             # shared producer on the established store/ingest contracts
             # without claiming the whole app/objects package.
             "app/objects/__init__.py",
+            # Product source-backed rebuild admission uses the shared write
+            # guard while readiness is unready; keep this exact producer on
+            # the Product total-loss integration and guard contract.
+            "app/write_guard.py",
             "tests/stores/",
             "tests/ingest/",
+            "tests/integration/test_product_total_loss.py",
+            "tests/integration/test_projection_rebuild.py",
             "docs/DB_SCHEMA.md",
             "docs/RUNTIME_CORRECTNESS_KERNEL/",
         ),
         (
             "tests/stores",
             "tests/ingest",
+            "tests/integration/test_product_total_loss.py",
+            "tests/integration/test_projection_rebuild.py",
+            "tests/services/test_write_guard.py",
             "tests/architecture",
             "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event",
         ),
@@ -601,6 +627,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "memory_retrieval",
         (
             "app/memory/",
+            # Promoted and provisional agent-memory recall is consumed by the
+            # memory/retrieval suites. Keep this runtime package owned so a
+            # recall-boundary change cannot fail CI selection as unowned.
+            "app/agent_memory/",
+            # Review admission is the producer seam that hands an approved
+            # candidate to promoted-memory materialization. Its persisted
+            # scope/candidate authority must stay on the same acceptance
+            # surface as the consumer that later admits the memory to recall.
+            "app/knowledge_compilation/review_admission.py",
             "app/retrieval/",
             "app/index/",
             # Index rebuild is the memory-retrieval CLI producer for the
@@ -625,6 +660,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
         (
             "tests/agent_memory",
+            "tests/knowledge_compilation/test_review_admission_handoff.py",
             "tests/retrieval",
             "tests/index",
             "tests/indexer",
@@ -1144,7 +1180,11 @@ def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
 
 def _pr_targets(targets: list[str]) -> tuple[str, ...]:
     """Keep slower end-to-end coverage in the post-merge/nightly lanes."""
-    return _dedupe(target for target in targets if not target.startswith("tests/e2e/"))
+    return _dedupe(
+        target
+        for target in targets
+        if target != "tests/e2e" and not target.startswith("tests/e2e/")
+    )
 
 
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:

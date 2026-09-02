@@ -29,6 +29,7 @@ from app.dispatcher.verified_merge import (
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
     restored_body_matches_authority,
+    verified_merge_body_sha256,
 )
 
 
@@ -291,6 +292,75 @@ def test_verified_merge_body_digest_canonicalizes_terminal_newline() -> None:
     )
 
 
+def test_neutralized_body_transport_round_trip_preserves_canonical_digest() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    transport_body = str(plan["neutralized_body"])
+
+    assert not transport_body.endswith("\n")
+    for live_body in (transport_body, transport_body + "\n"):
+        assert (
+            verified_merge_body_sha256(live_body)
+            == authority["neutralized_body_sha256"]
+        )
+        assert (
+            resolve_verified_merge_authority_receipt(
+                [_trusted_comment(str(plan["authority_receipt_comment"]))],
+                pr=_pr(live_body),
+                repository=REPOSITORY,
+            )
+            == authority
+        )
+        prepared = build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="prepared",
+            pr=_pr(live_body),
+        )
+        assert prepared["phase_receipt"]["body_sha256"] == authority[
+            "neutralized_body_sha256"
+        ]
+
+
+def test_neutralized_body_transport_rejects_noncanonical_whitespace_drift() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    transport_body = str(plan["neutralized_body"])
+    assert not transport_body.endswith("\n")
+
+    for drifted_body in (
+        transport_body + "\n\n",
+        transport_body + "\r\n",
+        transport_body.replace("Refs #3900", "Refs  #3900"),
+        transport_body + " substantive drift",
+    ):
+        assert (
+            resolve_verified_merge_authority_receipt(
+                [_trusted_comment(str(plan["authority_receipt_comment"]))],
+                pr=_pr(drifted_body),
+                repository=REPOSITORY,
+            )
+            is None
+        )
+        with pytest.raises(ValueError, match="live state is malformed"):
+            build_verified_merge_phase(
+                authority_receipt=authority,
+                phase="prepared",
+                pr=_pr(drifted_body),
+            )
+
+
 def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> None:
     plan = prepare_verified_merge(
         context=_context(),
@@ -301,13 +371,13 @@ def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> No
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutralized_body = str(plan["neutralized_body"])
-    assert neutralized_body.endswith("\n")
-    neutralized_without_terminal_lf = neutralized_body[:-1]
+    assert not neutralized_body.endswith("\n")
+    github_stored_body = neutralized_body + "\n"
 
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
-        pr=_pr(neutralized_without_terminal_lf),
+        pr=_pr(github_stored_body),
     )
 
     assert prepared["phase_receipt"]["head_sha"] == HEAD
@@ -345,9 +415,9 @@ def _legacy_authority_fixture() -> tuple[dict[str, object], dict[str, object], s
     neutralized = str(plan["neutralized_body"])
     authority["body_sha256"] = hashlib.sha256(original.encode("utf-8")).hexdigest()
     authority["neutralized_body_sha256"] = hashlib.sha256(
-        neutralized.encode("utf-8")
+        (neutralized + "\n").encode("utf-8")
     ).hexdigest()
-    return authority, _pr(neutralized[:-1]), original[:-1], neutralized[:-1]
+    return authority, _pr(neutralized), original[:-1], neutralized
 
 
 def test_legacy_authority_receipt_accepts_only_single_terminal_lf_digest_difference() -> None:
@@ -1376,6 +1446,75 @@ def test_neutralized_body_outliving_its_head_is_surfaced_as_restorable() -> None
     assert (
         resolve_neutralized_body_restoration(
             next_comments, pr=reneutralized_pr, repository=REPOSITORY
+        )
+        is None
+    )
+
+
+def test_neutralized_body_transport_restores_authenticated_stranded_pr() -> None:
+    original_body = _body()
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(original_body),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    transport_body = str(plan["neutralized_body"])
+    assert not transport_body.endswith("\n")
+    stranded_body = transport_body + "\n\n"
+    authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    stranded_pr = _pr(stranded_body)
+
+    assert (
+        resolve_verified_merge_authority_receipt(
+            [authority_comment], pr=stranded_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    restoration = resolve_neutralized_body_restoration(
+        [authority_comment], pr=stranded_pr, repository=REPOSITORY
+    )
+    assert restoration is not None
+    assert restoration["head_sha"] == HEAD
+    assert restoration["neutralized_head_sha"] == HEAD
+    assert restoration["neutralized_body_sha256"] == authority[
+        "neutralized_body_sha256"
+    ]
+    assert restoration["restore_body_sha256"] == authority["body_sha256"]
+    assert restoration["reason"] == "neutralized-body-transport-stranded"
+    assert restored_body_matches_authority(
+        original_body, restoration=restoration
+    )
+
+    untrusted = {**authority_comment, "author_association": "NONE"}
+    assert (
+        resolve_neutralized_body_restoration(
+            [untrusted], pr=stranded_pr, repository=REPOSITORY
+        )
+        is None
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            [authority_comment],
+            pr=_pr(stranded_body.replace("Refs #3900", "Refs #3901")),
+            repository=REPOSITORY,
+        )
+        is None
+    )
+    conflicting = copy.deepcopy(authority)
+    conflicting["body_sha256"] = "c" * 64
+    conflicting_comment = _trusted_comment(
+        "verified issue-set merge authority:\n```json\n"
+        + json.dumps(conflicting, sort_keys=True, separators=(",", ":"))
+        + "\n```"
+    )
+    assert (
+        resolve_neutralized_body_restoration(
+            [authority_comment, conflicting_comment],
+            pr=stranded_pr,
+            repository=REPOSITORY,
         )
         is None
     )

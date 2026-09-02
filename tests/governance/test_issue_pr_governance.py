@@ -14,6 +14,7 @@ import pytest
 from app.dispatcher.verification_contract import (
     IssueAuthority,
     MAX_CLOSING_ISSUES,
+    has_closing_issue_attempt,
     neutralize_closing_issue_references,
     resolve_builderops_routing_status,
     resolve_issue_authority,
@@ -21,6 +22,8 @@ from app.dispatcher.verification_contract import (
     resolve_neutralized_issue_authority,
     resolve_pr_contract_final_review_rounds,
 )
+from app.dispatcher.verified_merge import verified_merge_body_sha256
+from scripts.pr_body_generator import generate_pr_body_from_mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -400,8 +403,7 @@ def test_issue_shape_workflow_keeps_normal_issue_contract_strict() -> None:
 
 
 def _verified_merge_body_digest(body: str) -> str:
-    canonical_body = body[:-1] if body.endswith("\n") else body
-    return hashlib.sha256(canonical_body.encode()).hexdigest()
+    return verified_merge_body_sha256(body)
 
 
 def _js_final_review_rounds(body: str) -> dict[str, object]:
@@ -786,7 +788,7 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
         ) is None
     assert _js_neutralized_merge_authority(
         [legacy_comment], {**pull_request, "body": body + "\n"}, str(legacy["repository"])
-    ) == legacy
+    ) is None
 
     for crlf_body in (body[:-1] + "\r", body[:-1].replace("Refs", "Refs\r", 1)):
         crlf_receipt = copy.deepcopy(legacy)
@@ -850,7 +852,7 @@ def test_neutralized_pr_contract_accepts_legacy_authority_receipt_only_for_one_t
     )
     assert _js_neutralized_merge_authority(
         [canonical_comment], {**pull_request, "body": double_lf}, str(receipt["repository"])
-    ) == canonical_double_lf
+    ) is None
 
 
 def test_neutralized_pr_contract_rejects_forged_stale_missing_and_conflicting_authority() -> None:
@@ -891,6 +893,7 @@ def test_production_pr_contract_authenticates_neutralized_merge_authority() -> N
         "resolveNeutralizedMergeAuthority",
         "TRUSTED_ASSOCIATIONS",
         "receipt.head_sha === pullRequest.head?.sha",
+        "neutralizedBodyTransportCanonical(liveBody)",
         "liveBody, receipt.neutralized_body_sha256, {allowLegacy}",
         "valid.map(entry => canonicalJson(entry.receipt))",
         "one trusted, non-conflicting exact-head verified-merge authority receipt",
@@ -1205,7 +1208,9 @@ def test_commit_message_closing_keywords_are_forbidden() -> None:
     guidance = (
         REPO_ROOT / ".codex" / "skills" / "publish-pr" / "SKILL.md"
     ).read_text(encoding="utf-8")
-    workflow = _read_workflow()
+    publication_adapter = (REPO_ROOT / "app/builderops/publication.py").read_text(
+        encoding="utf-8"
+    )
 
     for keyword in (
         "Fix",
@@ -1218,29 +1223,23 @@ def test_commit_message_closing_keywords_are_forbidden() -> None:
         "Resolves",
         "Resolved",
     ):
-        assert f"`{keyword}`" in guidance
-    assert "as an issue-closing reference" in guidance
-    assert "Ordinary non-target prose such as `Fix runtime env` is allowed" in guidance
-    assert "Start with imperative verb (Add, Update, Rebuild, etc.)" in guidance
-    assert "Start with imperative verb (Fix, Add, Update, Rebuild, etc.)" not in guidance
-    assert "Never include any issue-closing keyword in the commit subject or body" not in guidance
-    # The citation targets the workflow's `// authority-classifier:start`
-    # marker so it stays resolvable under the section-citation lint (#4297).
-    assert ".github/workflows/issue-pr-governance.yml :: authority-classifier" in guidance
-    assert "const closingKeyword =" in workflow
-    assert "closingAttemptSeparator" in workflow
-    assert "closingAttemptTarget" in workflow
-    assert "Use evidence-only `Refs #<id>`" in guidance
+        assert has_closing_issue_attempt(f"{keyword} #5230")
+    assert not has_closing_issue_attempt("Fix runtime env")
+    assert not has_closing_issue_attempt("Refs #5230")
+    assert "Commit messages may use `Refs #<id>` but no closing-keyword reference" in guidance
+    assert "has_closing_issue_attempt(request.commit_message)" in publication_adapter
 
 
 def test_pr_body_closing_keywords_remain_required_for_issue_backed_prs() -> None:
-    guidance = (
-        REPO_ROOT / ".codex" / "skills" / "publish-pr" / "SKILL.md"
-    ).read_text(encoding="utf-8")
+    inputs = json.loads(
+        (REPO_ROOT / "tests/fixtures/pr_body_generator/governance_issue.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
-    assert "Governing-Issue: #<ISSUE_NUMBER>" in guidance
-    assert "Fixes #<ISSUE_NUMBER>" in guidance
-    assert "closing keywords only for fully delivered" in guidance
+    body = generate_pr_body_from_mapping(inputs)
+
+    assert resolve_issue_authority(body) == IssueAuthority(3275, (3275,), ())
 
 
 def test_pr_contract_rejects_incomplete_commit_enumeration() -> None:

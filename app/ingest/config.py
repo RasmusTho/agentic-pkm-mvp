@@ -9,7 +9,7 @@ import yaml
 from app.config.paths import resolve_system_settings_path
 from app.services import settings as settings_service
 from app.settings.locations import resolve_settings_file
-from app.vault.layout import VaultLayout, load_or_create_layout, normalize_md_filename
+from app.vault.layout import VaultLayout, load_layout, load_or_create_layout, normalize_md_filename
 
 DEFAULT_VAULT_ROOT = Path("vault")
 
@@ -103,7 +103,7 @@ def _fallback_include_folders(layout: VaultLayout) -> List[str]:
     return values
 
 
-def resolve_ingest_config(vault_root: Path) -> IngestConfig:
+def resolve_ingest_config(vault_root: Path, *, create_layout: bool = True) -> IngestConfig:
     include_folders = None
     ignore_glob = None
     settings_path = resolve_system_settings_path(vault_root=vault_root)
@@ -117,7 +117,7 @@ def resolve_ingest_config(vault_root: Path) -> IngestConfig:
             include_folders = ingest.get("include_folders")
             ignore_glob = ingest.get("ignore_glob")
 
-    layout = load_or_create_layout(vault_root)
+    layout = load_or_create_layout(vault_root) if create_layout else load_layout(vault_root)
     override = _resolve_override(vault_root, layout.system_folder)
     override_include = override.get("include_folders")
     override_ignore = override.get("ignore_glob")

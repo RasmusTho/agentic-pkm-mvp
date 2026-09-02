@@ -464,6 +464,7 @@ class HealthContract:
         now_fn: Callable[[], datetime] | None = None,
         vault_root_fn: Callable[[], Path | None] | None = None,
         db_ping_fn: Callable[..., tuple[bool, str]] | None = None,
+        product_readiness_fn: Callable[[Path | None, Iterable[Any]], Any] | None = None,
     ):
         self.state_machine = state_machine or HealthStateMachine()
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))  # noqa: UP017
@@ -474,6 +475,7 @@ class HealthContract:
         # readiness short-circuit without a real Postgres. Bounded by the caller's
         # connect_timeout so the health probe never hangs.
         self.db_ping_fn = db_ping_fn or ping_postgres
+        self.product_readiness_fn = product_readiness_fn
         self._dependency_incident_lock = Lock()
         self._dependency_incident_reported = False
         self._dependency_incident_sequence = 0
@@ -524,6 +526,7 @@ class HealthContract:
                 outbox_path=outbox_path,
                 reason=db_down_reason,
                 resolution=resolution,
+                vault_root=vault_root,
                 sample_sequence=sample_sequence,
             )
         self._should_capture_dependency_incident(
@@ -540,6 +543,7 @@ class HealthContract:
         # (e.g. schema missing) — still surfaced loudly, never folded into
         # "genuinely empty".
         object_count, store_count_error = self._count_objects()
+        product_readiness = self._product_readiness(vault_root, resolution)
         latest_ts = self._latest_timestamp(records)
         age = self._compute_age(latest_ts, now) if records is not None else None
         state, reason, since_ts, transitioned, transition_history, sample_applied = (
@@ -599,6 +603,8 @@ class HealthContract:
             dead_letter_status=dead_letter_status,
             store_count_error=store_count_error,
         )
+        if not product_readiness.ready:
+            suggested_actions.append("rebuild Product projection from retained sources before readiness")
 
         bootstrap_state, bootstrap_reason = self._bootstrap_state(
             object_count, outbox_count, store_error=store_count_error
@@ -644,6 +650,7 @@ class HealthContract:
             "store_resolution_error": resolution.error,
             "bootstrap_state": bootstrap_state,
             "bootstrap_reason": bootstrap_reason,
+            "product_readiness": product_readiness.as_dict(),
             "embedding_identity": {
                 "backend": index_result.get("backend"),
                 "expected_identity": index_result.get("expected_identity"),
@@ -676,6 +683,7 @@ class HealthContract:
         outbox_path: Path,
         reason: str,
         resolution: StoreBackendResolution | None = None,
+        vault_root: Path | None = None,
         sample_sequence: int,
     ) -> dict[str, Any]:
         """Build a complete `unhealthy` snapshot for a known DB-down stack.
@@ -725,6 +733,17 @@ class HealthContract:
         write_guard_reason = reason
         suggested_actions = ["python -m app.cli health status --json"]
         store_error = resolution.error if resolution is not None else reason
+        from app.rebuildability import ProductReadiness
+
+        product_readiness = ProductReadiness(
+            "refused",
+            False,
+            "Product store dependency unavailable",
+            0,
+            0,
+        ) if vault_root is not None and resolution is not None and resolution.backend == "pg" else ProductReadiness(
+            "not_selected", True, "no vault selected", 0, 0
+        )
         bootstrap_state, bootstrap_reason = self._bootstrap_state(
             object_count, outbox_count, store_error=store_error
         )
@@ -774,6 +793,7 @@ class HealthContract:
             "store_resolution_error": store_error,
             "bootstrap_state": bootstrap_state,
             "bootstrap_reason": bootstrap_reason,
+            "product_readiness": product_readiness.as_dict(),
             "embedding_identity": {
                 "backend": None,
                 "expected_identity": None,
@@ -1059,6 +1079,36 @@ class HealthContract:
             # by evaluate() — logged too so the traceback is not lost (#3894).
             logger.warning("Object store count failed", exc_info=True)
             return 0, f"{type(exc).__name__}: {exc}"
+
+    def _product_readiness(
+        self,
+        vault_root: Path | None,
+        resolution: StoreBackendResolution,
+    ) -> Any:
+        """Verify the Product object projection only when a durable vault is selected.
+
+        Memory is an explicit dev/test backend and keeps its existing empty-workspace
+        semantics. The production Postgres path reads the StorePort rows and lets the
+        retained-source verifier decide whether the projection is usable; it never
+        repairs the store or treats process memory as a fallback.
+        """
+        from app.rebuildability import ProductReadiness, evaluate_product_store_readiness
+
+        if vault_root is None or resolution.backend != "pg":
+            return ProductReadiness("not_selected", True, "Product loss gate not applicable", 0, 0)
+        try:
+            rows = get_object_store().list_objects(limit=None)
+        except Exception as exc:
+            logger.warning("Product readiness projection read failed", exc_info=True)
+            return ProductReadiness(
+                "refused",
+                False,
+                f"Product projection unavailable ({type(exc).__name__})",
+                0,
+                0,
+            )
+        verifier = self.product_readiness_fn or evaluate_product_store_readiness
+        return verifier(vault_root, rows)
 
     def _bootstrap_state(
         self,

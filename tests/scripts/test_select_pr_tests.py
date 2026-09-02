@@ -146,6 +146,14 @@ def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
+def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
+    selection = select_tests([".github/workflows/ci-smoke.yaml"])
+
+    assert selection.full_suite is True
+    assert selection.reason == "shared CI/test/runtime configuration changed"
+    assert selection.unowned_paths == ()
+
+
 def test_governance_docs_change_selects_governance_tests() -> None:
     selection = select_tests(["docs/development/TEST_STRATEGY_HOT_PATH.md"])
 
@@ -154,12 +162,51 @@ def test_governance_docs_change_selects_governance_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
+def test_docs_change_with_deferred_e2e_scenario_is_owned() -> None:
+    selection = select_tests(
+        [
+            "docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md",
+            "tests/e2e/test_human_need_uat.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs",)
+    assert selection.unowned_paths == ()
+    assert "tests/architecture" in selection.targets
+    assert "tests/e2e" not in selection.pytest_args
+
+
 def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     selection = select_tests(["app/new_surface/example.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("unowned",)
     assert selection.unowned_paths == ("app/new_surface/example.py",)
+
+
+def test_agent_memory_recall_modules_select_memory_retrieval_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/agent_memory/recall_retrieval.py",
+            "app/agent_memory/recall_activation.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("memory_retrieval",)
+    assert "tests/agent_memory" in selection.targets
+
+
+def test_promoted_memory_review_admission_selects_memory_retrieval_coverage() -> None:
+    selection = select_tests(["app/knowledge_compilation/review_admission.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("memory_retrieval",)
+    assert "tests/agent_memory" in selection.targets
+    assert "tests/knowledge_compilation/test_review_admission_handoff.py" in selection.targets
 
 
 def test_builder_system_architecture_fitness_test_has_ci_owner() -> None:

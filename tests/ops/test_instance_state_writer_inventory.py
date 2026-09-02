@@ -20,6 +20,9 @@ identifier for it -- while still never emitting the raw host path.
 """
 
 import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,12 +42,58 @@ MOUNTS = [
 ENV = ["PKM_ENVIRONMENT=dev", "PATH=/usr/local/bin"]
 
 
-def _inspect_payload(mounts):
+def test_writer_direct_entrypoint_loads_shared_parser_from_outside_repo(tmp_path) -> None:
+    script = tmp_path / "instance_state_writer_inventory.py"
+    shutil.copy(Path(writer_inventory.__file__).resolve(), script)
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout
+
+
+def test_read_env_bytes_matches_compose_quoted_comment_rules() -> None:
+    values = writer_inventory._read_env_bytes(
+        b'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n'
+        b'VALUE="literal # data" # trailing comment\n'
+        b'ESCAPED="prefix\\"suffix" # trailing comment\n'
+        b'PLAIN=/app/tmp/runtime.env # canonical\n'
+    )
+
+    assert values == {
+        "DESIGN_HANDOFF_APP_LOCAL_SETTINGS": "/app/tmp/agentic-pkm/app-local.md",
+        "VALUE": "literal # data",
+        "ESCAPED": 'prefix"suffix',
+        "PLAIN": "/app/tmp/runtime.env",
+    }
+
+
+def test_config_sources_accept_quoted_container_app_local_setting(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".env.dev.local").write_text(
+        'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n',
+        encoding="utf-8",
+    )
+    for name in ("VAULT_HOST_ROOT", "VAULT_ROOT", "WATCHER_VAULT_PATH", "VAULT_ROOT_DEV"):
+        monkeypatch.delenv(name, raising=False)
+
+    owners, _ = writer_inventory._config_legacy_owner_sources(repo_root, active_channel="dev")
+
+    assert owners == []
+
+
+def _inspect_payload(mounts, *, env=None):
     return [
         {
             "Id": CONTAINER_ID,
             "Config": {
-                "Env": list(ENV),
+                "Env": list(ENV if env is None else env),
                 "Labels": {
                     "com.docker.compose.project": "pkm-dev",
                     "com.docker.compose.service": "api",
@@ -59,7 +108,7 @@ def _inspect_payload(mounts):
 def docker_stub(monkeypatch):
     """Drive `_docker_legacy_owner_sources` from a scripted sequence of mount orders."""
 
-    state = {"orders": [], "calls": 0}
+    state = {"orders": [], "calls": 0, "env": list(ENV)}
 
     def fake_run_checked(command, *, label, env=None):
         command = list(command)
@@ -68,12 +117,33 @@ def docker_stub(monkeypatch):
         if command[:2] == ["docker", "inspect"]:
             index = min(state["calls"], len(state["orders"]) - 1)
             state["calls"] += 1
-            return json.dumps(_inspect_payload(state["orders"][index]))
+            return json.dumps(
+                _inspect_payload(state["orders"][index], env=state["env"])
+            )
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(writer_inventory, "_run_checked", fake_run_checked)
     monkeypatch.setattr(writer_inventory, "_docker_copy_file", lambda *_args: None)
     return state
+
+
+def test_docker_env_preserves_literal_hash_in_resolved_vault_root(docker_stub):
+    """Docker inspect values are literal data, not dotenv source text."""
+
+    vault_mount = {
+        "Type": "bind",
+        "Source": "/Volumes/Vault #1",
+        "Destination": "/app/Vault #1",
+        "RW": True,
+    }
+    docker_stub["orders"] = [[vault_mount]]
+    docker_stub["env"] = ["PKM_ENVIRONMENT=dev", "VAULT_ROOT=/app/Vault #1"]
+
+    owners, _ = writer_inventory._docker_legacy_owner_sources()
+
+    assert [(owner.channel_id, owner.root, owner.source) for owner in owners] == [
+        ("dev", "/Volumes/Vault #1", "docker_env")
+    ]
 
 
 def test_docker_legacy_owner_fingerprint_is_mount_order_invariant(docker_stub):
@@ -544,6 +614,25 @@ def test_collision_error_names_both_domains(tmp_path):
     assert "domain_b=prod" in message
     assert "id=inode:" in message
     assert str(shared_root) not in message
+
+
+def test_nested_roots_collide_across_domains(tmp_path):
+    parent_root = tmp_path / "parent-vault"
+    child_root = parent_root / "child-vault"
+    child_root.mkdir(parents=True)
+    records = [
+        writer_inventory.LegacyOwnerRecord("dev", str(child_root), source="config_env"),
+        writer_inventory.LegacyOwnerRecord("prod", str(parent_root), source="config_env"),
+    ]
+
+    with pytest.raises(InventoryError, match="collide across domains") as excinfo:
+        writer_inventory._normalize_legacy_owners(records)
+
+    message = str(excinfo.value)
+    assert "domain_a=dev" in message
+    assert "domain_b=prod" in message
+    assert str(parent_root) not in message
+    assert str(child_root) not in message
 
 
 def test_inventory_errors_never_emit_raw_paths(tmp_path):

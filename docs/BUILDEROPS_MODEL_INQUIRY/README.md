@@ -1,14 +1,14 @@
 State: BMI-01 through BMI-05 are implemented; parent acceptance remains pending under #3288. The
-durable Model Inquiry contract uses a provider-neutral capability/configuration boundary: the
-current Codex-only operational profile is selected by declared configuration, while future
-provider/model changes remain configuration-only. Fable/GPT references are
-compatibility/provenance only and cannot select an active route. The configured remote host owns
-its subscription session and host-specific launcher settings. Under ADR-0064's 2026-07-30
-owner-cost ruling, that subscription-backed session is the sanctioned operational auth for
-host-local Builder model inquiry. The provider-free intent, declared provider-API adapters, and
-high-reasoning policy remain versioned for any future metered path, but their API-key identifiers
-are intentionally unprovisioned and currently fail closed as `credential_unavailable`. The Model
-Inquiry subscription exception is never a CKM source or fallback.
+durable Model Inquiry contract is provider-neutral and capability-resolved. The current operational
+profile enables only the Codex subscription transport; future provider/model changes require
+declared configuration plus an explicitly registered compatible transport. The
+configured remote host owns its subscription session and host-specific launcher settings. Under
+ADR-0064's 2026-07-30 owner-cost ruling, that subscription-backed session is the sanctioned
+operational auth for host-local Builder model inquiry. The provider-free intent, declared
+provider-API adapters, and high-reasoning policy remain versioned for any future metered path, but
+their API-key identifiers are intentionally unprovisioned and currently fail closed as
+`credential_unavailable`. The Model Inquiry subscription exception is never a CKM source or
+fallback.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -19,7 +19,9 @@ Source of truth: ADR-0010, BuilderOps Vault contracts, and this directory for ta
 # BuilderOps Model Inquiry
 
 BuilderOps Model Inquiry turns one development question into a bounded, pre-ticket collaboration
-between two neutral review perspectives over one resolver-selected target. It stores the question, context packets, model turns, synthesis,
+between two neutral review perspectives over one resolver-selected capability target. Current operational
+configuration enables only Codex subscription transport; durable selection remains provider-neutral
+and configuration-resolved. It stores the question, context packets, model turns, synthesis,
 readiness outcome, and promotion evidence in the BuilderOps plane. It does not make a GitHub Issue
 until the result is executable work.
 
@@ -32,10 +34,10 @@ its advisory claim files never guarantee exclusive ownership.
 
 ## Scope
 
-The inquiry intent and workflow roles stay provider-neutral. A single declared capability/configuration
-boundary resolves the current Codex-only operational profile. Future provider/model changes remain
-configuration-only; Fable/GPT references are compatibility/provenance only and never reactivate a
-provider, transport, or acceptance target.
+The inquiry intent and workflow roles stay provider-neutral. The declared capability boundary
+resolves the current Codex-only profile; a future provider/model is not executable until a compatible
+transport is explicitly registered and selected through declared configuration. Fable/GPT references
+remain compatibility/provenance only and cannot reactivate a provider, transport, or acceptance target.
 
 - one command/API request creates an `inquiry_id` before any ticket or Issue exists;
 - the neutral `synthesis` and `verification` perspectives receive structured context packets over
@@ -104,9 +106,10 @@ is delivered. No task is ready to make a Product/Runtime write.
    blocking questions terminally record `needs_input` or `not_ready`; no model invents missing
    requirements to reach Issue-ready. An eligible unavailable, timed-out, empty, or malformed
    subscription turn may try the one alternate configured adapter only on legacy/compatibility
-   paths with distinct effective targets. Active v2 single-target execution has no same-identity
-   alternate; explicit refusal, unsafe output, credential or session failure, and persistence
-   failure never fall back. The owner-controlled
+   paths with distinct effective targets. Active v2 single-target execution has no alternate;
+   adapter or command failure is terminal `provider_error`, never `degraded_consensus`, and cannot
+   become ready or promotable. Explicit refusal, unsafe output, credential or session failure, and
+   persistence failure never fall back. The owner-controlled
    host launcher selects this fixed bridge only with
    `BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION=1`; that boolean cannot name targets or
    secrets, and the provider-API launcher refuses to start if it is present or inherited.
@@ -148,7 +151,7 @@ Partial failure examples:
 - [x] The operational subscription runner uses one resolved target for both neutral perspectives and
   records truthful single-target acceptance. Verify:
   `tests/builderops/test_model_inquiry_runner.py::test_single_target_acceptance_is_truthful_and_receipted`.
-- [x] The configured Model Inquiry profile binds the Sol capability without provider/model selection
+- [x] The configured Model Inquiry profile binds the Model Inquiry capability without provider/model selection
   in the inquiry intent, and API/subscription adapters consume the same resolved target. Verify:
   `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
   and `tests/builderops/test_model_inquiry_adapters.py::test_subscription_adapter_uses_resolved_target_profile`.
