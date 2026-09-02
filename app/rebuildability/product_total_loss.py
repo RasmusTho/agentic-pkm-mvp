@@ -216,6 +216,16 @@ def _retained_sources(vault_root: Path) -> tuple[list[_RetainedSource], list[str
                 object_id="",
             )
         )
+    claims: dict[str, list[str]] = {}
+    for source in sources:
+        claims.setdefault(source.vault_uuid, []).append(source.replay.source_identity)
+    for vault_uuid, source_identities in claims.items():
+        if len(source_identities) > 1:
+            failures.append(
+                f"duplicate-retained-vault-uuid:{vault_uuid}"
+            )
+    if failures:
+        return sources, failures
     if sources:
         try:
             object_ids = _canonical_object_ids_for_sources(source.vault_uuid for source in sources)

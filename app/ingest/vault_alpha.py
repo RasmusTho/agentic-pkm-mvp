@@ -555,6 +555,28 @@ def _store_object_count(store: ObjectStore) -> int:
     return 0
 
 
+def _assert_unique_source_backed_identities(
+    vault_root: Path, candidates: Sequence[Path]
+) -> None:
+    """Refuse ambiguous retained UUID claims before recovery writes projections."""
+    claims: dict[str, Path] = {}
+    for path in candidates:
+        raw_text = _decode_note_text(path.read_bytes())
+        frontmatter, body, fm_error = _load_frontmatter_with_reporting(raw_text, path)
+        if fm_error:
+            continue
+        identity = resolve_vault_note_identity(
+            path, vault_root=vault_root, frontmatter=frontmatter, body=body
+        )
+        previous = claims.get(identity.note_uuid)
+        if previous is not None and previous != path:
+            raise RuntimeError(
+                "source-backed recovery refuses duplicate retained UUID claim "
+                f"{identity.note_uuid!r}: {previous} and {path}"
+            )
+        claims[identity.note_uuid] = path
+
+
 def _ingest_single(
     path: Path,
     *,
@@ -911,6 +933,8 @@ def _ingest_candidates(
     record_locked: bool = True,
     uuid_write_action: str = "ensure uuid",
 ) -> VaultAlphaSummary:
+    if uuid_write_action == SOURCE_BACKED_REBUILD_ACTION:
+        _assert_unique_source_backed_identities(vault_root, candidates)
     store = get_object_store()
 
     store_count = _store_object_count(store)
@@ -960,6 +984,8 @@ def _ingest_candidates(
             try:
                 raw_bytes = path.read_bytes()
             except OSError as exc:
+                if uuid_write_action == SOURCE_BACKED_REBUILD_ACTION:
+                    raise
                 if _is_locked_error(exc):
                     _record_locked(rel_display)
                     continue
@@ -992,6 +1018,8 @@ def _ingest_candidates(
                         write_action=uuid_write_action,
                     )
                 except OSError as exc:
+                    if uuid_write_action == SOURCE_BACKED_REBUILD_ACTION:
+                        raise
                     if _is_locked_error(exc) or _is_permission_denied_error(exc):
                         click.echo(
                             f"Warning: could not persist uuid for {rel_display}; continuing without file rewrite ({exc})",
@@ -1057,6 +1085,8 @@ def _ingest_candidates(
             processed.add(rel_display)
         except OSError as exc:
             rel_display = str(rel_path) if "rel_path" in locals() else str(path)
+            if uuid_write_action == SOURCE_BACKED_REBUILD_ACTION:
+                raise
             if _is_locked_error(exc):
                 _record_locked(rel_display)
                 continue

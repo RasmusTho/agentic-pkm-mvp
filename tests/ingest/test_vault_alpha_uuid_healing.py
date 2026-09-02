@@ -208,6 +208,68 @@ def test_source_backed_ingest_uses_atomic_projection_reconciliation(
     assert captured["vault_uuid"] != object_id
 
 
+def test_source_backed_uuid_persistence_failure_is_fail_loud(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "Notes" / "recovery.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("---\ntitle: Recovery\n---\n\nBody\n", encoding="utf-8")
+    layout = vault_root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir(parents=True)
+    layout.write_text("---\ninclude_folders:\n  - Notes\n---\n\nLayout.\n", encoding="utf-8")
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_store_backends()
+
+    def refuse_uuid_write(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise PermissionError(13, "permission denied")
+
+    monkeypatch.setattr(vault_alpha, "ensure_note_uuid", refuse_uuid_write)
+    monkeypatch.setattr(
+        vault_alpha,
+        "_ingest_single",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("recovery must not project a note without durable UUID")
+        ),
+    )
+
+    with pytest.raises(PermissionError, match="permission denied"):
+        vault_alpha.run_vault_alpha_ingest_paths(
+            vault_root, [note_path], source_backed_rebuild=True
+        )
+
+
+def test_source_backed_rebuild_rejects_duplicate_declared_uuid_before_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault_root = tmp_path / "vault"
+    notes_dir = vault_root / "Notes"
+    notes_dir.mkdir(parents=True)
+    shared_uuid = str(uuid.uuid4())
+    for name in ("first.md", "second.md"):
+        (notes_dir / name).write_text(
+            f"---\nuuid: {shared_uuid}\ntitle: {name}\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+    layout = vault_root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir(parents=True)
+    layout.write_text("---\ninclude_folders:\n  - Notes\n---\n\nLayout.\n", encoding="utf-8")
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_store_backends()
+    monkeypatch.setattr(
+        vault_alpha,
+        "_ingest_single",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("duplicate claims must be rejected before projection writes")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate retained UUID claim"):
+        vault_alpha.run_vault_alpha_ingest(vault_root, source_backed_rebuild=True)
+
+
 def test_source_backed_locked_retry_forwards_recovery_admission(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

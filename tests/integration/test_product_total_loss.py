@@ -173,6 +173,28 @@ def test_product_readiness_rejects_wrong_canonical_object_id(tmp_path: Path) -> 
     assert source_identity in result.refused_source_identities
 
 
+def test_product_readiness_rejects_duplicate_retained_uuid_claims(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    first_identity = _write_source(vault_root, "First retained note.")
+    shared_uuid = str(uuid.uuid4())
+    first = vault_root / first_identity
+    second = vault_root / "Notes" / "second.md"
+    for path in (first, second):
+        path.write_text(
+            f"---\nuuid: {shared_uuid}\ntitle: Duplicate\n---\n\n{path.stem} body.\n",
+            encoding="utf-8",
+        )
+
+    result = evaluate_product_store_readiness(vault_root, [])
+
+    assert result.ready is False
+    assert result.state == "refused"
+    assert any(
+        item.startswith("duplicate-retained-vault-uuid:")
+        for item in result.refused_source_identities
+    )
+
+
 def test_product_readiness_loads_canonical_identity_map_once_per_inventory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
