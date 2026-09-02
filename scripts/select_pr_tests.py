@@ -515,6 +515,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # shared producer on the established store/ingest contracts
             # without claiming the whole app/objects package.
             "app/objects/__init__.py",
+            # Product source-backed rebuild admission uses the shared write
+            # guard while readiness is unready; keep this exact producer on
+            # the Product total-loss integration and guard contract.
+            "app/write_guard.py",
             "tests/stores/",
             "tests/ingest/",
             "tests/integration/test_product_total_loss.py",
@@ -527,6 +531,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/ingest",
             "tests/integration/test_product_total_loss.py",
             "tests/integration/test_projection_rebuild.py",
+            "tests/services/test_write_guard.py",
             "tests/architecture",
             "tests/services/test_outbox_idempotency.py::test_save_object_content_change_emits_new_event",
         ),

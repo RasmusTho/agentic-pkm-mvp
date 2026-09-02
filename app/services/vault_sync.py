@@ -272,18 +272,23 @@ def _canonical_note_payload(
     review_state: str,
     maturity: Any,
     content: str,
-    replay: dict[str, str],
+    # Keep the pre-#5303 internal/test helper shape valid. Named canonical
+    # producers below pass replay explicitly; legacy callers do not have a
+    # source path from which to derive the tuple.
+    replay: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the canonical payload shared by every filesystem vault-sync writer."""
-    return {
+    payload = {
         "title": title,
         "review_state": review_state,
         "maturity": maturity,
         "content": content,
         "frontmatter": frontmatter,
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
-        "replay": replay,
     }
+    if replay is not None:
+        payload["replay"] = replay
+    return payload
 
 
 def canonical_note_replay(note_path: Path, *, vault_root: Path | None = None) -> dict[str, str]:
