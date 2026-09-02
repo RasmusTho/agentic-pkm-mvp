@@ -707,10 +707,113 @@ wait_json_required_ok() {
   return 1
 }
 
+wait_json_embedding_rebuild_transition() {
+  local url="$1" deadline body
+  deadline=$((SECONDS + health_timeout))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if body="$(curl -fsS --max-time 3 "${url}" 2>/dev/null)"; then
+      if "${PYTHON}" -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+checks = data.get("checks") if isinstance(data, dict) else None
+runtime = data.get("runtime") if isinstance(data, dict) else None
+required_failures = [
+    name
+    for name, raw_check in (checks or {}).items()
+    if isinstance(raw_check, dict)
+    and raw_check.get("required") is True
+    and raw_check.get("ok") is not True
+]
+embedding_check = (checks or {}).get("embedding_index") if isinstance(checks, dict) else None
+runtime_failures = [
+    name
+    for name, raw_status in (runtime or {}).items()
+    if not isinstance(raw_status, dict) or raw_status.get("ok") is not True
+]
+sys.exit(0 if (
+    isinstance(data, dict)
+    and data.get("required_ok") is False
+    and isinstance(checks, dict)
+    and all(isinstance(raw_check, dict) for raw_check in checks.values())
+    and required_failures == ["embedding_index"]
+    and isinstance(embedding_check, dict)
+    and embedding_check.get("status") == "rebuild_required"
+    and isinstance(runtime, dict)
+    and not runtime_failures
+) else 1)
+' <<<"${body}"; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+wait_product_readiness_usable() {
+  local url="$1" deadline body
+  deadline=$((SECONDS + health_timeout))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if body="$(curl -fsS --max-time 3 "${url}" 2>/dev/null)"; then
+      if "${PYTHON}" -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+product_readiness = data.get("product_readiness") if isinstance(data, dict) else None
+sys.exit(0 if (
+    isinstance(data, dict)
+    and data.get("state") in {"running", "catch_up", "degraded"}
+    and isinstance(product_readiness, dict)
+    and product_readiness.get("ready") is True
+) else 1)
+' <<<"${body}"; then
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+readiness_http_503() {
+  local url="$1" status
+  status="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null)" || return 1
+  [ "${status}" = "503" ]
+}
+
+acknowledged_embedding_readiness_failure() {
+  wait_json_embedding_rebuild_transition \
+    "http://127.0.0.1:${api_port}/api/health" || return 1
+  wait_product_readiness_usable \
+    "http://127.0.0.1:${api_port}/status" || return 1
+}
+
 health_gate() {
   wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
-  wait_http_success "http://127.0.0.1:${api_port}/readyz" || return 1
-  wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
+  # Product readiness remains mandatory. An acknowledged cutover may defer a
+  # red /readyz only after the exact embedding-only transition is proven and
+  # the canonical status snapshot shows no independent readiness failure.
+  if ! wait_http_success "http://127.0.0.1:${api_port}/readyz"; then
+    if [ "${action}" != "deploy" ] || [ "${ack_embedding_rebuild_required}" != "1" ] \
+      || ! readiness_http_503 "http://127.0.0.1:${api_port}/readyz" \
+      || ! acknowledged_embedding_readiness_failure; then
+      return 1
+    fi
+  fi
+  if [ "${action}" != "deploy" ] || [ "${ack_embedding_rebuild_required}" != "1" ]; then
+    wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
+  fi
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
