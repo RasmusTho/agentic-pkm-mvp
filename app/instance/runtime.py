@@ -2648,8 +2648,6 @@ def _load_legacy_owner_inventory(
                 ancestor_identities,
             )
         )
-    if len({owner.vault_binding_id for owner in owners}) != len(owners):
-        raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
     represented = {owner.vault_binding_id for owner in owners if owner.channel_id == channel}
     missing_bindings = set(registry.registrations) - represented
     if missing_bindings:
@@ -3004,10 +3002,17 @@ def _finish_instance_state_deployment_locked(
     )
     if established is not None and established.legacy_bootstrap_complete:
         try:
+            for registration in registry.registrations.values():
+                ledger.recover_or_require_active(
+                    registration.vault_binding_id,
+                    channel_id=channel,
+                    root=Path(registration.path),
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
             owners = list(ledger.resolve_live_owner_bindings(owners, skip_unadopted=True))
         except LedgerError as exc:
             raise InstanceStatePreflightError(
-                "host-validated legacy-owner binding is invalid"
+                "host-validated legacy-owner binding or lease recovery is invalid"
             ) from exc
     else:
         owners = [
@@ -3023,6 +3028,8 @@ def _finish_instance_state_deployment_locked(
             )
             for owner in owners
         ]
+    if len({owner.vault_binding_id for owner in owners}) != len(owners):
+        raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
     try:
         ledger_snapshot = backup._require_registry_ledger_consistency(
             registry=registry,
