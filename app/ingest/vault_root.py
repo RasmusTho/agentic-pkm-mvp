@@ -14,11 +14,27 @@ from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
-from app.stores import get_object_store
+from app.stores import get_object_store, resolve_store_backend
 from app.rebuildability import canonical_product_source_text, product_replay_provenance
 from app.stores.provider import get_stores
+from app.objects import resolve_canonical_object_id
 
 logger = logging.getLogger(__name__)
+
+
+def _stable_vault_root_object_id(
+    path: Path, *, vault_root: Path, frontmatter: dict
+) -> str:
+    """Resolve one canonical Product identity for a root-ingested retained note."""
+    from app.ingest.vault_alpha import _VAULT_NOTE_UUID_NAMESPACE
+
+    source_identity = path.resolve().relative_to(vault_root.resolve()).as_posix()
+    raw_uuid = str(frontmatter.get("uuid") or "").strip()
+    try:
+        vault_uuid = str(uuid.UUID(raw_uuid))
+    except (ValueError, AttributeError):
+        vault_uuid = str(uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, source_identity))
+    return resolve_canonical_object_id(vault_uuid)
 
 
 def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[Path]:
@@ -71,9 +87,18 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     payload_copy.setdefault("source_path", str(path))
     payload_copy.setdefault("source_ref", str(path))
     sanitize_normalize["payload"] = payload_copy
-    object_id = str(normalize_res.get("object_id") or normalize_res.get("uuid") or "").strip()
-    if not object_id:
+    normalized_object_id = str(
+        normalize_res.get("object_id") or normalize_res.get("uuid") or ""
+    ).strip()
+    if not normalized_object_id:
         raise RuntimeError("normalize did not return object_id")
+    object_id = (
+        _stable_vault_root_object_id(path, vault_root=root, frontmatter=frontmatter)
+        if resolve_store_backend() == "pg"
+        else normalized_object_id
+    )
+    core6 = dict(normalize_res.get("core6") or {})
+    core6["id"] = object_id
 
     try:
         object_uuid = uuid.UUID(object_id)
@@ -101,7 +126,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     # blind-dropped to 'unbound' on the next cold rebuild (index_rebuild reads store_objects payload).
     canonical_payload = {
         **payload_copy,
-        "core6": normalize_res.get("core6") or {},
+        "core6": core6,
         "episode_ref": ep_ref,
         "replay": replay,
     }

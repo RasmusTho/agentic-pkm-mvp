@@ -607,6 +607,7 @@ def _ingest_single(
         "core6": core6,
         "raw_text": stripped_text,
         "text": stripped_text,
+        "replay_text_kind": "extracted_body",
         "source_path": str(path),
         "maturity": maturity,
         "domain": domain,
@@ -656,6 +657,7 @@ def _ingest_single(
         "trust": trust,
         "review_state": review_state,
         "text": stripped_text,
+        "replay_text_kind": "extracted_body",
         "ingest_fingerprint": ingest_fingerprint,
         # Vault-canonical episode binding (ERE-03/ERE-05): carry the frontmatter's episode_ref into
         # the DB projection so a reingest never blind-drops a stamped binding (round-2 Finding 1).

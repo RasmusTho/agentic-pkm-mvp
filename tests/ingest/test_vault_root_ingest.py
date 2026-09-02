@@ -1,4 +1,5 @@
 import os
+import uuid
 from pathlib import Path
 
 from app.ingest.vault_root import ingest_vault_root, iter_vault_root_markdown
@@ -73,3 +74,51 @@ def test_ingest_vault_root_honors_layout_admission_for_root_files(
 
     assert ingest_vault_root(vault_root) == 0
     assert seen == []
+
+
+def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from app.ingest import vault_root
+
+    vault_root_path = tmp_path / "vault"
+    vault_root_path.mkdir()
+    note_path = vault_root_path / "root-note.md"
+    note_path.write_text("# Root\nMeaning-bearing body", encoding="utf-8")
+    upserted_ids: list[str] = []
+    stored_ids: list[uuid.UUID] = []
+
+    class FakeObjects:
+        def upsert(self, *, id=None, **_kwargs):  # type: ignore[no-untyped-def]
+            upserted_ids.append(str(id))
+            return {"id": id}
+
+    class FakeStore:
+        def put(self, object_id, **_kwargs):  # type: ignore[no-untyped-def]
+            stored_ids.append(object_id)
+
+    def fake_normalize(_path, *, trace_id):  # type: ignore[no-untyped-def]
+        fresh_id = str(uuid.uuid4())
+        return {
+            "object_id": fresh_id,
+            "uuid": fresh_id,
+            "core6": {"id": fresh_id, "title": "Root"},
+            "payload": {"raw_text": "# Root\nMeaning-bearing body"},
+        }
+
+    monkeypatch.setattr(vault_root, "normalize_run", fake_normalize)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_root, "get_stores", lambda: (FakeObjects(), None))
+    monkeypatch.setattr(vault_root, "get_object_store", lambda: FakeStore())
+    monkeypatch.setattr(vault_root, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_root, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_root, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    vault_root._ingest_file(note_path, trace_id="trace", vault_root=vault_root_path)
+    vault_root._ingest_file(note_path, trace_id="trace", vault_root=vault_root_path)
+
+    assert len(upserted_ids) == 2
+    assert upserted_ids[0] == upserted_ids[1]
+    assert len(stored_ids) == 2
+    assert stored_ids[0] == stored_ids[1]

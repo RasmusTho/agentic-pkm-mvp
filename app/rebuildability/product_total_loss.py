@@ -206,6 +206,15 @@ def _payload_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _canonical_payload_text(payload: dict[str, Any]) -> str:
+    """Canonicalize stored text according to the producer's capture semantics."""
+    if payload.get("replay_text_kind") == "extracted_body":
+        return canonical_product_body_text(_payload_text(payload))
+    if isinstance(payload.get("content"), str):
+        return canonical_product_body_text(str(payload["content"]))
+    return _canonical_source_text(_payload_text(payload))
+
+
 def evaluate_product_store_readiness(
     vault_root: Path | None,
     projection_rows: Iterable[Any],
@@ -252,12 +261,7 @@ def evaluate_product_store_readiness(
     for source in sources:
         observed = by_identity.get(source.replay.source_identity, [])
         observed_payload = observed[0][1] if len(observed) == 1 else None
-        observed_text = (
-            canonical_product_body_text(str(observed_payload["content"]))
-            if isinstance(observed_payload, dict)
-            and isinstance(observed_payload.get("content"), str)
-            else _canonical_source_text(_payload_text(observed_payload or {}))
-        )
+        observed_text = _canonical_payload_text(observed_payload or {})
         if (
             len(observed) != 1
             or observed[0][0] != source.replay
