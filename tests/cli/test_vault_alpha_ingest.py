@@ -16,7 +16,11 @@ from click.testing import CliRunner
 from app.agents.panel.filters import strip_ai_panels
 from app.cli import cli
 from app.ingest import vault_alpha as vault_alpha
-from app.ingest.vault_alpha import _compute_ingest_fingerprint, run_vault_alpha_ingest
+from app.ingest.vault_alpha import (
+    VaultAlphaSummary,
+    _compute_ingest_fingerprint,
+    run_vault_alpha_ingest,
+)
 from app.retrieval.hybrid import get_store, rebuild_from_durable_index, reset_durable_rebuild_state
 from tests._click_compat import cli_runner
 from app.services.companion_note import companion_path, read_companion, write_companion, CompanionNote
@@ -232,6 +236,40 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
 
     # Legacy VaultMirror directory must NOT be created
     assert not (vault / "System" / "Metadata" / "VaultMirror").exists()
+
+
+def test_vault_alpha_cli_routes_source_backed_rebuild_admission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    captured: dict[str, object] = {}
+
+    def fake_ingest(root, *, max_notes, include_test_note, force, source_backed_rebuild):  # type: ignore[no-untyped-def]
+        captured.update(
+            root=root,
+            max_notes=max_notes,
+            include_test_note=include_test_note,
+            force=force,
+            source_backed_rebuild=source_backed_rebuild,
+        )
+        return VaultAlphaSummary(scanned=0, ingested=0, included_folders=[])
+
+    monkeypatch.setattr("app.cli.run_vault_alpha_ingest", fake_ingest)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "vault-alpha-ingest",
+            "--vault-root",
+            str(vault),
+            "--source-backed-rebuild",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["root"] == vault.resolve()
+    assert captured["source_backed_rebuild"] is True
 
 
 def test_vault_alpha_ingest_persists_uuid_to_companion_and_store(tmp_path: Path) -> None:
@@ -703,6 +741,7 @@ def test_ingest_vault_paths_single_note(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     note_a = _write_note(vault, Path("Concepts/NoteA.md"), title="Note A")
     _write_note(vault, Path("Concepts/NoteB.md"), title="Note B")
+    _write_layout_note(vault)
 
     runner = CliRunner()
     env = _base_env(tmp_path)
@@ -741,6 +780,7 @@ def test_ingest_vault_paths_multiple_notes(tmp_path: Path) -> None:
     note_a = _write_note(vault, Path("Concepts/NoteA.md"), title="Note A")
     note_b = _write_note(vault, Path("Concepts/NoteB.md"), title="Note B")
     _write_note(vault, Path("Concepts/NoteC.md"), title="Note C (not ingested)")
+    _write_layout_note(vault)
 
     runner = CliRunner()
     env = _base_env(tmp_path)
@@ -780,6 +820,7 @@ def test_ingest_vault_paths_handles_missing_files(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     note_a = _write_note(vault, Path("Concepts/NoteA.md"), title="Note A")
     missing = vault / "Concepts/Missing.md"
+    _write_layout_note(vault)
 
     runner = CliRunner()
     env = _base_env(tmp_path)

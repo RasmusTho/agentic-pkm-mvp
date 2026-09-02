@@ -29,6 +29,7 @@ from uuid import UUID
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.services.outbox import insert_object_and_outbox, payload_fingerprint
 from app.objects.relation_types import RelationEdge, GraphSlice, RelationIndex
 from app.store.vector_index import ScoredNeighbor, VectorIndex
@@ -245,6 +246,20 @@ def resolve_canonical_object_id(vault_uuid: str) -> str:
     return resolve_vault_uuid(str(vault_uuid))
 
 
+def retained_vault_uuid_to_canonical_id_map(
+    *, vault_binding_id: str = COMPATIBILITY_BINDING_ID
+) -> dict[str, str]:
+    """Load the binding-scoped retained UUID to canonical ID map.
+
+    Product readiness consumes this compatibility boundary rather than reaching
+    into the Postgres provider.  The provider remains responsible for the
+    binding-scoped query and its identity semantics.
+    """
+    from app.stores.pg import retained_vault_uuid_to_canonical_id_map as load_map
+
+    return load_map(vault_binding_id=vault_binding_id)
+
+
 def canonical_event_identity(canonical_object_id: str, vault_uuid: str) -> dict[str, str]:
     """Return the single reviewed lifecycle-event identity shape for #3510."""
     return {
@@ -282,6 +297,7 @@ __all__ = [
     "save_object_in_transaction",
     "resolve_canonical_object_id",
     "resolve_canonical_object_id_in_transaction",
+    "retained_vault_uuid_to_canonical_id_map",
     "canonical_event_identity",
     "update_object_source_ref_in_transaction",
 ]

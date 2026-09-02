@@ -142,6 +142,40 @@ def test_every_store_payload_producer_carries_episode_ref() -> None:
     )
 
 
+def test_vault_alpha_product_sinks_are_classified_and_episode_bound() -> None:
+    """Keep the three vault-alpha Product sinks pinned to their carrying payloads.
+
+    This targeted regression catches line drift in the classification registry separately from
+    the repository-wide census, which is the failure mode that previously escaped local checks.
+    """
+    sites = [
+        (rel, line)
+        for rel, line in find_store_payload_sink_sites()
+        if rel == "app/ingest/vault_alpha.py"
+    ]
+
+    assert len(sites) == 3
+    for site in sites:
+        classification = STORE_PAYLOAD_SINK_CLASSIFICATION[site]
+        assert classification.startswith("carries_frontmatter:")
+        assert "episode_ref" in (payload_keys_at_sink(*site) or set())
+
+
+def test_vault_root_product_sinks_are_classified_and_episode_bound() -> None:
+    """Pin vault-root line drift to its four episode-bound Product sinks."""
+    sites = [
+        (rel, line)
+        for rel, line in find_store_payload_sink_sites()
+        if rel == "app/ingest/vault_root.py"
+    ]
+
+    assert len(sites) == 4
+    for site in sites:
+        classification = STORE_PAYLOAD_SINK_CLASSIFICATION[site]
+        assert classification.startswith("carries_frontmatter:")
+        assert "episode_ref" in (payload_keys_at_sink(*site) or set())
+
+
 def test_no_non_producer_escape_hatches() -> None:
     """Round-5 structural hardening: the ONLY non-producer classifications are
     ``transport_passthrough`` (forwards a verified caller payload) and ``harness_excluded``. The

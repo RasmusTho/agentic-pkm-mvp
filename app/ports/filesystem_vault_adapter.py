@@ -11,9 +11,10 @@ from app.knowledge.write_ops import (
     write_note_from_absolute,
 )
 from app.ports.vault_port import EnsureUuidResult, NoteRead
+from app.rebuildability import parse_bounded_frontmatter
 from app.services.inbox import append_change
 from app.services.vault_sync import active_edit, delete_note, update_path, upsert_object_from_note
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter
 
 
 class FilesystemVaultAdapter:
@@ -26,7 +27,9 @@ class FilesystemVaultAdapter:
     def read_note(self, path: Path) -> NoteRead:
         resolved = Path(path).resolve()
         text, version = read_note_text_with_version(resolved)
-        frontmatter, body = load_frontmatter(text)
+        frontmatter, body, error = parse_bounded_frontmatter(text)
+        if error is not None:
+            raise ValueError("malformed frontmatter")
         return NoteRead(
             path=resolved,
             frontmatter=frontmatter,
@@ -111,7 +114,11 @@ class FilesystemVaultAdapter:
     def rename_note(self, uuid_value: str, new_path: Path) -> None:
         if not self.backend_writes_enabled:
             return
-        update_path(uuid_value, str(Path(new_path).resolve()))
+        update_path(
+            uuid_value,
+            str(Path(new_path).resolve()),
+            vault_root=self.vault_root,
+        )
 
     def delete_note(self, path: Path, *, uuid_value: str | None = None) -> None:
         if not self.backend_writes_enabled:
@@ -128,7 +135,14 @@ class FilesystemVaultAdapter:
     ) -> None:
         if not self.backend_writes_enabled:
             return
-        upsert_object_from_note(str(Path(path).resolve()), frontmatter, body, fm_changed, body_changed)
+        upsert_object_from_note(
+            str(Path(path).resolve()),
+            frontmatter,
+            body,
+            fm_changed,
+            body_changed,
+            vault_root=self.vault_root,
+        )
 
     def append_inbox_item(self, message: str, *, vault_path: Path | None = None, uri: str | None = None) -> None:
         append_change(message, vault_path=vault_path, uri=uri)

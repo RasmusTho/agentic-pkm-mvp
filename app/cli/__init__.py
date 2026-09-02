@@ -790,17 +790,38 @@ def pkm_alpha_ingest(limit: int | None) -> None:
 @click.option("--include-test-note", is_flag=True, help="Include Test/Alpha-HumanFlows.md in this run.")
 @click.option("--force", is_flag=True, help="Re-ingest notes even if they appear already ingested or mirrored.")
 @click.option("--locked-only", is_flag=True, help="Retry only files previously skipped due to locked errors (errno=35).")
+@click.option(
+    "--source-backed-rebuild",
+    is_flag=True,
+    help="Use the named Product recovery admission for retained-source UUID repair.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output JSON summary.")
 def vault_alpha_ingest(
-    vault_root: Path | None, max_notes: int, include_test_note: bool, force: bool, locked_only: bool, as_json: bool
+    vault_root: Path | None,
+    max_notes: int,
+    include_test_note: bool,
+    force: bool,
+    locked_only: bool,
+    source_backed_rebuild: bool,
+    as_json: bool,
 ) -> None:
     resolved = _resolve_vault_root_path(vault_root, allow_env=True, fallback_to_default=True)
     if resolved is None:
         raise click.BadParameter("Vault root could not be resolved.")
     if locked_only:
-        summary = run_vault_alpha_ingest_locked_only(resolved, force=force)
+        summary = run_vault_alpha_ingest_locked_only(
+            resolved,
+            force=force,
+            source_backed_rebuild=source_backed_rebuild,
+        )
     else:
-        summary = run_vault_alpha_ingest(resolved, max_notes=max_notes, include_test_note=include_test_note, force=force)
+        summary = run_vault_alpha_ingest(
+            resolved,
+            max_notes=max_notes,
+            include_test_note=include_test_note,
+            force=force,
+            source_backed_rebuild=source_backed_rebuild,
+        )
     if as_json:
         payload = {
             "scanned": summary.scanned,

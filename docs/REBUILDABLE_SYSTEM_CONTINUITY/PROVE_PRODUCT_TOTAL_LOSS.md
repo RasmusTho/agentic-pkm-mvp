@@ -20,9 +20,10 @@ rebuild coverage.
 ## What This Task Does
 
 Add isolated retained-source fixtures and production readiness checks for an empty or corrupt
-Product database. Rebuild/use binds source identity, source generation/content identity, and
-recipe version; `/readyz` stays blocked until reconstruction and integrity verification complete,
-while the source-backed recovery write path remains available to perform that rebuild.
+Product database. The retained inventory uses the vault-alpha candidate/exclusion policy, and the
+three canonical note producers stamp source identity, source generation/content identity, and
+recipe version. `/readyz` stays blocked until reconstruction and integrity verification complete,
+while the narrowly named source-backed recovery admission remains available to perform that rebuild.
 
 ## Concretely
 

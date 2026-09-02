@@ -129,6 +129,7 @@ startup_status_path="$ROOT/tmp/startup_status.json"
 mkdir -p "$ROOT/tmp"
 
 readiness_state="unknown"
+readyz_http_status="unknown"
 api_health_ok="false"
 api_health_required_ok="false"
 api_health_failed="none"
@@ -2183,8 +2184,12 @@ if [ "$START_WATCHERS" -eq 1 ]; then
     exit 1
   fi
 fi
-ready_payload=$(curl -sS "$API_BASE_URL/readyz" || true)
-readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
+probe_product_readiness() {
+  local readyz_response
+  readyz_response=$(curl -sS -w $'\n%{http_code}' "$API_BASE_URL/readyz" || true)
+  readyz_http_status="${readyz_response##*$'\n'}"
+  ready_payload="${readyz_response%$'\n'*}"
+  readiness_state=$(READY_JSON="$ready_payload" python - <<'PY'
 import json, os, sys
 try:
     raw = os.environ.get("READY_JSON", "")
@@ -2200,7 +2205,40 @@ except Exception as exc:
     print(f"INFO: optional preflight failed: {exc}")
     sys.exit(0)
 PY
-)
+  )
+}
+
+probe_product_status() {
+  local status_response product_readiness_probe
+  status_response=$(curl -sS -w $'\n%{http_code}' "$API_BASE_URL/status" || true)
+  product_status_http_status="${status_response##*$'\n'}"
+  product_status_payload="${status_response%$'\n'*}"
+  product_readiness_probe=$(PRODUCT_STATUS_JSON="$product_status_payload" python - <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ.get("PRODUCT_STATUS_JSON", ""))
+    product_readiness = data.get("product_readiness") if isinstance(data, dict) else None
+    if not isinstance(product_readiness, dict):
+        raise ValueError("missing Product readiness")
+    ready = "1" if product_readiness.get("ready") is True else "0"
+    state = str(product_readiness.get("state") or "unknown")
+except Exception:
+    ready = "0"
+    state = "invalid-status-payload"
+print(f"{ready}|{state}")
+PY
+  )
+  IFS='|' read -r product_readiness_ready product_readiness_state \
+    <<<"$product_readiness_probe"
+}
+
+probe_product_readiness
+product_rebuild_required=0
+case "$readiness_state" in
+  *"product replay refused:"*) product_rebuild_required=1 ;;
+esac
 
 api_health_payload=$(curl -sS "$API_BASE_URL/api/health" || true)
 update_health_state() {
@@ -2349,37 +2387,20 @@ object_count="$objects_before"
 vector_count="$vectors_before"
 ingest_summary_json="{}"
 ingest_status=0
-if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
+if [ "$NO_VAULT_MODE" -ne 1 ] && {
+  [ "$objects_before" -le 0 ] || [ "$product_rebuild_required" -eq 1 ]
+}; then
   ingest_run="yes"
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --source-backed-rebuild --json)
     ingest_status=$?
     set -e
-    if [ "$ingest_status" -ne 0 ]; then
-      echo "INFO: bootstrap ingest failed but will be retried after first ingest (empty system)"
-      ingest_run="no"
-      ingest_summary_json="{}"
-    fi
   else
     set +e
-    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --json)
+    ingest_summary_json=$(run_docker_compose exec -T api python -m app.cli vault-alpha-ingest --vault-root /app/vault --max-notes "$max_notes" --force --source-backed-rebuild --json)
     ingest_status=$?
     set -e
-    if [ "$ingest_status" -ne 0 ]; then
-      if [ "$VERIFY_ACTIVE" -eq 1 ]; then
-        EXIT_REASON="bootstrap_ingest_failed"
-        EXIT_CODE=1
-        export EXIT_REASON EXIT_CODE
-        write_startup_status 0 "$EXIT_REASON"
-        echo "ERROR: bootstrap ingest failed" >&2
-        exit 1
-      else
-        echo "INFO: bootstrap ingest failed (ignored for fast start)" >&2
-        ingest_run="no"
-        ingest_summary_json="{}"
-      fi
-    fi
   fi
   store_stats_json=$(run_docker_compose exec -T api python -m app.cli store stats --json || true)
   objects_after=$(extract_stat objects)
@@ -2389,6 +2410,76 @@ if [ "$NO_VAULT_MODE" -ne 1 ] && [ "$objects_before" -le 0 ]; then
 fi
 
 ensure_json_or_fail "vault-alpha-ingest" "$ingest_summary_json" "vault-alpha-ingest --json" "$ingest_status"
+
+fail_product_rebuild() {
+  local reason="$1"
+  local message="$2"
+  EXIT_REASON="$reason"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: $message" >&2
+  debug_dump
+  exit 1
+}
+
+if [ "$ingest_run" = "yes" ]; then
+  if [ "$ingest_status" -ne 0 ]; then
+    fail_product_rebuild "bootstrap_ingest_failed" "source-backed vault-alpha reconstruction failed"
+  fi
+  ingest_rebuild_meta=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
+import json, os
+
+try:
+    payload = json.loads(os.environ.get("INGEST_JSON", ""))
+    values = [
+        int(payload.get("scanned") or 0),
+        int(payload.get("ingested") or 0),
+        int(payload.get("errors") or 0),
+        int(payload.get("malformed") or 0),
+        int(payload.get("skipped_locked") or 0),
+        int(payload.get("skipped_invalid") or 0),
+        0,
+    ]
+except Exception:
+    values = [0, 0, 0, 0, 0, 0, 1]
+print("|".join(str(value) for value in values))
+PY
+  )
+  IFS='|' read -r ingest_scanned_count ingest_rebuilt_count ingest_error_count \
+    ingest_malformed_count ingest_locked_count ingest_invalid_count ingest_meta_invalid \
+    <<<"$ingest_rebuild_meta"
+  ingest_scanned_count=${ingest_scanned_count:-0}
+  ingest_rebuilt_count=${ingest_rebuilt_count:-0}
+  ingest_error_count=${ingest_error_count:-0}
+  ingest_malformed_count=${ingest_malformed_count:-0}
+  ingest_locked_count=${ingest_locked_count:-0}
+  ingest_invalid_count=${ingest_invalid_count:-0}
+  ingest_meta_invalid=${ingest_meta_invalid:-1}
+  if [ "$ingest_meta_invalid" -ne 0 ] \
+    || [ "$ingest_error_count" -ne 0 ] \
+    || [ "$ingest_malformed_count" -ne 0 ] \
+    || [ "$ingest_locked_count" -ne 0 ] \
+    || [ "$ingest_invalid_count" -ne 0 ] \
+    || [ "$ingest_rebuilt_count" -ne "$ingest_scanned_count" ]; then
+    fail_product_rebuild \
+      "bootstrap_product_rebuild_incomplete" \
+      "source-backed vault-alpha reconstruction was incomplete or reported errors"
+  fi
+
+  # The ingest command can report success while the Product projection is
+  # still unready. Inspect that component directly: aggregate /readyz can stay
+  # 503 while an independent health state completes its recovery hysteresis.
+  if [ "$ingest_scanned_count" -gt 0 ] || [ "$product_rebuild_required" -eq 1 ]; then
+    probe_product_status
+    if [ "$product_status_http_status" != "200" ] \
+      || [ "$product_readiness_ready" != "1" ]; then
+      fail_product_rebuild \
+        "bootstrap_product_readiness_failed" \
+        "source-backed reconstruction completed but Product readiness is $product_status_http_status ($product_readiness_state)"
+    fi
+  fi
+fi
 
 if [ "$auto_bootstrap" -eq 1 ]; then
   if [ "$BOOTSTRAP_STATE" = "empty" ]; then
