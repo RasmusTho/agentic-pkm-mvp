@@ -215,3 +215,21 @@ def test_backend_calls_are_gated_when_backend_disabled(monkeypatch, tmp_path: Pa
     adapter.rename_note("u1", tmp_path / "new.md")
     adapter.delete_note(tmp_path / "gone.md", uuid_value="u1")
     adapter.upsert_note_object(tmp_path / "n.md", {"uuid": "u1"}, "Body", True, True)
+
+
+def test_adapter_passes_selected_root_to_rename(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_update_path(uuid_value: str, new_path: str, *, vault_root: Path) -> None:
+        captured.update(uuid=uuid_value, path=new_path, vault_root=vault_root)
+
+    monkeypatch.setattr("app.ports.filesystem_vault_adapter.update_path", fake_update_path)
+    adapter = FilesystemVaultAdapter(vault_root=tmp_path)
+
+    adapter.rename_note("u1", tmp_path / "new.md")
+
+    assert captured == {
+        "uuid": "u1",
+        "path": str((tmp_path / "new.md").resolve()),
+        "vault_root": tmp_path.resolve(),
+    }

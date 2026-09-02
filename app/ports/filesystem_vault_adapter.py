@@ -111,7 +111,11 @@ class FilesystemVaultAdapter:
     def rename_note(self, uuid_value: str, new_path: Path) -> None:
         if not self.backend_writes_enabled:
             return
-        update_path(uuid_value, str(Path(new_path).resolve()))
+        update_path(
+            uuid_value,
+            str(Path(new_path).resolve()),
+            vault_root=self.vault_root,
+        )
 
     def delete_note(self, path: Path, *, uuid_value: str | None = None) -> None:
         if not self.backend_writes_enabled:

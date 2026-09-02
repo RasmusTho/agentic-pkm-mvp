@@ -227,6 +227,24 @@ def test_canonical_ingest_producers_stamp_replay_tuple(tmp_path: Path) -> None:
     assert canonical_note_replay(note, vault_root=vault_root) == expected
 
 
+def test_vault_sync_replay_canonicalizes_extracted_thematic_body(tmp_path: Path) -> None:
+    from app.rebuildability import canonical_product_body_text
+    from app.services.vault_sync import canonical_note_replay
+
+    vault_root = tmp_path / "vault"
+    note = vault_root / "thematic.md"
+    note.parent.mkdir(parents=True)
+    body = "---\nA thematic section\n---\n\nMeaning-bearing suffix."
+    note.write_text(f"---\nuuid: thematic-uuid\n---\n\n{body}", encoding="utf-8")
+
+    assert canonical_note_replay(
+        note, vault_root=vault_root, source_body=body
+    ) == product_replay_provenance(
+        source_identity="thematic.md",
+        source_text=canonical_product_body_text(body),
+    )
+
+
 def test_selected_postgres_health_refuses_unverified_product_projection(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -208,6 +208,7 @@ def test_upsert_enqueues_within_transaction_before_commit(tmp_path, monkeypatch)
         "body",
         fm_changed=False,
         body_changed=False,
+        vault_root=tmp_path,
     )
 
     # New note (no prior state) → CREATED → emits.
@@ -240,6 +241,7 @@ def test_upsert_fault_between_store_and_enqueue_rolls_back(tmp_path, monkeypatch
             "body",
             fm_changed=False,
             body_changed=False,
+            vault_root=tmp_path,
         )
 
     # No commit after the store write → a real transaction rolls the object
