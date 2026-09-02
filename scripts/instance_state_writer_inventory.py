@@ -25,7 +25,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from scripts.compose_env import compose_env_value as _compose_env_value
+try:
+    from scripts.compose_env import compose_env_value as _compose_env_value
+except ModuleNotFoundError:
+    # Direct launcher invocations put scripts/, rather than the repo root, on
+    # sys.path; keep the shared parser usable without mutating sys.path.
+    from compose_env import compose_env_value as _compose_env_value
 
 INVENTORY_SCHEMA = "agentic-pkm.host-deployment-quiescence.v2"
 LEGACY_OWNER_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"

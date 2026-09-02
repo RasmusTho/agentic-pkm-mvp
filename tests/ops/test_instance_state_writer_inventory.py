@@ -20,6 +20,8 @@ identifier for it -- while still never emitting the raw host path.
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,19 @@ MOUNTS = [
 ]
 
 ENV = ["PKM_ENVIRONMENT=dev", "PATH=/usr/local/bin"]
+
+
+def test_writer_direct_entrypoint_loads_shared_parser_from_outside_repo(tmp_path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(Path(writer_inventory.__file__).resolve()), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout
 
 
 def test_read_env_bytes_matches_compose_quoted_comment_rules() -> None:
