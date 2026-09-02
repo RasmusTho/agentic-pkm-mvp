@@ -1528,7 +1528,6 @@ def test_acknowledged_embedding_cutover_stages_compose_before_transition_smoke(
 
 def test_acknowledged_embedding_cutover_allows_transitional_health(tmp_path: Path) -> None:
     root, env, sha = _deploy_harness(tmp_path)
-    env["FAKE_READINESS"] = "fail"
     env["FAKE_REQUIRED_HEALTH"] = "fail"
 
     result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
@@ -1536,7 +1535,23 @@ def test_acknowledged_embedding_cutover_allows_transitional_health(tmp_path: Pat
     assert result.returncode == 0, result.stdout + result.stderr
     events = _deploy_events(env)
     assert any("/healthz" in event for event in events)
-    assert not any("/readyz" in event for event in events)
+    assert any("/readyz" in event for event in events)
+    assert any("/api/health" in event for event in events)
+
+
+def test_acknowledged_embedding_cutover_keeps_independent_readiness_failure_blocking(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_READINESS"] = "fail"
+    env["FAKE_REQUIRED_HEALTH"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert "health gate failed" in result.stderr
+    events = _deploy_events(env)
+    assert any("/readyz" in event for event in events)
 
 
 @pytest.mark.parametrize(
