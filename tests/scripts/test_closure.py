@@ -29,6 +29,8 @@ class Fake:
         self.calls: list[tuple[str, ...]] = []
         self.inputs: list[str | None] = []
         self.body = "Governing-Issue: #5245\n\nFixes #5245\n\nFinal-Review-Rounds: 0\n"
+        self.issue_title = "builder: make light-path closure deterministic with plan/apply"
+        self.issue_body = "Issue body"
         self.events_commit_id = MERGE
         self.dispatcher_task = {
             "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5245",
@@ -55,9 +57,9 @@ class Fake:
                 },
             )
         if endpoint.endswith("/issues/5245") and "GET" in args:
-            return self._json(args, {"number": 5245, "state": "closed" if self.merged else "open", "labels": [{"name": "agent:in-progress"}, {"name": "lane:governance"}]})
+            return self._json(args, {"number": 5245, "state": "closed" if self.merged else "open", "title": self.issue_title, "body": self.issue_body, "labels": [{"name": "agent:in-progress"}, {"name": "lane:governance"}]})
         if endpoint.endswith("/issues/5245/events") and "GET" in args:
-            return self._json(args, [{"event": "closed", "issue": {"number": 5245}, "commit_id": self.events_commit_id}])
+            return self._json(args, [{"event": "closed", "commit_id": self.events_commit_id}])
         if endpoint.endswith("check-runs"):
             return self._json(args, {"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]})
         if endpoint.endswith("/pulls/99/merge") and "PUT" in args:
@@ -113,6 +115,22 @@ def test_closure_apply_reads_back_merge_closure_and_bounded_cleanup(tmp_path: Pa
     patch_call = next(call for call in fake.calls if "PATCH" in call)
     patch_input = fake.inputs[fake.calls.index(patch_call)]
     assert json.loads(patch_input or "") == {"labels": ["lane:governance"]}
+
+
+@pytest.mark.parametrize("field", ["issue_title", "issue_body"])
+def test_closure_apply_rejects_post_merge_closing_issue_title_or_body_drift(tmp_path: Path, field: str) -> None:
+    fake = Fake(tmp_path); plan = build_closure_plan(request(tmp_path), executor=fake)
+    fake.merged = True
+    setattr(fake, field, getattr(fake, field) + " changed")
+    with pytest.raises(ClosureError, match="post-merge closing Issue title/body drifted"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any("/events" in call[6] for call in fake.calls if call[:2] == ("gh", "api"))
+
+
+def test_closure_apply_accepts_valid_event_without_optional_issue_number(tmp_path: Path) -> None:
+    fake = Fake(tmp_path); plan = build_closure_plan(request(tmp_path), executor=fake)
+    receipt = apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert receipt["issue"]["closure_attribution"] == "GitHub-native closing keyword and exact merge event"
 
 
 def test_closure_apply_completes_exact_dispatcher_task_with_lease_holder(tmp_path: Path) -> None:

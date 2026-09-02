@@ -101,6 +101,30 @@ def _issue(executor: CommandExecutor, cwd: Path, repository: str, number: int) -
     return value
 
 
+def _issue_hashes(issue: Mapping[str, Any]) -> dict[str, str]:
+    title = issue.get("title")
+    body = issue.get("body")
+    if not isinstance(title, str) or (body is not None and not isinstance(body, str)):
+        raise ClosureError("unknown", "Issue title/body readback was malformed")
+    return {
+        "title_sha256": hashlib.sha256(title.encode()).hexdigest(),
+        "body_sha256": hashlib.sha256((body or "").encode()).hexdigest(),
+    }
+
+
+def _validate_planned_issue(
+    issue: Mapping[str, Any], plan: Mapping[str, Any], *, phase: str
+) -> None:
+    planned = plan.get("closing_issue")
+    if not isinstance(planned, Mapping) or issue.get("number") != planned.get("number"):
+        raise ClosureError("drift", f"{phase} closing Issue identity drifted")
+    if _issue_hashes(issue) != {
+        "title_sha256": planned.get("title_sha256"),
+        "body_sha256": planned.get("body_sha256"),
+    }:
+        raise ClosureError("drift", f"{phase} closing Issue title/body drifted")
+
+
 def _issue_events(executor: CommandExecutor, cwd: Path, repository: str, number: int) -> list[dict[str, Any]]:
     value = _api(executor, cwd, repository, "GET", f"/issues/{number}/events", "-f", "per_page=100")
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
@@ -154,13 +178,19 @@ def _dispatcher_snapshot(
 def _validate_closure_attribution(
     events: Sequence[Mapping[str, Any]], issue_number: int, merge_sha: str
 ) -> None:
-    matches = [
-        event
-        for event in events
-        if event.get("event") == "closed"
-        and event.get("issue", {}).get("number", issue_number) == issue_number
-        and event.get("commit_id") == merge_sha
-    ]
+    matches = []
+    for event in events:
+        if event.get("event") != "closed" or event.get("commit_id") != merge_sha:
+            continue
+        # The endpoint is already scoped to /issues/{issue_number}/events.  The
+        # event API may omit issue.number, so only reject an explicitly
+        # conflicting number and never require the optional field.
+        event_issue = event.get("issue")
+        if isinstance(event_issue, Mapping) and event_issue.get("number") not in (None, issue_number):
+            continue
+        if event_issue is not None and not isinstance(event_issue, Mapping):
+            continue
+        matches.append(event)
     if len(matches) != 1:
         raise ClosureError("incomplete", "exact closing Issue attribution was not proven")
 
@@ -187,6 +217,7 @@ def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, A
         raise ClosureError("unsupported", "PR body declares an unsupported light-path surface")
     issue_number = _issue_number(body)
     issue = _issue(executor, cwd, request.repository, issue_number)
+    _issue_hashes(issue)
     labels = sorted(str(item.get("name") if isinstance(item, dict) else item) for item in issue.get("labels", []))
     if str(issue.get("state", "")).lower() != "open" or "agent:in-progress" not in labels:
         raise ClosureError("incomplete", "governing Issue is not the active open claim")
@@ -206,6 +237,7 @@ def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | N
         "title_sha256": hashlib.sha256(str(before["pr"].get("title") or "").encode()).hexdigest(),
         "body_sha256": hashlib.sha256(str(before["pr"].get("body") or "").encode()).hexdigest(),
         "governing_issue": before["issue_number"], "closing_issues": [before["issue_number"]],
+        "closing_issue": {"number": before["issue_number"], **_issue_hashes(before["issue"])},
         "tier": 2, "final_review_rounds": 0, "verify_evidence": json.loads(canonical_json(request.verify_evidence)),
         "checks": [{"name": item.get("name"), "status": item.get("status"), "conclusion": item.get("conclusion")} for item in before["checks"]],
         "merge": {"method": "squash", "commit_title": f"Merge PR #{request.pr_number}", "commit_message": "Governed light-path closure."},
@@ -219,7 +251,15 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
     value = json.loads(canonical_json(plan))
     if value.get("schema") != PLAN_SCHEMA or value.get("plan_sha256") != expected or closure_plan_hash(value) != expected:
         raise ClosureError("drift", "closure plan hash mismatch")
-    if value.get("tier") not in (1, 2) or value.get("final_review_rounds") != 0 or value.get("closing_issues") != [value.get("governing_issue")]:
+    closing_issue = value.get("closing_issue")
+    if (
+        value.get("tier") not in (1, 2)
+        or value.get("final_review_rounds") != 0
+        or value.get("closing_issues") != [value.get("governing_issue")]
+        or not isinstance(closing_issue, Mapping)
+        or closing_issue.get("number") != value.get("governing_issue")
+        or not all(isinstance(closing_issue.get(field), str) and re.fullmatch(r"[0-9a-f]{64}", closing_issue[field]) for field in ("title_sha256", "body_sha256"))
+    ):
         raise ClosureError("unsupported", "plan is outside the light path")
     return value
 
@@ -237,12 +277,14 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
         if current_pr.get("merge_commit_sha") is None or current_pr.get("head", {}).get("sha") != value["head_sha"]:
             raise ClosureError("unknown", "closed PR does not prove the planned exact merge")
         current = {"pr": current_pr, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}
+        _validate_planned_issue(current["issue"], value, phase="post-merge")
         if str(current["issue"].get("state", "")).lower() != "closed":
             raise ClosureError("incomplete", "merged PR exists but GitHub-native Issue closure is absent")
         events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
         _validate_closure_attribution(events, int(value["governing_issue"]), str(current_pr["merge_commit_sha"]))
         return _finish_cleanup(value, current, runner, cwd, reconciled=True)
     current = _snapshot(request, runner)
+    _validate_planned_issue(current["issue"], value, phase="pre-merge")
     if current["head_sha"] != value["head_sha"] or current["issue_number"] != value["governing_issue"] or current["pr"].get("base", {}).get("sha") != value["base_sha"] or hashlib.sha256(str(current["pr"].get("body") or "").encode()).hexdigest() != value["body_sha256"] or hashlib.sha256(str(current["pr"].get("title") or "").encode()).hexdigest() != value["title_sha256"]:
         raise ClosureError("drift", "mutable PR or Issue authority drifted before merge")
     observed_checks = [{"name": item.get("name"), "status": item.get("status"), "conclusion": item.get("conclusion")} for item in current["checks"]]
@@ -255,6 +297,7 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
             readback = _pr(runner, cwd, value["repository"], value["pr_number"])
             if readback.get("merged_at") is not None and readback.get("head", {}).get("sha") == value["head_sha"]:
                 current = {"pr": readback, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}
+                _validate_planned_issue(current["issue"], value, phase="post-merge")
                 if str(current["issue"].get("state", "")).lower() == "closed":
                     events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
                     _validate_closure_attribution(events, int(value["governing_issue"]), str(readback["merge_commit_sha"]))
@@ -267,6 +310,7 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     closed = _issue(runner, cwd, value["repository"], int(value["governing_issue"]))
     if str(merged.get("state", "")).lower() != "closed" or merged.get("merged_at") is None or not isinstance(merge_sha, str) or not SHA_RE.fullmatch(merge_sha) or str(closed.get("state", "")).lower() != "closed":
         raise ClosureError("incomplete", "merge or GitHub-native Issue closure lacks exact readback")
+    _validate_planned_issue(closed, value, phase="post-merge")
     events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
     _validate_closure_attribution(events, int(value["governing_issue"]), merge_sha)
     return _finish_cleanup(value, {"pr": merged, "issue": closed, "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}, runner, cwd, reconciled=False, merge_sha=merge_sha)
