@@ -156,13 +156,122 @@ recover_lost_instance_state_lease() {
       --vault-binding-id "${binding_id}"
 }
 
+# Read one non-secret setting from a channel env file without sourcing it into
+# the deployer's shell. Compose treats a non-empty shell value as the winner
+# over --env-file, so the caller must resolve that same precedence before any
+# deployment mutation. This parser intentionally accepts only the simple
+# KEY=value form used by config/deploy/*.env and strips the optional matching
+# quote pair handled by load_env_defaults_file.
+_instance_state_deployment_env_value() {
+  local env_file="${1:?env file required}"
+  local key="${2:?env key required}"
+  [ -f "${env_file}" ] || return 0
+  awk -v key="${key}" '
+    index($0, key "=") == 1 {
+      value = substr($0, length(key) + 2)
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      if (length(value) >= 2) {
+        first = substr(value, 1, 1)
+        last = substr(value, length(value), 1)
+        if ((first == "\"" && last == "\"") || (first == "\047" && last == "\047")) {
+          value = substr(value, 2, length(value) - 2)
+        }
+      }
+      print value
+      exit
+    }
+  ' "${env_file}"
+}
+
+_instance_state_deployment_default_legacy_path() {
+  local channel="${1:?channel required}"
+  case "${channel}" in
+    test) printf '%s\n' /app/tmp-test/agentic-pkm/app-local.md ;;
+    dev|prod) printf '%s\n' /app/tmp/agentic-pkm/app-local.md ;;
+    *)
+      echo "instance state deployment: unsupported channel for legacy settings preflight" >&2
+      return 78
+      ;;
+  esac
+}
+
+# Resolve the path exactly as Compose's ${VAR:-default} expression does for
+# the instance-state-init environment. The config/deploy file is passed by
+# deploy_channel.sh; start_full_system.sh has already loaded its channel file
+# into the environment and therefore passes no second file here.
+_instance_state_deployment_effective_legacy_path() {
+  local channel="${1:?channel required}"
+  local channel_env_file="${2:-}"
+  local configured_path=""
+
+  if [ -n "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}" ]; then
+    printf '%s\n' "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS}"
+    return 0
+  fi
+  if [ -n "${channel_env_file}" ] && [ -f "${channel_env_file}" ]; then
+    if ! configured_path="$(_instance_state_deployment_env_value \
+      "${channel_env_file}" DESIGN_HANDOFF_APP_LOCAL_SETTINGS)"; then
+      echo "instance state deployment: channel legacy settings configuration could not be read; refusing before initialization" >&2
+      return 78
+    fi
+    if [ -n "${configured_path}" ]; then
+      printf '%s\n' "${configured_path}"
+      return 0
+    fi
+  fi
+  _instance_state_deployment_default_legacy_path "${channel}"
+}
+
+# The ordinary one-shot has only its channel runtime-tmp mount. There is no
+# safe host-side resolution or receipt handoff for this legacy input here, so
+# admit only the exact canonical container path for the selected channel.
+# Rejecting every alias also rejects traversal, repeated/relative components,
+# unsupported /app locations, and symlink-like namespace escapes without
+# attempting to resolve a path the host cannot see inside the container.
+_instance_state_deployment_validate_legacy_path() {
+  local channel="${1:?channel required}"
+  local legacy_path="${2:?legacy path required}"
+  case "${channel}:${legacy_path}" in
+    dev:/app/tmp/agentic-pkm/app-local.md|prod:/app/tmp/agentic-pkm/app-local.md|test:/app/tmp-test/agentic-pkm/app-local.md)
+      return 0
+      ;;
+  esac
+
+  local path_class="unsupported_container_location"
+  case "${legacy_path}" in
+    *"/../"*|*/..|../*|..|*"/./"*|*/.|*"//"*)
+      path_class="noncanonical_or_traversal" ;;
+    /Users/*|/Volumes/*)
+      path_class="absolute_host_path" ;;
+    /*)
+      path_class="unsupported_absolute_path" ;;
+    *)
+      path_class="relative_or_unresolved_path" ;;
+  esac
+  echo "instance state deployment: configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS rejected path_class=${path_class}; refusing before initialization" >&2
+  return 78
+}
+
+preflight_instance_state_deployment_legacy_settings() {
+  local channel="${1:?channel required}"
+  local channel_env_file="${2:-}"
+  local legacy_path=""
+  if ! legacy_path="$(_instance_state_deployment_effective_legacy_path \
+    "${channel}" "${channel_env_file}")"; then
+    return 78
+  fi
+  _instance_state_deployment_validate_legacy_path "${channel}" "${legacy_path}"
+}
+
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.
 prepare_instance_state_deployment() {
   local compose_function="$1"
   local channel="$2"
-  local legacy_path="${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}"
+  local channel_env_file="${3:-}"
+  local legacy_path=""
   local inventory_path="${INSTANCE_LEGACY_OWNER_INVENTORY_PATH:-/app/instance-ownership/legacy-owner-inventory.json}"
   local quiescence_inventory_path="/app/instance-ownership/deployment-quiescence-inventory.json"
   local backup_root="${INSTANCE_STATE_BACKUP_PATH:-/app/instance-ownership/backups/${channel}/latest}"
@@ -180,6 +289,11 @@ prepare_instance_state_deployment() {
   local mvr05_stop_services
   local -a mvr05_stop_service_args
   local mvr05_effective_compose_path mvr05_fence_plan_host_path
+  if ! legacy_path="$(_instance_state_deployment_effective_legacy_path \
+    "${channel}" "${channel_env_file}")"; then
+    return 78
+  fi
+  _instance_state_deployment_validate_legacy_path "${channel}" "${legacy_path}" || return $?
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   inventory_helper="${repo_root}/scripts/instance_state_writer_inventory.py"
   controller_pid="$$"
@@ -222,22 +336,6 @@ prepare_instance_state_deployment() {
   if [ -z "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:-}" ]; then
     echo "instance state deployment: INSTANCE_OWNERSHIP_HOST_STATE_DIR must be resolved before prepare_instance_state_deployment runs" >&2
     return 78
-  fi
-
-  # The ordinary one-shot has no host-root mount. An explicitly configured
-  # host-side legacy source must therefore not be allowed to look absent and
-  # trigger an empty-registry initialization. A bounded handoff for that
-  # source is not available on this path, so refuse before producing an
-  # inventory or invoking instance-state-init. The default /app path remains
-  # the receipt-only/container-visible compatibility path.
-  if [ -n "${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-}" ]; then
-    case "${legacy_path}" in
-      /app/*) ;;
-      *)
-        echo "instance state deployment: configured DESIGN_HANDOFF_APP_LOCAL_SETTINGS is outside the instance-state-init container namespace; refusing before initialization" >&2
-        return 78
-        ;;
-    esac
   fi
 
   quiescence_inventory_host_target_path="$(

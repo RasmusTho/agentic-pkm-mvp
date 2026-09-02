@@ -216,7 +216,11 @@ treating that legacy source as absent. The bounded receipt handoff and regressio
 PR #5244 for #5235; this does not claim a live three-channel host deployment. The explicit MVR-01C
 authority cutover is the qualified exception: its separately governed `authority-cutover` command
 mounts the already-authorized `MVR01C_ROLLBACK_VAULT_ROOT` read-only at `/app/selected-vault` for that
-command only. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
+command only. For ordinary deploy/start, the effective setting from the ambient environment or
+`config/deploy/<channel>.env` is admitted only at the exact channel container path
+(`/app/tmp/agentic-pkm/app-local.md`, or `/app/tmp-test/agentic-pkm/app-local.md` for TEST); host
+paths, traversal, aliases, symlink-like paths, and other `/app` locations fail closed before the
+deployment mutation window. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
 evidence cannot release the fence or mutate registry/ledger state.
 
 MVR-01C cuts registry authority over only by committing one complete rollback floor into the same

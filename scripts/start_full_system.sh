@@ -1211,6 +1211,7 @@ if collisions:
 PY
 }
 
+preflight_instance_state_deployment_legacy_settings "${PKM_ENVIRONMENT:-dev}" || exit $?
 run_preflight
 ensure_prod_instance_state_volume
 if prepare_instance_state_deployment run_docker_compose "${PKM_ENVIRONMENT:-dev}"; then

@@ -7,7 +7,8 @@
 # container-visible state and host-produced opaque receipt material and must
 # not receive the selected vault. If DESIGN_HANDOFF_APP_LOCAL_SETTINGS is
 # explicitly configured to a host-side path, the deployment wrapper refuses
-# before initialization instead of treating that legacy source as absent.
+# before the deployment mutation window instead of treating that legacy source
+# as absent.
 # The explicit MVR-01C authority-cutover command is the separately governed
 # exception that mounts its already-authorized rollback root read-only.
 x-requires-explicit-full-host-vault: "${DEPLOY_VAULT_CONTAINER_ROOT:?DEPLOY_VAULT_CONTAINER_ROOT must be set for a full-host vault binding}"
