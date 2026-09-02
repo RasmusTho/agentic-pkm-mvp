@@ -12,16 +12,22 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import quote
 
 from app.builderops.publication import CommandExecutor, CommandResult, SubprocessExecutor
+from app.dispatcher.verification_contract import CLOSING_ISSUE_PATTERN, resolve_issue_authority
 
 PLAN_SCHEMA = "builder.closure-plan.v1"
 RECEIPT_SCHEMA = "builder.closure-receipt.v1"
+VERIFY_EVIDENCE_SCHEMA = "builder.closure-verify-evidence.v1"
 GITHUB_HOST = "github.com"
 SHA_RE = re.compile(r"[0-9a-f]{40,64}\Z")
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+HEX64_RE = re.compile(r"[0-9a-f]{64}\Z")
+PR_CONTRACT_NAME = "pr-contract"
 
 
 class ClosureError(RuntimeError):
@@ -133,11 +139,77 @@ def _issue_events(executor: CommandExecutor, cwd: Path, repository: str, number:
 
 
 def _issue_number(body: str) -> int:
-    governing = re.findall(r"(?m)^Governing-Issue:\s*#(\d+)\s*$", body)
-    closing = re.findall(r"(?mi)^\s*(?:fixes|closes|resolves)\s+#(\d+)\s*$", body)
-    if len(governing) != 1 or len(closing) != 1 or governing[0] != closing[0]:
+    authority = resolve_issue_authority(body)
+    if (
+        authority is None
+        or authority.closing_issues != (authority.governing_issue,)
+        or len(CLOSING_ISSUE_PATTERN.findall(body)) != 1
+    ):
         raise ClosureError("unsupported", "PR must have one exact governing and closing Issue")
-    return int(governing[0])
+    return authority.governing_issue
+
+
+def _parse_timestamp(value: object, field: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ClosureError("incomplete", f"{field} revision timestamp is unavailable")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ClosureError("incomplete", f"{field} revision timestamp is malformed") from exc
+    if parsed.tzinfo is None:
+        raise ClosureError("incomplete", f"{field} revision timestamp is malformed")
+    return parsed
+
+
+def _latest_row(rows: Sequence[Mapping[str, Any]], *, kind: str) -> dict[str, Any]:
+    """Resolve one latest rerun while refusing an unorderable history."""
+    if not rows:
+        raise ClosureError("incomplete", f"{kind} evidence is unavailable")
+    if len(rows) == 1:
+        return dict(rows[0])
+    ranked: list[tuple[datetime, int, dict[str, Any]]] = []
+    seen_ids: set[int] = set()
+    for row in rows:
+        row_id = row.get("id")
+        if not isinstance(row_id, int) or isinstance(row_id, bool) or row_id <= 0 or row_id in seen_ids:
+            raise ClosureError("incomplete", f"{kind} rerun history is malformed or ambiguous")
+        seen_ids.add(row_id)
+        timestamps = [
+            _parse_timestamp(row[field], f"{kind}.{field}")
+            for field in ("completed_at", "updated_at", "started_at", "created_at")
+            if row.get(field) is not None
+        ]
+        if not timestamps:
+            raise ClosureError("incomplete", f"{kind} rerun history has no ordering evidence")
+        ranked.append((max(timestamps), row_id, dict(row)))
+    return max(ranked, key=lambda item: (item[0], item[1]))[2]
+
+
+def _check_identity(run: Mapping[str, Any]) -> tuple[str, int]:
+    name = run.get("name")
+    app = run.get("app")
+    app_id = app.get("id") if isinstance(app, Mapping) else None
+    if not isinstance(name, str) or not name or not isinstance(app, Mapping):
+        raise ClosureError("incomplete", "check-run identity is malformed")
+    if not isinstance(app_id, int) or isinstance(app_id, bool) or app_id <= 0:
+        raise ClosureError("incomplete", "check-run application identity is malformed")
+    return name, app_id
+
+
+def _check_snapshot(run: Mapping[str, Any]) -> dict[str, Any]:
+    name, app_id = _check_identity(run)
+    row: dict[str, Any] = {
+        "id": run.get("id"),
+        "name": name,
+        "status": run.get("status"),
+        "conclusion": run.get("conclusion"),
+        "app_id": app_id,
+        "head_sha": run.get("head_sha"),
+    }
+    for field in ("started_at", "completed_at", "updated_at", "created_at"):
+        if run.get(field) is not None:
+            row[field] = run[field]
+    return row
 
 
 def _checks(executor: CommandExecutor, cwd: Path, repository: str, sha: str) -> list[dict[str, Any]]:
@@ -146,9 +218,18 @@ def _checks(executor: CommandExecutor, cwd: Path, repository: str, sha: str) -> 
     if not isinstance(runs, list) or not runs:
         raise ClosureError("incomplete", "current-head check evidence is unavailable")
     normalized = [dict(run) for run in runs if isinstance(run, dict)]
-    if len(normalized) != len(runs) or any(run.get("status") != "completed" or run.get("conclusion") != "success" for run in normalized):
+    if len(normalized) != len(runs):
+        raise ClosureError("incomplete", "current-head check evidence is malformed")
+    histories: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for run in normalized:
+        if run.get("head_sha") != sha:
+            raise ClosureError("incomplete", "current-head check evidence is foreign")
+        identity = _check_identity(run)
+        histories.setdefault(identity, []).append(run)
+    latest = [_latest_row(history, kind="check-run") for history in histories.values()]
+    if any(run.get("status") != "completed" or run.get("conclusion") != "success" for run in latest):
         raise ClosureError("incomplete", "current-head checks are not all successful")
-    return normalized
+    return sorted(latest, key=lambda run: canonical_json(_check_snapshot(run)))
 
 
 def _required_check_authority(
@@ -186,7 +267,16 @@ def _statuses(
     rows = value.get("statuses") if isinstance(value, Mapping) else None
     if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
         raise ClosureError("incomplete", "current-head status evidence is unavailable")
-    return [dict(row) for row in rows]
+    histories: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        context = row.get("context")
+        if not isinstance(context, str) or not context:
+            raise ClosureError("incomplete", "current-head status evidence is malformed")
+        histories.setdefault(context, []).append(dict(row))
+    return sorted(
+        [_latest_row(history, kind="status") for history in histories.values()],
+        key=lambda row: canonical_json({"context": row.get("context"), "id": row.get("id")}),
+    )
 
 
 def _required_check_evidence(
@@ -225,6 +315,233 @@ def _required_check_evidence(
             raise ClosureError("incomplete", "required-check evidence identity is malformed")
         evidence.append({**requirement, "evidence_id": evidence_id})
     return sorted(evidence, key=canonical_json)
+
+
+def _closing_issue_references(
+    executor: CommandExecutor, cwd: Path, repository: str, pr_number: int
+) -> list[int]:
+    owner, name = repository.split("/", 1)
+    query = """
+      query($owner: String!, $name: String!, $number: Int!) {
+        repository(owner: $owner, name: $name) {
+          pullRequest(number: $number) {
+            closingIssuesReferences(first: 11) {
+              nodes { number repository { nameWithOwner } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+      }
+    """
+    result = _run(
+        executor,
+        cwd,
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOST,
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={pr_number}",
+        ],
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ClosureError("unknown", "GitHub closing-reference readback was not JSON") from exc
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    repository_row = data.get("repository") if isinstance(data, Mapping) else None
+    pull = repository_row.get("pullRequest") if isinstance(repository_row, Mapping) else None
+    references = pull.get("closingIssuesReferences") if isinstance(pull, Mapping) else None
+    nodes = references.get("nodes") if isinstance(references, Mapping) else None
+    page_info = references.get("pageInfo") if isinstance(references, Mapping) else None
+    if (
+        not isinstance(nodes, list)
+        or not isinstance(page_info, Mapping)
+        or page_info.get("hasNextPage") is not False
+    ):
+        raise ClosureError("incomplete", "GitHub closing-reference evidence is unavailable or incomplete")
+    numbers: list[int] = []
+    for node in nodes:
+        number = node.get("number") if isinstance(node, Mapping) else None
+        node_repository = node.get("repository") if isinstance(node, Mapping) else None
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number <= 0
+            or not isinstance(node_repository, Mapping)
+            or node_repository.get("nameWithOwner") != repository
+        ):
+            raise ClosureError("incomplete", "GitHub closing-reference identity is malformed")
+        numbers.append(number)
+    if len(numbers) != len(set(numbers)):
+        raise ClosureError("incomplete", "GitHub closing-reference evidence is ambiguous")
+    return sorted(numbers)
+
+
+def _acceptance_criteria(issue_body: object) -> list[dict[str, Any]]:
+    if not isinstance(issue_body, str):
+        raise ClosureError("incomplete", "governing Issue acceptance criteria are unavailable")
+    section_match = re.search(
+        r"(?ims)^##\s+Acceptance Criteria\s*$([\s\S]*?)(?=^##\s|^---\s*$|\Z)",
+        issue_body,
+    )
+    if section_match is None:
+        raise ClosureError("incomplete", "governing Issue acceptance criteria are unavailable")
+    section = section_match.group(1).strip()
+    starts = list(re.finditer(r"(?m)^\s*[-*]\s+\[[ xX]\]\s+.+$", section))
+    if not starts:
+        raise ClosureError("incomplete", "governing Issue acceptance criteria are malformed")
+    criteria: list[dict[str, Any]] = []
+    for index, start in enumerate(starts, start=1):
+        end = starts[index].start() if index < len(starts) else len(section)
+        item = section[start.start() : end].strip()
+        targets = [
+            match.group(1).strip()
+            for match in re.finditer(r"(?im)(?:^|\b)Verify:[ \t]*(.*)$", item)
+            if match.group(1).strip()
+        ]
+        if not targets:
+            raise ClosureError("incomplete", "governing Issue acceptance criteria lack Verify evidence")
+        criteria.append(
+            {
+                "index": index,
+                "criterion_sha256": hashlib.sha256(item.encode()).hexdigest(),
+                "verify_targets": targets,
+            }
+        )
+    return criteria
+
+
+def _validate_verify_evidence(
+    evidence: object,
+    *,
+    repository: str,
+    pr_number: int,
+    pr: Mapping[str, Any],
+    issue: Mapping[str, Any],
+    issue_number: int,
+    head_sha: str,
+    body: str,
+) -> dict[str, Any]:
+    if not isinstance(evidence, Mapping):
+        raise ClosureError("incomplete", "Verify evidence is unavailable")
+    required_fields = {
+        "schema",
+        "verified",
+        "head_sha",
+        "tier",
+        "final_review_rounds",
+        "tcd",
+        "scope",
+        "pr",
+        "issue",
+        "acceptance_criteria",
+    }
+    if set(evidence) != required_fields:
+        raise ClosureError("incomplete", "Verify evidence schema is incomplete or ambiguous")
+    if (
+        evidence.get("schema") != VERIFY_EVIDENCE_SCHEMA
+        or evidence.get("verified") is not True
+        or evidence.get("head_sha") != head_sha
+        or evidence.get("tier") != 2
+        or evidence.get("final_review_rounds") != 0
+    ):
+        raise ClosureError("incomplete", "Verify evidence is not bound to the light path")
+    tcd = evidence.get("tcd")
+    if (
+        not isinstance(tcd, Mapping)
+        or set(tcd) != {"risk_surfaces", "risk_assessment_complete", "stateful_fallback"}
+        or tcd.get("risk_surfaces") != []
+        or tcd.get("risk_assessment_complete") is not True
+        or tcd.get("stateful_fallback") is not False
+    ):
+        raise ClosureError("incomplete", "Verify evidence does not authenticate the TCD decision")
+    base = pr.get("base")
+    base_sha = base.get("sha") if isinstance(base, Mapping) else None
+    scope = evidence.get("scope")
+    if (
+        not isinstance(scope, Mapping)
+        or set(scope) != {"repository", "pr_number", "base_ref", "base_sha", "head_sha", "governing_issue", "closing_issues"}
+        or scope.get("repository") != repository
+        or scope.get("pr_number") != pr_number
+        or scope.get("base_ref") != "main"
+        or scope.get("base_sha") != base_sha
+        or scope.get("head_sha") != head_sha
+        or scope.get("governing_issue") != issue_number
+        or scope.get("closing_issues") != [issue_number]
+    ):
+        raise ClosureError("incomplete", "Verify evidence does not authenticate the exact scope")
+    pr_evidence = evidence.get("pr")
+    expected_pr = {
+        "number": pr_number,
+        "title_sha256": hashlib.sha256(str(pr.get("title") or "").encode()).hexdigest(),
+        "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "updated_at": pr.get("updated_at"),
+    }
+    if not isinstance(pr_evidence, Mapping) or set(pr_evidence) != set(expected_pr) or dict(pr_evidence) != expected_pr:
+        raise ClosureError("incomplete", "Verify evidence is not bound to the PR body revision")
+    issue_hashes = _issue_hashes(issue)
+    issue_evidence = evidence.get("issue")
+    if (
+        not isinstance(issue_evidence, Mapping)
+        or set(issue_evidence) != {"number", "title_sha256", "body_sha256", "updated_at"}
+        or issue_evidence.get("number") != issue_number
+        or issue_evidence.get("title_sha256") != issue_hashes["title_sha256"]
+        or issue_evidence.get("body_sha256") != issue_hashes["body_sha256"]
+        or issue_evidence.get("updated_at") != issue.get("updated_at")
+        or not isinstance(issue.get("updated_at"), str)
+    ):
+        raise ClosureError("incomplete", "Verify evidence is not bound to the governing Issue revision")
+    expected_criteria = _acceptance_criteria(issue.get("body"))
+    supplied_criteria = evidence.get("acceptance_criteria")
+    if not isinstance(supplied_criteria, list) or len(supplied_criteria) != len(expected_criteria):
+        raise ClosureError("incomplete", "Verify evidence does not cover every Acceptance Criterion")
+    for expected, supplied in zip(expected_criteria, supplied_criteria):
+        if (
+            not isinstance(supplied, Mapping)
+            or set(supplied) != {"index", "criterion_sha256", "verify_targets", "verified", "evidence_sha256"}
+            or supplied.get("index") != expected["index"]
+            or supplied.get("criterion_sha256") != expected["criterion_sha256"]
+            or supplied.get("verify_targets") != expected["verify_targets"]
+            or supplied.get("verified") is not True
+            or not isinstance(supplied.get("evidence_sha256"), str)
+            or HEX64_RE.fullmatch(supplied["evidence_sha256"]) is None
+        ):
+            raise ClosureError("incomplete", "Verify evidence has incomplete per-criterion authority")
+    return json.loads(canonical_json(evidence))
+
+
+def _pr_contract_revision(
+    pr: Mapping[str, Any], checks: Sequence[Mapping[str, Any]], sha: str
+) -> dict[str, Any]:
+    candidates = [run for run in checks if run.get("name") == PR_CONTRACT_NAME]
+    if len(candidates) != 1:
+        raise ClosureError("incomplete", "exact pr-contract evidence is unavailable or ambiguous")
+    run = candidates[0]
+    if run.get("head_sha") != sha:
+        raise ClosureError("incomplete", "pr-contract evidence is foreign")
+    if not isinstance(run.get("id"), int) or isinstance(run.get("id"), bool) or run["id"] <= 0:
+        raise ClosureError("incomplete", "pr-contract evidence identity is malformed")
+    if not isinstance(pr.get("updated_at"), str):
+        raise ClosureError("incomplete", "PR body revision is unavailable")
+    body_revision = _parse_timestamp(pr["updated_at"], "PR body")
+    started_at = _parse_timestamp(run.get("started_at"), "pr-contract")
+    if started_at <= body_revision:
+        raise ClosureError("incomplete", "pr-contract evidence predates the current PR body revision")
+    return {
+        "check_run_id": run.get("id"),
+        "head_sha": sha,
+        "started_at": run.get("started_at"),
+        "body_revision_updated_at": pr.get("updated_at"),
+    }
 
 
 def _dispatcher_snapshot(
@@ -345,19 +662,45 @@ def _snapshot(request: ClosureRequest, executor: CommandExecutor) -> dict[str, A
     if re.search(r"(?i)(?:risk[- ]surface|high[- ]risk|tier\s*3|final-review-rounds:\s*[12])", body):
         raise ClosureError("unsupported", "PR body declares an unsupported light-path surface")
     issue_number = _issue_number(body)
+    closing_references = _closing_issue_references(executor, cwd, request.repository, request.pr_number)
+    if closing_references != [issue_number]:
+        raise ClosureError("unsupported", "PR GitHub closing references are not the exact singleton Issue")
     issue = _issue(executor, cwd, request.repository, issue_number)
     _issue_hashes(issue)
     labels = sorted(str(item.get("name") if isinstance(item, dict) else item) for item in issue.get("labels", []))
     if str(issue.get("state", "")).lower() != "open" or "agent:in-progress" not in labels:
         raise ClosureError("incomplete", "governing Issue is not the active open claim")
-    if not isinstance(request.verify_evidence, Mapping) or request.verify_evidence.get("head_sha") != sha or not request.verify_evidence.get("verified"):
-        raise ClosureError("incomplete", "self-verified Verify evidence is not bound to the PR head")
+    verify_evidence = _validate_verify_evidence(
+        request.verify_evidence,
+        repository=request.repository,
+        pr_number=request.pr_number,
+        pr=pr,
+        issue=issue,
+        issue_number=issue_number,
+        head_sha=sha,
+        body=body,
+    )
     checks = _checks(executor, cwd, request.repository, sha)
     statuses = _statuses(executor, cwd, request.repository, sha)
     required_checks = _required_check_authority(executor, cwd, request.repository)
     required_evidence = _required_check_evidence(checks, statuses, required_checks)
+    pr_contract = _pr_contract_revision(pr, checks, sha)
     dispatcher = _dispatcher_snapshot(executor, cwd, request.dispatcher_task_id, pr_number=request.pr_number)
-    return {"pr": pr, "issue": issue, "issue_labels": labels, "checks": checks, "required_checks": required_checks, "required_evidence": required_evidence, "head_sha": sha, "issue_number": issue_number, "dispatcher": dispatcher}
+    return {
+        "pr": pr,
+        "issue": issue,
+        "issue_labels": labels,
+        "checks": checks,
+        "statuses": statuses,
+        "required_checks": required_checks,
+        "required_evidence": required_evidence,
+        "verify_evidence": verify_evidence,
+        "pr_contract": pr_contract,
+        "closing_references": closing_references,
+        "head_sha": sha,
+        "issue_number": issue_number,
+        "dispatcher": dispatcher,
+    }
 
 
 def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | None = None) -> dict[str, Any]:
@@ -368,16 +711,41 @@ def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | N
         "pr_number": request.pr_number, "base_sha": before["pr"]["base"].get("sha"), "head_sha": before["head_sha"],
         "title_sha256": hashlib.sha256(str(before["pr"].get("title") or "").encode()).hexdigest(),
         "body_sha256": hashlib.sha256(str(before["pr"].get("body") or "").encode()).hexdigest(),
+        "pr_body_revision": before["pr_contract"]["body_revision_updated_at"],
         "governing_issue": before["issue_number"], "closing_issues": [before["issue_number"]],
         "closing_issue": {"number": before["issue_number"], **_issue_hashes(before["issue"])},
-        "tier": 2, "final_review_rounds": 0, "verify_evidence": json.loads(canonical_json(request.verify_evidence)),
-        "checks": [{"name": item.get("name"), "status": item.get("status"), "conclusion": item.get("conclusion")} for item in before["checks"]],
+        "tier": 2, "final_review_rounds": 0, "verify_evidence": before["verify_evidence"],
+        "checks": [_check_snapshot(item) for item in before["checks"]],
         "required_checks": before["required_checks"], "required_check_evidence": before["required_evidence"],
+        "pr_contract": before["pr_contract"],
         "merge": {"method": "squash", "commit_title": f"Merge PR #{request.pr_number}", "commit_message": "Governed light-path closure."},
         "post_merge": {"remove_label_prefix": "agent:", "dispatcher": before["dispatcher"], "remaining_action": "post-merge-owner-doc"},
     }
     plan["plan_sha256"] = closure_plan_hash(plan)
     return plan
+
+
+def _validate_planned_pr(
+    pr: Mapping[str, Any], plan: Mapping[str, Any], *, phase: str, check_revision: bool = True
+) -> None:
+    base = pr.get("base")
+    head = pr.get("head")
+    if (
+        pr.get("number") != plan.get("pr_number")
+        or str(pr.get("state", "")).lower() not in {"open", "closed"}
+        or not isinstance(base, Mapping)
+        or base.get("ref") != "main"
+        or base.get("repo", {}).get("full_name") != plan.get("repository")
+        or not isinstance(head, Mapping)
+        or head.get("repo", {}).get("full_name") != plan.get("repository")
+        or head.get("sha") != plan.get("head_sha")
+        or hashlib.sha256(str(pr.get("body") or "").encode()).hexdigest() != plan.get("body_sha256")
+        or hashlib.sha256(str(pr.get("title") or "").encode()).hexdigest() != plan.get("title_sha256")
+        or (check_revision and pr.get("updated_at") != plan.get("pr_body_revision"))
+    ):
+        raise ClosureError("drift", f"{phase} PR body/head authority drifted")
+    if _issue_number(str(pr.get("body") or "")) != plan.get("governing_issue"):
+        raise ClosureError("drift", f"{phase} PR closing Issue authority drifted")
 
 
 def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
@@ -394,6 +762,10 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
         or not all(isinstance(closing_issue.get(field), str) and re.fullmatch(r"[0-9a-f]{64}", closing_issue[field]) for field in ("title_sha256", "body_sha256"))
         or not isinstance(value.get("required_checks"), list)
         or not isinstance(value.get("required_check_evidence"), list)
+        or not isinstance(value.get("checks"), list)
+        or not isinstance(value.get("pr_body_revision"), str)
+        or not isinstance(value.get("pr_contract"), Mapping)
+        or not isinstance(value.get("verify_evidence"), Mapping)
     ):
         raise ClosureError("unsupported", "plan is outside the light path")
     return value
@@ -407,6 +779,9 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     if str(current_pr.get("state", "")).lower() == "closed" and current_pr.get("merged_at") is not None:
         if current_pr.get("merge_commit_sha") is None or current_pr.get("head", {}).get("sha") != value["head_sha"]:
             raise ClosureError("unknown", "closed PR does not prove the planned exact merge")
+        _validate_planned_pr(current_pr, value, phase="post-merge", check_revision=False)
+        if _closing_issue_references(runner, cwd, value["repository"], int(value["pr_number"])) != [value["governing_issue"]]:
+            raise ClosureError("incomplete", "post-merge PR closing references are not the planned singleton")
         current = {"pr": current_pr, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}
         _validate_planned_issue(current["issue"], value, phase="post-merge")
         if str(current["issue"].get("state", "")).lower() != "closed":
@@ -423,10 +798,15 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     _validate_planned_issue(current["issue"], value, phase="pre-merge")
     if current["head_sha"] != value["head_sha"] or current["issue_number"] != value["governing_issue"] or current["pr"].get("base", {}).get("sha") != value["base_sha"] or hashlib.sha256(str(current["pr"].get("body") or "").encode()).hexdigest() != value["body_sha256"] or hashlib.sha256(str(current["pr"].get("title") or "").encode()).hexdigest() != value["title_sha256"]:
         raise ClosureError("drift", "mutable PR or Issue authority drifted before merge")
-    observed_checks = [{"name": item.get("name"), "status": item.get("status"), "conclusion": item.get("conclusion")} for item in current["checks"]]
+    observed_checks = [_check_snapshot(item) for item in current["checks"]]
     if observed_checks != value["checks"]:
         raise ClosureError("drift", "current-head check evidence drifted before merge")
-    if current["required_checks"] != value["required_checks"] or current["required_evidence"] != value["required_check_evidence"]:
+    if (
+        current["required_checks"] != value["required_checks"]
+        or current["required_evidence"] != value["required_check_evidence"]
+        or current["pr_contract"] != value["pr_contract"]
+        or current["verify_evidence"] != value["verify_evidence"]
+    ):
         raise ClosureError("drift", "required-check authority or evidence drifted before merge")
     merge = value["merge"]
     result = runner.run(["gh", "api", "--hostname", GITHUB_HOST, "--method", "PUT", f"repos/{value['repository']}/pulls/{value['pr_number']}/merge", "-f", f"sha={value['head_sha']}", "-f", f"merge_method={merge['method']}", "-f", f"commit_title={merge['commit_title']}", "-f", f"commit_message={merge['commit_message']}"], cwd=cwd)
@@ -435,6 +815,9 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
             readback = _pr(runner, cwd, value["repository"], value["pr_number"])
             if readback.get("merged_at") is not None and readback.get("head", {}).get("sha") == value["head_sha"]:
                 current = {"pr": readback, "issue": _issue(runner, cwd, value["repository"], value["governing_issue"]), "issue_labels": [], "checks": [], "head_sha": value["head_sha"], "issue_number": value["governing_issue"], "dispatcher": dispatcher}
+                _validate_planned_pr(readback, value, phase="post-merge", check_revision=False)
+                if _closing_issue_references(runner, cwd, value["repository"], int(value["pr_number"])) != [value["governing_issue"]]:
+                    raise ClosureError("incomplete", "post-merge PR closing references are not the planned singleton")
                 _validate_planned_issue(current["issue"], value, phase="post-merge")
                 if str(current["issue"].get("state", "")).lower() == "closed":
                     events = _issue_events(runner, cwd, value["repository"], int(value["governing_issue"]))
@@ -445,6 +828,9 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
             pass
         raise ClosureError("unknown", "exact-head merge outcome is ambiguous; read PR and Issue", result)
     merged = _pr(runner, cwd, value["repository"], int(value["pr_number"]))
+    _validate_planned_pr(merged, value, phase="post-merge", check_revision=False)
+    if _closing_issue_references(runner, cwd, value["repository"], int(value["pr_number"])) != [value["governing_issue"]]:
+        raise ClosureError("incomplete", "post-merge PR closing references are not the planned singleton")
     merge_sha = merged.get("merge_commit_sha")
     closed = _issue(runner, cwd, value["repository"], int(value["governing_issue"]))
     if str(merged.get("state", "")).lower() != "closed" or merged.get("merged_at") is None or not isinstance(merge_sha, str) or not SHA_RE.fullmatch(merge_sha) or str(closed.get("state", "")).lower() != "closed":
@@ -458,9 +844,27 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
 def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner: CommandExecutor, cwd: Path, *, reconciled: bool, merge_sha: str | None = None) -> dict[str, Any]:
     closed = current["issue"]
     labels = [str(item.get("name") if isinstance(item, dict) else item) for item in closed.get("labels", [])]
-    retained = [label for label in labels if not label.startswith("agent:")]
-    if set(labels) != set(retained):
-        _api(runner, cwd, str(value["repository"]), "PATCH", f"/issues/{value['governing_issue']}", "--input", "-", input_text=canonical_json({"labels": retained}))
+    agent_labels = sorted({label for label in labels if label.startswith("agent:")})
+    for label in agent_labels:
+        result = runner.run(
+            [
+                "gh",
+                "api",
+                "--hostname",
+                GITHUB_HOST,
+                "--method",
+                "DELETE",
+                f"repos/{value['repository']}/issues/{value['governing_issue']}/labels/{quote(label, safe='')}",
+            ],
+            cwd=cwd,
+        )
+        if result.returncode and "404" not in f"{result.stdout}\n{result.stderr}":
+            raise ClosureError("incomplete", "agent label cleanup failed", result)
+    after_cleanup = _issue(runner, cwd, str(value["repository"]), int(value["governing_issue"]))
+    final_labels = [
+        str(item.get("name") if isinstance(item, dict) else item)
+        for item in after_cleanup.get("labels", [])
+    ]
     dispatcher = value["post_merge"].get("dispatcher")
     if isinstance(dispatcher, Mapping):
         state = _dispatcher_completion(runner, cwd, dispatcher, pr_number=int(value["pr_number"]))
@@ -471,7 +875,7 @@ def _finish_cleanup(value: Mapping[str, Any], current: Mapping[str, Any], runner
             state = _dispatcher_completion(runner, cwd, dispatcher, pr_number=int(value["pr_number"]))
         dispatcher = state
     merge_sha = merge_sha or current["pr"].get("merge_commit_sha")
-    receipt = {"schema": RECEIPT_SCHEMA, "outcome": "success", "reconciled": reconciled, "plan_sha256": value["plan_sha256"], "repository": value["repository"], "pr_number": value["pr_number"], "head_sha": value["head_sha"], "merge_sha": merge_sha, "issue": {"number": value["governing_issue"], "state": "closed", "closure_attribution": current.get("closure_attribution", "GitHub-native closing keyword and exact merge event")}, "cleanup": {"removed_agent_labels": sorted(set(labels) - set(retained)), "dispatcher": dispatcher, "project_projection": "optional/unmodified"}, "remaining_action": "post-merge-owner-doc"}
+    receipt = {"schema": RECEIPT_SCHEMA, "outcome": "success", "reconciled": reconciled, "plan_sha256": value["plan_sha256"], "repository": value["repository"], "pr_number": value["pr_number"], "head_sha": value["head_sha"], "merge_sha": merge_sha, "issue": {"number": value["governing_issue"], "state": "closed", "closure_attribution": current.get("closure_attribution", "GitHub-native closing keyword and exact merge event")}, "cleanup": {"removed_agent_labels": agent_labels, "remaining_labels": sorted(set(final_labels)), "dispatcher": dispatcher, "project_projection": "optional/unmodified"}, "remaining_action": "post-merge-owner-doc"}
     receipt["receipt_sha256"] = _digest(receipt)
     return receipt
 
