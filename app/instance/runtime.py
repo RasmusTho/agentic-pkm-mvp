@@ -22,6 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.instance.vault_dimensions import VaultDimensionService
 
 from app.instance.filesystem_identity import (
+    FilesystemIdentityError,
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
@@ -3015,17 +3016,32 @@ def _finish_instance_state_deployment_locked(
                     registration_lease is not None
                     and registration_lease.state == "pending"
                 ):
-                    ledger.recover_or_require_active(
-                        registration.vault_binding_id,
+                    pending_owner = next(
+                        (
+                            owner
+                            for owner in owners
+                            if owner.channel_id == channel
+                            and owner.vault_binding_id
+                            == registration.vault_binding_id
+                        ),
+                        None,
+                    )
+                    if pending_owner is None:
+                        raise LedgerError(
+                            "pending registration has no host-validated owner receipt"
+                        )
+                    ledger.recover_or_require_active_from_host_receipt(
+                        pending_owner,
                         channel_id=channel,
-                        root=Path(registration.path),
                         _capability=_STORAGE_MUTATION_CAPABILITY,
                     )
             owners = list(ledger.resolve_live_owner_bindings(owners, skip_unadopted=True))
-        except LedgerError as exc:
+        except (FilesystemIdentityError, LedgerError):
+            # deployment-finish must not expose a host-only path from a
+            # mount-blind recovery failure or its exception chain.
             raise InstanceStatePreflightError(
                 "host-validated legacy-owner binding or lease recovery is invalid"
-            ) from exc
+            ) from None
     else:
         owners = [
             owner

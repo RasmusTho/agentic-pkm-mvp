@@ -760,6 +760,47 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
+    def recover_or_require_active_from_host_receipt(
+        self,
+        owner: LegacyOwner,
+        *,
+        channel_id: str,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        """Recover a committed pending lease from opaque host receipt evidence.
+
+        Deployment-finish may run without the host content-root mount.  This
+        path therefore authenticates the receipt's identity fingerprints and
+        never opens, resolves, or checks ``owner.root``.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        if owner.channel_id != channel_id or not owner.vault_binding_id:
+            raise LedgerError("host-validated legacy-owner binding is invalid")
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(owner.vault_binding_id)
+            if (
+                lease is None
+                or lease.channel_id != channel_id
+                or lease.vault_binding_id != owner.vault_binding_id
+                or not self._matches_host_validated_identity(lease, owner, key)
+            ):
+                raise LedgerError(
+                    "registered binding has no authenticated ownership reservation"
+                )
+            if lease.state == "active":
+                return lease
+            if lease.state != "pending":
+                raise LedgerError("registered binding ownership is not recoverable")
+            active = OwnershipLease(**(asdict(lease) | {"state": "active"}))
+            leases = dict(current.leases)
+            leases[owner.vault_binding_id] = active
+            self._write_ledger_locked(self._replace(current, leases=leases), key)
+            return active
+
     def recover_missing_active(
         self,
         *,

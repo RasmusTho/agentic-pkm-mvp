@@ -30,7 +30,7 @@ from app.instance.instance_state import (
     validate_registry_disjoint_from_content,
 )
 from app.instance.ownership_ledger import LedgerCollisionError, LedgerError
-from app.instance.filesystem_identity import FilesystemRootIdentity
+from app.instance.filesystem_identity import FilesystemIdentityError, FilesystemRootIdentity
 from app.instance.runtime import (
     InstanceRegistryRuntime,
     _begin_instance_state_deployment,
@@ -5196,6 +5196,7 @@ def test_deployment_finish_recovers_pending_legacy_owner_lease_before_consistenc
             }
         ],
     )
+    vault_root.rename(tmp_path / "prod-vault-unmounted")
 
     result = _finish_instance_state_deployment(
         channel="prod",
@@ -5210,6 +5211,74 @@ def test_deployment_finish_recovers_pending_legacy_owner_lease_before_consistenc
 
     assert result["restart_fence_cleared"] is True
     assert runtime.ledger.load().leases[registration.vault_binding_id].state == "active"
+
+
+def test_deployment_finish_redacts_pending_recovery_filesystem_identity_errors(
+    tmp_path, monkeypatch
+) -> None:
+    """Mount-blind pending recovery must expose only the governed diagnostic."""
+
+    host_global_root = tmp_path / "host-global"
+    runtime = InstanceRegistryRuntime.for_paths(
+        InstanceStateLayout.for_channel(tmp_path / "prod-state", "prod"),
+        host_global_root,
+    )
+    vault_root = tmp_path / "prod-vault"
+    vault_root.mkdir()
+    registration = runtime.bootstrap_env_binding(
+        vault_root=vault_root, watcher_vault_path=vault_root
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger_payload = json.loads(runtime.ledger.path.read_text(encoding="utf-8"))
+    ledger_payload["leases"][registration.vault_binding_id]["state"] = "pending"
+    runtime.ledger.path.write_text(json.dumps(ledger_payload), encoding="utf-8")
+    os.chmod(runtime.ledger.path, 0o600)
+    proof, owner_receipt = _canonical_test_quiescence_authority(
+        layout=runtime.layout,
+        host_global_root=host_global_root,
+        legacy_path=tmp_path / "missing-legacy.md",
+        owners=[
+            {
+                "channel_id": "prod",
+                "vault_binding_id": registration.vault_binding_id,
+                "root": str(vault_root),
+            }
+        ],
+    )
+    raw_path = str(vault_root)
+
+    def raise_raw_path_error(*args, **kwargs):
+        del args, kwargs
+        raise FilesystemIdentityError(
+            f"cannot resolve filesystem identity for {raw_path}"
+        )
+
+    monkeypatch.setattr(
+        ownership_ledger_module.OwnershipLedger,
+        "recover_or_require_active_from_host_receipt",
+        raise_raw_path_error,
+    )
+    with pytest.raises(
+        InstanceStatePreflightError,
+        match="host-validated legacy-owner binding or lease recovery is invalid",
+    ) as excinfo:
+        _finish_instance_state_deployment(
+            channel="prod",
+            instance_state_root=runtime.layout.root.parent,
+            host_global_root=host_global_root,
+            legacy_path=tmp_path / "missing-legacy.md",
+            inventory_path=owner_receipt,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+    assert raw_path not in str(excinfo.value)
+    assert raw_path not in repr(excinfo.value.__cause__)
 
 
 def test_staged_backup_binds_materialized_owner_after_root_leaves_scratch_view(
