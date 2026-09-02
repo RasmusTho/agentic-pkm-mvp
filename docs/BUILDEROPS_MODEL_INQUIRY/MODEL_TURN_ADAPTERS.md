@@ -1,6 +1,6 @@
 ---
 name: Model Turn Adapters
-description: Execute structured neutral Model Inquiry perspectives through one configured Sol target.
+description: Execute structured neutral Model Inquiry perspectives through one configured capability target.
 task_id: BMI-03
 source_anchor: docs/BUILDEROPS_MODEL_INQUIRY/README.md :: Cross-Task Invariants / Interaction Safety
 parent_capability: BuilderOps Model Inquiry
@@ -9,9 +9,11 @@ depends_on: [PRE_TICKET_INQUIRY_RECORDS.md]
 can_parallelize_with: []
 ---
 
-State: Implemented. Model Inquiry uses explicit `single_target` acceptance over one capability
+State: Implemented. Model Inquiry uses explicit `single_target` acceptance over one provider-neutral capability
 declared in the provider census. The current operational profile enables only the Codex subscription
 transport; that temporary configuration is not a permanent provider, model, or capability architecture.
+Future provider/model changes require declared configuration plus an explicitly registered compatible
+transport; Fable/GPT references remain compatibility/provenance only.
 
 # Model Turn Adapters
 
@@ -21,6 +23,12 @@ Make model interaction executable without copy-paste or desktop-window automatio
 provider/model selection in the Builder Model Access resolver.
 
 ## Contract
+
+The durable contract keeps capability and acceptance semantics separate from operational selection.
+The current Codex-only profile is selected by declared configuration. A future provider/model may be
+selected only after its compatible transport is explicitly registered and enabled through the same
+declared boundary; the subscription bridge cannot execute an unregistered provider or silently
+substitute Codex.
 
 The caller supplies `BUILDEROPS_INQUIRY_ROLE_INTENT_JSON`, a provider-free document containing the
 runtime, channel, consumer, explicit `single_target` acceptance mode, and ordered neutral
@@ -57,7 +65,7 @@ fingerprints, a failed second adapter, or a fallback. A provider failure, malfor
 missing credential, or persistence failure remains a typed terminal failure and cannot be promoted.
 
 The operational subscription bridge is the declared `codex_subscription` transport for the current
-Sol capability. It receives the resolver-selected model and never selects another provider/model.
+Model Inquiry capability. It receives the resolver-selected model and never selects another provider/model.
 Active v2 single-target execution does not use an alternate adapter as fallback; a provider/command
 failure is terminal `provider_error`, never `degraded_consensus`, and cannot become ready or
 promotable. Legacy v1 records remain readable and deterministic, but legacy execution is not
@@ -112,7 +120,7 @@ scripts/builderops_cli.sh builderops inquiry run <inquiry-id> --max-rounds 5 --j
 - [x] The runner durably terminates at acceptance, maximum rounds, provider refusal, malformed
   output, unavailable provider, provider error, or persistence failure. Verify:
   `tests/builderops/test_model_inquiry_runner.py::test_runner_records_all_terminal_conditions`.
-- [x] The configured Sol capability is resolved once and shared by API and subscription adapters;
+- [x] The configured Model Inquiry capability is resolved once and shared by API and subscription adapters;
   inquiry code contains no concrete target selection. Verify:
   `tests/settings/test_provider_census.py::test_model_inquiry_profiles_bind_configured_capability`
   and `tests/builderops/test_model_inquiry_adapters.py::test_model_inquiry_has_no_hardcoded_target_selection`.

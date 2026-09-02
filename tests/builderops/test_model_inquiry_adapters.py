@@ -7,7 +7,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -146,6 +146,24 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
     )
     with pytest.raises(adapters_module.AdapterUnavailableError, match="no enabled adapter"):
         load_operational_adapters(env, resolver=resolver)
+
+
+def test_operational_transport_rejects_incompatible_provider() -> None:
+    env = {
+        **intent_env(),
+        "BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION": "1",
+        "HOME": "/tmp/model-inquiry-home",
+    }
+    selected, config, resolution = adapters_module.resolve_inquiry_target(env)
+    mismatched = resolution.model_copy(update={"provider": "anthropic"})
+
+    with patch.object(
+        adapters_module,
+        "resolve_inquiry_target",
+        return_value=(selected, config, mismatched),
+    ):
+        with pytest.raises(adapters_module.AdapterUnavailableError, match="incompatible"):
+            load_operational_adapters(env)
 
 
 def test_model_inquiry_has_no_hardcoded_target_selection() -> None:
@@ -668,6 +686,24 @@ def test_committed_inquiry_intent_config_is_provider_free_and_value_free() -> No
         descriptor["credential_identity_ref"].endswith(".api-key")
         for descriptor in descriptors.values()
     )
+
+
+
+def test_owner_docs_keep_capability_contract_separate_from_current_codex_profile() -> None:
+    """Parent acceptance must not turn today's profile into workflow authority."""
+    readme = Path("docs/BUILDEROPS_MODEL_INQUIRY/README.md").read_text(encoding="utf-8")
+    adapters = Path(
+        "docs/BUILDEROPS_MODEL_INQUIRY/MODEL_TURN_ADAPTERS.md"
+    ).read_text(encoding="utf-8")
+
+    for document in (readme, adapters):
+        normalized = " ".join(document.lower().split())
+        assert "provider-neutral" in normalized
+        assert "current codex-only operational profile" in normalized or "current operational" in normalized
+        assert "future provider/model changes require" in normalized
+        assert "explicitly registered compatible transport" in normalized
+        assert "compatibility/provenance only" in normalized
+        assert "permanently configured as a sol single-target" not in normalized
 
 
 def test_expired_interactive_session_is_not_a_generic_command_failure() -> None:
