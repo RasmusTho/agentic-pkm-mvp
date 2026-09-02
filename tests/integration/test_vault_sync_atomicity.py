@@ -301,14 +301,14 @@ def test_rename_atomic(tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(vault_sync, "_update_path_only", _boom)
 
         with pytest.raises(RuntimeError, match="injected fault"):
-            vault_sync.handle_rename(str(old_path), str(new_path))
+            vault_sync.handle_rename(str(old_path), str(new_path), vault_root=tmp_path)
 
         # All-or-nothing: neither objects.path nor file_state.path advanced to new_path.
         assert _file_state_path_for_uuid(dsn, uuid_value) == str(old_path.resolve())
         assert _objects_path_for_uuid(dsn, uuid_value) != str(new_path.resolve())
 
         monkeypatch.setattr(vault_sync, "_update_path_only", real_update_path_only)
-        result = vault_sync.handle_rename(str(old_path), str(new_path))
+        result = vault_sync.handle_rename(str(old_path), str(new_path), vault_root=tmp_path)
         assert result["updated"] is True
         assert _file_state_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
         assert _objects_path_for_uuid(dsn, uuid_value) == str(new_path.resolve())
@@ -435,7 +435,7 @@ def test_pure_rename_preserves_richer_canonical_payload(tmp_path, monkeypatch) -
             )
 
         old_path.rename(new_path)
-        vault_sync.handle_rename(str(old_path), str(new_path))
+        vault_sync.handle_rename(str(old_path), str(new_path), vault_root=tmp_path)
 
         payload = _canonical_payload(dsn, uuid_value)
         assert payload["episode_ref"] == "episode:2"
