@@ -61,3 +61,13 @@ def test_deleted_settings_schema_has_no_operational_references() -> None:
                 stale_references.append(path.relative_to(ROOT).as_posix())
 
     assert stale_references == []
+
+
+def test_settings_rebind_spec_reflects_delivered_hub_state() -> None:
+    specification = _read("docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md")
+
+    assert "#3163 was the blocked SETTINGS-05 validation hub" in specification
+    assert "it is now delivered and closed" in specification
+    assert "#4967" in specification and "#4968" in specification and "#4969" in specification
+    assert "Parent #3156 remains open" in specification
+    assert "Issue #3163 is the blocked validation hub" not in specification

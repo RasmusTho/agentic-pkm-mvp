@@ -23,8 +23,10 @@ converge") and #3119's closing fix (PR #3126, visible-warning-only, not self-hea
 chose not to make the watcher follow live selection. SETTINGS-05 implements the opposite ruling:
 the compatibility watcher follows the one committed compatibility binding.
 
-This is future-state specification, not shipped truth. GitHub issue #3163 is the blocked SETTINGS-05
-validation hub. It must not be claimed as one implementation issue.
+This is a future-state specification, not a substitute for live delivery evidence. GitHub issue
+#3163 was the blocked SETTINGS-05 validation hub; it is now delivered and closed after #4967,
+#4968, and #4969 plus the aggregate acceptance receipt. Parent #3156 remains open for final
+capability acceptance. This document must not be treated as the live lifecycle authority.
 
 ## Authority boundary and prerequisites
 
@@ -240,7 +242,8 @@ forward to B, and `no_lifecycle` is explicit rather than inferred from a missing
 
 ## Related GitHub Issues
 
-Issue #3163 is the blocked validation hub. Extract three serial child issues from the stable
-`Bounded implementation issue decomposition` anchor after this specification repair merges. Keep
-05A blocked on #3854/#3855; keep 05B blocked on 05A and 05C blocked on 05B. Use Sol/xhigh for
-architecture/concurrency review; downstream `issue-to-code` re-derives live capability per TCD.
+Issue #3163 is the delivered and closed validation hub. Its three serial child issues — #4967,
+#4968, and #4969 — were extracted from the stable `Bounded implementation issue decomposition`
+anchor and delivered in order; their aggregate acceptance receipt is recorded on #3163. Parent
+#3156 remains open for final capability acceptance. Use Sol/xhigh for architecture/concurrency
+review; downstream `issue-to-code` re-derives live capability per TCD.
