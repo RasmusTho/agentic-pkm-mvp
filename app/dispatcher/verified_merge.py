@@ -336,6 +336,22 @@ def _comments_authenticate_legacy_authority(
     )
 
 
+def neutralized_body_matches_authority(
+    body: str,
+    authority_receipt: Mapping[str, object],
+    comments: Sequence[Mapping[str, object]],
+) -> bool:
+    """Match a neutralized body under current or authenticated legacy authority."""
+
+    return neutralized_body_matches_digest(
+        body,
+        authority_receipt.get("neutralized_body_sha256"),
+        allow_legacy_terminal_lf=_comments_authenticate_legacy_authority(
+            comments, authority_receipt
+        ),
+    )
+
+
 def _body_authority(body: object) -> IssueAuthority | None:
     if not isinstance(body, str):
         return None

@@ -26,6 +26,7 @@ from app.dispatcher.verification_contract import (
 from app.dispatcher.verified_merge import (
     FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
     fixed_verified_merge_commit_title,
+    neutralized_body_matches_authority,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
     verified_merge_body_sha256,
@@ -473,7 +474,7 @@ class GitHubProtectedRepositoryAuthority:
             )
         assert isinstance(body, str)
         observed_body_sha256 = verified_merge_body_sha256(body)
-        if observed_body_sha256 != authority.get("neutralized_body_sha256"):
+        if not neutralized_body_matches_authority(body, authority, comments):
             raise MergeAuthorityError(
                 "real merge neutralized body digest did not converge"
             )
