@@ -195,6 +195,32 @@ def test_product_readiness_rejects_duplicate_retained_uuid_claims(tmp_path: Path
     )
 
 
+def test_product_readiness_dedupes_overlapping_include_folders(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    source_identity = "Notes/Active/product.md"
+    layout = vault_root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir(parents=True, exist_ok=True)
+    layout.write_text(
+        "---\nsystem_folder: ⚙️ System\ninclude_folders:\n"
+        "  - Notes\n  - Notes/Active\n  - Notes\n---\n",
+        encoding="utf-8",
+    )
+    note = vault_root / source_identity
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "---\ntitle: Product\n---\n\nMeaning-bearing Product note.\n",
+        encoding="utf-8",
+    )
+
+    result = evaluate_product_store_readiness(
+        vault_root,
+        [_verified_row(source_identity, "Meaning-bearing Product note.")],
+    )
+
+    assert result.ready is True
+    assert result.source_count == 1
+
+
 def test_product_readiness_loads_canonical_identity_map_once_per_inventory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

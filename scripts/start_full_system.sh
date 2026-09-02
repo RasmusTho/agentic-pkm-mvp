@@ -2208,6 +2208,32 @@ PY
   )
 }
 
+probe_product_status() {
+  local status_response product_readiness_probe
+  status_response=$(curl -sS -w $'\n%{http_code}' "$API_BASE_URL/status" || true)
+  product_status_http_status="${status_response##*$'\n'}"
+  product_status_payload="${status_response%$'\n'*}"
+  product_readiness_probe=$(PRODUCT_STATUS_JSON="$product_status_payload" python - <<'PY'
+import json
+import os
+
+try:
+    data = json.loads(os.environ.get("PRODUCT_STATUS_JSON", ""))
+    product_readiness = data.get("product_readiness") if isinstance(data, dict) else None
+    if not isinstance(product_readiness, dict):
+        raise ValueError("missing Product readiness")
+    ready = "1" if product_readiness.get("ready") is True else "0"
+    state = str(product_readiness.get("state") or "unknown")
+except Exception:
+    ready = "0"
+    state = "invalid-status-payload"
+print(f"{ready}|{state}")
+PY
+  )
+  IFS='|' read -r product_readiness_ready product_readiness_state \
+    <<<"$product_readiness_probe"
+}
+
 probe_product_readiness
 product_rebuild_required=0
 case "$readiness_state" in
@@ -2441,15 +2467,16 @@ PY
       "source-backed vault-alpha reconstruction was incomplete or reported errors"
   fi
 
-  # The ingest command can report success while the API still serves the old
-  # fail-closed readiness decision. Re-probe the Product gate before startup
-  # can publish STARTUP COMPLETE.
+  # The ingest command can report success while the Product projection is
+  # still unready. Inspect that component directly: aggregate /readyz can stay
+  # 503 while an independent health state completes its recovery hysteresis.
   if [ "$ingest_scanned_count" -gt 0 ] || [ "$product_rebuild_required" -eq 1 ]; then
-    probe_product_readiness
-    if [ "$readyz_http_status" != "200" ]; then
+    probe_product_status
+    if [ "$product_status_http_status" != "200" ] \
+      || [ "$product_readiness_ready" != "1" ]; then
       fail_product_rebuild \
         "bootstrap_product_readiness_failed" \
-        "source-backed reconstruction completed but Product readiness is $readyz_http_status ($readiness_state)"
+        "source-backed reconstruction completed but Product readiness is $product_status_http_status ($product_readiness_state)"
     fi
   fi
 fi

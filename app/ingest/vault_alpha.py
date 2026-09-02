@@ -457,6 +457,7 @@ def _select_candidates(
     max_notes: int,
 ) -> Tuple[List[Path], List[str]]:
     candidates: List[Path] = []
+    seen_source_identities: set[str] = set()
     included_folders = include_folders or ["."]
     vault_root = vault_root.expanduser().resolve()
 
@@ -484,6 +485,10 @@ def _select_candidates(
                 continue
             if _is_ignored(rel_display, ignore_glob):
                 continue
+            source_identity = rel_path.as_posix()
+            if source_identity in seen_source_identities:
+                continue
+            seen_source_identities.add(source_identity)
             candidates.append(path)
 
     if max_notes > 0:
