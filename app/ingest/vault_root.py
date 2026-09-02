@@ -156,12 +156,28 @@ def ingest_vault_root(root: Path, limit: int | None = None) -> int:
     run_started = datetime.now(timezone.utc)
     processed = 0
     failures = 0
-    files = iter_vault_root_markdown(root, limit)
+    files = list(iter_vault_root_markdown(root))
+    try:
+        # Once a vault has a layout, this producer must ingest only the same
+        # retained source set used by Product readiness. Keep the historical
+        # no-layout mode for small legacy/test vaults that predate layout.
+        from app.ingest.vault_alpha import select_source_backed_rebuild_candidates
+
+        admitted = {
+            path.expanduser().resolve()
+            for path in select_source_backed_rebuild_candidates(root)
+        }
+    except FileNotFoundError:
+        admitted = None
+    if admitted is not None:
+        files = [path for path in files if path.expanduser().resolve() in admitted]
+    if limit is not None:
+        files = files[:max(limit, 0)]
     try:
         for path in files:
             trace_id = with_trace_id(None)
             try:
-                _ingest_file(path, trace_id=trace_id)
+                _ingest_file(path, trace_id=trace_id, vault_root=root)
                 processed += 1
             except Exception as exc:  # pragma: no cover - defensive logging
                 failures += 1

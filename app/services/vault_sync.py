@@ -43,7 +43,11 @@ from app.events.types import (
 )
 from app.ingest.episode_ref import EPISODE_REF_SENTINELS, episode_ref_from_frontmatter
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
-from app.rebuildability import canonical_product_source_text, product_replay_provenance
+from app.rebuildability import (
+    canonical_product_body_text,
+    canonical_product_source_text,
+    product_replay_provenance,
+)
 from app.objects import (
     canonical_event_identity,
     DomainObject,
@@ -297,15 +301,25 @@ def canonical_note_replay(
     *,
     vault_root: Path | None = None,
     source_text: str | None = None,
+    source_body: str | None = None,
 ) -> dict[str, str]:
     """Build the Product replay tuple for the vault-sync canonical producer."""
+    if source_text is not None and source_body is not None:
+        raise ValueError("provide source_text or source_body, not both")
     path = note_path.expanduser().resolve()
-    root = (vault_root or default_vault_root_for_path(path)).expanduser().resolve()
+    if vault_root is None:
+        raise ValueError("vault_root is required for Product replay identity")
+    root = vault_root.expanduser().resolve()
+    canonical_text = (
+        canonical_product_body_text(source_body)
+        if source_body is not None
+        else canonical_product_source_text(
+            source_text if source_text is not None else path.read_text(encoding="utf-8")
+        )
+    )
     return product_replay_provenance(
         source_identity=path.relative_to(root).as_posix(),
-        source_text=canonical_product_source_text(
-            source_text if source_text is not None else path.read_text(encoding="utf-8")
-        ),
+        source_text=canonical_text,
     )
 
 
@@ -529,8 +543,17 @@ def _enqueue(
     insert_object_and_outbox(payload, topic, trace_id, conn=conn, observation=observation)
 
 
-def update_path(uuid_value: str, new_path: str) -> None:
+def update_path(uuid_value: str, new_path: str, *, vault_root: Path | None = None) -> None:
     resolved_path = str(Path(new_path).resolve())
+    replay: dict[str, str] | None = None
+    resolved_note_path = Path(resolved_path)
+    if resolved_note_path.exists():
+        _frontmatter, body = _read_note(resolved_note_path)
+        replay = canonical_note_replay(
+            resolved_note_path,
+            vault_root=vault_root,
+            source_body=body,
+        )
     binding_id = _binding_id()
     with _conn() as conn:
         _prepare(conn)
@@ -551,6 +574,44 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 source_ref=resolved_path,
                 allow_missing_parent=state is not None,
             )
+            if replay is not None:
+                canonical_exists, mirror_exists, _ = _object_materialization_state(
+                    conn,
+                    uuid_value=uuid_value,
+                    canonical_object_id=canonical_object_id,
+                    expected_source_ref=resolved_path,
+                )
+                if canonical_exists and mirror_exists:
+                    save_object_in_transaction(
+                        conn,
+                        DomainObject(
+                            uuid=canonical_object_id,
+                            kind="note",
+                            payload=_merge_canonical_payload(
+                                conn,
+                                object_id=canonical_object_id,
+                                updates={"replay": replay},
+                            ),
+                            source_ref=resolved_path,
+                            created_at=datetime.now(timezone.utc),
+                        ),
+                    )
+                    # The legacy mirror is still read by lifecycle and
+                    # migration paths. Keep its replay tuple aligned with the
+                    # canonical row in the same transaction as the rename.
+                    cur.execute(
+                        """
+                        update objects
+                        set payload = coalesce(payload, '{}'::jsonb) || %s::jsonb
+                        where vault_binding_id = %s and (id = %s or uuid = %s)
+                        """,
+                        (
+                            json.dumps({"replay": replay}),
+                            binding_id,
+                            canonical_object_id,
+                            uuid_value,
+                        ),
+                    )
             cur.execute(
                 """
                 insert into file_state(
@@ -694,7 +755,7 @@ def upsert_object_from_note(
     uuid_value = frontmatter["uuid"]
     title = frontmatter.get("title") or note_path.stem
     replay = canonical_note_replay(
-        note_path, vault_root=vault_root, source_text=body
+        note_path, vault_root=vault_root, source_body=body
     )
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
@@ -831,7 +892,7 @@ def _sync_markdown(
 
     uuid_value = frontmatter["uuid"]
     replay = canonical_note_replay(
-        note_path, vault_root=selected_root, source_text=body
+        note_path, vault_root=selected_root, source_body=body
     )
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
@@ -1096,7 +1157,9 @@ def sync_markdown_source_backed_rebuild(
     )
 
 
-def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
+def handle_rename(
+    old_path: str, new_path: str, *, vault_root: Path | None = None
+) -> dict[str, Any]:
     old = Path(old_path).resolve()
     new = Path(new_path).resolve()
     frontmatter, body = _read_note(new)
@@ -1109,7 +1172,12 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
     )
     mtime = datetime.fromtimestamp(new.stat().st_mtime, tz=timezone.utc)
     result = {"uuid": frontmatter["uuid"], "updated": False}
-    replay = canonical_note_replay(new, source_text=body)
+    selected_root = vault_root
+    if selected_root is None:
+        configured_root = os.getenv("VAULT_ROOT") or os.getenv("VAULT_DIR")
+        if configured_root:
+            selected_root = Path(configured_root)
+    replay = canonical_note_replay(new, vault_root=selected_root, source_body=body)
     binding_id = _binding_id()
     with _conn() as conn:
         _prepare(conn)

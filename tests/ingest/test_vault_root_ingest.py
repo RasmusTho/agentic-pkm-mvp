@@ -45,3 +45,31 @@ def test_ingest_vault_root_updates_status_and_store(tmp_path: Path, monkeypatch)
     status = get_system_status()
     assert status.ingestion.last_run_at is not None
     assert status.ingestion.last_run_ok is True
+
+
+def test_ingest_vault_root_honors_layout_admission_for_root_files(
+    tmp_path: Path, monkeypatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    system_dir = vault_root / "⚙️ System"
+    system_dir.mkdir(parents=True)
+    (vault_root / "root-note.md").write_text("# Root\nBody", encoding="utf-8")
+    (system_dir / "vault.layout.md").write_text(
+        "---\n"
+        "system_folder: ⚙️ System\n"
+        "inbox_folder: 📥 Inbox\n"
+        "desk_folder: 🛠️ Workbench\n"
+        "include_folders:\n"
+        "  - Notes\n"
+        "---\n\nLayout.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_STATUS_PATH", str(tmp_path / "ingest_status.json"))
+    seen: list[Path] = []
+    monkeypatch.setattr(
+        "app.ingest.vault_root._ingest_file",
+        lambda path, *, trace_id, vault_root=None: seen.append(path),
+    )
+
+    assert ingest_vault_root(vault_root) == 0
+    assert seen == []

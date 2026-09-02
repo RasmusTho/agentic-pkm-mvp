@@ -133,10 +133,10 @@ def test_sync_markdown_passes_selected_root_to_replay_producer(
     class ReplayReached(RuntimeError):
         pass
 
-    def fake_canonical_note_replay(path, *, vault_root, source_text):  # type: ignore[no-untyped-def]
+    def fake_canonical_note_replay(path, *, vault_root, source_body):  # type: ignore[no-untyped-def]
         captured["path"] = Path(path)
         captured["vault_root"] = Path(vault_root)
-        captured["source_text"] = source_text
+        captured["source_text"] = source_body
         raise ReplayReached
 
     monkeypatch.setattr(vault_sync, "canonical_note_replay", fake_canonical_note_replay)
@@ -174,7 +174,7 @@ def test_sync_markdown_forwards_source_backed_rebuild_action(
             vault_root=Path(vault_root),
         )
 
-    def fake_canonical_note_replay(path, *, vault_root, source_text):  # type: ignore[no-untyped-def]
+    def fake_canonical_note_replay(path, *, vault_root, source_body):  # type: ignore[no-untyped-def]
         raise ReplayReached
 
     monkeypatch.setattr(vault_sync, "_write_note", fake_write_note)

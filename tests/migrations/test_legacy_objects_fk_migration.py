@@ -859,7 +859,7 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
 
     with psycopg.connect(scratch_dsn) as conn:
         canonical = conn.execute(
-            "SELECT source_ref FROM store_objects WHERE object_id = %s", (canonical_id,)
+            "SELECT source_ref, payload FROM store_objects WHERE object_id = %s", (canonical_id,)
         ).fetchone()
         split_parent = conn.execute(
             "SELECT count(*) FROM store_objects WHERE object_id = %s", (watcher_uuid,)
@@ -870,7 +870,8 @@ def test_watcher_keeps_distinct_legacy_id_as_canonical_parent_through_lifecycle(
         mirror = conn.execute(
             "SELECT id, uuid FROM objects WHERE uuid = %s", (watcher_uuid,)
         ).fetchone()
-    assert canonical == (None,)
+    assert canonical[0] is None
+    assert canonical[1]["replay"]["source_identity"] == "renamed-retained-id.md"
     assert split_parent == (0,)
     assert decision == (canonical_id,)
     assert mirror == (canonical_id, watcher_uuid)

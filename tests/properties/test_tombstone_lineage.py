@@ -572,7 +572,12 @@ def test_reingest_mints_new_identity(
         "review_state": "provisional",
     }
     vault_sync.upsert_object_from_note(
-        path, frontmatter, "New body", fm_changed=True, body_changed=True
+        path,
+        frontmatter,
+        "New body",
+        fm_changed=True,
+        body_changed=True,
+        vault_root=Path(path).parent,
     )
 
     # --- Assert: two distinct object rows exist -- the old tombstone
