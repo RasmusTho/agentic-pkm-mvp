@@ -88,6 +88,57 @@ def test_engine_may_append_system_owned_fields_only(tmp_path: Path) -> None:
     assert updated["evidence"][0]["artifact_ref"] == "note:abc"
 
 
+def test_update_system_fields_refuses_concurrent_human_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text="Original question", scope="work", registered_via="explicit")
+    path = vault / "questions" / f"{note['question_id']}.md"
+    original_write = question_store_module.write_note_relative
+
+    def write_after_human_edit(*args: object, **kwargs: object) -> object:
+        human_edit = {**note, "text": "Human-edited question", "status": "closed"}
+        path.write_text(serialize_question_note(human_edit), encoding="utf-8")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(question_store_module, "write_note_relative", write_after_human_edit)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        store.update_system_fields(note["question_id"], {"last_refreshed_at": "2026-09-03T12:00:00Z"})
+
+    assert parse_question_note(path.read_text(encoding="utf-8"))["text"] == "Human-edited question"
+    assert parse_question_note(path.read_text(encoding="utf-8"))["status"] == "closed"
+
+
+def test_update_system_fields_preserves_human_owned_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _store(vault)
+    note, _ = store.create_question(text="Original question", scope="work", registered_via="explicit")
+    _observed, observed_version = store.read_question_with_version(note["question_id"])
+    expected_versions: list[str | None] = []
+    original_write = question_store_module.write_note_relative
+
+    def capture_expected_version(*args: object, **kwargs: object) -> object:
+        expected_versions.append(kwargs.get("expected_version"))
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(question_store_module, "write_note_relative", capture_expected_version)
+
+    updated, receipt = store.update_system_fields(
+        note["question_id"], {"last_refreshed_at": "2026-09-03T12:00:00Z"}
+    )
+
+    assert expected_versions == [observed_version]
+    assert receipt.operation == WRITE_ACTION
+    assert updated["text"] == note["text"]
+    assert updated["status"] == note["status"]
+
+
 def test_hashless_legacy_evidence_is_rejected_until_explicit_backfill() -> None:
     note = _minimal_valid_note(
         evidence=[

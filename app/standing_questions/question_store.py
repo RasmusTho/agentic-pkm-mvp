@@ -320,8 +320,10 @@ class QuestionStore:
     def update_system_fields(
         self, question_id: str, updates: Mapping[str, Any]
     ) -> tuple[dict[str, Any], WriteReceipt]:
-        current = self.read_question(question_id)
-        return self._update_system_fields_from_current(question_id, current, updates)
+        current, expected_version = self.read_question_with_version(question_id)
+        return self._update_system_fields_from_current(
+            question_id, current, updates, expected_version=expected_version
+        )
 
     def update_system_fields_if_unchanged(
         self,

@@ -59,7 +59,9 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
    proposal-class default, a **newly created** Question note is written only via an already-confirmed
    registration (explicit human action, or an accepted capture-intent proposal per SQ-02) — there is
    no "proposed" Question-note state; the note either exists as an `open` question or it does not yet
-   exist.
+   exist. Every existing-note system-field rewrite carries the exact-byte version observed with the
+   note to the shared write seam. A concurrent human edit therefore conflicts before replacement and
+   leaves the latest note bytes intact; system writers still cannot mutate `text` or `status`.
 4. **Projection**: a rebuildable PG `standing_questions` projection (Alembic migration, forward-only,
    following the `decisions`/`episodes` projection precedent at `app/jobs/decisions_projection.py`) —
    vault notes are the SoR; the projection exists for query (open-question list, evidence-trail
