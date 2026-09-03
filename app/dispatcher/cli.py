@@ -191,11 +191,26 @@ def _cmd_queue(args: argparse.Namespace, store: SqliteStore) -> int:
 
 
 def _cmd_next(args: argparse.Namespace, store: SqliteStore) -> int:
-    task = queue_module.next(store, agent_id=args.agent)
+    task, reclaimed_count = queue_module.select_next(store, agent_id=args.agent)
     if task is None:
-        _emit({"ok": True, "task": None, "empty": True}, args.json)
+        _emit(
+            {
+                "ok": True,
+                "task": None,
+                "empty": True,
+                "leases_reclaimed": reclaimed_count,
+            },
+            args.json,
+        )
     else:
-        _emit({"ok": True, "task": _compact_task(task)}, args.json)
+        _emit(
+            {
+                "ok": True,
+                "task": _compact_task(task),
+                "leases_reclaimed": reclaimed_count,
+            },
+            args.json,
+        )
     return 0
 
 

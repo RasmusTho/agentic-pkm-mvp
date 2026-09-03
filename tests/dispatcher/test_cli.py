@@ -7,6 +7,7 @@ No GitHub API access required.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,35 @@ def test_next_compact_output_with_task(tmp_env, store):
     assert "title" in task
     assert "status" in task
     assert "sync_state" not in task
+
+
+def test_next_reclaims_expired_lease_and_reports_count(tmp_env, store):
+    from app.dispatcher.leases import claim
+    from tests.dispatcher.helpers import seed_tasks
+
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    _claimed_task, lease = claim(store, ready.task_id, "departed-agent")
+    old_lease = store.get_lease(lease.lease_id)
+    assert old_lease is not None
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    old_lease.acquired_at = past_time
+    old_lease.expires_at = past_time
+    old_lease.heartbeat_at = past_time
+    store.upsert_lease(old_lease)
+
+    code, data = _run(["next", "--agent", "replacement-agent", "--json"])
+
+    assert code == 0
+    assert data["ok"] is True
+    assert data["leases_reclaimed"] == 1
+    assert data["task"]["task_id"] == ready.task_id
+    assert data["task"]["status"] == "ready"
+    assert data["task"]["lease_id"] is None
+
+    code, repeated = _run(["next", "--agent", "replacement-agent", "--json"])
+    assert code == 0
+    assert repeated["leases_reclaimed"] == 0
+    assert len(store.list_events(ready.task_id)) == 2
 
 
 # ---------------------------------------------------------------------------

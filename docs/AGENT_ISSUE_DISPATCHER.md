@@ -624,6 +624,19 @@ The new claim event remains the receipt. Its payload contains `ttl_minutes` and,
 the opt-in flag, an expired lease remains a claim rejection and the error directs the agent to
 `--takeover-stale`.
 
+Automatic recovery runs at the narrowest shared lifecycle boundary: every `next` queue-selection
+call invokes `reclaim_expired_leases` immediately before selecting an eligible task. The JSON CLI
+receipt reports this as `leases_reclaimed`, and the dispatcher logger records the same count. This
+boundary is safe because it runs on the existing selection path, requires no daemon or coordination
+store, and the reclaimer rechecks the captured task-linked lease's ownership, unreleased state, and
+expiry inside its SQLite write transaction. A concurrent stale takeover therefore wins its lease-ID
+fence, while repeated selections are harmless. Only unreleased, expired leases still referenced by
+a dispatcher task are eligible; terminal `completed`/`done` status is preserved while clearing a
+stray lease, and orphan lease rows are intentionally left for separate maintenance.
+This path reads and mutates only dispatcher SQLite state and emits the existing `task.released`
+expiry event; it does not query or mutate GitHub Issues, labels, Projects, Kanban, or any external
+API.
+
 Design boundary:
 - This extends the minimal shared lease boundary from #561 and `docs/development/GITHUB_GOVERNANCE_SETUP.md` but does not absorb #561's git-hygiene scope.
 

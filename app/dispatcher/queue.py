@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.dispatcher.leases import reclaim_expired_leases
 from app.dispatcher.models import EventRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -21,11 +26,28 @@ def _make_event_id() -> str:
     return f"evt-{uuid.uuid4().hex[:8]}"
 
 
-def next(store: SqliteStore, agent_id: str) -> TaskRecord | None:
-    """Return the next ready, unblocked, unleased task.
+def select_next(
+    store: SqliteStore,
+    agent_id: str,
+) -> tuple[TaskRecord | None, int]:
+    """Reclaim stale leases, then return the next eligible task and count.
 
-    Tasks are ordered by priority first, then by creation/update time (age).
+    Expired task-linked leases are reclaimed at the shared queue-selection
+    boundary, immediately before eligibility is evaluated. The existing
+    atomic lease reclaimer fences each mutation on its observed lease ID, so a
+    concurrent stale takeover cannot be erased by this sweep.
+
+    Returns the selected task and the number of leases reclaimed during this
+    selection. ``agent_id`` remains part of the selection API for callers that
+    identify the requesting agent; selection itself does not claim a task.
     """
+    reclaimed = reclaim_expired_leases(store)
+    reclaimed_count = len(reclaimed)
+    logger.info(
+        "dispatcher queue selection reclaimed %d expired lease(s)",
+        reclaimed_count,
+    )
+
     with store._connect() as conn:
         row = conn.execute(
             """
@@ -48,10 +70,18 @@ def next(store: SqliteStore, agent_id: str) -> TaskRecord | None:
             """
         ).fetchone()
 
-    if row is None:
-        return None
+    task = None if row is None else _row_to_task(row)
+    return task, reclaimed_count
 
-    return _row_to_task(row)
+
+def next(store: SqliteStore, agent_id: str) -> TaskRecord | None:
+    """Return the next ready, unblocked, unleased task.
+
+    Expired task-linked leases are reclaimed automatically before selection.
+    Tasks are ordered by priority first, then by creation/update time (age).
+    """
+    task, _ = select_next(store, agent_id)
+    return task
 
 
 def block(
