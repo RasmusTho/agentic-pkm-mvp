@@ -1221,10 +1221,10 @@ def plan_projection_convergence_failure_restoration(
         or not isinstance(head, Mapping)
         or head.get("sha") != authority_receipt.get("head_sha")
         or not isinstance(body, str)
-        or not _matches_stored_body_digest(
+        or not verified_merge_body_matches_digest(
             body, authority_receipt.get("neutralized_body_sha256")
         )
-        or not _matches_stored_body_digest(
+        or not verified_merge_body_matches_digest(
             canonical_body, authority_receipt.get("body_sha256")
         )
         or canonical_authority is None
@@ -1386,7 +1386,7 @@ def _validated_projection_observation(
         or not pr.get("title")
         or has_closing_issue_attempt(cast(str, pr.get("title")))
         or not isinstance(pr.get("body"), str)
-        or not _matches_stored_body_digest(
+        or not verified_merge_body_matches_digest(
             cast(str, pr["body"]),
             authority_receipt.get("neutralized_body_sha256"),
             allow_legacy_terminal_lf=allow_legacy_terminal_lf,

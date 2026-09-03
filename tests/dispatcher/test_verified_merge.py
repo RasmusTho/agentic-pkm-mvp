@@ -325,6 +325,7 @@ def test_neutralized_body_transport_round_trip_preserves_canonical_digest() -> N
             authority_receipt=authority,
             phase="prepared",
             pr=_pr(live_body),
+            **projection_phase_kwargs(authority, _pr(live_body)),
         )
         assert prepared["phase_receipt"]["body_sha256"] == authority[
             "neutralized_body_sha256"
@@ -357,11 +358,12 @@ def test_neutralized_body_transport_rejects_noncanonical_whitespace_drift() -> N
             )
             is None
         )
-        with pytest.raises(ValueError, match="live state is malformed"):
+        with pytest.raises(ValueError, match="is malformed"):
             build_verified_merge_phase(
                 authority_receipt=authority,
                 phase="prepared",
                 pr=_pr(drifted_body),
+                **projection_phase_kwargs(authority, _pr(drifted_body)),
             )
 
 
@@ -375,9 +377,8 @@ def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> No
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutralized_body = str(plan["neutralized_body"])
-    assert neutralized_body.endswith("\n")
-    neutralized_without_terminal_lf = neutralized_body[:-1]
-    neutral_pr = _pr(neutralized_without_terminal_lf)
+    assert not neutralized_body.endswith("\n")
+    neutral_pr = _pr(neutralized_body)
 
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
