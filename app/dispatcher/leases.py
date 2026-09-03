@@ -670,7 +670,7 @@ def _reclaim_one(
             conn.rollback()
             return None
 
-        if task_row["status"] in {"completed", "done"}:
+        if task_row["status"] in {"completed", "done", "failed"}:
             # A legacy/manual update can leave a terminal task lease-linked.
             # Clear that stale ownership without resurrecting terminal work.
             next_status = task_row["status"]

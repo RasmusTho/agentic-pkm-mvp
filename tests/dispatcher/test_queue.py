@@ -191,6 +191,28 @@ def test_next_gc_does_not_resurrect_terminal_task_with_expired_lease(
     assert completed.lease_id is None
 
 
+def test_next_reclaims_expired_failed_lease_without_requeue(
+    store: SqliteStore,
+) -> None:
+    """Queue selection clears stale ownership without reviving failed work."""
+    from app.dispatcher.services import update_task
+
+    task = _task()
+    store.upsert_task(task)
+    _claimed_task, lease = claim(store, task.task_id, "departed-agent")
+    update_task(store, task.task_id, "failed", None, "operator")
+    _expire_lease(store, lease.lease_id)
+
+    selected = next(store, agent_id="replacement-agent")
+
+    assert selected is None
+    recovered = store.get_task(task.task_id)
+    assert recovered is not None
+    assert recovered.status == "failed"
+    assert recovered.claimed_by is None
+    assert recovered.lease_id is None
+
+
 def test_queue_ordering_priority_then_age(store: SqliteStore) -> None:
     from app.dispatcher.leases import claim
 
