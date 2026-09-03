@@ -2,7 +2,7 @@
 name: LLM And Retrieval Settings
 description: Move model routing and rerank tuning through the Settings Spine without changing empty-settings behavior.
 task_id: SETTINGS-07A
-github_issue: 4796
+github_issue: 4948
 source_anchor: docs/SETTINGS_SPINE/DEHARDCODE_WAVE_ONE.md :: What This Task Does
 parent_capability: Settings Spine
 prerequisites: [SETTINGS-02, SETTINGS-03]
@@ -57,4 +57,4 @@ TTS, watcher, curation, expansion, environment-variable removal, and release-cha
 
 ## Related GitHub Issues
 
-Implements [#4796](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4796), first in the serial SETTINGS-07 chain. Its delivery receipt is posted to #3156 before SETTINGS-07B starts.
+Implements [#4948](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4948), the main-targeted replacement for historical #4796 and first in the serial SETTINGS-07 chain. Its delivery receipt is posted to #3156 before SETTINGS-07B starts.

@@ -1,12 +1,53 @@
-State: SoT v5.5 Reality-MVP baseline locked.
-Doc role: Reference
-Authority: Current settings model, registries, and operator/lab tiering for the runtime; explains settings surfaces and precedence without replacing runtime validation commands.
+State: Current-state owner document for the delivered Settings-08 documentation slice; the
+Settings Spine parent acceptance remains open on #3156.
+Doc role: Core SoT / owner document
+Authority: Owns the settings mechanism contract, scopes, resolution order, canonical vault location,
+ingestion/degradation semantics, receipts, and operator/lab tiering. It distinguishes the target
+one-spine model from current runtime evidence; runtime validation commands and the code contracts
+they exercise remain the executable evidence.
 
-## v5.5 Baseline Delta (Current Reality)
+## Ownership and reading order
+
+This document is the single owner for settings mechanism. `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`
+owns the conceptual vault/context model and defers here for settings mechanism; `docs/ENVIRONMENTS.md`
+owns environment and vault terminology and defers here for settings resolution. The Settings Spine
+specification directory records decomposition and invariants, while GitHub Issues and merged PRs
+record delivery evidence.
+
+The two settings scopes are:
+
+- **Instance scope** — app-local settings that exist before a vault and may select the instance's
+  default binding, UI state, ports, cache paths, and credential references.
+- **Vault scope** — human-visible Markdown settings under the selected vault's canonical
+  `<vault>/settings/` root, divided into vault-shared and clone-local files.
+
+The target model resolves both scopes through one `SettingsService` and one default registry. Current
+runtime evidence is not yet one universal resolver: vault/context paths use `app/vault/settings_service.py`,
+ASK prompts use `app/settings/prompts.py::resolve_ask_system_prompt`, and compiled runtime settings
+use `app/settings/compiler.py` plus `app/settings/runtime.py::get_settings_bundle`. A runtime/session
+override is an explicit final-layer override, not a third persistent settings location; future
+convergence must preserve these named seams and their existing validation.
+
+## Current-state baseline
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
 - DB outbox (Postgres) is the canonical queue; JSONL audit log is non-canonical and used for lag inspection.
 - Watcher auto-run defaults on (`WATCHER_AUTO_EXEC=1`); set `WATCHER_AUTO_EXEC=0` for emit-only mode. LangGraph/Reasoning rollout remains opt-in.
 - See `docs/STATUS.md` and `docs/ARCHITECTURE.md` for the current baseline and forward line.
+
+The delivered child work covers ingestion and visible degradation (SETTINGS-01), default-registry
+repair (SETTINGS-02), one canonical vault settings root (SETTINGS-03), durable receipts for settings
+writers (SETTINGS-04), prompt settings (SETTINGS-06), and the serial model/TTS/watcher tuning wave
+(SETTINGS-07A..07C). SETTINGS-05 parent acceptance remains open on #3156; SETTINGS-08 is the
+owner-document consolidation slice recorded by this PR. No separate settings owner or orphan schema
+is implied by the older roadmap.
+
+## Target-state boundary
+
+The current spine is a one-compatibility-watcher lifecycle, not generic multi-vault lifecycle
+supervision. Future multi-vault background supervision remains owned by the MVR handoff. Operator
+mode and lab mode are documented policy boundaries; adding new settings, changing defaults, or
+retiring compatibility inputs still requires the owning Issue, source-doc update, and the relevant
+validation evidence.
 
 # Settings
 

@@ -1,6 +1,6 @@
 ---
 name: Consolidate Settings Owner Docs
-description: One owner doc for settings; orphaned schema deleted; roadmap items superseded; parent-closure handoff
+description: One owner doc for settings; orphaned schema deleted; roadmap items superseded; parent acceptance remains with #3156
 task_id: SETTINGS-08
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F6, F7
 parent_capability: Settings Spine
@@ -28,22 +28,24 @@ simultaneously delivered and unmet.
 - `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md` stays the concept contract and defers to
   `docs/SETTINGS.md` for mechanism; the mutual-authority contradiction with `docs/ENVIRONMENTS.md`
   is resolved by explicit pointers.
-- Deletes `docs/schema/system-settings.schema.json`; `schemas/README.md` and any references point
-  only at the wired schema.
+- Deletes the orphan schema under `docs/schema/`; `schemas/README.md` and operational references
+  point only at the wired schema. The audit and this task spec retain the removed path only as
+  historical provenance for F6 and are excluded from the operational-reference check.
 - Marks the superseded rows in `docs/implementation/vault-settings-roadmap.md` (external-edits →
   SETTINGS-01, hardcoded extraction → SETTINGS-07, central service → the spine) with delivery
   pointers, resolving its internal delivered-vs-unmet contradiction.
 - Updates `docs/DOCS_INDEX.md`: `docs/SETTINGS.md` row becomes the owner row; the spec directory
   and audit rows point at it.
-- **Parent-closure handoff:** verifies the capability acceptance checklist in
-  `docs/SETTINGS_SPINE/README.md`, posts the final validation receipt on the parent feature issue,
-  reconciles `PARENT_FEATURE_ISSUE.md` + `README.md` lifecycle state, and closes the parent.
+- Records the owner-document delivery and the remaining current-versus-target boundary. The
+  Settings Spine parent acceptance and closure remain with #3156; this docs-only slice does not
+  claim that the parent is closed or that every runtime consumer has converged on one service.
 
 ## Concretely
 
 ```
-$ grep -rn "docs/schema/system-settings" docs/ app/ schemas/   # no hits
-$ head -5 docs/SETTINGS.md    # State: owner doc for the settings spine (two scopes, one spine)
+$ rg -n "docs/schema/system-settings" docs/ app/ schemas/ \
+    -g '!docs/audits/**' -g '!docs/SETTINGS_SPINE/CONSOLIDATE_SETTINGS_OWNER_DOCS.md'  # no hits
+$ head -5 docs/SETTINGS.md    # State: owner doc for the delivered SETTINGS-08 docs slice; parent #3156 remains open
 ```
 
 ## Why This Matters
@@ -53,17 +55,17 @@ schema regrows F2/F6 within a quarter.
 
 ## Acceptance Criteria
 
-- [ ] `docs/SETTINGS.md` is the single owner doc; ENVIRONMENTS/VAULT_AND_SETTINGS_CONTEXT defer
+- [x] `docs/SETTINGS.md` is the single owner doc; ENVIRONMENTS/VAULT_AND_SETTINGS_CONTEXT defer
       to it for mechanism and name the same canonical location.
   - Verify: doc writeback at `docs/SETTINGS.md :: Authority` + `docs/DOCS_INDEX.md` owner row
-- [ ] `docs/schema/system-settings.schema.json` is deleted with zero remaining references.
+- [x] The orphan system-settings schema is deleted with zero remaining operational references.
   - Verify: `tests/architecture` docs-reference checks green + repo grep in PR evidence
-- [ ] Roadmap supersessions are marked with delivery pointers (no silently stale "remaining" rows
+- [x] Roadmap supersessions are marked with delivery pointers (no silently stale "remaining" rows
       for delivered spine work).
   - Verify: doc writeback at `docs/implementation/vault-settings-roadmap.md :: Migration Notes`
-- [ ] Parent feature issue closed with the capability acceptance checklist verified and the final
-      receipt posted; local `PARENT_FEATURE_ISSUE.md` and `README.md` reconciled to closed state.
-  - Verify: closure receipt on the parent issue + doc writeback at
+- [x] Parent feature issue remains open with its live capability checklist and closure authority
+      preserved; local `PARENT_FEATURE_ISSUE.md` and `README.md` do not claim premature closure.
+  - Verify: live parent state at #3156 + doc writeback at
     `docs/SETTINGS_SPINE/PARENT_FEATURE_ISSUE.md :: State`
 
 ## How to Verify (Pre-Merge)
@@ -83,5 +85,6 @@ schema regrows F2/F6 within a quarter.
 
 ## Related GitHub Issues
 
-One docs-authoring issue, last in the chain, carries parent closure. TCD hint: sonnet / medium —
-docs consolidation with a truth-verification walk; no code risk.
+One docs-authoring issue carries the owner-document slice; parent closure remains governed by #3156.
+TCD hint: balanced Codex / medium — docs consolidation with a truth-verification walk; no runtime
+implementation is claimed.

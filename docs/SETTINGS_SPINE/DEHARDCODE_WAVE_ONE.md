@@ -23,7 +23,7 @@ markdown rather than redeploying with different environment variables.
 The hub owns the serial child ledger and stage-level acceptance. Each child owns its own registry
 keys and production consumers:
 
-1. [LLM_AND_RETRIEVAL_SETTINGS.md](LLM_AND_RETRIEVAL_SETTINGS.md) / SETTINGS-07A / #4796
+1. [LLM_AND_RETRIEVAL_SETTINGS.md](LLM_AND_RETRIEVAL_SETTINGS.md) / SETTINGS-07A / #4948 (replaces historical #4796)
 2. [TTS_SETTINGS.md](TTS_SETTINGS.md) / SETTINGS-07B / #4797
 3. [WATCHER_AND_TUNING_SETTINGS.md](WATCHER_AND_TUNING_SETTINGS.md) / SETTINGS-07C / #4798
 

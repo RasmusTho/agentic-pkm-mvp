@@ -1,8 +1,9 @@
-State: Implementation roadmap for the vault selector and Markdown settings foundation.
+State: Historical foundation roadmap reconciled with the delivered Settings Spine; remaining work
+below is context or explicitly downstream, not an alternate settings owner.
 Doc role: Plan / roadmap
 Authority: Tracks remaining work derived from `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`. GitHub Issues are the executable task contracts when available.
 Owner: Runtime / Companion UI / configuration
-Last reviewed: 2026-06-12
+Last reviewed: 2026-08-31
 
 # Vault Selector and Settings Roadmap
 
@@ -24,6 +25,27 @@ Last reviewed: 2026-06-12
 
 ## Migration Notes
 
+### Settings Spine reconciliation (2026-08-31)
+
+The Settings Spine delivery is now the authoritative implementation path. The former broad
+roadmap rows are retained as historical context, but their delivered portions are superseded by
+the bounded child Issues and the owner document:
+
+- **External Obsidian edits and validation recovery** → SETTINGS-01 / #3159 and the delivered
+  watcher-fed ingestion contract; the current owner and degradation rules are in
+  `docs/SETTINGS.md`.
+- **Extract configurable hardcoded values** → SETTINGS-07A..07C / #4948, #4797, and #4798
+  (with #4948 replacing historical #4796) and their validation hub #3165; no new extraction
+  should be inferred from this old row.
+- **Central SettingsService** → the scoped foundation and target contract; full consumer convergence
+  remains part of the open Settings Spine parent #3156. The single documentation owner is
+  `docs/SETTINGS.md`, not this roadmap.
+
+The Settings Spine capability checklist and exact acceptance path live in
+`docs/SETTINGS_SPINE/README.md`; GitHub parent #3156 and its child Issues remain the executable
+lifecycle authority. Do not report the overlapping rows under “Remaining Issues” as unmet spine
+work when the corresponding child delivery and receipt are closed.
+
 - Existing environment-scoped defaults (`VAULT_ROOT`, `VAULT_ROOT_DEV`, `VAULT_ROOT_TEST`, `PKM_ENVIRONMENT`) remain compatibility inputs.
 - A configured/default path that exists but lacks `settings/vault.md` is `uninitialized`, not a startup failure.
 - A missing stored path is `missing`; app-local registry repair should update the path without deleting legacy config.
@@ -37,7 +59,11 @@ Last reviewed: 2026-06-12
 - Service-gating tests for watchers/indexers/writers where the code path is touched.
 - Companion UI tests for no-vault, selected, uninitialized, missing, and invalid projections as UI integration lands.
 
-## Remaining Issues
+## Historical foundation work and downstream follow-up
+
+The sections below are the original foundation breakdown. Delivered Settings Spine behavior
+supersedes the overlapping portions above; any genuinely new work must be filed as a bounded
+Issue from its current owner document rather than revived from this historical list.
 
 ### Epic: Vault selector and Markdown settings foundation
 

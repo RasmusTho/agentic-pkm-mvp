@@ -281,8 +281,8 @@ ownership or a prior effect result by inference.
   the legacy choose/open producer and replacement supervisor preserve the mutation-gate/final-scan/
   quiesce → commit → resume protocol. Wake-up hints remain non-authoritative. Governed
   background administration explicitly transitions to multi-binding `explicit` mode; only then do
-  picker/default events stop changing lifecycle intent. #3163 remains a blocked validation hub, is
-  not a multi-active implementation, and no duplicate watcher-rebind issue is created here.
+  picker/default events stop changing lifecycle intent. The delivered #3163 validation hub is not a
+  multi-active implementation, and no duplicate watcher-rebind issue is created here.
 - **#2003 / #2311** delivered no-vault startup, runtime switching foundations, and removal of
   silent `./vault` fallback. This capability preserves those contracts.
 - **RSC-05 / #5309** amends this section in place with the fresh-bootstrap state machine and
