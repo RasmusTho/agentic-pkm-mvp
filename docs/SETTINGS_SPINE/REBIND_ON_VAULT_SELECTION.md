@@ -93,8 +93,9 @@ follows it without losing old-root work or observing the candidate root prematur
 
 ## Bounded implementation issue decomposition
 
-This specification maps to three serial, independently mergeable GitHub child issues under blocked
-validation hub #3163. It must never be filed or claimed as one monolithic implementation issue.
+This specification maps to three serial, independently mergeable GitHub child issues under the
+delivered SETTINGS-05 validation hub #3163. It must never be filed or claimed as one monolithic
+implementation issue.
 Each extracted issue copies the shared Context, Source Anchors, SBS Impact, Constraints, Out of
 Scope, and only its mapped acceptance criteria and validation commands.
 

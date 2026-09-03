@@ -1,5 +1,6 @@
 """Guard the Settings owner-document boundary against target-state overclaiming."""
 
+import re
 from pathlib import Path
 
 
@@ -64,10 +65,18 @@ def test_deleted_settings_schema_has_no_operational_references() -> None:
 
 
 def test_settings_rebind_spec_reflects_delivered_hub_state() -> None:
-    specification = _read("docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md")
+    mirrors = (
+        _read("docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md"),
+        _read("docs/MULTI_VAULT_RUNTIME/README.md"),
+    )
+    specification = mirrors[0]
 
     assert "#3163 was the blocked SETTINGS-05 validation hub" in specification
     assert "it is now delivered and closed" in specification
     assert "#4967" in specification and "#4968" in specification and "#4969" in specification
     assert "Parent #3156 remains open" in specification
-    assert "Issue #3163 is the blocked validation hub" not in specification
+    present_blocked_hub_claim = re.compile(
+        r"(?im)^(?!.*\bwas\b)(?=.*#3163)(?=.*\b(?:is|remains|stays|under)\b)"
+        r"(?=.*\bblocked\b).*$"
+    )
+    assert all(not present_blocked_hub_claim.search(mirror) for mirror in mirrors)
