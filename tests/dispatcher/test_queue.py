@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from app.dispatcher.events import JsonlEventWriter
-from app.dispatcher.models import TaskRecord
-from app.dispatcher.queue import block, next, unblock
+from app.dispatcher.leases import claim
+from app.dispatcher.models import LeaseRecord, TaskRecord
+from app.dispatcher.queue import block, next, select_next, unblock
 from app.dispatcher.store import SqliteStore
 
 
@@ -36,6 +38,25 @@ def store(tmp_path: Path) -> SqliteStore:
     return s
 
 
+def _expire_lease(store: SqliteStore, lease_id: str) -> None:
+    lease = store.get_lease(lease_id)
+    assert lease is not None
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
+        timespec="microseconds"
+    )
+    store.upsert_lease(
+        LeaseRecord(
+            lease_id=lease.lease_id,
+            resource=lease.resource,
+            holder=lease.holder,
+            ttl_seconds=lease.ttl_seconds,
+            acquired_at=past_time,
+            expires_at=past_time,
+            heartbeat_at=past_time,
+        )
+    )
+
+
 def test_next_returns_ready_unblocked_unleased(store: SqliteStore) -> None:
     task = _task()
     store.upsert_task(task)
@@ -59,6 +80,83 @@ def test_next_excludes_claimed_tasks(store: SqliteStore) -> None:
 
     result = next(store, agent_id="test-agent")
     assert result is None
+
+
+def test_next_reclaims_expired_task_lease_before_selection(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _claimed_task, lease = claim(store, task.task_id, "departed-agent")
+    _expire_lease(store, lease.lease_id)
+
+    selected, reclaimed_count = select_next(store, agent_id="replacement-agent")
+
+    assert reclaimed_count == 1
+    assert selected is not None
+    assert selected.task_id == task.task_id
+    reclaimed_task = store.get_task(task.task_id)
+    assert reclaimed_task is not None
+    assert reclaimed_task.status == "ready"
+    assert reclaimed_task.claimed_by is None
+    assert reclaimed_task.lease_id is None
+    events = store.list_events(task.task_id)
+    assert events[-1].event_type == "task.released"
+    assert events[-1].payload == {"reason": "expired"}
+
+
+def test_next_preserves_unexpired_task_lease(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _claimed_task, lease = claim(store, task.task_id, "active-agent")
+
+    selected, reclaimed_count = select_next(store, agent_id="replacement-agent")
+
+    assert selected is None
+    assert reclaimed_count == 0
+    current_task = store.get_task(task.task_id)
+    assert current_task is not None
+    assert current_task.status == "claimed"
+    assert current_task.claimed_by == "active-agent"
+    assert current_task.lease_id == lease.lease_id
+    current_lease = store.get_lease(lease.lease_id)
+    assert current_lease is not None
+    assert current_lease.released_at is None
+
+
+def test_next_reclaims_expired_blocked_task_but_keeps_it_blocked(
+    store: SqliteStore,
+) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _claimed_task, lease = claim(store, task.task_id, "departed-agent")
+    block(store, task.task_id, "waiting for dependency", "dispatcher")
+    _expire_lease(store, lease.lease_id)
+
+    selected, reclaimed_count = select_next(store, agent_id="replacement-agent")
+
+    assert selected is None
+    assert reclaimed_count == 1
+    reclaimed_task = store.get_task(task.task_id)
+    assert reclaimed_task is not None
+    assert reclaimed_task.status == "blocked"
+    assert reclaimed_task.blocked_reason == "waiting for dependency"
+    assert reclaimed_task.claimed_by is None
+    assert reclaimed_task.lease_id is None
+
+
+def test_repeated_next_gc_is_harmless(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _claimed_task, lease = claim(store, task.task_id, "departed-agent")
+    _expire_lease(store, lease.lease_id)
+
+    first, first_count = select_next(store, agent_id="replacement-agent")
+    second, second_count = select_next(store, agent_id="replacement-agent")
+
+    assert first is not None
+    assert second is not None
+    assert first_count == 1
+    assert second_count == 0
+    assert len(store.list_events(task.task_id)) == 2
 
 
 def test_next_excludes_non_ready_tasks(store: SqliteStore) -> None:

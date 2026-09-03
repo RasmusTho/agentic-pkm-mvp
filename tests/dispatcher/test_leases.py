@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -16,7 +16,7 @@ from app.dispatcher.leases import (
     reclaim_expired_leases,
     release,
 )
-from app.dispatcher.models import TaskRecord
+from app.dispatcher.models import LeaseRecord, TaskRecord
 from app.dispatcher.store import SqliteStore
 
 
@@ -213,7 +213,6 @@ def test_release_emits_event(store: SqliteStore) -> None:
 
 
 def test_expired_lease_reclaim(store: SqliteStore) -> None:
-    from app.dispatcher.models import LeaseRecord
     from datetime import datetime, timezone, timedelta
 
     task = _task()
@@ -242,6 +241,29 @@ def test_expired_lease_reclaim(store: SqliteStore) -> None:
     assert refetched.lease_id is None
     assert refetched.claimed_by is None
     assert refetched.status == "ready"
+
+
+def test_reclaim_ignores_expired_orphan_lease(store: SqliteStore) -> None:
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
+        timespec="microseconds"
+    )
+    orphan = LeaseRecord(
+        lease_id="orphan-lease",
+        resource="issue:999",
+        holder="departed-agent",
+        ttl_seconds=60,
+        acquired_at=past_time,
+        expires_at=past_time,
+        heartbeat_at=past_time,
+    )
+    store.upsert_lease(orphan)
+
+    reclaimed = reclaim_expired_leases(store, actor="dispatcher-gc")
+
+    assert reclaimed == []
+    persisted = store.get_lease(orphan.lease_id)
+    assert persisted is not None
+    assert persisted.released_at is None
 
 
 def _expire_lease(store: SqliteStore, lease_id: str) -> str:
