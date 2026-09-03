@@ -47,6 +47,8 @@ from tests.properties._machinery import (
     WRITE_FRONTMATTER_SITE_CLASSIFICATION,
     WRITE_MISSING_SITE_CLASSIFICATION,
     WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION,
+    WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION,
+    find_create_once_write_note_relative_call_sites,
     find_write_frontmatter_call_sites,
     find_write_missing_call_sites,
     find_write_note_relative_call_sites,
@@ -189,6 +191,36 @@ def test_every_write_note_relative_seam_has_port_coverage(tmp_path) -> None:
     assert find_write_note_relative_call_sites(synthetic_app, repo_root=tmp_path) == new_sites
     with pytest.raises(AssertionError, match="app/new_producer.py"):
         _assert_write_note_relative_census_is_closed(new_sites)
+
+
+def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
+    """Every #5140 producer has one explicit create-once/append-only intent."""
+    expected = {
+        ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1),
+        ("app/agent_memory/provisional_write.py", "write_provisional_memory", 1),
+        ("app/chat/session_log.py", "SessionLogWriter.open_session", 1),
+        ("app/episodes/segmenter.py", "_write_fusion_receipt", 1),
+        ("app/eval/failure_capture.py", "_write_draft", 1),
+        ("app/heimdal/candidate_projection.py", "write_candidate_note", 1),
+        ("app/heimdal/candidate_projection.py", "write_reading_candidate_note", 1),
+        ("app/mcp/vault_tools.py", "append_note", 1),
+    }
+    live = set(find_write_note_relative_call_sites())
+    assert set(WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION) == expected
+    assert expected <= live
+    create_once_sites = set(find_create_once_write_note_relative_call_sites())
+    assert create_once_sites == {
+        site for site, classification in WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION.items()
+        if classification.startswith("create_once:")
+    }
+
+    for site, classification in WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION.items():
+        assert classification.startswith(("create_once:", "append_only:")), site
+        source = (Path(__file__).resolve().parents[2] / site[0]).read_text(encoding="utf-8")
+        if classification.startswith("create_once:"):
+            assert "create_once=True" in source, site
+        else:
+            assert "create_once=True" not in source, site
 
 
 def test_every_candidate_create_once_seam_has_port_coverage() -> None:

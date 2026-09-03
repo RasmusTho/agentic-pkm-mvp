@@ -862,6 +862,36 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
 }
 
+# VMW-#5140 intent census. This is deliberately separate from the existing
+# WriteGuard census above: create-once is a producer contract, while the
+# guard classification proves only that the shared seam is protected.
+WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
+    ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1): (
+        "create_once: deterministic promoted-memory artifact; retry/recovery logic owns idempotency."
+    ),
+    ("app/agent_memory/provisional_write.py", "write_provisional_memory", 1): (
+        "create_once: UUID-keyed provisional artifact follows its staged lifecycle receipt."
+    ),
+    ("app/chat/session_log.py", "SessionLogWriter.open_session", 1): (
+        "create_once: session header is published once; later turns use append-only writes."
+    ),
+    ("app/episodes/segmenter.py", "_write_fusion_receipt", 1): (
+        "create_once: deterministic receipt is idempotent and precedes the fused note."
+    ),
+    ("app/eval/failure_capture.py", "_write_draft", 1): (
+        "create_once: initial draft is first-write-wins; _decide is a separate rewrite child."
+    ),
+    ("app/heimdal/candidate_projection.py", "write_candidate_note", 1): (
+        "create_once: deterministic candidate projection preserves an existing artifact."
+    ),
+    ("app/heimdal/candidate_projection.py", "write_reading_candidate_note", 1): (
+        "create_once: deterministic reading projection preserves an existing artifact."
+    ),
+    ("app/mcp/vault_tools.py", "append_note", 1): (
+        "append_only: next-available note allocation preserves every earlier MCP artifact."
+    ),
+}
+
 
 def find_write_note_relative_call_sites(
     root: Path = APP_ROOT, *, repo_root: Path = REPO_ROOT
@@ -920,6 +950,63 @@ def find_write_note_relative_call_sites(
                 self.generic_visit(node)
 
         _WriteNoteRelativeVisitor().visit(tree)
+    return sites
+
+
+def find_create_once_write_note_relative_call_sites(
+    root: Path = APP_ROOT, *, repo_root: Path = REPO_ROOT
+) -> list[tuple[str, str, int]]:
+    """AST-scan relative write sites that explicitly opt into create-once."""
+    sites: list[tuple[str, str, int]] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(repo_root))
+
+        class _CreateOnceVisitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.scope: list[str] = []
+                self.call_counts: dict[str, int] = {}
+
+            def _visit_scope(self, node: ast.AST, name: str) -> None:
+                self.scope.append(name)
+                self.generic_visit(node)
+                self.scope.pop()
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                self._visit_scope(node, node.name)
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                self._visit_scope(node, node.name)
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                self._visit_scope(node, node.name)
+
+            def visit_Call(self, node: ast.Call) -> None:
+                func = node.func
+                is_write_note_relative = (
+                    isinstance(func, ast.Name) and func.id == "write_note_relative"
+                ) or (isinstance(func, ast.Attribute) and func.attr == "write_note_relative")
+                if is_write_note_relative:
+                    qualname = ".".join(self.scope) or "<module>"
+                    ordinal = self.call_counts.get(qualname, 0) + 1
+                    self.call_counts[qualname] = ordinal
+                    if any(
+                        keyword.arg == "create_once"
+                        and isinstance(keyword.value, ast.Constant)
+                        and keyword.value.value is True
+                        for keyword in node.keywords
+                    ):
+                        sites.append((rel, qualname, ordinal))
+                self.generic_visit(node)
+
+        _CreateOnceVisitor().visit(tree)
     return sites
 
 

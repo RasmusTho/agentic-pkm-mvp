@@ -44,6 +44,19 @@ generic port/adapter semantics nor migrate Heimdal, Karakeep, or other `Sources/
 guarantees assume one user on macOS/Linux and one local filesystem; they provide no global lock,
 fairness, network-filesystem, or distributed-writer contract.
 
+The existing relative write seam also exposes one explicit, scoped creation mode:
+`write_note_relative(..., create_once=True)`. This is not a new `KnowledgePort` method or a
+generic replacement for `write_note`; it is reserved for the seven #5140 producers recorded in the
+multi-writer classification ledger. It asserts `WriteGuard`, stages complete UTF-8 bytes, and
+publishes with the same atomic no-replace primitive used by candidate creation. The first publisher
+returns `WriteReceipt(outcome="written", note_class="create-once", ...)`; a losing create returns
+`WriteReceipt(outcome="already_exists", ...)` and leaves the existing regular target byte-for-byte
+unchanged. Callers must treat `already_exists` as an idempotent no-op, not as a fresh write.
+`create_once=True` cannot be combined with `expected_version`, so the rewritten-note CAS policy is
+unchanged. The MCP `append_note` collection writer remains append-only and outside this scoped
+create-once mode: it keeps allocating the next available note path and never rewrites prior MCP
+artifacts.
+
 The `write_note` receipt above is the low-level port result. Production/service callers use
 `write_note_from_absolute` or `write_note_relative`; those helpers raise
 `KnowledgeWriteConflict` with the staged receipt attached when `outcome="conflict_staged"`.

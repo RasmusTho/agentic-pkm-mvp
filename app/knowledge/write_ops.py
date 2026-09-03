@@ -4,6 +4,7 @@ import errno
 import ctypes
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 import fcntl
 import hashlib
 import json
@@ -27,6 +28,7 @@ from app.knowledge.adapters import (
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
+from app.knowledge.multiwriter import NoteClass
 from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.knowledge.service import resolve_knowledge_port
@@ -793,6 +795,143 @@ def create_candidate_note_once(
             raise cleanup_error
 
 
+def _create_note_once_at_relative_seam(
+    note_rel_path: str,
+    content: str,
+    *,
+    vault_root: Path | str,
+    action: str,
+    write_guard: "WriteGuard | None",
+    stage_prefix: str,
+) -> CandidateCreateResult:
+    """Publish one UTF-8 note with atomic first-write-wins semantics.
+
+    This deliberately mirrors the candidate helper's descriptor-relative
+    algorithm without widening that helper's public contract. The candidate
+    helper remains candidate-only, while the relative seam opts in only when
+    a scoped producer passes ``create_once``.
+    """
+
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    guard = write_guard or DEFAULT_WRITE_GUARD
+    guard.assert_writes_allowed(action)
+    parts = _candidate_relative_parts(note_rel_path)
+    resolved_root = Path(vault_root).expanduser().resolve()
+    payload = content.encode("utf-8")
+
+    current_dir_fd: int | None = None
+    stage_fd: int | None = None
+    stage_name: str | None = None
+    stage_owned = False
+    stage_unlink_attempted = False
+    cleanup_error: BaseException | None = None
+
+    def record_cleanup_error(exc: BaseException) -> None:
+        nonlocal cleanup_error
+        if cleanup_error is None:
+            cleanup_error = exc
+
+    try:
+        current_dir_fd = os.open(resolved_root, _DIRECTORY_OPEN_FLAGS)
+        for component in parts[:-1]:
+            try:
+                os.mkdir(component, mode=0o777, dir_fd=current_dir_fd)
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+            os.fsync(current_dir_fd)
+            child_fd = os.open(
+                component,
+                _DIRECTORY_OPEN_FLAGS,
+                dir_fd=current_dir_fd,
+            )
+            superseded_fd = current_dir_fd
+            current_dir_fd = child_fd
+            os.close(superseded_fd)
+
+        stage_name = f".{stage_prefix}-{uuid.uuid4().hex}"
+        stage_fd = os.open(
+            stage_name,
+            _CANDIDATE_STAGE_OPEN_FLAGS,
+            0o600,
+            dir_fd=current_dir_fd,
+        )
+        stage_owned = True
+        offset = 0
+        while offset < len(payload):
+            written = os.write(stage_fd, payload[offset:])
+            if written <= 0:
+                raise OSError(
+                    errno.EIO,
+                    "candidate stage write made no progress",
+                    stage_name,
+                )
+            offset += written
+        os.fsync(stage_fd)
+        owned_stage_fd = stage_fd
+        stage_fd = None
+        os.close(owned_stage_fd)
+
+        try:
+            _atomic_rename_noreplace_at(
+                current_dir_fd,
+                stage_name,
+                current_dir_fd,
+                parts[-1],
+            )
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                raise
+            stage_unlink_attempted = True
+            os.unlink(stage_name, dir_fd=current_dir_fd)
+            stage_owned = False
+            os.fsync(current_dir_fd)
+            _require_regular_candidate_target(current_dir_fd, parts[-1])
+            return "already_exists"
+
+        stage_owned = False
+        os.fsync(current_dir_fd)
+        return "written"
+    finally:
+        if stage_fd is not None:
+            owned_stage_fd = stage_fd
+            stage_fd = None
+            try:
+                os.close(owned_stage_fd)
+            except BaseException as exc:  # noqa: BLE001 - preserve fail-closed cleanup
+                record_cleanup_error(exc)
+
+        if (
+            stage_owned
+            and not stage_unlink_attempted
+            and stage_name is not None
+            and current_dir_fd is not None
+        ):
+            stage_unlink_attempted = True
+            try:
+                os.unlink(stage_name, dir_fd=current_dir_fd)
+            except BaseException as exc:  # noqa: BLE001 - exact owned-stage cleanup
+                record_cleanup_error(exc)
+            else:
+                stage_owned = False
+                try:
+                    os.fsync(current_dir_fd)
+                except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
+                    record_cleanup_error(exc)
+
+        if current_dir_fd is not None:
+            owned_dir_fd = current_dir_fd
+            current_dir_fd = None
+            try:
+                os.close(owned_dir_fd)
+            except BaseException as exc:  # noqa: BLE001 - every owner gets one close attempt
+                record_cleanup_error(exc)
+
+        if cleanup_error is not None:
+            raise cleanup_error
+
+
 def default_vault_root_for_path(path: Path | str) -> Path:
     resolved = Path(path).expanduser().resolve()
     return Path(resolved.anchor) if resolved.anchor else Path("/")
@@ -901,6 +1040,7 @@ def write_note_relative(
     write_guard: "WriteGuard | None" = None,
     expected_version: str | None = None,
     writer_identity: str | None = None,
+    create_once: bool = False,
     accept_staged_conflict: bool = False,
 ) -> WriteReceipt:
     # Guard-at-seam (#2953, extending #2910): assert WriteGuard inside this
@@ -925,6 +1065,31 @@ def write_note_relative(
     from app.write_guard import DEFAULT_WRITE_GUARD
 
     guard = write_guard or DEFAULT_WRITE_GUARD
+
+    if create_once:
+        if expected_version is not None:
+            raise KnowledgeWriteConflict(
+                "create-once writes cannot combine with expected_version"
+            )
+        result = _create_note_once_at_relative_seam(
+            note_rel_path,
+            content,
+            vault_root=vault_root,
+            action=action,
+            write_guard=guard,
+            stage_prefix="write-note-stage",
+        )
+        locator = make_note_locator(note_rel_path)
+        return WriteReceipt(
+            operation="write_note",
+            locator=locator,
+            adapter="fs_vault",
+            note_class=NoteClass.CREATE_ONCE,
+            writer_identity=writer_identity or "mimer.runtime",
+            written_at=datetime.now(UTC).isoformat(),
+            outcome=result,
+        )
+
     guard.assert_writes_allowed(action)
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)

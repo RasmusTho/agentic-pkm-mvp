@@ -361,6 +361,7 @@ def write_provisional_memory(
             action=PROVISIONAL_MEMORY_WRITE_ACTION,
             write_guard=write_guard,
             writer_identity="agent_memory.provisional_write",
+            create_once=True,
         )
     except Exception as exc:
         failed = ProvisionalLifecycleReceipt(

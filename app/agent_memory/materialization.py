@@ -144,6 +144,10 @@ def materialize_promoted_memory(
                                 persisted=persisted,
                             ),
                             vault_root=vault_root,
+                            action=MEMORY_MATERIALIZATION_ACTION,
+                            write_guard=write_guard,
+                            writer_identity=MEMORY_MATERIALIZATION_SOURCE,
+                            create_once=True,
                         )
                     except Exception as exc:
                         failed_receipt_id = _append_promotion_receipt(

@@ -402,10 +402,18 @@ def write_candidate_note(
             reason=str(exc),
         )
 
-    write_note_relative(artifact_path, content, vault_root=vault_root, action=CANDIDATE_WRITE_ACTION)
+    receipt = write_note_relative(
+        artifact_path,
+        content,
+        vault_root=vault_root,
+        action=CANDIDATE_WRITE_ACTION,
+        write_guard=write_guard,
+        writer_identity=CANDIDATE_WRITE_ACTION,
+        create_once=True,
+    )
 
     return CandidateWriteResult(
-        status="written",
+        status="already_exists" if receipt.outcome == "already_exists" else "written",
         artifact_path=artifact_path,
         observation_id=candidate.observation_id,
     )
@@ -702,9 +710,17 @@ def write_reading_candidate_note(
         )
 
     content = render_reading_candidate_note(candidate)
-    write_note_relative(artifact_path, content, vault_root=vault_root, action=READING_CANDIDATE_WRITE_ACTION)
+    receipt = write_note_relative(
+        artifact_path,
+        content,
+        vault_root=vault_root,
+        action=READING_CANDIDATE_WRITE_ACTION,
+        write_guard=write_guard,
+        writer_identity=READING_CANDIDATE_WRITE_ACTION,
+        create_once=True,
+    )
     return CandidateWriteResult(
-        status="written",
+        status="already_exists" if receipt.outcome == "already_exists" else "written",
         artifact_path=artifact_path,
         observation_id=candidate.observation_id,
     )

@@ -75,7 +75,37 @@ class SessionLogWriter:
             "---\n\n"
             f"## Session: {label_slug}\n\n"
         )
-        write_note_relative(log_rel_path.as_posix(), frontmatter, vault_root=self._vault_root)
+        receipt = write_note_relative(
+            log_rel_path.as_posix(),
+            frontmatter,
+            vault_root=self._vault_root,
+            action=CHAT_SESSION_PERSIST_ACTION,
+            write_guard=DEFAULT_WRITE_GUARD,
+            writer_identity="chat.session_log",
+            create_once=True,
+        )
+        if receipt.outcome == "already_exists":
+            try:
+                existing_frontmatter, _ = load_frontmatter(
+                    log_path.read_text(encoding="utf-8")
+                )
+            except OSError as exc:
+                raise ValueError(
+                    "chat session create-once target disappeared after publication"
+                ) from exc
+            existing_session_id = existing_frontmatter.get("session_id")
+            existing_note_uuid = existing_frontmatter.get("note_uuid")
+            if (
+                existing_frontmatter.get("type") != "chat-session"
+                or not isinstance(existing_session_id, str)
+                or not existing_session_id.strip()
+                or existing_note_uuid != note_uuid
+            ):
+                raise ValueError(
+                    "chat session path is occupied by a different artifact: "
+                    f"{log_rel_path.as_posix()}"
+                )
+            session_id = existing_session_id.strip()
         return SessionLog(
             log_path=log_path,
             session_id=session_id,

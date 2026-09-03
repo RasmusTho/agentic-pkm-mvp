@@ -65,6 +65,29 @@ def test_frontmatter_fields_present(tmp_path: Path) -> None:
     assert f"role_message_format: {ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1}" in text
 
 
+def test_open_create_once_reuses_existing_session_identity(tmp_path: Path) -> None:
+    note = _note(tmp_path)
+    first_writer = SessionLogWriter(
+        vault_root=tmp_path,
+        now_fn=lambda: datetime(2026, 4, 24, 7, 30),
+        uuid_fn=lambda: "first-session",
+    )
+    second_writer = SessionLogWriter(
+        vault_root=tmp_path,
+        now_fn=lambda: datetime(2026, 4, 24, 7, 30),
+        uuid_fn=lambda: "second-session",
+    )
+
+    first = first_writer.open_session(note, "session")
+    second = second_writer.open_session(note, "session")
+
+    assert first.session_id == "first-session"
+    assert second.session_id == first.session_id
+    text = second.log_path.read_text(encoding="utf-8")
+    assert "session_id: first-session" in text
+    assert "session_id: second-session" not in text
+
+
 def test_type_field_is_chat_session_only(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
     note = _note(tmp_path)

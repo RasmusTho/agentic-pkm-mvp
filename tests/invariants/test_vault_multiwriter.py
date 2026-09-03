@@ -22,6 +22,8 @@ from app.knowledge.multiwriter import (
     is_conflict_artifact,
 )
 from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import write_note_relative
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 
 class _FaultingBinaryHandle:
@@ -991,10 +993,113 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
         assert "write_note_from_absolute(" in watcher_source, watcher_path
         assert "watcher_panel_writeback_allowed(" in watcher_source, watcher_path
 
+    intent_producers = {
+        "app/agent_memory/materialization.py": (
+            "materialize_promoted_memory",
+            "create-once",
+        ),
+        "app/agent_memory/provisional_write.py": (
+            "write_provisional_memory",
+            "create-once",
+        ),
+        "app/chat/session_log.py": ("SessionLogWriter.open_session", "create-once"),
+        "app/episodes/segmenter.py": ("_write_fusion_receipt", "create-once"),
+        "app/eval/failure_capture.py": ("_write_draft", "create-once"),
+        "app/heimdal/candidate_projection.py": (
+            "write_candidate_note",
+            "create-once",
+        ),
+        "app/heimdal/candidate_projection.py::reading": (
+            "write_reading_candidate_note",
+            "create-once",
+        ),
+        "app/mcp/vault_tools.py": ("append_note", "append-only"),
+    }
+    for relative_path, (symbol, classification) in intent_producers.items():
+        source_path = relative_path.removesuffix("::reading")
+        source = (repo_root / source_path).read_text(encoding="utf-8")
+        source_symbol = symbol.rsplit(".", 1)[-1]
+        assert source_symbol in source, (relative_path, symbol)
+        if classification == "create-once":
+            assert "create_once=True" in source, relative_path
+        else:
+            assert "create_once=True" not in source, relative_path
+
     worker_source = (repo_root / "app/workers/outbox_worker.py").read_text(
         encoding="utf-8"
     )
     assert "def _write_markdown_if_changed(" not in worker_source
+
+
+def test_create_intended_writers_do_not_clobber_existing_artifacts(
+    tmp_path: Path,
+) -> None:
+    guard = WriteGuard(lambda: {"state": "healthy"})
+    target = tmp_path / "Agent Memory" / "artifact.md"
+
+    first = write_note_relative(
+        "Agent Memory/artifact.md",
+        "first writer\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.first",
+        create_once=True,
+    )
+    second = write_note_relative(
+        "Agent Memory/artifact.md",
+        "second writer\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.second",
+        create_once=True,
+    )
+
+    assert first.outcome == "written"
+    assert second.outcome == "already_exists"
+    assert target.read_bytes() == b"first writer\n"
+    assert not list(target.parent.glob(".write-note-stage-*"))
+
+
+def test_create_intended_writers_preserve_idempotency_and_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    guard = WriteGuard(lambda: {"state": "healthy"})
+    target = tmp_path / "Sources" / "idempotent.md"
+
+    first = write_note_relative(
+        "Sources/idempotent.md",
+        "durable first\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.idempotent",
+        create_once=True,
+    )
+    replay = write_note_relative(
+        "Sources/idempotent.md",
+        "different replay\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.replay",
+        create_once=True,
+    )
+
+    assert first.note_class is NoteClass.CREATE_ONCE
+    assert first.writer_identity == "vmw.idempotent"
+    assert replay.writer_identity == "vmw.replay"
+    assert datetime.fromisoformat(first.written_at or "").tzinfo is UTC
+    assert datetime.fromisoformat(replay.written_at or "").tzinfo is UTC
+    assert replay.outcome == "already_exists"
+    assert target.read_bytes() == b"durable first\n"
+
+    from app.mcp.vault_tools import append_note
+
+    first_mcp = append_note(title="MCP Artifact", body="one", vault_root=tmp_path)
+    second_mcp = append_note(title="MCP Artifact", body="two", vault_root=tmp_path)
+    assert first_mcp != second_mcp
+    assert first_mcp.read_text(encoding="utf-8").endswith("one\n")
+    assert second_mcp.read_text(encoding="utf-8").endswith("two\n")
 
 
 def test_rewritten_write_with_expected_version_conflicts_when_target_was_deleted(

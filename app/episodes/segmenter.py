@@ -1082,6 +1082,8 @@ def _write_fusion_receipt(
         vault_root=vault_root,
         action=FUSION_RECEIPT_WRITE_ACTION,
         write_guard=write_guard,
+        writer_identity=FUSION_RECEIPT_WRITE_ACTION,
+        create_once=True,
     )
 
 
