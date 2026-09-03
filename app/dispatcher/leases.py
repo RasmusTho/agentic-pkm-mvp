@@ -670,7 +670,12 @@ def _reclaim_one(
             conn.rollback()
             return None
 
-        next_status = "blocked" if task_row["blocked_reason"] is not None else "ready"
+        if task_row["status"] in {"completed", "done"}:
+            # A legacy/manual update can leave a terminal task lease-linked.
+            # Clear that stale ownership without resurrecting terminal work.
+            next_status = task_row["status"]
+        else:
+            next_status = "blocked" if task_row["blocked_reason"] is not None else "ready"
         cleared = conn.execute(
             """
             UPDATE dispatcher_tasks
