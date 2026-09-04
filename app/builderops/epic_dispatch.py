@@ -27,6 +27,7 @@ from app.builderops.execution_routing import (
     validate_route_decision,
 )
 from app.components.settings.providers_loader import load_provider_census
+from app.dispatcher.verification_consumer import _is_codex_usage_limit_event
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL = 2
@@ -201,6 +202,11 @@ class CodexIssueSessionLauncher:
         execution_routing: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         prompt = self.prompt(context_pack)
+        canary_target = None
+        if execution_routing is not None:
+            canary_target = ResolvedExecutionTarget.model_validate(
+                execution_routing.get("proposed_target")
+            )
         result = self.runner(
             self.command(context_pack, execution_routing=execution_routing),
             cwd=self.repo_root,
@@ -228,6 +234,12 @@ class CodexIssueSessionLauncher:
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
             if event.get("allocation_state") == "allocation_unavailable":
+                allocation_unavailable = canary_target is not None and canary_target.capability == "spark"
+            if (
+                canary_target is not None
+                and canary_target.capability == "spark"
+                and _is_codex_usage_limit_event(event)
+            ):
                 allocation_unavailable = True
             usage = event.get("usage")
             if isinstance(usage, Mapping):
@@ -690,6 +702,11 @@ def _launch_canary(
             accepted_delivery_verification="not_run",
         )
         return first_result, receipt
+
+    if decision.selected_capability != "spark":
+        raise IssueSessionLaunchError(
+            "Luna canary reported allocation unavailable without an authorized fallback"
+        )
 
     fallback_target = resolve_execution_target(
         load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH),

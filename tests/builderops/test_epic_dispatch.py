@@ -1210,6 +1210,89 @@ def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallb
     assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
 
 
+def test_phase2_canary_codex_launcher_normalizes_versioned_usage_limit() -> None:
+    candidate = _candidate(
+        5326,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+        worktree="/tmp/issue-5326",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-codex-event",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5326],
+        run_id="phase2-canary-codex-event",
+        candidates=[candidate],
+    )
+    usage_limit = (
+        "You've hit your usage limit for gpt-5.3-codex-spark. "
+        "Switch to another model now, or try again later."
+    )
+    worker = _worker_receipt(5326)
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        model = command[command.index("--model") + 1]
+        if model == "gpt-5.3-codex-spark":
+            stdout = "\n".join(
+                [
+                    json.dumps({"type": "thread.started", "thread_id": "spark-5326"}),
+                    json.dumps({"type": "error", "message": usage_limit}),
+                    json.dumps({"type": "turn.failed", "error": {"message": "failed"}}),
+                ]
+            )
+            return subprocess.CompletedProcess(args=command, returncode=1, stdout=stdout, stderr="")
+        assert model == "gpt-5.6-luna"
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "luna-5326"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": json.dumps(worker)},
+                    }
+                ),
+            ]
+        )
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout=stdout, stderr="")
+
+    launcher = CodexIssueSessionLauncher(repo_root=Path("/tmp"), runner=runner)
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert [command[command.index("--model") + 1] for command in commands] == [
+        "gpt-5.3-codex-spark",
+        "gpt-5.6-luna",
+    ]
+    assert receipt["stopped_reason"] == "worker-handoff"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
+
+
 def test_phase2_canary_launch_time_staleness_records_fallback_without_spark_launch() -> None:
     candidate = _candidate(
         5324,
