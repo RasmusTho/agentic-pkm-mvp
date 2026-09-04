@@ -35,6 +35,25 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -> None:
+    selection = select_tests(["app/mimer_mcp/server.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("mimer_mcp",)
+    assert selection.unowned_paths == ()
+    feature_targets = set(selection.targets) - set(selector.ALWAYS_TARGETS)
+    assert feature_targets == {
+        "tests/mcp/test_mimer_server.py",
+        "tests/architecture/test_mimer_mcp_server_boundaries.py",
+        "tests/api/test_ask_contract.py",
+        "tests/api/test_capture_inbox_api.py",
+        "tests/api/test_search_canonical_substrate.py",
+        "tests/api/test_artifact_note_read_api.py",
+        "tests/api/test_health_contract_api.py",
+    }
+    assert "tests/api" not in selection.targets
+
+
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
     selection = select_tests(["app/web/static/cockpit.html", "app/web/static/signboard.js"])
 
