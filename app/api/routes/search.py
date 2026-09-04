@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.request_active_context import require_scoped_read_context
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
+from app.instance.context_settings import resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
 from app.observability.tracer import start_span
 from app.retrieval.capability import RetrievalRequest, retrieve
@@ -63,6 +64,12 @@ async def search_scoped(
     if not registry_path:
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     try:
+        # Resolve all selected bundles before opening the effect window: a
+        # combined request never gets a first-binding settings winner.
+        resolve_context_settings(
+            context,
+            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+        )
         with context_bound_effect_window(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),

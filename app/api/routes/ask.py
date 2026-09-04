@@ -13,6 +13,7 @@ from pydantic import AliasChoices, BaseModel, Field
 from app.agents.ask.graph import run_ask_graph
 from app.api.request_active_context import require_scoped_read_context
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
+from app.instance.context_settings import resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
 from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
@@ -247,6 +248,10 @@ async def ask_scoped(
     if not registry_path:
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     try:
+        resolve_context_settings(
+            context,
+            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+        )
         with context_bound_effect_window(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
