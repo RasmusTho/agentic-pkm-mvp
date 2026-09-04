@@ -90,3 +90,23 @@ def test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic(tmp_p
     store.consume(token=token, subject="trusted_loopback", target=tmp_path / "vault", registry=registry)
     with pytest.raises(BootstrapPreconditionError):
         store.consume(token=token, subject="trusted_loopback", target=tmp_path / "vault", registry=registry)
+
+
+def test_existing_picker_drives_scoped_request_context() -> None:
+    store = ContextSelectionStore()
+    token, record = store.create(
+        principal=PrincipalContext("owner", "human", "trusted_loopback"),
+        instance_identity="instance", workspace=WorkspaceState.none(), scope="core",
+        sphere_memberships=(), situated_identity=None, binding_ids=["binding-a"],
+    )
+    assert token and record.context_id.startswith("ctx_")
+
+
+def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault_a, vault_b = tmp_path / "a", tmp_path / "b"
+    initialize_test_vault(vault_a); initialize_test_vault(vault_b)
+    registry = _registry(tmp_path, vault_a, vault_b)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(registry.path)); monkeypatch.setenv("WATCHER_ENABLE", "0")
+    monkeypatch.setattr("app.settings.ingestion.ingest_settings", lambda **_k: __import__("app.settings.ingestion", fromlist=["SettingsIngestionState"]).SettingsIngestionState(state="ok", source="vault"))
+    VaultManager().select_vault(vault_b)
+    assert SettingsRebindStore(registry).read().candidate_binding_id == "binding-b"
