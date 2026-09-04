@@ -89,6 +89,24 @@ _STATE_OWNER = "knowledge"
 _GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
 
 
+def _reject_scoped_write_until_mvr05c(request: Request) -> None:
+    """Seal the legacy mutation route against MVR-05B selection carriers.
+
+    A scoped read bearer must never become an indistinguishable legacy write
+    target.  MVR-05C owns the explicit-target token/effect-fence replacement;
+    until then a caller presenting either scoped carrier receives a named
+    capability refusal before any global vault resolution or filesystem I/O.
+    """
+
+    if request.headers.get("X-Active-Context-Session") or request.headers.get(
+        "X-Active-Context-Override"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "capability_not_ready", "capability": "mvr05c_scoped_write"},
+        )
+
+
 class CaptureEventPersistenceError(RuntimeError):
     """Raised when governed capture accountability cannot be persisted."""
 
@@ -268,6 +286,7 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
 def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
     """Append a capture to the vault inbox note through the governed pipeline."""
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
+    _reject_scoped_write_until_mvr05c(request)
 
     # Validation — never silently drop text: whitespace-only is an explicit,
     # named rejection (schema validation already rejected missing/empty text
