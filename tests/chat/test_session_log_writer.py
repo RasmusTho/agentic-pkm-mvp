@@ -5,9 +5,11 @@ from datetime import datetime
 from pathlib import Path
 import json
 import threading
+from typing import Any
 
 import pytest
 
+import app.chat.session_log as session_log_module
 from app.chat.session_log import (
     ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1,
     SessionLogWriter,
@@ -98,6 +100,55 @@ def test_open_create_once_reuses_existing_session_identity(tmp_path: Path) -> No
     text = second.log_path.read_text(encoding="utf-8")
     assert "session_id: first-session" in text
     assert "session_id: second-session" not in text
+
+
+@pytest.mark.parametrize("replacement", ["leaf_symlink", "parent_symlink", "directory"])
+def test_open_create_once_rejects_raced_non_regular_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    note = _note(tmp_path)
+    first_writer = SessionLogWriter(
+        vault_root=tmp_path,
+        now_fn=lambda: datetime(2026, 4, 24, 7, 30),
+        uuid_fn=lambda: "first-session",
+    )
+    second_writer = SessionLogWriter(
+        vault_root=tmp_path,
+        now_fn=lambda: datetime(2026, 4, 24, 7, 30),
+        uuid_fn=lambda: "second-session",
+    )
+    first = first_writer.open_session(note, "session")
+    original_write = session_log_module.write_note_relative
+    outside = tmp_path.parent / f"{tmp_path.name}-{replacement}"
+
+    def write_then_replace(*args: Any, **kwargs: Any) -> Any:
+        receipt = original_write(*args, **kwargs)
+        assert receipt.outcome == "already_exists"
+        if replacement == "leaf_symlink":
+            outside.write_text(first.log_path.read_text(encoding="utf-8"), encoding="utf-8")
+            first.log_path.unlink()
+            first.log_path.symlink_to(outside)
+        elif replacement == "parent_symlink":
+            outside.mkdir()
+            displaced = tmp_path / ".displaced-chat-directory"
+            first.log_path.parent.rename(displaced)
+            first.log_path.parent.symlink_to(outside, target_is_directory=True)
+        else:
+            first.log_path.unlink()
+            first.log_path.mkdir()
+        return receipt
+
+    monkeypatch.setattr(session_log_module, "write_note_relative", write_then_replace)
+    try:
+        with pytest.raises(ValueError, match="chat session"):
+            second_writer.open_session(note, "session")
+    finally:
+        if outside.is_file():
+            outside.unlink()
+        elif outside.is_dir():
+            outside.rmdir()
 
 
 def test_type_field_is_chat_session_only(tmp_path: Path) -> None:

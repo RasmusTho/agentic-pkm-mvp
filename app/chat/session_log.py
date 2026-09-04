@@ -91,7 +91,10 @@ class SessionLogWriter:
         if receipt.outcome == "already_exists":
             try:
                 existing_frontmatter, _ = load_frontmatter(
-                    log_path.read_text(encoding="utf-8")
+                    _read_existing_session_at(
+                        log_rel_path,
+                        vault_root=self._vault_root,
+                    )
                 )
             except OSError as exc:
                 raise ValueError(
@@ -268,6 +271,116 @@ def _session_log_relative_path(session: SessionLog) -> str:
     if vault_root is None:
         raise ValueError("SessionLog.vault_root is required for durable chat writes")
     return session.log_path.relative_to(vault_root).as_posix()
+
+
+def _read_existing_session_at(relative_path: Path, *, vault_root: Path) -> str:
+    """Read one stable regular session file through its anchored vault path."""
+
+    if (
+        relative_path.is_absolute()
+        or not relative_path.parts
+        or any(part in {"", ".", ".."} for part in relative_path.parts)
+    ):
+        raise ValueError("chat session path must stay inside the active vault")
+
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    resolved_root = vault_root.expanduser().resolve()
+    descriptors: list[int] = []
+    file_descriptor: int | None = None
+    try:
+        root_descriptor = os.open(resolved_root, directory_flags)
+        descriptors.append(root_descriptor)
+        for component in relative_path.parts[:-1]:
+            child_descriptor = os.open(
+                component,
+                directory_flags,
+                dir_fd=descriptors[-1],
+            )
+            descriptors.append(child_descriptor)
+
+        filename = relative_path.parts[-1]
+        file_descriptor = os.open(
+            filename,
+            file_flags,
+            dir_fd=descriptors[-1],
+        )
+        opened = os.fstat(file_descriptor)
+        named = os.stat(filename, dir_fd=descriptors[-1], follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or not stat.S_ISREG(named.st_mode)
+            or named.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise ValueError("chat session target is not one stable regular file")
+
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        after = os.fstat(file_descriptor)
+        named_after = os.stat(
+            filename,
+            dir_fd=descriptors[-1],
+            follow_symlinks=False,
+        )
+        if (
+            (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+            or (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            != (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns)
+            or (named_after.st_dev, named_after.st_ino)
+            != (opened.st_dev, opened.st_ino)
+        ):
+            raise ValueError("chat session target changed while it was read")
+
+        for parent_descriptor, component, child_descriptor in zip(
+            descriptors[:-1],
+            relative_path.parts[:-1],
+            descriptors[1:],
+            strict=True,
+        ):
+            opened_directory = os.fstat(child_descriptor)
+            named_directory = os.stat(
+                component,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(opened_directory.st_mode)
+                or not stat.S_ISDIR(named_directory.st_mode)
+                or (opened_directory.st_dev, opened_directory.st_ino)
+                != (named_directory.st_dev, named_directory.st_ino)
+            ):
+                raise ValueError("chat session directory changed while it was read")
+
+        named_root = os.stat(resolved_root, follow_symlinks=False)
+        opened_root = os.fstat(root_descriptor)
+        if (
+            not stat.S_ISDIR(named_root.st_mode)
+            or (named_root.st_dev, named_root.st_ino)
+            != (opened_root.st_dev, opened_root.st_ino)
+        ):
+            raise ValueError("active vault changed while the chat session was read")
+        return b"".join(chunks).decode("utf-8")
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def _slugify(value: str) -> str:
