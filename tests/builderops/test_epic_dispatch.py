@@ -1210,6 +1210,120 @@ def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallb
     assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
 
 
+def test_phase2_canary_fallback_launcher_failure_records_redacted_receipt() -> None:
+    candidate = _candidate(
+        5327,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-fallback-launch-failure",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5327],
+        run_id="phase2-canary-fallback-launch-failure",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"allocation_state": "allocation_unavailable"},
+            RuntimeError("provider payload contained a secret and must not enter the receipt"),
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 2
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["schema_version"] == "builder_execution_routing_canary.v1"
+    assert canary_receipt["attempt_count"] == 2
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["outcome"] == "failed"
+    assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
+    assert canary_receipt["accepted_delivery_verification"] == "not_run"
+    assert canary_receipt["lifecycle_authority"] == "none"
+    assert "provider payload" not in json.dumps(canary_receipt, sort_keys=True)
+
+
+def test_phase2_canary_plan_bound_is_plan_wide_without_rejecting_independent_work_units() -> None:
+    def canary_candidate(issue_number: int, file_name: str) -> dict[str, object]:
+        candidate = _candidate(
+            issue_number,
+            risk="low",
+            files=[file_name],
+            preferred_path="subagent",
+        )
+        candidate["execution_routing"] = {
+            "mode": "canary",
+            "opt_in": True,
+            "sample_index": 1,
+            "sample_limit": 1,
+            "work_class": "bounded_fast",
+            "ambiguity": "low",
+            "protected_surface": False,
+            "decision_at": "2026-08-29T15:00:00Z",
+        }
+        return candidate
+
+    with pytest.raises(EpicDispatchError, match="sample limit permits one candidate"):
+        build_dispatch_plan(
+            independent_issue_numbers=[5328, 5329],
+            run_id="phase2-canary-plan-wide-bound",
+            candidates=[
+                canary_candidate(5328, "app/builderops/epic_dispatch.py"),
+                canary_candidate(5329, "app/builderops/execution_routing.py"),
+            ],
+        )
+
+    independent_plan = build_dispatch_plan(
+        independent_issue_numbers=[5330, 5331],
+        run_id="phase2-independent-work-units-remain-bounded",
+        candidates=[
+            _candidate(
+                5330,
+                risk="low",
+                files=["app/builderops/epic_dispatch.py"],
+                preferred_path="subagent",
+            ),
+            _candidate(
+                5331,
+                risk="low",
+                files=["app/builderops/execution_routing.py"],
+                preferred_path="subagent",
+            ),
+        ],
+    )
+    assert independent_plan["selected_count"] == 2
+    assert [
+        decision["issue_number"]
+        for decision in independent_plan["decisions"]
+        if decision["selected_for_dispatch"]
+    ] == [5330, 5331]
+
+
 def test_phase2_canary_codex_launcher_normalizes_versioned_usage_limit() -> None:
     candidate = _candidate(
         5326,
@@ -1393,6 +1507,8 @@ def test_phase2_canary_fallback_allocation_failure_does_not_retry() -> None:
     assert len(launcher.calls) == 2
     assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "spark"
     assert launcher.calls[1]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempts"][1]["outcome"] == "allocation_unavailable"
 
 
 def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:

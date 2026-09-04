@@ -71,8 +71,17 @@ class EpicDispatchError(ValueError):
 class IssueSessionLaunchError(RuntimeError):
     """Raised when one fresh worker session cannot finish truthfully."""
 
-    def __init__(self, message: str, *, session_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        canary_receipt: Mapping[str, object] | None = None,
+    ) -> None:
         self.session_id = session_id
+        self.canary_receipt = (
+            dict(canary_receipt) if canary_receipt is not None else None
+        )
         super().__init__(message)
 
 
@@ -374,6 +383,10 @@ def build_dispatch_plan(
     runtimes = _normalize_runtime_targets(runtime_targets)
     lease_issues = _normalize_active_leases(active_leases)
     normalized_candidates = [_normalize_candidate(item) for item in candidates]
+    _validate_phase2_canary_plan_bound(
+        normalized_candidates,
+        source="dispatch candidates",
+    )
     run_state_seen = run_state is not None
     if run_state is not None:
         _validate_run_state_owner(
@@ -553,6 +566,7 @@ def dispatch_issue_sessions(
     for decision, context_pack in ordered:
         issue_number = decision["issue_number"]
         context_pack_id = decision["context_pack_id"]
+        canary_receipt: dict[str, object] | None = None
         try:
             routing_payload = decision.get("execution_routing")
             if (
@@ -624,17 +638,21 @@ def dispatch_issue_sessions(
                 or not failed_session_id.strip()
             ):
                 failed_session_id = None
-            sessions.append(
-                {
-                    "issue_number": issue_number,
-                    "context_pack_id": context_pack_id,
-                    "session_id": failed_session_id,
-                    "fresh_session": True,
-                    "status": "failed",
-                    "error_type": type(exc).__name__,
-                    "error": (str(exc).strip() or type(exc).__name__)[-2_000:],
-                }
-            )
+            failed_session = {
+                "issue_number": issue_number,
+                "context_pack_id": context_pack_id,
+                "session_id": failed_session_id,
+                "fresh_session": True,
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": (str(exc).strip() or type(exc).__name__)[-2_000:],
+            }
+            exception_receipt = getattr(exc, "canary_receipt", None)
+            if isinstance(exception_receipt, Mapping):
+                canary_receipt = dict(exception_receipt)
+            if canary_receipt is not None:
+                failed_session["execution_routing_canary_receipt"] = canary_receipt
+            sessions.append(failed_session)
             return _session_dispatch_receipt(
                 run_id,
                 sessions,
@@ -728,17 +746,74 @@ def _launch_canary(
     fallback_routing = dict(routing_payload)
     fallback_routing["proposed_target"] = fallback_target.receipt_fields()
     fallback_routing["attempt_observation"] = fallback_attempt.model_dump(mode="json")
-    fallback_result = launcher.launch(context_pack, execution_routing=fallback_routing)
-    if not isinstance(fallback_result, Mapping):
-        raise IssueSessionLaunchError("canary fallback launcher returned a non-object result")
-    if fallback_result.get("allocation_state") == "allocation_unavailable":
-        raise IssueSessionLaunchError("canary Luna fallback reported allocation unavailable")
+    fallback_result: Mapping[str, Any] | None = None
+    fallback_error: Exception | None = None
+    fallback_allocation_state: object = None
+    try:
+        candidate_result = launcher.launch(
+            context_pack,
+            execution_routing=fallback_routing,
+        )
+    except Exception as exc:
+        fallback_error = exc
+    else:
+        if isinstance(candidate_result, Mapping):
+            fallback_result = candidate_result
+            fallback_allocation_state = candidate_result.get("allocation_state")
+
+    fallback_outcome: Literal["failed", "started", "allocation_unavailable"]
+    if fallback_error is not None or fallback_result is None:
+        fallback_outcome = "failed"
+    elif fallback_allocation_state == "allocation_unavailable":
+        fallback_outcome = "allocation_unavailable"
+    elif fallback_allocation_state in {None, "available"}:
+        fallback_outcome = "started"
+    else:
+        fallback_outcome = "failed"
+    fallback_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=fallback_target,
+        attempt_number=2,
+        mode="canary",
+        outcome=fallback_outcome,
+        observed_at=launch_at,
+        transition_kind="capacity_fallback",
+        transition_reason="spark_allocation_unavailable_at_launch",
+        triggering_attempt=first_attempt,
+    )
     receipt = build_execution_routing_canary_receipt(
         request=request,
         decision=decision,
         attempts=(*attempts, fallback_attempt),
         accepted_delivery_verification="not_run",
     )
+    if fallback_error is not None:
+        fallback_session_id = getattr(fallback_error, "session_id", None)
+        raise IssueSessionLaunchError(
+            "canary Luna fallback launcher failed",
+            session_id=(
+                fallback_session_id
+                if isinstance(fallback_session_id, str)
+                else None
+            ),
+            canary_receipt=receipt,
+        ) from fallback_error
+    if fallback_result is None:
+        raise IssueSessionLaunchError(
+            "canary fallback launcher returned a non-object result",
+            canary_receipt=receipt,
+        )
+    if fallback_allocation_state == "allocation_unavailable":
+        raise IssueSessionLaunchError(
+            "canary Luna fallback reported allocation unavailable",
+            canary_receipt=receipt,
+        )
+    if fallback_outcome == "failed":
+        raise IssueSessionLaunchError(
+            "canary fallback launcher returned an invalid allocation state",
+            canary_receipt=receipt,
+        )
     return fallback_result, receipt
 
 
@@ -758,6 +833,10 @@ def _validated_session_contexts(
     contexts_raw = plan.get("context_packs")
     if not isinstance(decisions_raw, list) or not isinstance(contexts_raw, list):
         raise EpicDispatchError("dispatch plan decisions and context_packs must be lists")
+    _validate_phase2_canary_plan_bound(
+        decisions_raw,
+        source="frozen dispatch plan",
+    )
     run_state_update = plan.get("epic_run_state_update")
     expected_state_decisions = [
         _dispatch_state_summary(decision)
@@ -972,6 +1051,26 @@ def _dispatch_slot(decision: Mapping[str, Any]) -> int:
         decision.get("dispatch_slot"),
         "decision.dispatch_slot",
     )
+
+
+def _validate_phase2_canary_plan_bound(
+    items: Iterable[Mapping[str, Any]],
+    *,
+    source: str,
+) -> None:
+    """Reject more than one canary declaration in one frozen dispatch plan."""
+
+    canary_count = 0
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        routing = item.get("execution_routing")
+        if isinstance(routing, Mapping) and routing.get("mode") == "canary":
+            canary_count += 1
+    if canary_count > 1:
+        raise EpicDispatchError(
+            f"Phase 2 canary sample limit permits one candidate per {source}"
+        )
 
 
 def _session_dispatch_receipt(
