@@ -872,7 +872,7 @@ key before launch. Those actions remain with their live owning workflows.
 
 ### Execution Routing target contract
 
-**Status: target architecture with the Phase 1 shadow seam and bounded Phase 2 canary shipped.** Execution Routing is the Builder System policy that selects an
+**Status: target architecture with the Phase 1 shadow seam and a partial Phase 2 canary enabling slice shipped.** Execution Routing is the Builder System policy that selects an
 adequate execution capability for one already-authorized unit of work. It is a policy/decision seam
 inside the existing Builder control plane, not another orchestrator, lifecycle authority, task
 store, or verification authority. The shipped seam is intentionally evidence-only; the current
@@ -981,7 +981,7 @@ escalation. Phase 1 adds no automatic Luna/Terra/Sol escalation, coordinator pro
 general-delivery policy change, quota polling, worker-start authority, or verification/merge/closure
 change.
 
-### Execution Routing shipped Phase 2 canary seam
+### Execution Routing partial Phase 2 canary enabling seam
 
 Phase 2 admits only an explicitly opted-in single-candidate canary through the same existing
 `epic_dispatch` and configured-provider seams. Admission replay rejects every non-`bounded_fast`,
@@ -992,13 +992,15 @@ unavailable, its only permitted continuation is one typed Luna fallback for that
 work unit; it preserves the exact context-pack, authority, verification-profile, and route-lineage
 hashes. No retry loop, quota oracle, second orchestrator, or model-specific workflow is introduced.
 
-`builder_execution_routing_canary.v1` is a redaction-safe evidence receipt. It records candidate
-identity, requested and actual capability, route lineage, semantic hashes, bounded attempt outcomes,
-and accepted-delivery verification result, while explicitly granting no pickup, lifecycle,
-verification-waiver, merge, or closure authority. The canary does not alter the general-delivery
-default, configured capability ladder, independent review, exact-head CI, owner-doc, merge, or
-closure gates. Any sample widening, active-policy change, or default promotion remains separately
-governed work.
+The canary dispatch result carries redaction-safe, non-authoritative
+`builder_execution_routing_canary.v1` launch/session evidence. It records candidate identity,
+requested and actual capability, route lineage, semantic hashes, bounded attempt outcomes, and
+`accepted_delivery_verification: not_run`; that value is explicitly not acceptance evidence. A
+durable passed/failed accepted-delivery observation, its verification-consumer writer, and any
+restart/recovery correlation remain parent #5322 work. The canary does not alter the
+general-delivery default, configured capability ladder, independent review, exact-head CI,
+owner-doc, merge, or closure gates. Any sample widening, active-policy change, or default
+promotion remains separately governed work.
 
 ```mermaid
 flowchart TD
