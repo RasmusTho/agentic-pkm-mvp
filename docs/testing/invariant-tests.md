@@ -1229,6 +1229,38 @@ GAF-01 (#5063) adds the common vocabulary only. These are shared fitness entries
 | ARCHIVE-DOCTOR-02 | DOCTOR | Read-only doctor detects stale generation, unresolved cleanup, missing tombstone, and resolver mismatch. | `future_runtime` | GAF-07 doctor tests |
 | ARCHIVE-DOCTOR-03 | DOCTOR | Read-only doctor detects derivatives treated as source authority and human identity/provenance held only in a projection. | `future_runtime` | GAF-06 and GAF-07 tests |
 
+## Autonomous operations and cross-surface parity
+
+These rows are the OEF probe registry for the target-state
+`docs/contracts/YGGDRASIL_AUTONOMOUS_OPERATIONS_CONTRACT.md`. They create no second operation,
+policy, receipt, or lifecycle authority and claim no current MCP/GUI parity. The operation's owning
+subsystem remains normative; this section classifies the cross-surface probes.
+
+| ID | Category | Purpose | Current enforcement | Eventual test path |
+| --- | --- | --- | --- | --- |
+| AUTOOPS-MUST-01 | MUST | Durable resource identity is stable across move/rename and is never reconstructed from path, title, UI position, URL, or tool-call position. | `doc_only` | operation identity conformance tests |
+| AUTOOPS-MUST-02 | MUST | Every path resolves from an immutable selected context/vault generation to a canonical portable relative path; absolute, traversal, symlink-escape, cross-vault, and ambiguous targets fail before effects. | `partial_runtime` | hostile path and context-generation tests |
+| AUTOOPS-MUST-03 | MUST | Actor, client, delegation, policy version, target scope, limits, and expiry are resolved before execution; GUI/MCP connectivity or discovery never grants authority. | `doc_only` | delegation and production-call-site policy tests |
+| AUTOOPS-MUST-04 | MUST | Every mutation declares CAS, create-once/no-clobber, atomic append, or an equivalent owner-native transaction; mediated autonomous callers have no force-save bypass. | `partial_runtime` | operation concurrency and collision tests |
+| AUTOOPS-MUST-05 | MUST | A governed effect is successful only after the required source effect and durable receipt reach their terminal state; projection lag remains explicit. | `partial_runtime` | mutation-before-receipt and convergence tests |
+| AUTOOPS-MUST-06 | MUST | Stable request identity makes retry idempotent; ambiguous effects enter verify-before-retry recovery rather than blind replay. | `doc_only` | duplicate, timeout, crash, and recovery tests |
+| AUTOOPS-MUST-07 | MUST | Batch target sets are bounded and frozen before confirmation; atomicity or partial-success policy is explicit, with durable per-item outcomes and restart recovery. | `future_runtime` | batch interruption and restart tests |
+| AUTOOPS-MUST-08 | MUST | Source mutation durably records required Store, index, backlink, relation, and link-projection convergence without making a derivative authoritative. | `doc_only` | operation projection-convergence tests |
+| AUTOOPS-MUST-09 | MUST | Operation provenance preserves operation/request version, actor/client/surface, delegation/policy, context, targets, versions, effects, trust/boundary changes, receipts, and recovery posture. | `doc_only` | receipt and provenance conformance tests |
+| AUTOOPS-MUST-10 | MUST | Recovery reconciles partial batches, orphan effects/receipts, conflicts, pending outbox work, identity/path drift, and projection mismatch without guessing identity or upgrading trust. | `future_runtime` | operation doctor and recovery tests |
+| AUTOOPS-GATE-01 | GATE | Direct operation, GUI/API, and MCP adapters pass one conformance corpus with equivalent domain outcomes, authority, effects, receipts, conflicts, idempotency, and recovery. | `future_runtime` | cross-surface operation conformance suite |
+| AUTOOPS-GATE-02 | GATE | A production call-site census rejects GUI/API/MCP mutation paths that bypass the owning operation. | `future_runtime` | operation-boundary architecture tests |
+| AUTOOPS-GATE-03 | GATE | Hostile path, symlink, collision, no-clobber, CAS, and multi-process races fail closed. | `partial_runtime` | adversarial filesystem/concurrency suite |
+| AUTOOPS-GATE-04 | GATE | Batch interruption, process restart, duplicate request, and mutation-before-receipt scenarios converge to a typed terminal or recovery-required result. | `future_runtime` | operation liveness/recovery suite |
+| AUTOOPS-GATE-05 | GATE | Operation and MCP descriptors are versioned, reject unknown fields, match executable schemas, and expose authority/side-effect/maturity posture. | `future_runtime` | descriptor/schema parity tests |
+| AUTOOPS-GATE-06 | GATE | Move, rename, archive, and restore preserve stable identity and prove Store/search/link convergence. | `future_runtime` | lifecycle convergence suite |
+| AUTOOPS-GATE-07 | GATE | Human-flow scenarios prove bounded delegation, one batch confirmation, legible progress/receipts, conflict handling, and recovery. | `future_runtime` | Companion browser/UAT operation scenarios |
+| AUTOOPS-GATE-08 | GATE | Agent-flow scenarios prove discovery, preflight, bounded autonomous execution, per-item outcomes, verified retry, and a real external MCP client journey. | `future_runtime` | external MCP composed acceptance suite |
+| AUTOOPS-DOCTOR-01 | DOCTOR | Report operation descriptor/implementation/adapter drift and presentation-only controls exposed as domain tools. | `future_runtime` | autonomous-operations doctor tests |
+| AUTOOPS-DOCTOR-02 | DOCTOR | Report identity/path/Store/index/link drift, unresolved UUID-to-path mappings, and stale context generations. | `future_runtime` | autonomous-operations doctor tests |
+| AUTOOPS-DOCTOR-03 | DOCTOR | Report orphan effects/receipts, stuck convergence work, incomplete batches, staged conflicts, and recovery-required operations. | `future_runtime` | autonomous-operations doctor tests |
+| AUTOOPS-DOCTOR-04 | DOCTOR | Report remaining versionless writers and any GUI/API/MCP call site that bypasses an admitted operation. | `future_runtime` | writer/bypass census tests |
+
 ## Settings Spine invariants (SET-1..7)
 
 The Settings Spine (feature #3156, Option B ruling) consolidates five settings substrates into two
