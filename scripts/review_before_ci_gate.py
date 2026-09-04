@@ -1398,6 +1398,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ReviewBeforeCiGateError(
                 "publication requires explicit --publication-mode existing"
             )
+        elif args.governing_issue is not None:
+            raise ReviewBeforeCiGateError(
+                "governing Issue identity requires explicit --publication-mode new or existing"
+            )
         if args.pr_scope_revalidation:
             if (
                 args.pr_number is None

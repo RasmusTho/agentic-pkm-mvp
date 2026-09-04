@@ -1503,6 +1503,39 @@ def test_new_publication_rejects_existing_pr_evidence(
     assert "cannot supply existing-PR identity or revalidation receipt" in capsys.readouterr().err
 
 
+def test_modeless_governing_issue_requires_publication_mode(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate.workflow_risk_evidence_from_git",
+        lambda *args, **kwargs: SimpleNamespace(risks=[], head_sha="a" * 40),
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._github_repository_from_origin", lambda: "octo/repo"
+    )
+    monkeypatch.setattr(
+        "scripts.review_before_ci_gate._current_branch_has_open_pr", lambda repository: False
+    )
+
+    assert review_before_ci_main(
+        [
+            "--lane",
+            "governance",
+            "--changed-file",
+            "scripts/review_before_ci_gate.py",
+            "--risk-assessment-complete",
+            "--risk-surface",
+            "state-machine",
+            "--review-gate-complete",
+            "--github-repository",
+            "octo/repo",
+            "--governing-issue",
+            "5319",
+        ]
+    ) == 2
+    assert "requires explicit --publication-mode new or existing" in capsys.readouterr().err
+
+
 def test_pr_scope_revalidation_rejects_unbound_governing_issue_or_review() -> None:
     responses, api = _live_pr_review_api()
     responses["repos/octo/repo/pulls/4029"]["body"] = "Governing-Issue: #9999\n\nFixes #9999\n"  # type: ignore[index]
