@@ -274,13 +274,17 @@ def _run_ask(
     ask_settings = get_ask_settings()
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
-        state = run_ask_graph(
-            req.question,
-            trace_id=trace_id,
-            ask_settings=ask_settings,
-            active_scope=active_scope,
-            active_context=active_context,
-        )
+        graph_kwargs = {
+            "trace_id": trace_id,
+            "ask_settings": ask_settings,
+            "active_scope": active_scope,
+        }
+        # Preserve the existing graph-call shape for unscoped requests.  This
+        # matters for compatibility adapters while scoped requests still carry
+        # their immutable context through the production graph seam.
+        if active_context is not None:
+            graph_kwargs["active_context"] = active_context
+        state = run_ask_graph(req.question, **graph_kwargs)
     except LLMBackendTimeout as exc:
         record_ask_error()
         raise HTTPException(
