@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -61,7 +61,8 @@ from app.agent_memory.posture_projection import (
     AgentMemoryPostureTarget,
     agent_memory_posture_for_artifacts,
 )
-from app.auth import require_loopback_or_api_key
+from app.auth import require_loopback_or_api_key, resolve_auth_subject
+from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -115,6 +116,7 @@ from app.vault.active_context import ActiveContextResolver
 from app.vault.active_context_v1 import ActiveContextSetV1
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_read_window
 from app.instance.vault_registry import VaultRegistryStore
+from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
 from app.vault.layout import LAYOUT_NOTE_NAME
 from app.vault.manager import (
     SETTINGS_DIR_NAME,
@@ -267,6 +269,10 @@ class VaultContextResponse(BaseModel):
     validation_error: str | None = None
     permissions: dict[str, bool] = Field(default_factory=dict)
     active_context: dict[str, Any] | None = None
+    #: Returned only by the picker transition in a registry-bound process. The
+    #: raw bearer is session-scoped UI transport state, never persisted in the
+    #: vault context or app-local selection.
+    context_selection_id: str | None = None
 
 
 class VaultSelectRequest(BaseModel):
@@ -931,9 +937,35 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     response_model=VaultContextResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
-def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
+def select_companion_vault(req: VaultSelectRequest, request: Request) -> VaultContextResponse:
     context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-    return _vault_context_response(context)
+    response = _vault_context_response(context)
+    registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    if not registry_path:
+        return response
+    registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
+    selected = Path(req.path).expanduser().resolve(strict=False)
+    selected_identity = resolve_filesystem_root_identity(selected)
+    matches = [
+        registration
+        for registration in registry.load().registrations.values()
+        if same_filesystem_root(resolve_filesystem_root_identity(registration.path), selected_identity)
+    ]
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="active_context_binding_unresolved")
+    try:
+        service = build_selection_service(get_selection_store())
+        derived = service.derive(
+            resolve_auth_subject(request, request.headers.get("X-API-Key")),
+            presented_credential=request.headers.get("X-API-Key"),
+        )
+        bearer, _record = service.create(
+            derived=derived,
+            binding_ids=[matches[0].vault_binding_id],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail="active_context_selection_unavailable") from exc
+    return response.model_copy(update={"context_selection_id": bearer})
 
 
 # --- Visual folder browser (#2565) ------------------------------------------

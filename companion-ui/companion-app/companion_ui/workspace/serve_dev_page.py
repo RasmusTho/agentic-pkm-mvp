@@ -7144,7 +7144,9 @@ def _render_vault_picker_script() -> str:
         body: JSON.stringify(body || {})
       }).then(function(response) {
         if (!response.ok) { return response.text().then(function(t) { throw new Error(t || response.status); }); }
-        return response.text();
+        return response.text().then(function(text) {
+          try { return text ? JSON.parse(text) : null; } catch (e) { return null; }
+        });
       });
     }
     function escapeHtml(value) {
@@ -7191,7 +7193,15 @@ def _render_vault_picker_script() -> str:
         button.setAttribute('data-affordance-status', 'pending');
       }
       jsonPost('/api/companion/vault/select', { path: path })
-        .then(function() { window.location.reload(); })
+        .then(function(data) {
+          // MVR-05B: the picker owns this browser-session bearer. It is not a
+          // durable preference and a stale value is handled by the scoped
+          // route's visible reselection contract.
+          if (data && data.context_selection_id) {
+            window.sessionStorage.setItem('active-context-session', data.context_selection_id);
+          }
+          window.location.reload();
+        })
         .catch(function(err) {
           var message = String(err && err.message || err);
           showSelectError(message);
