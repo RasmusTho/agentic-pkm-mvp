@@ -1249,7 +1249,7 @@ def read_companion_now() -> list[dict]:
     response_model=VaultInitializeResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
-def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
+def initialize_companion_vault(req: VaultInitializeRequest, request: Request) -> VaultInitializeResponse:
     target = Path(req.path)
     # Personal-vault-write guard (#2518): initializing writes the settings
     # scaffold INTO the chosen folder. When that folder is already populated
@@ -1285,8 +1285,11 @@ def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeRe
         machine_role=req.machine_role,
         remember=req.remember,
     )
+    picker_context = select_companion_vault(
+        VaultSelectRequest(path=str(target), remember=req.remember), request
+    )
     return VaultInitializeResponse(
-        context=_vault_context_response(result.context),
+        context=picker_context,
         created_files=list(result.created_files),
         skipped_existing_files=list(result.skipped_existing_files),
     )

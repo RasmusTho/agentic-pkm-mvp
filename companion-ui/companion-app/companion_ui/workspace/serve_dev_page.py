@@ -7236,7 +7236,12 @@ def _render_vault_picker_script() -> str:
           return { ok: response.ok, status: response.status, data: data, text: text };
         });
       }).then(function(res) {
-        if (res.ok) { window.location.reload(); return; }
+        if (res.ok) {
+          var selectionId = res.data && res.data.context && res.data.context.context_selection_id;
+          if (selectionId) { window.sessionStorage.setItem('active-context-session', selectionId); }
+          window.location.reload();
+          return;
+        }
         button.removeAttribute('data-submitting');
         var detail = res.data && res.data.detail;
         if (res.status === 409 && detail && detail.error === 'vault_init_confirmation_required') {
