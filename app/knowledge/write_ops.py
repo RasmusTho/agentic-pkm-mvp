@@ -1217,30 +1217,59 @@ def _create_note_once_at_relative_seam(
                 raise
             stage_unlink_attempted = True
             retain_owned_stage()
-            winner = os.stat(
+            winner_fd = os.open(
                 parts[-1],
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=directory_fds[-1],
-                follow_symlinks=False,
             )
-            if not stat.S_ISREG(winner.st_mode) or winner.st_nlink != 1:
-                raise KnowledgeWriteConflict(
-                    f"create-once winner is not one regular file: {note_rel_path}"
+            try:
+                winner = os.fstat(winner_fd)
+                named_winner = os.stat(
+                    parts[-1],
+                    dir_fd=directory_fds[-1],
+                    follow_symlinks=False,
                 )
-            require_live_directory_chain()
-            winner_after = os.stat(
-                parts[-1],
-                dir_fd=directory_fds[-1],
-                follow_symlinks=False,
-            )
-            if (
-                not stat.S_ISREG(winner_after.st_mode)
-                or winner_after.st_nlink != 1
-                or not _same_file_identity(winner_after, winner)
-            ):
-                raise KnowledgeWriteConflict(
-                    f"create-once winner changed before acknowledgement: {note_rel_path}"
+                if (
+                    not stat.S_ISREG(winner.st_mode)
+                    or winner.st_nlink != 1
+                    or not stat.S_ISREG(named_winner.st_mode)
+                    or named_winner.st_nlink != 1
+                    or not _same_file_identity(winner, named_winner)
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"create-once winner is not one regular file: {note_rel_path}"
+                    )
+                winner_payload, observed_winner = _read_stable_descriptor(winner_fd)
+                if not _same_file_identity(observed_winner, winner):
+                    raise KnowledgeWriteConflict(
+                        f"create-once winner changed while reading: {note_rel_path}"
+                    )
+                require_live_directory_chain()
+                winner_after = os.fstat(winner_fd)
+                named_after = os.stat(
+                    parts[-1],
+                    dir_fd=directory_fds[-1],
+                    follow_symlinks=False,
                 )
-            return "already_exists"
+                final_payload, final_winner = _read_stable_descriptor(winner_fd)
+                if (
+                    not stat.S_ISREG(winner_after.st_mode)
+                    or winner_after.st_nlink != 1
+                    or not stat.S_ISREG(named_after.st_mode)
+                    or named_after.st_nlink != 1
+                    or not _same_file_identity(winner_after, winner)
+                    or not _same_file_identity(named_after, winner)
+                    or not _same_file_identity(final_winner, winner)
+                    or final_payload != winner_payload
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"create-once winner changed before acknowledgement: {note_rel_path}"
+                    )
+                return "already_exists"
+            finally:
+                os.close(winner_fd)
 
         stage_owned = False
         os.fsync(directory_fds[-1])
