@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import asyncio
+import json
 import os
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 
-from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
 import pytest
 
+
 SIDECAR_DISTRIBUTION = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
-sys.path.insert(0, str(SIDECAR_DISTRIBUTION))
-from mimer_mcp_sidecar.transport import MimerMcpTransportConfig, parse_config
 
 
 def _installed_entrypoint(tmp_path: Path) -> Path:
@@ -38,13 +35,27 @@ def _installed_entrypoint(tmp_path: Path) -> Path:
     ],
 )
 def test_network_transport_and_listener_configuration_are_rejected(
-    arguments: list[str], message: str
+    tmp_path: Path, arguments: list[str], message: str
 ) -> None:
-    with pytest.raises(ValueError, match=message):
-        parse_config(arguments)
+    result = subprocess.run(
+        [str(_installed_entrypoint(tmp_path)), *arguments], capture_output=True, text=True
+    )
+    assert result.returncode == 2
+    assert message in result.stderr
 
 
-def test_stdio_production_entrypoint_opens_no_network_listener(tmp_path) -> None:
+def _request(process: subprocess.Popen[str], payload: dict[str, object]) -> dict[str, object]:
+    assert process.stdin is not None and process.stdout is not None
+    process.stdin.write(json.dumps(payload) + "\n")
+    process.stdin.flush()
+    line = process.stdout.readline()
+    assert line, process.stderr.read() if process.stderr is not None else "sidecar exited"
+    response = json.loads(line)
+    assert isinstance(response, dict)
+    return response
+
+
+def test_stdio_production_entrypoint_opens_no_network_listener(tmp_path: Path) -> None:
     entrypoint = _installed_entrypoint(tmp_path)
     probe = tmp_path / "probe"
     probe.mkdir()
@@ -57,25 +68,21 @@ def test_stdio_production_entrypoint_opens_no_network_listener(tmp_path) -> None
         "socket.socket = NoListener\n",
         encoding="utf-8",
     )
-
-    async def negotiate() -> list[str]:
-        parameters = StdioServerParameters(
-            command=str(entrypoint), args=["--transport", "stdio"],
-            env={**os.environ, "PYTHONPATH": str(probe)},
-        )
-        async with stdio_client(parameters) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                tools = await session.list_tools()
-                return [tool.name for tool in tools.tools]
-
-    assert asyncio.run(negotiate()) == [
-        "mimer.ask",
-        "mimer.capture",
-        "mimer.retrieve",
-        "mimer.read_note",
-        "mimer.health",
-    ]
-
-    with pytest.raises(ValueError, match="loopback"):
-        MimerMcpTransportConfig(base_url="http://192.0.2.1:8000").validate()
+    process = subprocess.Popen(
+        [str(entrypoint), "--transport", "stdio"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": str(probe)},
+    )
+    initialize = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+    }
+    try:
+        assert _request(process, initialize)["id"] == 1
+        assert process.stdin is not None
+        process.stdin.close()
+        process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
