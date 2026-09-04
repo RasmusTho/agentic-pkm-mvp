@@ -207,6 +207,7 @@ def _http_exception_outcome(request: OperationRequest, exc: Exception) -> Operat
 
 def _list_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
     from app.api.routes.companion import _select_vault_notes
+    from app.objects import resolve_canonical_object_id
 
     limit = int(request.arguments.get("limit", 250))
     if not 1 <= limit <= 1000:
@@ -214,7 +215,7 @@ def _list_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwn
     notes, _, _, _, _ = _select_vault_notes(vault_root, query="", limit=limit)
     items = tuple(
         {
-            "stable_id": note.uuid,
+            "stable_id": resolve_canonical_object_id(note.uuid),
             "locator": note.note_path,
             "current_locator": note.note_path,
             "title": note.title,
@@ -239,6 +240,7 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
         _resolve_related_scope,
         _validate_workspace_markdown_note_path,
     )
+    from app.objects import resolve_canonical_object_id
 
     target = request.targets[0] if request.targets else request.arguments
     locator = str(target.get("locator") or target.get("note_path") or "")
@@ -253,7 +255,17 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
     # ID merely to echo it, so it cannot establish that invariant itself.
     notes = _collect_relation_notes(vault_root)
     identity_note = next(
-        (note for note in notes if note.get("artifact_uuid") == stable_id), None
+        (
+            note
+            for note in notes
+            if note.get("artifact_uuid")
+            and stable_id
+            in {
+                str(note["artifact_uuid"]),
+                resolve_canonical_object_id(str(note["artifact_uuid"])),
+            }
+        ),
+        None,
     )
     if identity_note is None:
         return ReadOwnerResult("not_found", warning="artifact_not_found")
@@ -263,7 +275,7 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
         _resolve_related_scope(
             notes,
             note_path=safe_locator,
-            artifact_uuid=stable_id,
+            artifact_uuid=str(identity_note["artifact_uuid"]),
         )
     resolved = _resolve_and_validate(current_locator, vault_root)
     if not resolved.exists() or not resolved.is_file():
@@ -273,7 +285,7 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
         "succeeded",
         (
             {
-                "stable_id": stable_id,
+                "stable_id": resolve_canonical_object_id(str(identity_note["artifact_uuid"])),
                 "locator": current_locator,
                 "current_locator": current_locator,
                 "title": _extract_title(body, fallback=resolved.stem),
@@ -289,6 +301,7 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
 
 def _search_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
     from app.retrieval.capability import RetrievalRequest, retrieve
+    from app.vault.manager import nearest_enclosing_vault_root
 
     query = str(request.arguments.get("query") or "")
     if not query:
@@ -296,7 +309,10 @@ def _search_from_companion(request: OperationRequest, vault_root: Path) -> ReadO
     limit = int(request.arguments.get("limit", 10))
     if not 1 <= limit <= 1000:
         return ReadOwnerResult("invalid", warning="limit must be between 1 and 1000")
-    response = retrieve(RetrievalRequest(query=query, k=1000))
+    try:
+        response = retrieve(RetrievalRequest(query=query, k=1000))
+    except (TypeError, ValueError):
+        return ReadOwnerResult("owner_unavailable", warning="retrieval owner failed")
     root = vault_root.resolve()
 
     def locator_for(source_ref: str | None) -> str | None:
@@ -305,7 +321,10 @@ def _search_from_companion(request: OperationRequest, vault_root: Path) -> ReadO
         source = Path(source_ref)
         candidate = source if source.is_absolute() else root / source
         try:
-            return candidate.resolve().relative_to(root).as_posix()
+            resolved = candidate.resolve()
+            if nearest_enclosing_vault_root(resolved, search_root=root) != root:
+                return None
+            return resolved.relative_to(root).as_posix()
         except ValueError:
             return None
 
@@ -344,6 +363,7 @@ def _related_from_companion(request: OperationRequest, vault_root: Path) -> Read
         _resolve_related_scope,
         _validate_workspace_markdown_note_path,
     )
+    from app.objects import resolve_canonical_object_id
 
     target = request.targets[0] if request.targets else request.arguments
     limit = int(request.arguments.get("limit", 10))
@@ -360,14 +380,16 @@ def _related_from_companion(request: OperationRequest, vault_root: Path) -> Read
         _resolve_related_scope(
             notes,
             note_path=safe_note_path,
-            artifact_uuid=target.get("artifact_id") or target.get("stable_id"),
+            artifact_uuid=_raw_vault_uuid(
+                target.get("artifact_id") or target.get("stable_id"), notes
+            ),
         ),
         notes,
         limit=limit,
     )
     items = tuple(
         {
-            "stable_id": item.artifact_uuid or item.note_path,
+            "stable_id": resolve_canonical_object_id(str(item.artifact_uuid)),
             "locator": item.note_path,
             "current_locator": item.note_path,
             "title": item.title,
@@ -386,3 +408,25 @@ def _related_from_companion(request: OperationRequest, vault_root: Path) -> Read
             "owner_unavailable", items, "one or more related artifacts lack stable identity"
         )
     return ReadOwnerResult("succeeded", items)
+
+
+def _raw_vault_uuid(stable_id: object, notes: list[dict[str, object]]) -> str | None:
+    """Translate public canonical IDs back to Companion's vault UUID seam."""
+    if stable_id is None:
+        return None
+    from app.objects import resolve_canonical_object_id
+
+    identifier = str(stable_id)
+    return next(
+        (
+            str(note["artifact_uuid"])
+            for note in notes
+            if note.get("artifact_uuid")
+            and identifier
+            in {
+                str(note["artifact_uuid"]),
+                resolve_canonical_object_id(str(note["artifact_uuid"])),
+            }
+        ),
+        identifier,
+    )
