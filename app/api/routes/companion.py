@@ -113,7 +113,7 @@ from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
 from app.vault.active_context_v1 import ActiveContextSetV1
-from app.instance.context_bound_read import ContextBoundReadError, resolve_context_read_roots
+from app.instance.context_bound_read import ContextBoundReadError, context_bound_read_window
 from app.instance.vault_registry import VaultRegistryStore
 from app.vault.layout import LAYOUT_NOTE_NAME
 from app.vault.manager import (
@@ -2076,7 +2076,7 @@ def list_scoped_vault_notes(
         # process configuration changes between resolution and the read seam.
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     try:
-        roots = resolve_context_read_roots(
+        read_window = context_bound_read_window(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         )
@@ -2084,21 +2084,23 @@ def list_scoped_vault_notes(
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
     notes: list[ScopedVaultNoteEntry] = []
-    for source in roots:
-        for note in _list_vault_notes(source.root, q=q):
-            notes.append(
-                ScopedVaultNoteEntry(
-                    **note.model_dump(),
-                    vault_binding_id=source.vault_binding_id,
-                    context_generation=source.context_generation,
-                )
-            )
-            if len(notes) >= _BROWSE_MAX_NOTES:
-                return ScopedVaultNoteListResponse(
-                    notes=notes,
-                    context_generation=context.generation,
-                    total_count=len(notes),
-                )
+    try:
+        with read_window as roots:
+            for source in roots:
+                for note in _list_vault_notes(source.root, q=q):
+                    notes.append(
+                        ScopedVaultNoteEntry(
+                            **note.model_dump(),
+                            vault_binding_id=source.vault_binding_id,
+                            context_generation=source.context_generation,
+                        )
+                    )
+                    if len(notes) >= _BROWSE_MAX_NOTES:
+                        break
+                if len(notes) >= _BROWSE_MAX_NOTES:
+                    break
+    except ContextBoundReadError as exc:
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
     return ScopedVaultNoteListResponse(
         notes=notes,
         context_generation=context.generation,
