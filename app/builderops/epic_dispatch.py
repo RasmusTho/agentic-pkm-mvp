@@ -692,14 +692,24 @@ def _launch_canary(
 
     attempts: list[ExecutionAttemptObservation] = []
     first_result: Mapping[str, Any] | None = None
+    first_error: Exception | None = None
     if not allocation_unavailable:
-        first_result = launcher.launch(context_pack, execution_routing=routing_payload)
-        if not isinstance(first_result, Mapping):
-            raise IssueSessionLaunchError("canary launcher returned a non-object result")
-        allocation_state = first_result.get("allocation_state")
-        if allocation_state not in {None, "available", "allocation_unavailable"}:
-            raise IssueSessionLaunchError("canary launcher returned an invalid allocation state")
-        allocation_unavailable = allocation_state == "allocation_unavailable"
+        try:
+            candidate_result = launcher.launch(
+                context_pack,
+                execution_routing=routing_payload,
+            )
+            if not isinstance(candidate_result, Mapping):
+                raise IssueSessionLaunchError("canary launcher returned a non-object result")
+            allocation_state = candidate_result.get("allocation_state")
+            if allocation_state not in {None, "available", "allocation_unavailable"}:
+                raise IssueSessionLaunchError(
+                    "canary launcher returned an invalid allocation state"
+                )
+            first_result = candidate_result
+            allocation_unavailable = allocation_state == "allocation_unavailable"
+        except Exception as exc:
+            first_error = exc
 
     first_attempt = create_execution_attempt(
         request=request,
@@ -707,10 +717,31 @@ def _launch_canary(
         target=target,
         attempt_number=1,
         mode="canary",
-        outcome="allocation_unavailable" if allocation_unavailable else "started",
+        outcome=(
+            "failed"
+            if first_error is not None
+            else "allocation_unavailable"
+            if allocation_unavailable
+            else "started"
+        ),
         observed_at=launch_at,
     )
     attempts.append(first_attempt)
+    if first_error is not None:
+        receipt = build_execution_routing_canary_receipt(
+            request=request,
+            decision=decision,
+            attempts=attempts,
+            accepted_delivery_verification="not_run",
+        )
+        first_session_id = getattr(first_error, "session_id", None)
+        raise IssueSessionLaunchError(
+            "canary primary launcher failed",
+            session_id=(
+                first_session_id if isinstance(first_session_id, str) else None
+            ),
+            canary_receipt=receipt,
+        ) from first_error
     if not allocation_unavailable:
         assert first_result is not None  # narrowed by the branch above
         receipt = build_execution_routing_canary_receipt(

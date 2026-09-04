@@ -1268,6 +1268,59 @@ def test_phase2_canary_fallback_launcher_failure_records_redacted_receipt() -> N
     assert "provider payload" not in json.dumps(canary_receipt, sort_keys=True)
 
 
+def test_phase2_canary_primary_launcher_failure_records_redacted_receipt() -> None:
+    candidate = _candidate(
+        5332,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-primary-launch-failure",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5332],
+        run_id="phase2-canary-primary-launch-failure",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [RuntimeError("provider payload contained a secret and must not enter the receipt")]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 1
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["schema_version"] == "builder_execution_routing_canary.v1"
+    assert canary_receipt["attempt_count"] == 1
+    assert canary_receipt["attempts"][0]["outcome"] == "failed"
+    assert canary_receipt["accepted_delivery_verification"] == "not_run"
+    assert canary_receipt["lifecycle_authority"] == "none"
+    assert "provider payload" not in json.dumps(canary_receipt, sort_keys=True)
+
+
 def test_phase2_canary_plan_bound_is_plan_wide_without_rejecting_independent_work_units() -> None:
     def canary_candidate(issue_number: int, file_name: str) -> dict[str, object]:
         candidate = _candidate(
