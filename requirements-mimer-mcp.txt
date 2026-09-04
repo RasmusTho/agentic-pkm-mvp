@@ -1,0 +1,2 @@
+# Client-spawned A2 Mimer MCP sidecar only; do not install into core runtime.
+mcp==1.29.1
