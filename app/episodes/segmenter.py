@@ -113,7 +113,8 @@ from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path, parse_validated_episode_note
 from app.episodes.store import write_episode_note
 from app.jobs.episodes_projection import EPISODES_TABLE, row_tuple
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.episodes.stream_registry import (
     STATUS_LIVE,
     StreamRegistry,
@@ -1042,6 +1043,29 @@ def _fusion_receipt_rel_path(fused_episode_id: str) -> str:
     return f"{_FUSION_RECEIPT_DIR}/{fused_episode_id}.md"
 
 
+def _fusion_receipt_matches(
+    receipt_rel_path: str,
+    *,
+    vault_root: Path,
+    fuse: "cross_scope_fusion.AllowedFusion",
+) -> bool:
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    try:
+        fields, _ = load_frontmatter(
+            read_create_once_winner_relative(receipt_rel_path, vault_root=vault_root)
+        )
+    except (OSError, UnicodeError, KnowledgeWriteConflict):
+        return False
+    recorded_at = fields.get("recorded_at")
+    if not isinstance(recorded_at, str) or not recorded_at:
+        return False
+    return fields == cross_scope_fusion.fusion_receipt_fields(
+        fuse,
+        recorded_at=recorded_at,
+    )
+
+
 def _write_fusion_receipt(
     fuse: "cross_scope_fusion.AllowedFusion",
     *,
@@ -1061,8 +1085,14 @@ def _write_fusion_receipt(
     # Idempotent under redelivery (Finding 3): the fused id is deterministic, so a crash/retry
     # re-resolves the SAME receipt path -- never a duplicate receipt (mirrors _emit_fused_note's
     # existence check on the note itself).
-    if (Path(vault_root) / _fusion_receipt_rel_path(fuse.fused_episode_id)).exists():
-        return
+    receipt_rel_path = _fusion_receipt_rel_path(fuse.fused_episode_id)
+    receipt_path = Path(vault_root) / receipt_rel_path
+    if receipt_path.exists() or receipt_path.is_symlink():
+        if _fusion_receipt_matches(receipt_rel_path, vault_root=vault_root, fuse=fuse):
+            return
+        raise KnowledgeWriteConflict(
+            f"fusion receipt path is occupied by a different artifact: {receipt_rel_path}"
+        )
 
     fields = cross_scope_fusion.fusion_receipt_fields(
         fuse, recorded_at=datetime.now(timezone.utc).isoformat()
@@ -1076,13 +1106,21 @@ def _write_fusion_receipt(
         "before the fused episode note; a fused cross-scope episode never exists without it.\n"
     )
     content = dump_frontmatter(fields, body)
-    write_note_relative(
-        _fusion_receipt_rel_path(fuse.fused_episode_id),
+    receipt = write_note_relative(
+        receipt_rel_path,
         content,
         vault_root=vault_root,
         action=FUSION_RECEIPT_WRITE_ACTION,
         write_guard=write_guard,
+        writer_identity=FUSION_RECEIPT_WRITE_ACTION,
+        create_once=True,
     )
+    if receipt.outcome == "already_exists" and not _fusion_receipt_matches(
+        receipt_rel_path, vault_root=vault_root, fuse=fuse
+    ):
+        raise KnowledgeWriteConflict(
+            f"fusion receipt path is occupied by a different artifact: {receipt_rel_path}"
+        )
 
 
 def _emit_fused_note(

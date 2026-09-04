@@ -450,3 +450,34 @@ def test_ordinary_reclaim_returns_task_and_emits_released_expired_event(
     assert event.actor == "dispatcher-gc"
     assert event.lease_id == old_lease.lease_id
     assert event.payload == {"reason": "expired"}
+
+
+def test_reclaim_expired_failed_lease_preserves_status_and_emits_release(
+    store: SqliteStore,
+) -> None:
+    """Recovery retains a recorded failed outcome while releasing its lease."""
+    from app.dispatcher.services import update_task
+
+    task = _task()
+    store.upsert_task(task)
+    _claimed_task, lease = claim(store, task.task_id, "departed-agent")
+    update_task(store, task.task_id, "failed", None, "operator")
+    _expire_lease(store, lease.lease_id)
+
+    reclaimed = reclaim_expired_leases(store, actor="dispatcher-gc")
+
+    assert reclaimed == [task.task_id]
+    recovered = store.get_task(task.task_id)
+    assert recovered is not None
+    assert recovered.status == "failed"
+    assert recovered.claimed_by is None
+    assert recovered.lease_id is None
+    released_lease = store.get_lease(lease.lease_id)
+    assert released_lease is not None
+    assert released_lease.released_at is not None
+    assert released_lease.release_reason == "expired"
+    event = store.list_events(task.task_id)[-1]
+    assert event.event_type == "task.released"
+    assert event.actor == "dispatcher-gc"
+    assert event.lease_id == lease.lease_id
+    assert event.payload == {"reason": "expired"}

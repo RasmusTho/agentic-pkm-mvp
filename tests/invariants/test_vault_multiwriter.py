@@ -11,6 +11,7 @@ from typing import BinaryIO
 import pytest
 
 from app.knowledge import adapters as adapters_module
+from app.knowledge import write_ops as write_ops_module
 from app.knowledge.adapters import FsVaultAdapter
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
@@ -22,6 +23,8 @@ from app.knowledge.multiwriter import (
     is_conflict_artifact,
 )
 from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.write_ops import write_note_relative
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 
 class _FaultingBinaryHandle:
@@ -991,10 +994,312 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
         assert "write_note_from_absolute(" in watcher_source, watcher_path
         assert "watcher_panel_writeback_allowed(" in watcher_source, watcher_path
 
+    intent_producers = {
+        "app/agent_memory/materialization.py": (
+            "materialize_promoted_memory",
+            "create-once",
+        ),
+        "app/agent_memory/provisional_write.py": (
+            "write_provisional_memory",
+            "create-once",
+        ),
+        "app/chat/session_log.py": ("SessionLogWriter.open_session", "create-once"),
+        "app/episodes/segmenter.py": ("_write_fusion_receipt", "create-once"),
+        "app/eval/failure_capture.py": ("_write_draft", "create-once"),
+        "app/heimdal/candidate_projection.py": (
+            "write_candidate_note",
+            "create-once",
+        ),
+        "app/heimdal/candidate_projection.py::reading": (
+            "write_reading_candidate_note",
+            "create-once",
+        ),
+        "app/mcp/vault_tools.py": ("append_note", "append-only"),
+    }
+    for relative_path, (symbol, classification) in intent_producers.items():
+        source_path = relative_path.removesuffix("::reading")
+        source = (repo_root / source_path).read_text(encoding="utf-8")
+        source_symbol = symbol.rsplit(".", 1)[-1]
+        assert source_symbol in source, (relative_path, symbol)
+        if classification == "create-once":
+            assert "create_once=True" in source, relative_path
+        else:
+            assert "create_once=True" not in source, relative_path
+
     worker_source = (repo_root / "app/workers/outbox_worker.py").read_text(
         encoding="utf-8"
     )
     assert "def _write_markdown_if_changed(" not in worker_source
+
+
+def test_create_intended_writers_do_not_clobber_existing_artifacts(
+    tmp_path: Path,
+) -> None:
+    guard = WriteGuard(lambda: {"state": "healthy"})
+    target = tmp_path / "Agent Memory" / "artifact.md"
+
+    first = write_note_relative(
+        "Agent Memory/artifact.md",
+        "first writer\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.first",
+        create_once=True,
+    )
+    second = write_note_relative(
+        "Agent Memory/artifact.md",
+        "second writer\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.second",
+        create_once=True,
+    )
+
+    assert first.outcome == "written"
+    assert second.outcome == "already_exists"
+    assert target.read_bytes() == b"first writer\n"
+    assert not list(target.parent.glob(".write-note-stage-*"))
+
+
+def test_relative_create_once_rejects_substituted_stage_inode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    (parent / "foreign.md").write_text("foreign bytes\n", encoding="utf-8")
+    real_publish = write_ops_module._atomic_rename_noreplace_at
+
+    def substitute_stage_then_publish(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        os.unlink(source_name, dir_fd=source_fd)
+        os.symlink("foreign.md", source_name, dir_fd=source_fd)
+        real_publish(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        substitute_stage_then_publish,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="target changed"):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "intended bytes\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.stage-substitution",
+            create_once=True,
+        )
+
+    target = parent / "artifact.md"
+    assert target.is_symlink()
+    assert target.read_text(encoding="utf-8") == "foreign bytes\n"
+
+
+def test_relative_create_once_cleanup_preserves_foreign_stage_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    target = parent / "artifact.md"
+    target.write_text("winner\n", encoding="utf-8")
+    real_retain = write_ops_module._atomically_retain_controlled_entry
+    substituted = False
+
+    def substitute_before_retention(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        locator: NoteLocator,
+        *,
+        retain_guard: bool = False,
+    ):
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            os.rename(
+                source_name,
+                ".owned-stage-moved-away",
+                src_dir_fd=source_dir_fd,
+                dst_dir_fd=source_dir_fd,
+            )
+            foreign_fd = os.open(
+                source_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_dir_fd,
+            )
+            try:
+                os.write(foreign_fd, b"foreign replacement\n")
+                os.fsync(foreign_fd)
+            finally:
+                os.close(foreign_fd)
+        return real_retain(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            locator,
+            retain_guard=retain_guard,
+        )
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomically_retain_controlled_entry",
+        substitute_before_retention,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="staged inode changed"):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "loser\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.cleanup-substitution",
+            create_once=True,
+        )
+
+    assert target.read_text(encoding="utf-8") == "winner\n"
+    stages = list(parent.glob(".write-note-stage-*"))
+    assert len(stages) == 1
+    assert stages[0].read_text(encoding="utf-8") == "foreign replacement\n"
+    assert (parent / ".owned-stage-moved-away").read_text(encoding="utf-8") == "loser\n"
+
+
+def test_relative_create_once_rejects_replaced_parent_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    displaced = tmp_path / "Agent Memory-displaced"
+    real_publish = write_ops_module._atomic_rename_noreplace_at
+
+    def replace_parent_then_publish(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        parent.rename(displaced)
+        parent.mkdir()
+        real_publish(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        replace_parent_then_publish,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="directory changed"):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "intended bytes\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.parent-substitution",
+            create_once=True,
+        )
+
+    assert not (parent / "artifact.md").exists()
+    assert (displaced / "artifact.md").read_text(encoding="utf-8") == "intended bytes\n"
+
+
+@pytest.mark.parametrize("replacement", ["delete", "symlink", "regular"])
+def test_relative_create_once_loser_rejects_final_target_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    target = parent / "artifact.md"
+    target.write_text("winner\n", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    real_chain_check = write_ops_module._require_live_relative_directory_chain
+    checks = 0
+
+    def change_leaf_after_loser_chain_check(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal checks
+        real_chain_check(*args, **kwargs)
+        checks += 1
+        if checks != 2:
+            return
+        target.unlink()
+        if replacement == "symlink":
+            target.symlink_to(outside)
+        elif replacement == "regular":
+            target.write_text("replacement\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_require_live_relative_directory_chain",
+        change_leaf_after_loser_chain_check,
+    )
+
+    with pytest.raises((FileNotFoundError, KnowledgeWriteConflict)):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "loser\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.final-loser-fence",
+            create_once=True,
+        )
+
+    if replacement == "delete":
+        assert not target.exists()
+    elif replacement == "symlink":
+        assert target.is_symlink()
+        assert outside.read_text(encoding="utf-8") == "outside\n"
+    else:
+        assert target.read_text(encoding="utf-8") == "replacement\n"
+
+
+def test_create_intended_writers_preserve_idempotency_and_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "healthy"})
+    guard = WriteGuard(lambda: {"state": "healthy"})
+    target = tmp_path / "Sources" / "idempotent.md"
+
+    first = write_note_relative(
+        "Sources/idempotent.md",
+        "durable first\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.idempotent",
+        create_once=True,
+    )
+    replay = write_note_relative(
+        "Sources/idempotent.md",
+        "different replay\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+        writer_identity="vmw.replay",
+        create_once=True,
+    )
+
+    assert first.note_class is NoteClass.CREATE_ONCE
+    assert first.writer_identity == "vmw.idempotent"
+    assert replay.writer_identity == "vmw.replay"
+    assert datetime.fromisoformat(first.written_at or "").tzinfo is UTC
+    assert datetime.fromisoformat(replay.written_at or "").tzinfo is UTC
+    assert replay.outcome == "already_exists"
+    assert target.read_bytes() == b"durable first\n"
+
+    from app.mcp.vault_tools import append_note
+
+    first_mcp = append_note(title="MCP Artifact", body="one", vault_root=tmp_path)
+    second_mcp = append_note(title="MCP Artifact", body="two", vault_root=tmp_path)
+    assert first_mcp != second_mcp
+    assert first_mcp.read_text(encoding="utf-8").endswith("one\n")
+    assert second_mcp.read_text(encoding="utf-8").endswith("two\n")
 
 
 def test_rewritten_write_with_expected_version_conflicts_when_target_was_deleted(

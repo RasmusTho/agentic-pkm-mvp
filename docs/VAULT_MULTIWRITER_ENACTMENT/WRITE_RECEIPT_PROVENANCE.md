@@ -31,6 +31,26 @@ Add a centralized note-class/operation classifier aligned with the committed Mim
 
 This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, an initially stale opted-in rewrite has the structured staged-conflict outcome supplied by VMW-02 at the low-level adapter, the production helpers preserve hard-failure semantics for unaware consumers, and an in-flight race remains a hard failure. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
 
+## Classification ledger (#5140)
+
+The relative write seam owns the explicit create-once mode for the seven producers below. The MCP
+collection writer remains append-only; it is listed so the census is complete without treating its
+unique-path allocation as a rewritten-note migration.
+
+| Producer | Disposition | Enforcement / preservation rule |
+| --- | --- | --- |
+| `app/agent_memory/materialization.py::materialize_promoted_memory` | create-once | deterministic materialization path; retries preserve the first complete artifact |
+| `app/agent_memory/provisional_write.py::write_provisional_memory` | create-once | UUID artifact is first-write-wins; lifecycle receipts remain replayable |
+| `app/chat/session_log.py::SessionLogWriter.open_session` | create-once | session header is published once; later turns use append-only writes |
+| `app/episodes/segmenter.py::_write_fusion_receipt` | create-once | deterministic receipt path is idempotent and never clobbers a prior receipt |
+| `app/eval/failure_capture.py::_write_draft` | create-once | initial draft is first-write-wins; `_decide` remains a separate rewrite/CAS child |
+| `app/heimdal/candidate_projection.py::write_candidate_note` | create-once | deterministic candidate projection is idempotent and preserves a prior artifact |
+| `app/heimdal/candidate_projection.py::write_reading_candidate_note` | create-once | deterministic reading projection is idempotent and preserves a prior artifact |
+| `app/mcp/vault_tools.py::append_note` | append-only | next-available MCP note paths preserve every earlier artifact; no create-once mode is added |
+
+The ledger is an intent classification, not a new generic write primitive. Any writer discovered to
+rewrite an existing artifact belongs in a follow-up CAS child rather than this census.
+
 ## Why This Matters
 
 VMW-02 relies on this classification to apply stale detection only to rewritten operations. Provenance lets a human understand the two sides of a staged conflict, while VMW-03 consumes the same artifact grammar to quarantine that sibling before ordinary ingest.

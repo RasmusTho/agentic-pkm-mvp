@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
+import app.eval.failure_capture as failure_capture_module
 import app.workers.outbox_worker as outbox_worker
 from app.api.app import app
 from app.eval.failure_capture import (
@@ -29,9 +30,11 @@ from app.eval.failure_capture import (
     DRAFT_KIND_SCHEMA_VIOLATION,
     DRAFT_STATUS_PENDING,
     DRAFT_STATUS_PROMOTED,
+    draft_dead_letter_case,
     promote_draft,
     read_draft,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import WriteGuard, WritesBlockedError
 
@@ -259,6 +262,34 @@ def test_draft_is_write_guard_gated(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         )
 
     assert not (vault / get_vault_system_dir_rel(vault) / "eval_drafts").exists()
+
+
+def test_draft_create_race_loser_fails_loudly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    real_write = failure_capture_module.write_note_relative
+
+    def interleaved_write(note_rel_path: str, content: str, **kwargs: object):
+        target = Path(str(kwargs["vault_root"])) / note_rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("foreign raced eval draft\n", encoding="utf-8")
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", interleaved_write)
+
+    with pytest.raises(KnowledgeWriteConflict, match="already exists"):
+        draft_dead_letter_case(
+            vault_root=vault,
+            topic="ingest.vault.changed",
+            reason="schema_violation:missing_required_field",
+            event_id="evt-raced",
+            payload={"event_id": "evt-raced"},
+            trace_id="trace-raced",
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
 
 
 def test_worker_dead_letter_draft_is_best_effort_on_write_guard_block(

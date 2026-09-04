@@ -18,7 +18,8 @@ from app.agent_memory.review_decision_store import (
 )
 from app.agent_memory.review_queue import ReviewDecision, ReviewEntry, ReviewStatus
 from app.events.types import PROMOTION_TRANSITION_APPLIED
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.receipts.promotion_receipts import (
     PromotionReceiptQuery,
     PromotionReceiptRow,
@@ -135,7 +136,7 @@ def materialize_promoted_memory(
                     )
                     try:
                         write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
-                        write_note_relative(
+                        write_receipt = write_note_relative(
                             artifact_path,
                             _render_memory_note(
                                 entry,
@@ -144,7 +145,24 @@ def materialize_promoted_memory(
                                 persisted=persisted,
                             ),
                             vault_root=vault_root,
+                            action=MEMORY_MATERIALIZATION_ACTION,
+                            write_guard=write_guard,
+                            writer_identity=MEMORY_MATERIALIZATION_SOURCE,
+                            create_once=True,
                         )
+                        if write_receipt.outcome == "already_exists":
+                            raced_note = _find_materialized_note(
+                                vault_root=vault_root,
+                                memory_dir=memory_dir,
+                                entry=entry,
+                                scope_id=persisted_scope_id,
+                                persisted=persisted,
+                            )
+                            if raced_note is None:
+                                raise MemoryMaterializationError(
+                                    "memory materialization target was won by a different artifact"
+                                )
+                            artifact_uuid, artifact_path = raced_note
                     except Exception as exc:
                         failed_receipt_id = _append_promotion_receipt(
                             outbox_path,
@@ -315,13 +333,16 @@ def _recover_applied_receipt(
         raise MemoryMaterializationError(
             "persisted memory materialization receipt conflicts with review authority"
         )
-    artifact_file = _resolve_existing_vault_path(vault_root, row.artifact_path)
-    identity = _read_materialized_note_identity(artifact_file)
-    if identity != (entry.candidate_id, scope_id, row.artifact_uuid):
+    recovered = _read_materialized_note(row.artifact_path, vault_root=vault_root)
+    if recovered is None or recovered[:3] != (
+        entry.candidate_id,
+        scope_id,
+        row.artifact_uuid,
+    ):
         raise MemoryMaterializationError(
             "persisted memory materialization receipt does not match its artifact"
         )
-    if artifact_file.read_text(encoding="utf-8") != _render_memory_note(
+    if recovered[3] != _render_memory_note(
         entry,
         artifact_uuid=row.artifact_uuid,
         scope_id=scope_id,
@@ -347,23 +368,20 @@ def _find_materialized_note(
     _resolve_existing_vault_path(vault_root, root.relative_to(vault_root).as_posix())
     matches: list[tuple[str, str]] = []
     for path in root.rglob("*.md"):
-        identity = _read_materialized_note_identity(path)
-        if identity is None or identity[:2] != (entry.candidate_id, scope_id):
+        relative_path = path.relative_to(vault_root).as_posix()
+        recovered = _read_materialized_note(relative_path, vault_root=vault_root)
+        if recovered is None or recovered[:2] != (entry.candidate_id, scope_id):
             continue
-        safe_path = _resolve_existing_vault_path(
-            vault_root,
-            path.relative_to(vault_root).as_posix(),
-        )
-        if safe_path.read_text(encoding="utf-8") != _render_memory_note(
+        if recovered[3] != _render_memory_note(
             entry,
-            artifact_uuid=identity[2],
+            artifact_uuid=recovered[2],
             scope_id=scope_id,
             persisted=persisted,
         ):
             raise MemoryMaterializationError(
                 "candidate-bound recovery artifact content changed"
             )
-        matches.append((identity[2], path.relative_to(vault_root).as_posix()))
+        matches.append((recovered[2], relative_path))
     if len(matches) > 1:
         raise MemoryMaterializationError(
             "multiple vault artifacts exist for one memory candidate"
@@ -395,10 +413,14 @@ def _resolve_existing_vault_path(vault_root: Path, relative_path: str) -> Path:
     return resolved
 
 
-def _read_materialized_note_identity(path: Path) -> tuple[str, str, str] | None:
+def _read_materialized_note(
+    relative_path: str,
+    *,
+    vault_root: Path,
+) -> tuple[str, str, str, str] | None:
     try:
-        body = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+        body = read_create_once_winner_relative(relative_path, vault_root=vault_root)
+    except (OSError, UnicodeError, KnowledgeWriteConflict):
         return None
     if not body.startswith("---\n"):
         return None
@@ -420,7 +442,7 @@ def _read_materialized_note_identity(path: Path) -> tuple[str, str, str] | None:
         or not isinstance(artifact_uuid, str)
     ):
         return None
-    return candidate_id, scope_id, artifact_uuid
+    return candidate_id, scope_id, artifact_uuid, body
 
 
 def _render_memory_note(
