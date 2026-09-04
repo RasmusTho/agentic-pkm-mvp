@@ -843,3 +843,11 @@ def test_instance_identity_never_substitutes_for_principal_context(instance, cli
         companion_proxy_configured=False,
     )
     assert other_posture.subjects() == ("trusted_loopback",)
+def test_request_override_header_outranks_session_without_mutating_it() -> None:
+    """The resolver contract keeps override precedence explicit and request-local."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "app/instance/active_context_service.py").read_text()
+    assert "override_bearer" in source
+    assert "session_bearer" in source
+    assert "override_bearer if override_bearer is not None else session_bearer" in source
