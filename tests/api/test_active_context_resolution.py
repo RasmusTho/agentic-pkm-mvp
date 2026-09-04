@@ -36,6 +36,7 @@ from app.instance.context_selection import (
     ContextSelectionStore,
     SelectionPrincipalMismatchError,
 )
+from app.instance.context_bound_read import ContextBoundReadError, resolve_context_read_roots
 from app.instance.local_operator_principal import AuthPosture, PrincipalPreflightError
 from app.vault.active_context_v1 import (
     ActiveContextSetV1,
@@ -159,6 +160,42 @@ def test_request_resolution_rotates_generation_on_live_registry_drift(instance) 
     assert after.invalidation.previous_generation == 1
 
 
+def test_context_bound_read_roots_reject_a_stale_binding_revision(instance) -> None:
+    """Filesystem readers cannot rebind a frozen snapshot after registry drift."""
+
+    runtime, first, _second, record = instance
+    service = ActiveContextSelectionService(
+        registry_store=runtime.registry,
+        principal_record=record,
+        selection_store=ContextSelectionStore(),
+    )
+    derived = service.derive("trusted_loopback")
+    bearer, _ = service.create(derived=derived, binding_ids=[first.vault_binding_id])
+    context = service.resolve_request_context(
+        derived=derived, session_bearer=bearer, override_bearer=None, **_READ_GOV_INPUTS
+    ).snapshot
+
+    roots = resolve_context_read_roots(context, registry_store=runtime.registry)
+    assert [(root.vault_binding_id, root.context_generation) for root in roots] == [
+        (first.vault_binding_id, 1)
+    ]
+
+    registration = runtime.registry.lookup(first.vault_binding_id)
+    assert registration is not None
+    runtime.registry.update_registration(
+        replace(
+            registration,
+            extensions={
+                **(registration.extensions or {}),
+                "bindingRevision": runtime.registry.load().revision + 1,
+            },
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    with pytest.raises(ContextBoundReadError, match="binding revision changed"):
+        resolve_context_read_roots(context, registry_store=runtime.registry)
+
+
 def test_ask_route_uses_one_server_resolved_context_generation_end_to_end(
     instance, client, monkeypatch
 ) -> None:
@@ -225,6 +262,38 @@ def test_scoped_ask_refuses_a_stripped_carrier_before_legacy_default(instance, c
 
     assert response.status_code == 401, response.text
     assert response.json()["detail"] == "reselection_required"
+
+
+def test_scoped_note_reads_keep_sessions_and_source_bindings_isolated(instance, client) -> None:
+    """Two scoped requests enumerate only their own registry-bound roots."""
+
+    runtime, first, second, _record = instance
+    first_root = Path(runtime.registry.lookup(first.vault_binding_id).path)  # type: ignore[union-attr]
+    second_root = Path(runtime.registry.lookup(second.vault_binding_id).path)  # type: ignore[union-attr]
+    (first_root / "only-first.md").write_text("# First", encoding="utf-8")
+    (second_root / "only-second.md").write_text("# Second", encoding="utf-8")
+    first_session = _create(client, [first.vault_binding_id])
+    second_session = _create(client, [second.vault_binding_id])
+
+    first_response = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": first_session["context_selection_id"]},
+    )
+    second_response = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": second_session["context_selection_id"]},
+    )
+
+    assert first_response.status_code == 200, first_response.text
+    assert second_response.status_code == 200, second_response.text
+    first_notes = first_response.json()["notes"]
+    second_notes = second_response.json()["notes"]
+    assert [(note["path"], note["vault_binding_id"]) for note in first_notes] == [
+        ("only-first.md", first.vault_binding_id)
+    ]
+    assert [(note["path"], note["vault_binding_id"]) for note in second_notes] == [
+        ("only-second.md", second.vault_binding_id)
+    ]
 
 
 def _record_for(store: ContextSelectionStore, raw_id: str, principal, instance_identity):
