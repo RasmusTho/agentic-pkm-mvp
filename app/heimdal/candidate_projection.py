@@ -69,7 +69,8 @@ from app.heimdal.quarantine import (
     EVIDENCE_ROLE_OBSERVED,
     quarantine_observed_content,
 )
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
@@ -377,7 +378,7 @@ def write_candidate_note(
 
     candidate_path = vault_root / artifact_path
     if candidate_path.exists() or candidate_path.is_symlink():
-        if _is_durable_candidate(candidate_path, candidate):
+        if _is_durable_candidate(artifact_path, vault_root=vault_root, candidate=candidate):
             return CandidateWriteResult(
                 status="already_exists",
                 artifact_path=artifact_path,
@@ -413,7 +414,7 @@ def write_candidate_note(
     )
 
     if receipt.outcome == "already_exists" and not _is_durable_candidate(
-        candidate_path, candidate
+        artifact_path, vault_root=vault_root, candidate=candidate
     ):
         return CandidateWriteResult(
             status="blocked",
@@ -651,19 +652,22 @@ review and a governed authority transition before promotion (KMA-INV-1)._
     return f"---\n{yaml_block}\n---\n{body}"
 
 
-def _is_durable_reading_candidate(path: Path, candidate: ReadingSourceCandidate) -> bool:
+def _is_durable_reading_candidate(
+    artifact_path: str,
+    *,
+    vault_root: Path,
+    candidate: ReadingSourceCandidate,
+) -> bool:
     """Whether an existing path is this reading candidate's durable replay result."""
-    if not path.is_file() or path.is_symlink():
-        return False
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = read_create_once_winner_relative(artifact_path, vault_root=vault_root)
         if not raw.startswith("---\n"):
             return False
         frontmatter, separator, _ = raw.removeprefix("---\n").partition("\n---\n")
         if not separator:
             return False
         parsed = yaml.safe_load(frontmatter)
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeError, KnowledgeWriteConflict, yaml.YAMLError):
         return False
     if not isinstance(parsed, Mapping) or parsed.get("artifact_class") != READING_ARTIFACT_CLASS:
         return False
@@ -696,7 +700,9 @@ def write_reading_candidate_note(
     candidate_path = vault_root / artifact_path
 
     if candidate_path.exists() or candidate_path.is_symlink():
-        if _is_durable_reading_candidate(candidate_path, candidate):
+        if _is_durable_reading_candidate(
+            artifact_path, vault_root=vault_root, candidate=candidate
+        ):
             return CandidateWriteResult(
                 status="already_exists",
                 artifact_path=artifact_path,
@@ -730,7 +736,7 @@ def write_reading_candidate_note(
         create_once=True,
     )
     if receipt.outcome == "already_exists" and not _is_durable_reading_candidate(
-        candidate_path, candidate
+        artifact_path, vault_root=vault_root, candidate=candidate
     ):
         return CandidateWriteResult(
             status="blocked",
@@ -920,19 +926,22 @@ def _vault_root(context: VaultContext) -> Path:
     return root
 
 
-def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
+def _is_durable_candidate(
+    artifact_path: str,
+    *,
+    vault_root: Path,
+    candidate: HeimdalCandidate,
+) -> bool:
     """Return whether an existing path is this candidate's durable replay result."""
-    if not path.is_file() or path.is_symlink():
-        return False
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = read_create_once_winner_relative(artifact_path, vault_root=vault_root)
         if not raw.startswith("---\n"):
             return False
         frontmatter, separator, body = raw.removeprefix("---\n").partition("\n---\n")
         if not separator:
             return False
         parsed = yaml.safe_load(frontmatter)
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeError, KnowledgeWriteConflict, yaml.YAMLError):
         return False
     if not isinstance(parsed, Mapping) or parsed.get("artifact_class") != ARTIFACT_CLASS:
         return False

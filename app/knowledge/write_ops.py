@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Callable, Iterator, Literal
 import uuid
 
 from app.knowledge.adapters import (
+    _atomically_retain_controlled_entry,
     _atomic_exchange_at,
     _atomic_rename_noreplace_at,
     _open_conflict_directory,
@@ -802,6 +803,116 @@ def create_candidate_note_once(
             raise cleanup_error
 
 
+def _require_live_relative_directory_chain(
+    resolved_root: Path,
+    directory_parts: tuple[str, ...],
+    directory_fds: list[int],
+    *,
+    context: str,
+) -> None:
+    if len(directory_fds) != len(directory_parts) + 1:
+        raise KnowledgeWriteConflict(f"{context} lost vault directory authority")
+    try:
+        named_root = os.stat(resolved_root, follow_symlinks=False)
+        opened_root = os.fstat(directory_fds[0])
+        if (
+            not stat.S_ISDIR(named_root.st_mode)
+            or not _same_file_identity(named_root, opened_root)
+        ):
+            raise KnowledgeWriteConflict(f"{context} directory changed")
+        for parent_fd, component, child_fd in zip(
+            directory_fds[:-1],
+            directory_parts,
+            directory_fds[1:],
+            strict=True,
+        ):
+            named = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            opened = os.fstat(child_fd)
+            if (
+                not stat.S_ISDIR(named.st_mode)
+                or not stat.S_ISDIR(opened.st_mode)
+                or not _same_file_identity(named, opened)
+            ):
+                raise KnowledgeWriteConflict(f"{context} directory changed")
+    except OSError as exc:
+        raise KnowledgeWriteConflict(f"{context} directory changed") from exc
+
+
+def read_create_once_winner_relative(
+    note_rel_path: str,
+    *,
+    vault_root: Path | str,
+) -> str:
+    """Read one create-once winner through stable no-follow descriptors."""
+
+    parts = _candidate_relative_parts(note_rel_path)
+    resolved_root = Path(vault_root).expanduser().resolve()
+    directory_fds: list[int] = []
+    target_fd: int | None = None
+    try:
+        directory_fds.append(os.open(resolved_root, _DIRECTORY_OPEN_FLAGS))
+        for component in parts[:-1]:
+            directory_fds.append(
+                os.open(
+                    component,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=directory_fds[-1],
+                )
+            )
+        target_fd = os.open(
+            parts[-1],
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory_fds[-1],
+        )
+        opened = os.fstat(target_fd)
+        named = os.stat(
+            parts[-1],
+            dir_fd=directory_fds[-1],
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or not stat.S_ISREG(named.st_mode)
+            or named.st_nlink != 1
+            or not _same_file_identity(opened, named)
+        ):
+            raise KnowledgeWriteConflict(
+                f"create-once winner is not one stable regular file: {note_rel_path}"
+            )
+        payload, observed = _read_stable_descriptor(target_fd)
+        if not _same_file_identity(observed, opened):
+            raise KnowledgeWriteConflict(
+                f"create-once winner changed while reading: {note_rel_path}"
+            )
+        _require_live_relative_directory_chain(
+            resolved_root,
+            parts[:-1],
+            directory_fds,
+            context=f"create-once winner {note_rel_path}",
+        )
+        named_after = os.stat(
+            parts[-1],
+            dir_fd=directory_fds[-1],
+            follow_symlinks=False,
+        )
+        if (
+            named_after.st_nlink != 1
+            or not _same_file_identity(named_after, opened)
+        ):
+            raise KnowledgeWriteConflict(
+                f"create-once winner changed during receipt fencing: {note_rel_path}"
+            )
+        return payload.decode("utf-8")
+    finally:
+        if target_fd is not None:
+            os.close(target_fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+
+
 def _create_note_once_at_relative_seam(
     note_rel_path: str,
     content: str,
@@ -826,6 +937,7 @@ def _create_note_once_at_relative_seam(
     parts = _candidate_relative_parts(note_rel_path)
     resolved_root = Path(vault_root).expanduser().resolve()
     payload = content.encode("utf-8")
+    locator = make_note_locator(note_rel_path)
 
     directory_fds: list[int] = []
     stage_fd: int | None = None
@@ -841,40 +953,12 @@ def _create_note_once_at_relative_seam(
             cleanup_error = exc
 
     def require_live_directory_chain() -> None:
-        if not directory_fds:
-            raise KnowledgeWriteConflict(
-                f"create-once publication lost vault authority for {note_rel_path}"
-            )
-        try:
-            named_root = os.stat(resolved_root, follow_symlinks=False)
-            opened_root = os.fstat(directory_fds[0])
-            if (
-                not stat.S_ISDIR(named_root.st_mode)
-                or not _same_file_identity(named_root, opened_root)
-            ):
-                raise KnowledgeWriteConflict(
-                    f"create-once publication directory changed for {note_rel_path}"
-                )
-            for parent_fd, component, child_fd in zip(
-                directory_fds[:-1],
-                parts[:-1],
-                directory_fds[1:],
-                strict=True,
-            ):
-                named = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
-                opened = os.fstat(child_fd)
-                if (
-                    not stat.S_ISDIR(named.st_mode)
-                    or not stat.S_ISDIR(opened.st_mode)
-                    or not _same_file_identity(named, opened)
-                ):
-                    raise KnowledgeWriteConflict(
-                        f"create-once publication directory changed for {note_rel_path}"
-                    )
-        except OSError as exc:
-            raise KnowledgeWriteConflict(
-                f"create-once publication directory changed for {note_rel_path}"
-            ) from exc
+        _require_live_relative_directory_chain(
+            resolved_root,
+            parts[:-1],
+            directory_fds,
+            context=f"create-once publication for {note_rel_path}",
+        )
 
     def require_named_stage_identity(name: str) -> None:
         assert stage_fd is not None
@@ -901,6 +985,27 @@ def _create_note_once_at_relative_seam(
             raise KnowledgeWriteConflict(
                 f"create-once staged inode changed for {note_rel_path}"
             )
+
+    def retain_owned_stage() -> None:
+        nonlocal stage_owned
+        assert stage_name is not None
+        assert stage_stat is not None
+        conflict_fd = _open_conflict_directory(directory_fds[-1])
+        try:
+            retained = _atomically_retain_controlled_entry(
+                directory_fds[-1],
+                stage_name,
+                stage_stat,
+                conflict_fd,
+                locator,
+            )
+        finally:
+            os.close(conflict_fd)
+        if retained is None:
+            raise KnowledgeWriteConflict(
+                f"create-once staged inode changed during retention for {note_rel_path}"
+            )
+        stage_owned = False
 
     try:
         directory_fds.append(os.open(resolved_root, _DIRECTORY_OPEN_FLAGS))
@@ -959,11 +1064,8 @@ def _create_note_once_at_relative_seam(
         except OSError as exc:
             if exc.errno != errno.EEXIST:
                 raise
-            require_named_stage_identity(stage_name)
             stage_unlink_attempted = True
-            os.unlink(stage_name, dir_fd=directory_fds[-1])
-            stage_owned = False
-            os.fsync(directory_fds[-1])
+            retain_owned_stage()
             _require_regular_candidate_target(directory_fds[-1], parts[-1])
             require_live_directory_chain()
             return "already_exists"
@@ -1014,16 +1116,9 @@ def _create_note_once_at_relative_seam(
         ):
             stage_unlink_attempted = True
             try:
-                require_named_stage_identity(stage_name)
-                os.unlink(stage_name, dir_fd=directory_fds[-1])
+                retain_owned_stage()
             except BaseException as exc:  # noqa: BLE001 - exact owned-stage cleanup
                 record_cleanup_error(exc)
-            else:
-                stage_owned = False
-                try:
-                    os.fsync(directory_fds[-1])
-                except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
-                    record_cleanup_error(exc)
 
         if stage_fd is not None:
             owned_stage_fd = stage_fd
@@ -4981,6 +5076,7 @@ __all__ = [
     "create_candidate_note_once",
     "default_vault_root_for_path",
     "locked_atomic_append_authority",
+    "read_create_once_winner_relative",
     "read_note_text_with_version",
     "write_note_from_absolute",
     "write_note_relative",

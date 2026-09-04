@@ -113,7 +113,7 @@ from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path, parse_validated_episode_note
 from app.episodes.store import write_episode_note
 from app.jobs.episodes_projection import EPISODES_TABLE, row_tuple
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.episodes.stream_registry import (
     STATUS_LIVE,
@@ -1044,16 +1044,18 @@ def _fusion_receipt_rel_path(fused_episode_id: str) -> str:
 
 
 def _fusion_receipt_matches(
-    path: Path,
+    receipt_rel_path: str,
+    *,
+    vault_root: Path,
     fuse: "cross_scope_fusion.AllowedFusion",
 ) -> bool:
-    if not path.is_file() or path.is_symlink():
-        return False
     from scripts.yaml_roundtrip import load_frontmatter
 
     try:
-        fields, _ = load_frontmatter(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError):
+        fields, _ = load_frontmatter(
+            read_create_once_winner_relative(receipt_rel_path, vault_root=vault_root)
+        )
+    except (OSError, UnicodeError, KnowledgeWriteConflict):
         return False
     recorded_at = fields.get("recorded_at")
     if not isinstance(recorded_at, str) or not recorded_at:
@@ -1086,7 +1088,7 @@ def _write_fusion_receipt(
     receipt_rel_path = _fusion_receipt_rel_path(fuse.fused_episode_id)
     receipt_path = Path(vault_root) / receipt_rel_path
     if receipt_path.exists() or receipt_path.is_symlink():
-        if _fusion_receipt_matches(receipt_path, fuse):
+        if _fusion_receipt_matches(receipt_rel_path, vault_root=vault_root, fuse=fuse):
             return
         raise KnowledgeWriteConflict(
             f"fusion receipt path is occupied by a different artifact: {receipt_rel_path}"
@@ -1114,7 +1116,7 @@ def _write_fusion_receipt(
         create_once=True,
     )
     if receipt.outcome == "already_exists" and not _fusion_receipt_matches(
-        receipt_path, fuse
+        receipt_rel_path, vault_root=vault_root, fuse=fuse
     ):
         raise KnowledgeWriteConflict(
             f"fusion receipt path is occupied by a different artifact: {receipt_rel_path}"

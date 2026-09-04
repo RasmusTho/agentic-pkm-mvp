@@ -1100,6 +1100,77 @@ def test_relative_create_once_rejects_substituted_stage_inode(
     assert target.read_text(encoding="utf-8") == "foreign bytes\n"
 
 
+def test_relative_create_once_cleanup_preserves_foreign_stage_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    target = parent / "artifact.md"
+    target.write_text("winner\n", encoding="utf-8")
+    real_retain = write_ops_module._atomically_retain_controlled_entry
+    substituted = False
+
+    def substitute_before_retention(
+        source_dir_fd: int,
+        source_name: str,
+        expected: os.stat_result,
+        conflict_dir_fd: int,
+        locator: NoteLocator,
+        *,
+        retain_guard: bool = False,
+    ):
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            os.rename(
+                source_name,
+                ".owned-stage-moved-away",
+                src_dir_fd=source_dir_fd,
+                dst_dir_fd=source_dir_fd,
+            )
+            foreign_fd = os.open(
+                source_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_dir_fd,
+            )
+            try:
+                os.write(foreign_fd, b"foreign replacement\n")
+                os.fsync(foreign_fd)
+            finally:
+                os.close(foreign_fd)
+        return real_retain(
+            source_dir_fd,
+            source_name,
+            expected,
+            conflict_dir_fd,
+            locator,
+            retain_guard=retain_guard,
+        )
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomically_retain_controlled_entry",
+        substitute_before_retention,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="staged inode changed"):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "loser\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.cleanup-substitution",
+            create_once=True,
+        )
+
+    assert target.read_text(encoding="utf-8") == "winner\n"
+    stages = list(parent.glob(".write-note-stage-*"))
+    assert len(stages) == 1
+    assert stages[0].read_text(encoding="utf-8") == "foreign replacement\n"
+    assert (parent / ".owned-stage-moved-away").read_text(encoding="utf-8") == "loser\n"
+
+
 def test_relative_create_once_rejects_replaced_parent_namespace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

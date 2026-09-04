@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 
 import pytest
 import yaml
@@ -41,6 +43,20 @@ def test_append_note_sequential_names(tmp_path: Path) -> None:
     second = append_note(title="Test", body="two", vault_root=tmp_path)
     assert first.name == "test.md"
     assert second.name == "test-2.md"
+
+
+def test_append_note_concurrent_same_title_preserves_both_bodies(tmp_path: Path) -> None:
+    ready = threading.Barrier(2)
+
+    def write(body: str) -> Path:
+        ready.wait()
+        return append_note(title="Same", body=body, vault_root=tmp_path)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        paths = list(executor.map(write, ("one", "two")))
+
+    assert {path.name for path in paths} == {"same.md", "same-2.md"}
+    assert {_read_frontmatter(path)[1] for path in paths} == {"one", "two"}
 
 
 def test_get_vault_root_prefers_settings(tmp_path: Path) -> None:

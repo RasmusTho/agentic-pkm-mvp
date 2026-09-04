@@ -38,6 +38,7 @@ from app.heimdal.cursor_store import get_cursor, reset_memory_cursor_store
 from app.heimdal.observation_log import reset_memory_observation_log
 from app.heimdal.publish import publish_observation
 from app.heimdal.quarantine import FENCE_CLOSE, FENCE_OPEN
+from app.knowledge import write_ops as write_ops_module
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
 
@@ -528,6 +529,49 @@ def test_projector_does_not_acknowledge_foreign_candidate_winning_create_race(
 
     assert results[0].status == "blocked"
     assert "non-durable artifact" in (results[0].reason or "")
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
+@pytest.mark.parametrize("replacement", ["leaf", "parent"])
+def test_projector_does_not_acknowledge_candidate_swapped_during_winner_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    _publish("obs-swapped", episode_id="ep-swapped")
+    vault = _vault(tmp_path / "vault")
+    first = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    candidate_path = Path(vault.active_vault_path) / str(first[0].artifact_path)
+    original_content = candidate_path.read_text(encoding="utf-8")
+    reset_memory_cursor_store()
+    real_read = write_ops_module._read_stable_descriptor
+    swapped = False
+
+    def read_then_swap(descriptor: int):
+        nonlocal swapped
+        result = real_read(descriptor)
+        if not swapped:
+            swapped = True
+            if replacement == "leaf":
+                outside = tmp_path / "outside-candidate.md"
+                outside.write_text(original_content, encoding="utf-8")
+                candidate_path.unlink()
+                candidate_path.symlink_to(outside)
+            else:
+                displaced = candidate_path.parent.with_name("Heimdal-displaced")
+                candidate_path.parent.rename(displaced)
+                candidate_path.parent.mkdir()
+                (candidate_path.parent / candidate_path.name).write_text(
+                    original_content,
+                    encoding="utf-8",
+                )
+        return result
+
+    monkeypatch.setattr(write_ops_module, "_read_stable_descriptor", read_then_swap)
+
+    replay = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert replay[0].status == "blocked"
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
 
 
