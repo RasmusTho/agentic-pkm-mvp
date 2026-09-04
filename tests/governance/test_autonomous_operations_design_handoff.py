@@ -26,6 +26,16 @@ def test_handoff_maps_human_flow_and_components() -> None:
         assert stage in handoff
     for surface in ("Workspace shell", "Vault Browser", "Panel", "Chat"):
         assert surface in handoff
+    for family in (
+        "Create",
+        "Move and rename",
+        "Classify and tag",
+        "Archive and restore",
+        "Bounded batch",
+    ):
+        assert family in handoff
+    assert "Companion operations workspace" in handoff
+    assert "artifact-local" in handoff
     assert "server declares; UI renders" in handoff
 
 

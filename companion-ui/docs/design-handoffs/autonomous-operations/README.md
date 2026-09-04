@@ -25,18 +25,40 @@ expand, or retry an ambiguous authority-bearing effect.
 | Contract stage | Existing Companion surface/component | Required interaction guidance | Authority boundary |
 | --- | --- | --- | --- |
 | Discover and select | Workspace shell and Vault Browser | Browse/filter resources, show title/path together with stable identity and provenance, then retain an explicit selection set. | Discovery is read-only; a path is locator data, not identity authority. |
-| State an outcome | Workspace shell action entry and Panel | Offer only server-declared admitted operations for the selection; disclose unsupported capability rather than synthesizing an action. | Panel transports intent to the governed seam; it does not classify authority. |
-| Inspect scope | Panel preview/diff and bounded batch review | Show affected identities, versions, context/vault generation, policy/trust crossings, reversibility, limits, and material uncertainty before confirmation. | Preview is not delegation and does not reserve an unconfirmed target set. |
-| Delegate once | Panel confirmation | Confirm the immutable operation family, context, selector or explicit targets, maximum count, expiry/revocation, and partial-success policy once. | A client cannot broaden this delegation or add targets after confirmation. |
-| Execute and observe | Workspace shell progress region and Panel activity | Show per-item progress separately for source effect, receipt persistence, and derived convergence. Keep progress passive until the kernel returns a typed outcome. | `convergence_pending` is observable work, not a reason to roll back a committed source effect. |
-| Review outcome | Panel receipt/activity history and Vault Browser inspection | Keep completed, refused, skipped, conflicted, and recoverable items inspectable with stable receipt/provenance links. | A visible intent or spinner must not stand in for an owner-native effect and receipt. |
-| Recover or correct | Panel conflict/recovery view | Offer resume, verify, retry, compensate, or restore only when the returned operation contract admits that action. | Unknown, stale, or ambiguous effects fail closed; no UI retry is implied. |
+| State an outcome | Workspace shell action entry | Offer only server-declared admitted operations for the selection; disclose unsupported capability rather than synthesizing an action. | The shell transports intent and does not classify authority. |
+| Inspect scope | Artifact-local Panel preview/diff for one resource; Companion operations workspace for aggregate scope | Show affected identities, versions, context/vault generation, policy/trust crossings, reversibility, limits, and material uncertainty before confirmation. | Preview is not delegation and does not reserve an unconfirmed target set. |
+| Delegate once | Artifact-local Panel confirmation for one resource; Companion operations workspace confirmation for a batch | Confirm the immutable operation family, context, selector or explicit targets, maximum count, expiry/revocation, and partial-success policy once. | A client cannot broaden this delegation or add targets after confirmation. |
+| Execute and observe | Workspace shell progress region; artifact-local Panel activity for one resource; Companion operations workspace for aggregate progress | Show per-item progress separately for source effect, receipt persistence, and derived convergence. Keep progress passive until the kernel returns a typed outcome. | `convergence_pending` is observable work, not a reason to roll back a committed source effect. |
+| Review outcome | Artifact-local Panel receipt/activity history for one resource; Companion operations workspace aggregate history; Vault Browser inspection | Keep completed, refused, skipped, conflicted, and recoverable items inspectable with stable receipt/provenance links. | A visible intent or spinner must not stand in for an owner-native effect and receipt. |
+| Recover or correct | Artifact-local Panel conflict/recovery view for one resource; Companion operations workspace for aggregate recovery | Offer resume, verify, retry, compensate, or restore only when the returned operation contract admits that action. | Unknown, stale, or ambiguous effects fail closed; no UI retry is implied. |
 
 Progressive disclosure starts with the selection, declared capability, and
 high-level impact. It expands into the frozen scope/policy before confirmation,
 then into per-item outcomes, receipt metadata, and recovery evidence after the
 operation. This avoids turning the Workspace shell into a dashboard while
 keeping authority-bearing detail available when it matters.
+
+## Required operation-family map
+
+The **Companion operations workspace** is a required GUI addition for the
+downstream implementation issue; it mounts in the existing Workspace shell and
+is not claimed as shipped here. It owns aggregate selection, frozen batch
+scope, aggregate progress, and aggregate receipts/recovery. Panel remains
+artifact-local: it may show a single selected artifact's preview, confirmation,
+activity, receipt, conflict, or recovery detail, but it does not become a
+multi-resource operation controller.
+
+| Operation family | Entry and target selection | Preview/confirmation and outcome location |
+| --- | --- | --- |
+| Create | Workspace shell action entry supplies the declared artifact type and destination context. | Companion operations workspace shows destination/policy preview and the resulting stable identity/receipt. |
+| Move and rename | Vault Browser selects one artifact; the operations workspace chooses a target location/name using server preflight. | Artifact-local Panel may show the selected artifact's diff; the workspace owns collision, expected-version, and final placement outcome. |
+| Classify and tag | Vault Browser inspector exposes current values and starts a declared semantic operation. | Artifact-local Panel shows a single-artifact proposal; the workspace owns bounded multi-select semantic preview and per-item outcomes. |
+| Archive and restore | Vault Browser selection starts the owner-native lifecycle operation. | Panel may show one artifact's reason/reversibility; the workspace owns batch impact, lifecycle receipts, and recoverable subset. |
+| Bounded batch | Workspace shell and Vault Browser produce a visible multi-selection; the operations workspace freezes the identities/versions. | The operations workspace alone presents one batch confirmation, aggregate progress, per-item receipts, cancellation, and recovery. |
+
+Chat may describe a goal or proposal with context, but it routes any admitted
+operation back to the declared command surface; it never becomes an independent
+mutation or batch-control lane.
 
 ## Failure and recovery states
 
