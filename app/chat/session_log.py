@@ -54,8 +54,12 @@ class SessionLogWriter:
         DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
         note_uuid = ensure_note_uuid(note_path, vault_root=self._vault_root)
         now = self._now_fn()
-        note_slug = _slugify(note_path.stem)
-        label_slug = _slugify(session_label)
+        # Keep the standard-library basename sanitizer visible at the path
+        # construction boundary. ``_slugify`` already removes separators, but
+        # this explicit fence also lets static analysis prove that owner input
+        # cannot control a path outside the generated chat namespace.
+        note_slug = os.path.basename(_slugify(note_path.stem))
+        label_slug = os.path.basename(_slugify(session_label))
         ts_file = now.strftime("%Y-%m-%dT%H-%M")
         ts_frontmatter = now.strftime("%Y-%m-%dT%H:%M")
         session_id = self._uuid_fn()

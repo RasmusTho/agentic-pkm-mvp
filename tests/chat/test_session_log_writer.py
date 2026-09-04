@@ -51,6 +51,18 @@ def test_log_path_uses_note_slug_and_timestamp(tmp_path: Path) -> None:
     assert session.log_path.name.endswith("restructure-decision-section.md")
 
 
+def test_log_path_sanitizes_traversal_shaped_session_label(tmp_path: Path) -> None:
+    writer = _writer(tmp_path)
+    note = _note(tmp_path)
+
+    session = writer.open_session(note, "../../outside")
+
+    assert session.log_path.parent == tmp_path / ".chats" / "my-design-decision"
+    assert session.log_path.name == "2026-04-24T07-30-outside.md"
+    assert session.log_path.is_relative_to(tmp_path)
+    assert not (tmp_path.parent / "outside.md").exists()
+
+
 def test_frontmatter_fields_present(tmp_path: Path) -> None:
     writer = _writer(tmp_path)
     note = _note(tmp_path)
