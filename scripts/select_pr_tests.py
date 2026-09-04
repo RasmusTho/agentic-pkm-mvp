@@ -397,6 +397,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # proofs owned together so a new adapter module cannot fall through
             # CI's fail-closed unowned-runtime path (#3368).
             "app/mimer_mcp/",
+            "requirements-mimer-mcp.txt",
             "tests/mcp/test_mimer_server.py",
             "tests/mcp/test_mimer_server_transport.py",
             "tests/mcp/test_mimer_server_security.py",

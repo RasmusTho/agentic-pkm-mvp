@@ -108,9 +108,11 @@ async def serve_stdio(
     config.validate()
     semantic = semantic_factory(config.base_url)
     server = create_stdio_server(semantic)
+    dependency = semantic.call_tool("mimer.health", {})
+    readiness = "degraded" if dependency.is_error else "ready"
     try:
         async with stdio_server() as (read_stream, write_stream):
-            _LOG.info("mimer_mcp_started transport=stdio readiness=ready dependency=loopback_http")
+            _LOG.info("mimer_mcp_started transport=stdio readiness=%s dependency=loopback_http", readiness)
             await server.run(
                 read_stream,
                 write_stream,

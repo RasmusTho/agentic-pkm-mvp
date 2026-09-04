@@ -170,6 +170,16 @@ def test_shared_pins_do_not_diverge() -> None:
     assert not divergences, "Shared requirement majors diverged:\n" + "\n".join(divergences)
 
 
+def test_pyproject_and_requirements_are_consistent() -> None:
+    """The A2 sidecar SDK stays out of core requirements but has a pinned lock."""
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    sidecar = _parse_requirements(REPO_ROOT / "requirements-mimer-mcp.txt")
+    runtime = _parse_requirements(ROOT_REQUIREMENTS)
+    assert "mimer-mcp" in pyproject
+    assert "mcp" in sidecar
+    assert "mcp" not in runtime
+
+
 def test_docker_and_ci_install_same_numpy_major() -> None:
     sources = _install_sources()
     assert sources, "No Docker/CI requirements install sources found"

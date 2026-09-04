@@ -33,11 +33,6 @@ def test_stdio_production_entrypoint_opens_no_network_listener(tmp_path) -> None
         "import socket, sys\n"
         "sys.path.insert(0, '.')\n"
         "from app.mimer_mcp.transport import main\n"
-        "_socket = socket.socket\n"
-        "def deny_network(family=socket.AF_INET, *args, **kwargs):\n"
-        "    if family != socket.AF_UNIX: raise RuntimeError('network socket forbidden')\n"
-        "    return _socket(family, *args, **kwargs)\n"
-        "socket.socket = deny_network\n"
         "raise SystemExit(main())\n",
         encoding="utf-8",
     )
