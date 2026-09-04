@@ -14,7 +14,12 @@ from typing import Iterator
 from uuid import uuid4
 
 from app.journaling.transcript_protocol import ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1
-from app.knowledge.write_ops import append_note_relative, write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import (
+    append_note_relative,
+    read_create_once_winner_relative,
+    write_note_relative,
+)
 from app.services.note_uuid import ensure_note_uuid
 from app.vault.manager import VaultContext
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -54,8 +59,12 @@ class SessionLogWriter:
         DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
         note_uuid = ensure_note_uuid(note_path, vault_root=self._vault_root)
         now = self._now_fn()
-        note_slug = _slugify(note_path.stem)
-        label_slug = _slugify(session_label)
+        # Keep the standard-library basename sanitizer visible at the path
+        # construction boundary. ``_slugify`` already removes separators, but
+        # this explicit fence also lets static analysis prove that owner input
+        # cannot control a path outside the generated chat namespace.
+        note_slug = os.path.basename(_slugify(note_path.stem))
+        label_slug = os.path.basename(_slugify(session_label))
         ts_file = now.strftime("%Y-%m-%dT%H-%M")
         ts_frontmatter = now.strftime("%Y-%m-%dT%H:%M")
         session_id = self._uuid_fn()
@@ -75,7 +84,45 @@ class SessionLogWriter:
             "---\n\n"
             f"## Session: {label_slug}\n\n"
         )
-        write_note_relative(log_rel_path.as_posix(), frontmatter, vault_root=self._vault_root)
+        receipt = write_note_relative(
+            log_rel_path.as_posix(),
+            frontmatter,
+            vault_root=self._vault_root,
+            action=CHAT_SESSION_PERSIST_ACTION,
+            write_guard=DEFAULT_WRITE_GUARD,
+            writer_identity="chat.session_log",
+            create_once=True,
+        )
+        if receipt.outcome == "already_exists":
+            try:
+                existing_frontmatter, _ = load_frontmatter(
+                    read_create_once_winner_relative(
+                        log_rel_path.as_posix(),
+                        vault_root=self._vault_root,
+                    )
+                )
+            except (OSError, UnicodeError, KnowledgeWriteConflict) as exc:
+                raise ValueError(
+                    "chat session create-once target became unavailable or unsafe "
+                    "after publication"
+                ) from exc
+            existing_session_id = existing_frontmatter.get("session_id")
+            existing_note_uuid = existing_frontmatter.get("note_uuid")
+            if (
+                existing_frontmatter.get("type") != "chat-session"
+                or not isinstance(existing_session_id, str)
+                or not existing_session_id.strip()
+                or existing_note_uuid != note_uuid
+            ):
+                raise ValueError(
+                    "chat session path is occupied by a different artifact: "
+                    f"{log_rel_path.as_posix()}"
+                )
+            if existing_session_id.strip() != session_id:
+                raise ValueError(
+                    "chat session path is occupied by a different session: "
+                    f"{log_rel_path.as_posix()}"
+                )
         return SessionLog(
             log_path=log_path,
             session_id=session_id,

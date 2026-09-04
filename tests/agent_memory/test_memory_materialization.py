@@ -491,6 +491,40 @@ def test_blocked_materialization_keeps_promotion_actionable(tmp_path: Path) -> N
     assert [item.candidate_id for item in rebuilt.pending()] == [candidate.candidate_id]
 
 
+def test_materialization_create_race_does_not_append_applied_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    vault_root = Path(vault.active_vault_path)
+    vault_root.mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    entry = _promoted(_candidate(candidate_id="candidate-raced"), store=store, vault=vault)
+    real_write = materialization_module.write_note_relative
+
+    def interleaved_write(note_rel_path: str, content: str, **kwargs: object):
+        target = Path(str(kwargs["vault_root"])) / note_rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("foreign raced materialization\n", encoding="utf-8")
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(materialization_module, "write_note_relative", interleaved_write)
+
+    with pytest.raises(MemoryMaterializationError):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    receipts = query_promotion_receipts(vault_root=vault_root, outbox_path=outbox)
+    assert [row.outcome_status for row in receipts.rows] == ["failed"]
+
+
 def test_materialized_note_preserves_provenance_and_human_authorship(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     vault_root = Path(vault.active_vault_path)

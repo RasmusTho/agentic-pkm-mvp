@@ -175,6 +175,37 @@ def test_artifact_failure_records_retryable_content_free_failure(
     assert not (vault / "Memory" / "Provisional").exists()
 
 
+def test_create_race_loser_records_failure_instead_of_created(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = _MemoryReceiptStore()
+    real_write = provisional_write_module.write_note_relative
+
+    def interleaved_write(note_rel_path: str, content: str, **kwargs: object):
+        target = Path(str(kwargs["vault_root"])) / note_rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("foreign raced provisional memory\n", encoding="utf-8")
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(provisional_write_module, "write_note_relative", interleaved_write)
+
+    with pytest.raises(ProvisionalMemoryWriteError):
+        write_provisional_memory(
+            _request(),
+            vault_root=vault,
+            receipt_store=store,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+        )
+
+    assert [item.transition for item in store.receipts] == [
+        ProvisionalLifecycleTransition.WRITE_STAGED,
+        ProvisionalLifecycleTransition.WRITE_FAILED,
+    ]
+
+
 def test_receipt_store_serializes_cross_process_appends(tmp_path: Path) -> None:
     path = tmp_path / "receipts.jsonl"
     memory_id = uuid4()
