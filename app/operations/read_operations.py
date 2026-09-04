@@ -98,6 +98,8 @@ class ReadOperationAdapters:
             return _outcome(request, OperationStatus.DEGRADED_READ, "owner_unavailable")
         except (TypeError, ValueError):
             return _outcome(request, OperationStatus.INVALID, "invalid_arguments")
+        except Exception:
+            return _outcome(request, OperationStatus.DEGRADED_READ, "owner_unavailable")
         return _normalize(request, result)
 
 
@@ -300,60 +302,15 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
 
 
 def _search_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
-    from app.retrieval.capability import RetrievalRequest, retrieve
-    from app.vault.manager import nearest_enclosing_vault_root
-
-    query = str(request.arguments.get("query") or "")
-    if not query:
-        return ReadOwnerResult("invalid", warning="search query is required")
-    limit = int(request.arguments.get("limit", 10))
-    if not 1 <= limit <= 1000:
-        return ReadOwnerResult("invalid", warning="limit must be between 1 and 1000")
-    try:
-        response = retrieve(RetrievalRequest(query=query, k=1000))
-    except (TypeError, ValueError):
-        return ReadOwnerResult("owner_unavailable", warning="retrieval owner failed")
-    root = vault_root.resolve()
-
-    def locator_for(source_ref: str | None) -> str | None:
-        if not source_ref:
-            return None
-        source = Path(source_ref)
-        candidate = source if source.is_absolute() else root / source
-        try:
-            resolved = candidate.resolve()
-            if nearest_enclosing_vault_root(resolved, search_root=root) != root:
-                return None
-            return resolved.relative_to(root).as_posix()
-        except ValueError:
-            return None
-
-    bound_hits = tuple(
-        (hit, locator)
-        for hit in response.hits
-        if hit.doc_id and (locator := locator_for(hit.source_ref)) is not None
-    )[:limit]
-    items = tuple(
-        {
-            "stable_id": hit.doc_id,
-            "locator": locator,
-            "current_locator": locator,
-            "title": str(hit.payload.get("title") or ""),
-            "provenance": {
-                "owner": "retrieval.capability",
-                "source_ref": hit.source_ref,
-                "vault_binding": request.context.active_context_ref,
-            },
-            "freshness": dict(response.metadata.get("temporal_validity") or {}),
-            "vault_context": request.context.active_context_ref,
-        }
-        for hit, locator in bound_hits
+    del request, vault_root
+    # The canonical retrieval service owns ranking but does not yet accept the
+    # selected vault binding.  Filtering global top-k results afterwards is
+    # observably incomplete and can cross nested-vault boundaries, so fail
+    # typed rather than advertise an unsafe partial search until #3860 lands.
+    return ReadOwnerResult(
+        "owner_unavailable",
+        warning="vault-bound retrieval is unavailable pending owner-native context propagation",
     )
-    if len(items) != len(bound_hits):
-        return ReadOwnerResult(
-            "owner_unavailable", items, "one or more search artifacts lack stable identity"
-        )
-    return ReadOwnerResult("succeeded", items)
 
 
 def _related_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
@@ -376,14 +333,26 @@ def _related_from_companion(request: OperationRequest, vault_root: Path) -> Read
         else None
     )
     notes = _collect_relation_notes(vault_root)
+    artifact_uuid = _raw_vault_uuid(target.get("artifact_id") or target.get("stable_id"), notes)
+    target_note = next(
+        (note for note in notes if note.get("artifact_uuid") == artifact_uuid), None
+    )
+    if target_note is not None:
+        if safe_note_path is not None:
+            locator_note = next(
+                (note for note in notes if note.get("note_path") == safe_note_path), None
+            )
+            if locator_note is not None and locator_note is not target_note:
+                _resolve_related_scope(
+                    notes, note_path=safe_note_path, artifact_uuid=artifact_uuid
+                )
+        scope_target = target_note
+    else:
+        scope_target = _resolve_related_scope(
+            notes, note_path=safe_note_path, artifact_uuid=artifact_uuid
+        )
     response = _rank_related_notes(
-        _resolve_related_scope(
-            notes,
-            note_path=safe_note_path,
-            artifact_uuid=_raw_vault_uuid(
-                target.get("artifact_id") or target.get("stable_id"), notes
-            ),
-        ),
+        scope_target,
         notes,
         limit=limit,
     )
