@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops import epic_dispatch as epic_dispatch_module
+from app.builderops.delivery_orchestration_contracts import canonical_hash
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
@@ -96,8 +97,16 @@ class _RecordingSessionLauncher:
         self.responses = iter(responses)
         self.calls: list[dict[str, object]] = []
 
-    def launch(self, context_pack: Mapping[str, object]) -> Mapping[str, object]:
-        self.calls.append(dict(context_pack))
+    def launch(
+        self,
+        context_pack: Mapping[str, object],
+        *,
+        execution_routing: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
+        call = dict(context_pack)
+        if execution_routing is not None:
+            call["_execution_routing"] = dict(execution_routing)
+        self.calls.append(call)
         response = next(self.responses)
         if isinstance(response, Exception):
             raise response
@@ -1075,6 +1084,484 @@ def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launc
     command = launcher.command(pack)
     assert command[command.index("--model") + 1] == "gpt-5.6-luna"
     assert "_TCD_CODEX_ROUTE" not in inspect.getsource(epic_dispatch_module)
+
+
+def test_phase2_canary_preserves_contract_hashes_and_route_lineage() -> None:
+    candidate = _candidate(
+        5322,
+        risk="low",
+        files=["app/builderops/execution_routing.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5322],
+        run_id="phase2-canary-hash-preservation",
+        candidates=[candidate],
+    )
+
+    routing = plan["decisions"][0]["execution_routing"]
+    request = routing["route_request"]
+    decision = routing["route_decision"]
+    attempt = routing["attempt_observation"]
+    pack = plan["context_packs"][0]
+    assert routing["mode"] == "canary"
+    assert routing["canary_admission"] == {
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+    }
+    assert routing["authority"] == "evidence-only-no-launch-or-lifecycle-effect"
+    assert request["context_pack_hash"] == canonical_hash(pack)
+    assert request["authority_hash"] == canonical_hash(pack["issue_contract"])
+    assert request["verification_profile_hash"] == canonical_hash(pack["validation_ledger"])
+    assert decision["route_lineage_id"] == f"execution-route:{canonical_hash(request)}"
+    assert attempt["route_lineage_id"] == decision["route_lineage_id"]
+    assert attempt["context_pack_hash"] == request["context_pack_hash"]
+
+    valid_launcher = _RecordingSessionLauncher(
+        [{"session_id": "session-5322", "worker_receipt": _worker_receipt(5322)}]
+    )
+    valid = dispatch_issue_sessions(
+        plan, valid_launcher, expected_plan_hash=frozen_dispatch_plan_hash(plan)
+    )
+    assert valid["stopped_reason"] == "worker-handoff"
+    assert valid_launcher.calls[0]["_execution_routing"]["proposed_target"][
+        "capability"
+    ] == "luna"
+
+    tampered = json.loads(json.dumps(plan))
+    tampered["decisions"][0]["execution_routing"]["canary_admission"][
+        "sample_limit"
+    ] = 2
+    rejected_launcher = _RecordingSessionLauncher([])
+    with pytest.raises(EpicDispatchError, match="frozen decisions|canary routing requires"):
+        dispatch_issue_sessions(
+            tampered,
+            rejected_launcher,
+            expected_plan_hash=frozen_dispatch_plan_hash(tampered),
+        )
+    assert rejected_launcher.calls == []
+
+
+def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallback() -> None:
+    candidate = _candidate(
+        5323,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-production",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5323],
+        run_id="phase2-canary-production-fallback",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"allocation_state": "allocation_unavailable"},
+            {"session_id": "session-5323", "worker_receipt": _worker_receipt(5323)},
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["stopped_reason"] == "worker-handoff"
+    assert len(launcher.calls) == 2
+    assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "spark"
+    assert launcher.calls[1]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempt_count"] == 2
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
+    assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
+
+
+def test_phase2_canary_fallback_launcher_failure_records_redacted_receipt() -> None:
+    candidate = _candidate(
+        5327,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-fallback-launch-failure",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5327],
+        run_id="phase2-canary-fallback-launch-failure",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"allocation_state": "allocation_unavailable"},
+            RuntimeError("provider payload contained a secret and must not enter the receipt"),
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 2
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["schema_version"] == "builder_execution_routing_canary.v1"
+    assert canary_receipt["attempt_count"] == 2
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["outcome"] == "failed"
+    assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
+    assert canary_receipt["accepted_delivery_verification"] == "not_run"
+    assert canary_receipt["lifecycle_authority"] == "none"
+    assert "provider payload" not in json.dumps(canary_receipt, sort_keys=True)
+
+
+def test_phase2_canary_primary_launcher_failure_records_redacted_receipt() -> None:
+    candidate = _candidate(
+        5332,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-primary-launch-failure",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5332],
+        run_id="phase2-canary-primary-launch-failure",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [RuntimeError("provider payload contained a secret and must not enter the receipt")]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 1
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["schema_version"] == "builder_execution_routing_canary.v1"
+    assert canary_receipt["attempt_count"] == 1
+    assert canary_receipt["attempts"][0]["outcome"] == "failed"
+    assert canary_receipt["accepted_delivery_verification"] == "not_run"
+    assert canary_receipt["lifecycle_authority"] == "none"
+    assert "provider payload" not in json.dumps(canary_receipt, sort_keys=True)
+
+
+def test_phase2_canary_plan_bound_is_plan_wide_without_rejecting_independent_work_units() -> None:
+    def canary_candidate(issue_number: int, file_name: str) -> dict[str, object]:
+        candidate = _candidate(
+            issue_number,
+            risk="low",
+            files=[file_name],
+            preferred_path="subagent",
+        )
+        candidate["execution_routing"] = {
+            "mode": "canary",
+            "opt_in": True,
+            "sample_index": 1,
+            "sample_limit": 1,
+            "work_class": "bounded_fast",
+            "ambiguity": "low",
+            "protected_surface": False,
+            "decision_at": "2026-08-29T15:00:00Z",
+        }
+        return candidate
+
+    with pytest.raises(EpicDispatchError, match="sample limit permits one candidate"):
+        build_dispatch_plan(
+            independent_issue_numbers=[5328, 5329],
+            run_id="phase2-canary-plan-wide-bound",
+            candidates=[
+                canary_candidate(5328, "app/builderops/epic_dispatch.py"),
+                canary_candidate(5329, "app/builderops/execution_routing.py"),
+            ],
+        )
+
+    independent_plan = build_dispatch_plan(
+        independent_issue_numbers=[5330, 5331],
+        run_id="phase2-independent-work-units-remain-bounded",
+        candidates=[
+            _candidate(
+                5330,
+                risk="low",
+                files=["app/builderops/epic_dispatch.py"],
+                preferred_path="subagent",
+            ),
+            _candidate(
+                5331,
+                risk="low",
+                files=["app/builderops/execution_routing.py"],
+                preferred_path="subagent",
+            ),
+        ],
+    )
+    assert independent_plan["selected_count"] == 2
+    assert [
+        decision["issue_number"]
+        for decision in independent_plan["decisions"]
+        if decision["selected_for_dispatch"]
+    ] == [5330, 5331]
+
+
+def test_phase2_canary_codex_launcher_normalizes_versioned_usage_limit() -> None:
+    candidate = _candidate(
+        5326,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+        worktree="/tmp/issue-5326",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-codex-event",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5326],
+        run_id="phase2-canary-codex-event",
+        candidates=[candidate],
+    )
+    usage_limit = (
+        "You've hit your usage limit for gpt-5.3-codex-spark. "
+        "Switch to another model now, or try again later."
+    )
+    worker = _worker_receipt(5326)
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        model = command[command.index("--model") + 1]
+        if model == "gpt-5.3-codex-spark":
+            stdout = "\n".join(
+                [
+                    json.dumps({"type": "thread.started", "thread_id": "spark-5326"}),
+                    json.dumps({"type": "error", "message": usage_limit}),
+                    json.dumps({"type": "turn.failed", "error": {"message": "failed"}}),
+                ]
+            )
+            return subprocess.CompletedProcess(args=command, returncode=1, stdout=stdout, stderr="")
+        assert model == "gpt-5.6-luna"
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "luna-5326"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": json.dumps(worker)},
+                    }
+                ),
+            ]
+        )
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout=stdout, stderr="")
+
+    launcher = CodexIssueSessionLauncher(repo_root=Path("/tmp"), runner=runner)
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert [command[command.index("--model") + 1] for command in commands] == [
+        "gpt-5.3-codex-spark",
+        "gpt-5.6-luna",
+    ]
+    assert receipt["stopped_reason"] == "worker-handoff"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
+
+
+def test_phase2_canary_launch_time_staleness_records_fallback_without_spark_launch() -> None:
+    candidate = _candidate(
+        5324,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-stale-at-launch",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:01:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5324],
+        run_id="phase2-canary-launch-time-stale",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [{"session_id": "session-5324", "worker_receipt": _worker_receipt(5324)}]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:01:01Z",
+    )
+
+    assert len(launcher.calls) == 1
+    assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempts"][0]["actual_capability"] == "spark"
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
+
+
+def test_phase2_canary_fallback_allocation_failure_does_not_retry() -> None:
+    candidate = _candidate(
+        5325,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-no-retry",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5325],
+        run_id="phase2-canary-no-retry",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"allocation_state": "allocation_unavailable"},
+            {"allocation_state": "allocation_unavailable"},
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 2
+    assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "spark"
+    assert launcher.calls[1]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempts"][1]["outcome"] == "allocation_unavailable"
 
 
 def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:

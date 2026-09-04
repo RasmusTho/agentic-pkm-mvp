@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, cast
 
@@ -18,12 +19,15 @@ from app.builderops.execution_routing import (
     ExecutionRouteRequest,
     ResolvedExecutionTarget,
     WorkClass,
+    admit_phase2_canary,
+    build_execution_routing_canary_receipt,
     create_execution_attempt,
     resolve_bounded_fast_route,
     resolve_execution_target,
     validate_route_decision,
 )
 from app.components.settings.providers_loader import load_provider_census
+from app.dispatcher.verification_consumer import _is_codex_usage_limit_event
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL = 2
@@ -67,15 +71,33 @@ class EpicDispatchError(ValueError):
 class IssueSessionLaunchError(RuntimeError):
     """Raised when one fresh worker session cannot finish truthfully."""
 
-    def __init__(self, message: str, *, session_id: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        canary_receipt: Mapping[str, object] | None = None,
+    ) -> None:
         self.session_id = session_id
+        self.canary_receipt = (
+            dict(canary_receipt) if canary_receipt is not None else None
+        )
         super().__init__(message)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class IssueSessionLauncher(Protocol):
     """Minimal transitional seam for one fresh issue-worker session."""
 
-    def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def launch(
+        self,
+        context_pack: Mapping[str, Any],
+        *,
+        execution_routing: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]: ...
 
 
 _CAPABILITY_FOR_MODEL_CLASS = {
@@ -125,8 +147,21 @@ class CodexIssueSessionLauncher:
         self.developer_instructions = instructions.strip()
         self.sandbox = sandbox
 
-    def command(self, context_pack: Mapping[str, Any]) -> list[str]:
+    def command(
+        self,
+        context_pack: Mapping[str, Any],
+        *,
+        execution_routing: Mapping[str, Any] | None = None,
+    ) -> list[str]:
         model, reasoning_effort = self._tcd_route(context_pack)
+        if execution_routing is not None:
+            if execution_routing.get("mode") != "canary":
+                raise EpicDispatchError("only a validated canary may override the launch target")
+            target = ResolvedExecutionTarget.model_validate(
+                execution_routing.get("proposed_target")
+            )
+            model = target.model
+            reasoning_effort = target.reasoning_effort
         worktree = self._planned_worktree(context_pack)
         return [
             "codex",
@@ -169,10 +204,20 @@ class CodexIssueSessionLauncher:
             f"{serialized}\n"
         )
 
-    def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]:
+    def launch(
+        self,
+        context_pack: Mapping[str, Any],
+        *,
+        execution_routing: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
         prompt = self.prompt(context_pack)
+        canary_target = None
+        if execution_routing is not None:
+            canary_target = ResolvedExecutionTarget.model_validate(
+                execution_routing.get("proposed_target")
+            )
         result = self.runner(
-            self.command(context_pack),
+            self.command(context_pack, execution_routing=execution_routing),
             cwd=self.repo_root,
             input=prompt,
             capture_output=True,
@@ -182,6 +227,7 @@ class CodexIssueSessionLauncher:
         session_id: str | None = None
         worker_receipt: object | None = None
         terminal_error: str | None = None
+        allocation_unavailable = False
         observed_input_tokens: int | None = None
         for line in result.stdout.splitlines():
             try:
@@ -196,6 +242,14 @@ class CodexIssueSessionLauncher:
                     session_id = candidate.strip()
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
+            if event.get("allocation_state") == "allocation_unavailable":
+                allocation_unavailable = canary_target is not None and canary_target.capability == "spark"
+            if (
+                canary_target is not None
+                and canary_target.capability == "spark"
+                and _is_codex_usage_limit_event(event)
+            ):
+                allocation_unavailable = True
             usage = event.get("usage")
             if isinstance(usage, Mapping):
                 candidate_tokens = usage.get("input_tokens")
@@ -211,6 +265,8 @@ class CodexIssueSessionLauncher:
                     text = item.get("text")
                     if isinstance(text, str) and text.strip():
                         worker_receipt = _parse_worker_receipt(text)
+        if allocation_unavailable:
+            return {"allocation_state": "allocation_unavailable"}
         if result.returncode != 0 or terminal_error is not None:
             detail = result.stderr.strip() or terminal_error or "codex exec failed"
             raise IssueSessionLaunchError(
@@ -327,6 +383,10 @@ def build_dispatch_plan(
     runtimes = _normalize_runtime_targets(runtime_targets)
     lease_issues = _normalize_active_leases(active_leases)
     normalized_candidates = [_normalize_candidate(item) for item in candidates]
+    _validate_phase2_canary_plan_bound(
+        normalized_candidates,
+        source="dispatch candidates",
+    )
     run_state_seen = run_state is not None
     if run_state is not None:
         _validate_run_state_owner(
@@ -386,7 +446,7 @@ def build_dispatch_plan(
                 )
                 routing_input = candidate.get("execution_routing")
                 if routing_input is not None:
-                    decision["execution_routing"] = _build_shadow_routing(
+                    decision["execution_routing"] = _build_execution_routing(
                         candidate,
                         routing_input=routing_input,
                         context_pack=context_pack,
@@ -479,13 +539,14 @@ def dispatch_issue_sessions(
     launcher: IssueSessionLauncher,
     *,
     expected_plan_hash: str | None = None,
+    canary_observed_at: str | None = None,
 ) -> dict[str, Any]:
     """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
 
     routing_present = _contains_execution_routing(plan)
     if routing_present and expected_plan_hash is None:
         raise EpicDispatchError(
-            "shadow-routed dispatch requires an independently preserved plan hash"
+            "routed dispatch requires an independently preserved plan hash"
         )
     if expected_plan_hash is not None:
         if (
@@ -505,8 +566,22 @@ def dispatch_issue_sessions(
     for decision, context_pack in ordered:
         issue_number = decision["issue_number"]
         context_pack_id = decision["context_pack_id"]
+        canary_receipt: dict[str, object] | None = None
         try:
-            launch_result = launcher.launch(context_pack)
+            routing_payload = decision.get("execution_routing")
+            if (
+                isinstance(routing_payload, Mapping)
+                and routing_payload.get("mode") == "canary"
+            ):
+                launch_result, canary_receipt = _launch_canary(
+                    context_pack,
+                    routing_payload=routing_payload,
+                    launcher=launcher,
+                    observed_at=canary_observed_at or _utc_now(),
+                )
+            else:
+                launch_result = launcher.launch(context_pack)
+                canary_receipt = None
             if not isinstance(launch_result, Mapping):
                 raise IssueSessionLaunchError(
                     "session launcher returned a non-object result"
@@ -539,16 +614,17 @@ def dispatch_issue_sessions(
                 session_id=session_id,
             )
             final_state = worker_receipt["final_state"]
-            sessions.append(
-                {
-                    "issue_number": issue_number,
-                    "context_pack_id": context_pack_id,
-                    "session_id": session_id,
-                    "fresh_session": True,
-                    "status": final_state,
-                    "worker_receipt": worker_receipt,
-                }
-            )
+            session_record: dict[str, Any] = {
+                "issue_number": issue_number,
+                "context_pack_id": context_pack_id,
+                "session_id": session_id,
+                "fresh_session": True,
+                "status": final_state,
+                "worker_receipt": worker_receipt,
+            }
+            if canary_receipt is not None:
+                session_record["execution_routing_canary_receipt"] = canary_receipt
+            sessions.append(session_record)
             return _session_dispatch_receipt(
                 run_id,
                 sessions,
@@ -562,17 +638,21 @@ def dispatch_issue_sessions(
                 or not failed_session_id.strip()
             ):
                 failed_session_id = None
-            sessions.append(
-                {
-                    "issue_number": issue_number,
-                    "context_pack_id": context_pack_id,
-                    "session_id": failed_session_id,
-                    "fresh_session": True,
-                    "status": "failed",
-                    "error_type": type(exc).__name__,
-                    "error": (str(exc).strip() or type(exc).__name__)[-2_000:],
-                }
-            )
+            failed_session = {
+                "issue_number": issue_number,
+                "context_pack_id": context_pack_id,
+                "session_id": failed_session_id,
+                "fresh_session": True,
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": (str(exc).strip() or type(exc).__name__)[-2_000:],
+            }
+            exception_receipt = getattr(exc, "canary_receipt", None)
+            if isinstance(exception_receipt, Mapping):
+                canary_receipt = dict(exception_receipt)
+            if canary_receipt is not None:
+                failed_session["execution_routing_canary_receipt"] = canary_receipt
+            sessions.append(failed_session)
             return _session_dispatch_receipt(
                 run_id,
                 sessions,
@@ -586,6 +666,186 @@ def dispatch_issue_sessions(
         status="completed",
         stopped_reason=None,
     )
+
+
+def _launch_canary(
+    context_pack: Mapping[str, Any],
+    *,
+    routing_payload: Mapping[str, Any],
+    launcher: IssueSessionLauncher,
+    observed_at: str,
+) -> tuple[Mapping[str, Any], dict[str, object]]:
+    """Execute one canary attempt and, only on typed capacity failure, one Luna fallback."""
+
+    try:
+        request = ExecutionRouteRequest.model_validate(routing_payload["route_request"])
+        decision = ExecutionRouteDecision.model_validate(routing_payload["route_decision"])
+        target = ResolvedExecutionTarget.model_validate(routing_payload["proposed_target"])
+        launch_at = _normalize_string(observed_at, "canary_observed_at")
+        if decision.selected_capability == "spark":
+            observation = request.allocation_observation
+            allocation_unavailable = observation is None or not observation.is_fresh_at(launch_at)
+        else:
+            allocation_unavailable = False
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EpicDispatchError(f"invalid canary launch input: {exc}") from exc
+
+    attempts: list[ExecutionAttemptObservation] = []
+    first_result: Mapping[str, Any] | None = None
+    first_error: Exception | None = None
+    if not allocation_unavailable:
+        try:
+            candidate_result = launcher.launch(
+                context_pack,
+                execution_routing=routing_payload,
+            )
+            if not isinstance(candidate_result, Mapping):
+                raise IssueSessionLaunchError("canary launcher returned a non-object result")
+            allocation_state = candidate_result.get("allocation_state")
+            if allocation_state not in {None, "available", "allocation_unavailable"}:
+                raise IssueSessionLaunchError(
+                    "canary launcher returned an invalid allocation state"
+                )
+            first_result = candidate_result
+            allocation_unavailable = allocation_state == "allocation_unavailable"
+        except Exception as exc:
+            first_error = exc
+
+    first_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=target,
+        attempt_number=1,
+        mode="canary",
+        outcome=(
+            "failed"
+            if first_error is not None
+            else "allocation_unavailable"
+            if allocation_unavailable
+            else "started"
+        ),
+        observed_at=launch_at,
+    )
+    attempts.append(first_attempt)
+    if first_error is not None:
+        receipt = build_execution_routing_canary_receipt(
+            request=request,
+            decision=decision,
+            attempts=attempts,
+            accepted_delivery_verification="not_run",
+        )
+        first_session_id = getattr(first_error, "session_id", None)
+        raise IssueSessionLaunchError(
+            "canary primary launcher failed",
+            session_id=(
+                first_session_id if isinstance(first_session_id, str) else None
+            ),
+            canary_receipt=receipt,
+        ) from first_error
+    if not allocation_unavailable:
+        assert first_result is not None  # narrowed by the branch above
+        receipt = build_execution_routing_canary_receipt(
+            request=request,
+            decision=decision,
+            attempts=attempts,
+            accepted_delivery_verification="not_run",
+        )
+        return first_result, receipt
+
+    if decision.selected_capability != "spark":
+        raise IssueSessionLaunchError(
+            "Luna canary reported allocation unavailable without an authorized fallback"
+        )
+
+    fallback_target = resolve_execution_target(
+        load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH),
+        channel="dev",
+        capability="luna",
+    )
+    fallback_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=fallback_target,
+        attempt_number=2,
+        mode="canary",
+        outcome="started",
+        observed_at=launch_at,
+        transition_kind="capacity_fallback",
+        transition_reason="spark_allocation_unavailable_at_launch",
+        triggering_attempt=first_attempt,
+    )
+    fallback_routing = dict(routing_payload)
+    fallback_routing["proposed_target"] = fallback_target.receipt_fields()
+    fallback_routing["attempt_observation"] = fallback_attempt.model_dump(mode="json")
+    fallback_result: Mapping[str, Any] | None = None
+    fallback_error: Exception | None = None
+    fallback_allocation_state: object = None
+    try:
+        candidate_result = launcher.launch(
+            context_pack,
+            execution_routing=fallback_routing,
+        )
+    except Exception as exc:
+        fallback_error = exc
+    else:
+        if isinstance(candidate_result, Mapping):
+            fallback_result = candidate_result
+            fallback_allocation_state = candidate_result.get("allocation_state")
+
+    fallback_outcome: Literal["failed", "started", "allocation_unavailable"]
+    if fallback_error is not None or fallback_result is None:
+        fallback_outcome = "failed"
+    elif fallback_allocation_state == "allocation_unavailable":
+        fallback_outcome = "allocation_unavailable"
+    elif fallback_allocation_state in {None, "available"}:
+        fallback_outcome = "started"
+    else:
+        fallback_outcome = "failed"
+    fallback_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=fallback_target,
+        attempt_number=2,
+        mode="canary",
+        outcome=fallback_outcome,
+        observed_at=launch_at,
+        transition_kind="capacity_fallback",
+        transition_reason="spark_allocation_unavailable_at_launch",
+        triggering_attempt=first_attempt,
+    )
+    receipt = build_execution_routing_canary_receipt(
+        request=request,
+        decision=decision,
+        attempts=(*attempts, fallback_attempt),
+        accepted_delivery_verification="not_run",
+    )
+    if fallback_error is not None:
+        fallback_session_id = getattr(fallback_error, "session_id", None)
+        raise IssueSessionLaunchError(
+            "canary Luna fallback launcher failed",
+            session_id=(
+                fallback_session_id
+                if isinstance(fallback_session_id, str)
+                else None
+            ),
+            canary_receipt=receipt,
+        ) from fallback_error
+    if fallback_result is None:
+        raise IssueSessionLaunchError(
+            "canary fallback launcher returned a non-object result",
+            canary_receipt=receipt,
+        )
+    if fallback_allocation_state == "allocation_unavailable":
+        raise IssueSessionLaunchError(
+            "canary Luna fallback reported allocation unavailable",
+            canary_receipt=receipt,
+        )
+    if fallback_outcome == "failed":
+        raise IssueSessionLaunchError(
+            "canary fallback launcher returned an invalid allocation state",
+            canary_receipt=receipt,
+        )
+    return fallback_result, receipt
 
 
 def _validated_session_contexts(
@@ -604,6 +864,10 @@ def _validated_session_contexts(
     contexts_raw = plan.get("context_packs")
     if not isinstance(decisions_raw, list) or not isinstance(contexts_raw, list):
         raise EpicDispatchError("dispatch plan decisions and context_packs must be lists")
+    _validate_phase2_canary_plan_bound(
+        decisions_raw,
+        source="frozen dispatch plan",
+    )
     run_state_update = plan.get("epic_run_state_update")
     expected_state_decisions = [
         _dispatch_state_summary(decision)
@@ -702,6 +966,7 @@ def _validate_execution_routing_context(
         "route_decision",
         "proposed_target",
         "shadow_comparison",
+        "canary_admission",
         "attempt_observation",
         "authority",
     }
@@ -741,15 +1006,43 @@ def _validate_execution_routing_context(
             channel="dev",
             capability=route.selected_capability,
         )
+        mode = _normalize_choice(
+            routing_payload.get("mode"), "execution_routing.mode", {"shadow", "canary"}
+        )
+        canary_admission = routing_payload.get("canary_admission")
+        if mode == "canary":
+            if not isinstance(canary_admission, Mapping):
+                raise EpicDispatchError("canary routing requires explicit admission evidence")
+            sample_index = _normalize_positive_int(
+                canary_admission.get("sample_index"), "canary_admission.sample_index"
+            )
+            sample_limit = _normalize_positive_int(
+                canary_admission.get("sample_limit"), "canary_admission.sample_limit"
+            )
+            admit_phase2_canary(
+                request,
+                opt_in=canary_admission.get("opt_in") is True,
+                sample_index=sample_index,
+                sample_limit=sample_limit,
+            )
+            expected_admission: dict[str, object] | None = {
+                "opt_in": True,
+                "sample_index": 1,
+                "sample_limit": 1,
+            }
+        else:
+            expected_admission = None
         expected_attempt = create_execution_attempt(
             request=request,
             decision=route,
             target=expected_target,
             attempt_number=1,
-            mode="shadow",
+            mode=cast(Literal["shadow", "canary"], mode),
             outcome="not_invoked",
             observed_at=request.decision_at,
-            transition_reason="shadow_route_not_invoked",
+            transition_reason=(
+                "shadow_route_not_invoked" if mode == "shadow" else "initial_route"
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise EpicDispatchError(
@@ -759,11 +1052,11 @@ def _validate_execution_routing_context(
         "incumbent_capability": route.shadow_against_capability,
         "proposed_capability": route.selected_capability,
         "verification_profile_hash_unchanged": True,
-        "launch_policy_changed": False,
+        "launch_policy_changed": mode == "canary",
     }
     if (
         routing_payload.get("schema_version") != 1
-        or routing_payload.get("mode") != "shadow"
+        or routing_payload.get("mode") not in {"shadow", "canary"}
         or routing_payload.get("authority")
         != "evidence-only-no-launch-or-lifecycle-effect"
         or request.issue_number != issue_contract.get("number")
@@ -771,6 +1064,7 @@ def _validate_execution_routing_context(
         or target != expected_target
         or attempt != expected_attempt
         or routing_payload.get("shadow_comparison") != expected_comparison
+        or routing_payload.get("canary_admission") != expected_admission
         or any(
             contract.context_pack_hash != context_hash
             or contract.authority_hash != authority_hash
@@ -788,6 +1082,26 @@ def _dispatch_slot(decision: Mapping[str, Any]) -> int:
         decision.get("dispatch_slot"),
         "decision.dispatch_slot",
     )
+
+
+def _validate_phase2_canary_plan_bound(
+    items: Iterable[Mapping[str, Any]],
+    *,
+    source: str,
+) -> None:
+    """Reject more than one canary declaration in one frozen dispatch plan."""
+
+    canary_count = 0
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        routing = item.get("execution_routing")
+        if isinstance(routing, Mapping) and routing.get("mode") == "canary":
+            canary_count += 1
+    if canary_count > 1:
+        raise EpicDispatchError(
+            f"Phase 2 canary sample limit permits one candidate per {source}"
+        )
 
 
 def _session_dispatch_receipt(
@@ -1187,15 +1501,16 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_shadow_routing(
+def _build_execution_routing(
     candidate: Mapping[str, Any],
     *,
     routing_input: Mapping[str, Any],
     context_pack: Mapping[str, Any],
     incumbent_capability: str,
 ) -> dict[str, Any]:
-    if routing_input.get("mode") != "shadow":
-        raise EpicDispatchError("Phase 1 execution routing supports shadow mode only")
+    mode = routing_input.get("mode")
+    if mode not in {"shadow", "canary"}:
+        raise EpicDispatchError("execution routing supports shadow or explicit canary mode")
     if "risk" in routing_input:
         raise EpicDispatchError(
             "execution_routing.risk must come from the canonical candidate"
@@ -1263,7 +1578,21 @@ def _build_shadow_routing(
             shadow_against_capability=cast(CapabilityTier, incumbent),
             allocation_observation=observation,
         )
-        route = resolve_bounded_fast_route(request)
+        if mode == "canary":
+            sample_index = _normalize_positive_int(
+                routing_input.get("sample_index"), "execution_routing.sample_index"
+            )
+            sample_limit = _normalize_positive_int(
+                routing_input.get("sample_limit"), "execution_routing.sample_limit"
+            )
+            route = admit_phase2_canary(
+                request,
+                opt_in=routing_input.get("opt_in") is True,
+                sample_index=sample_index,
+                sample_limit=sample_limit,
+            )
+        else:
+            route = resolve_bounded_fast_route(request)
         census = load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH)
         proposed_target = resolve_execution_target(
             census,
@@ -1275,17 +1604,19 @@ def _build_shadow_routing(
             decision=route,
             target=proposed_target,
             attempt_number=1,
-            mode="shadow",
+            mode=cast(Literal["shadow", "canary"], mode),
             outcome="not_invoked",
             observed_at=request.decision_at,
-            transition_reason="shadow_route_not_invoked",
+            transition_reason=(
+                "shadow_route_not_invoked" if mode == "shadow" else "initial_route"
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise EpicDispatchError(f"invalid execution_routing input: {exc}") from exc
 
     return {
         "schema_version": 1,
-        "mode": "shadow",
+        "mode": mode,
         "route_request": request.model_dump(mode="json"),
         "route_decision": route.model_dump(mode="json"),
         "proposed_target": proposed_target.receipt_fields(),
@@ -1293,8 +1624,17 @@ def _build_shadow_routing(
             "incumbent_capability": incumbent,
             "proposed_capability": route.selected_capability,
             "verification_profile_hash_unchanged": True,
-            "launch_policy_changed": False,
+            "launch_policy_changed": mode == "canary",
         },
+        "canary_admission": (
+            {
+                "opt_in": True,
+                "sample_index": 1,
+                "sample_limit": 1,
+            }
+            if mode == "canary"
+            else None
+        ),
         "attempt_observation": attempt.model_dump(mode="json"),
         "authority": "evidence-only-no-launch-or-lifecycle-effect",
     }
