@@ -31,6 +31,7 @@ class ReadOwnerResult:
 
 
 ReadOwner = Callable[[OperationRequest], ReadOwnerResult]
+ContextResolver = Callable[[OperationRequest], bool]
 
 
 def read_operation_handlers() -> dict[str, ReadOwner]:
@@ -58,14 +59,13 @@ class ReadOperationAdapters:
 
     owners: Mapping[str, ReadOwner]
     discovery: CapabilityDiscovery
+    context_resolver: ContextResolver | None = None
 
     @classmethod
     def production(cls) -> "ReadOperationAdapters":
         return cls(read_operation_handlers(), read_capability_discovery())
 
     def invoke(self, request: OperationRequest) -> OperationOutcome:
-        if not request.context.active_context_ref:
-            return _outcome(request, OperationStatus.REJECTED, "missing_context")
         if request.operation_id == "operation.discovery":
             return _outcome(
                 request,
@@ -75,6 +75,9 @@ class ReadOperationAdapters:
                     _capability_item(capability) for capability in self.discovery.capabilities
                 ),
             )
+        context_resolver = self.context_resolver or _selected_vault_context_matches
+        if not request.context.active_context_ref or not context_resolver(request):
+            return _outcome(request, OperationStatus.REJECTED, "missing_context")
         owner = self.owners.get(request.operation_id)
         if owner is None:
             return _outcome(request, OperationStatus.NOT_SUPPORTED, "capability_unavailable")
@@ -82,6 +85,8 @@ class ReadOperationAdapters:
             result = owner(request)
         except PermissionError:
             return _outcome(request, OperationStatus.REJECTED, "artifact_inaccessible")
+        except _http_exception_type() as exc:
+            return _http_exception_outcome(request, exc)
         except (ConnectionError, RuntimeError):
             return _outcome(request, OperationStatus.DEGRADED_READ, "owner_unavailable")
         return _normalize(request, result)
@@ -142,10 +147,60 @@ def _selection_result(value: Any) -> ReadOwnerResult | None:
     return None
 
 
+def _selected_vault_context_matches(request: OperationRequest) -> bool:
+    """Bind ambient legacy read owners to the selected vault's stable ID.
+
+    Those owners currently expose no immutable vault-generation token.  A
+    generation-bearing operation therefore fails closed until an owner-native
+    generation seam exists, rather than mislabelling a global-vault read.
+    """
+    from app.vault.manager import get_vault_manager
+
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    return (
+        request.context.vault_generation is None
+        and context.status in {"selected", "uninitialized"}
+        and bool(context.active_vault_id)
+        and request.context.active_context_ref == context.active_vault_id
+    )
+
+
+def _http_exception_type() -> type[Exception]:
+    from fastapi import HTTPException
+
+    return HTTPException
+
+
+def _http_exception_outcome(request: OperationRequest, exc: Exception) -> OperationOutcome:
+    status_code = int(getattr(exc, "status_code", 503))
+    detail = getattr(exc, "detail", {})
+    error = detail.get("error") if isinstance(detail, Mapping) else None
+    if status_code == 404:
+        return _outcome(request, OperationStatus.NOT_FOUND, str(error or "not_found"))
+    if status_code == 400:
+        return _outcome(request, OperationStatus.INVALID, str(error or "invalid"))
+    if status_code == 403:
+        return _outcome(request, OperationStatus.REJECTED, "artifact_inaccessible")
+    if status_code == 409:
+        return _outcome(request, OperationStatus.CONFLICTED, str(error or "conflicted"))
+    return _outcome(request, OperationStatus.DEGRADED_READ, str(error or "owner_unavailable"))
+
+
 def _list_from_companion(request: OperationRequest) -> ReadOwnerResult:
     from app.api.routes.companion import read_companion_vault_browser
 
-    response: Any = read_companion_vault_browser(limit=int(request.arguments.get("limit", 250)))
+    response: Any = read_companion_vault_browser(
+        q="",
+        limit=int(request.arguments.get("limit", 250)),
+        cursor=None,
+        kind=[],
+        zone=[],
+        review_state=[],
+        trust=[],
+    )
     selection = _selection_result(response)
     if selection:
         return selection
