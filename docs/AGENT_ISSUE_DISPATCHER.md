@@ -631,8 +631,9 @@ boundary is safe because it runs on the existing selection path, requires no dae
 store, and the reclaimer rechecks the captured task-linked lease's ownership, unreleased state, and
 expiry inside its SQLite write transaction. A concurrent stale takeover therefore wins its lease-ID
 fence, while repeated selections are harmless. Only unreleased, expired leases still referenced by
-a dispatcher task are eligible; terminal `completed`/`done` status is preserved while clearing a
-stray lease, and orphan lease rows are intentionally left for separate maintenance.
+a dispatcher task are eligible; terminal `completed`/`done` and failed status are preserved while
+clearing a stray lease, so automatic recovery cannot requeue a failed lifecycle outcome. Orphan
+lease rows are intentionally left for separate maintenance.
 This path reads and mutates only dispatcher SQLite state and emits the existing `task.released`
 expiry event; it does not query or mutate GitHub Issues, labels, Projects, Kanban, or any external
 API.
