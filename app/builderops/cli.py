@@ -81,6 +81,7 @@ from app.builderops.epic_dispatch import (
     _contains_execution_routing,
     build_dispatch_plan,
     dispatch_issue_sessions,
+    frozen_dispatch_plan_hash,
 )
 from app.builderops.epic_delivery_ledger import (
     EpicDeliveryLedgerError,
@@ -2479,13 +2480,23 @@ def dispatch_sessions(
     plan = _load_json_object_file(plan_file, field="plan-file")
     try:
         launcher = CodexIssueSessionLauncher(repo_root=repo_root)
+        receipt_store = None
+        if (
+            _contains_execution_routing(plan)
+            and expected_plan_hash is not None
+            and len(expected_plan_hash) == 64
+            and all(
+                character in "0123456789abcdef"
+                for character in expected_plan_hash
+            )
+            and frozen_dispatch_plan_hash(plan) == expected_plan_hash
+        ):
+            receipt_store = _store(ctx)
         receipt = dispatch_issue_sessions(
             plan,
             launcher,
             expected_plan_hash=expected_plan_hash,
-            receipt_store=(
-                _store(ctx) if _contains_execution_routing(plan) else None
-            ),
+            receipt_store=receipt_store,
         )
     except EpicDispatchError as exc:
         raise click.ClickException(str(exc)) from exc
