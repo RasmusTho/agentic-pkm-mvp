@@ -96,6 +96,7 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
             # #2921: bind this turn's active scope so `_partition_by_scope` actually partitions on
             # the production path instead of relying on an ambient env var nothing ever sets.
             scope=_active_scope(state),
+            active_context=state.active_context,
         )
     )
     enriched: list[RetrievedHit] = []
@@ -667,6 +668,7 @@ def run_ask_graph(
     trace_id: Optional[str] = None,
     ask_settings=None,
     active_scope: Optional[str] = None,
+    active_context=None,
 ) -> AgentState:
     """Run one ASK turn.
 
@@ -678,7 +680,13 @@ def run_ask_graph(
     ask_settings = ask_settings or get_ask_settings()
     compiled = build_ask_graph(ask_settings)
     resolved_scope = (active_scope or "").strip() or _resolve_domain_scope()
-    initial = AgentState(trace_id=trace_id, query=query, active_scope=resolved_scope, hits=[])
+    initial = AgentState(
+        trace_id=trace_id,
+        query=query,
+        active_scope=resolved_scope,
+        active_context=active_context,
+        hits=[],
+    )
     result = compiled.invoke(initial)
     if isinstance(result, AgentState):
         return result
@@ -687,7 +695,12 @@ def run_ask_graph(
     except Exception:
         # Best-effort fallback if graph returned a plain dict
         return AgentState(
-            trace_id=trace_id, query=query, active_scope=resolved_scope, hits=[], answer=None
+            trace_id=trace_id,
+            query=query,
+            active_scope=resolved_scope,
+            active_context=active_context,
+            hits=[],
+            answer=None,
         )
 
 

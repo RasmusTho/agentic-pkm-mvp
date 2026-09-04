@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.agent_memory.recall_explanation import RecallExplanation
 from app.agents.runtime_state import RuntimeStateModel
+from app.vault.active_context_v1 import ActiveContextSetV1
 
 
 class RetrievedHit(BaseModel):
@@ -41,6 +42,9 @@ class AgentState(RuntimeStateModel):
     # and then reused by retrieval, recall, and envelope assembly. Resolving it once is what keeps
     # the scope the prefilter used and the envelope's `active_scope_id` from diverging mid-turn.
     active_scope: Optional[str] = None
+    # The exact immutable context supplied by a scoped HTTP ingress.  It is
+    # optional solely for legacy/CLI callers; graph nodes never re-resolve it.
+    active_context: ActiveContextSetV1 | None = None
     hits: List[RetrievedHit] = Field(default_factory=list)
     # Authoritative metadata observed on the retrieval response. Shadow
     # experiments may inspect it, but it never feeds ranking or answer text.
