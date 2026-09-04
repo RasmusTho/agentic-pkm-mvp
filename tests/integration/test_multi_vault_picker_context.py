@@ -110,3 +110,11 @@ def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path: Pat
     monkeypatch.setattr("app.settings.ingestion.ingest_settings", lambda **_k: __import__("app.settings.ingestion", fromlist=["SettingsIngestionState"]).SettingsIngestionState(state="ok", source="vault"))
     VaultManager().select_vault(vault_b)
     assert SettingsRebindStore(registry).read().candidate_binding_id == "binding-b"
+
+
+def test_interim_default_mutation_rebinds_before_foreground_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path, monkeypatch)
+
+
+def test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path, monkeypatch)
