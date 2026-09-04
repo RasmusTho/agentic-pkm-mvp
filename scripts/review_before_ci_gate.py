@@ -1386,7 +1386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReviewBeforeCiGateError(
                     "new-PR publication requires GitHub repository identity"
                 )
-            if args.pr_number is not None or args.contract_revalidation_receipt:
+            if args.pr_number is not None or args.contract_revalidation_receipt is not None:
                 raise ReviewBeforeCiGateError(
                     "new-PR publication cannot supply existing-PR identity or revalidation receipt"
                 )

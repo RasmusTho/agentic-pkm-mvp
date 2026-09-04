@@ -1463,7 +1463,11 @@ def test_new_publication_rejects_scope_revalidation(
 
 @pytest.mark.parametrize(
     ("argument", "value"),
-    (("--pr-number", "4029"), ("--contract-revalidation-receipt", "receipt.json")),
+    (
+        ("--pr-number", "4029"),
+        ("--contract-revalidation-receipt", "receipt.json"),
+        ("--contract-revalidation-receipt", ""),
+    ),
 )
 def test_new_publication_rejects_existing_pr_evidence(
     monkeypatch: pytest.MonkeyPatch,
