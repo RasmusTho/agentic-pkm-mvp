@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
 from mcp import types
@@ -88,20 +88,29 @@ def create_stdio_server(semantic: MimerMcpServer) -> Server:
     @server.call_tool(validate_input=True)
     async def call_tool(name: str, arguments: Mapping[str, Any]) -> types.CallToolResult:
         result = semantic.call_tool(name, arguments)
+        if name == "mimer.health":
+            _LOG.info(
+                "mimer_mcp_health transport=stdio readiness=%s dependency=%s",
+                "degraded" if result.is_error else "ready",
+                "loopback_http",
+            )
         return types.CallToolResult(content=_result_content(result), isError=result.is_error)
 
     return server
 
 
-async def serve_stdio(config: MimerMcpTransportConfig) -> None:
+async def serve_stdio(
+    config: MimerMcpTransportConfig,
+    semantic_factory: Callable[[str], MimerMcpServer] = MimerMcpServer.for_loopback,
+) -> None:
     """Run one client-spawned stdio server until the client closes its streams."""
 
     config.validate()
-    semantic = MimerMcpServer.for_loopback(config.base_url)
+    semantic = semantic_factory(config.base_url)
     server = create_stdio_server(semantic)
-    _LOG.info("mimer_mcp_started transport=stdio readiness=ready")
     try:
         async with stdio_server() as (read_stream, write_stream):
+            _LOG.info("mimer_mcp_started transport=stdio readiness=ready dependency=loopback_http")
             await server.run(
                 read_stream,
                 write_stream,

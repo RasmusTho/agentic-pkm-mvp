@@ -837,7 +837,8 @@ make db-dump-prod                           # → .db-snapshots/prod_20260628T..
 - pg_dump / pg_restore must be installed on the host (they are not bundled in containers).
 ## Mimer MCP adapter
 
-The accepted Mimer MCP v1 adapter is a client-spawned stdio sidecar. Start it
+The accepted Mimer MCP v1 adapter is a client-spawned stdio sidecar. Install
+its isolated sidecar dependency set with `pip install -r requirements-mimer-mcp.txt`, then start it
 with `python -m app.mimer_mcp --transport stdio`; it calls only the existing
 loopback Mimer HTTP API. It opens no network listener, accepts no bind, TLS, or
 authentication configuration, and exits when its client closes stdio. Network
