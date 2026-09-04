@@ -8,6 +8,7 @@ import threading
 import pytest
 import yaml
 
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.mcp.vault_tools import append_note, get_vault_root, VaultToolError
 
 
@@ -147,6 +148,50 @@ def test_append_note_retries_atomic_suffix_without_clobbering_foreign_winner(
     assert (tmp_path / "_mcp" / "same.md").read_bytes() == b"foreign prior bytes\n"
     assert _read_frontmatter(path)[1] == "MCP body"
     assert not (tmp_path / ".mcp-append-note.lock").exists()
+
+
+def test_append_note_rejects_parent_replacement_with_equal_foreign_content(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.mcp import vault_tools as vault_tools_module
+
+    real_publish = vault_tools_module._atomic_rename_noreplace_at
+    displaced = tmp_path / "_mcp-displaced"
+
+    def replace_parent_then_publish(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        stage_fd = os.open(source_name, os.O_RDONLY, dir_fd=source_fd)
+        try:
+            payload = os.read(stage_fd, 1024 * 1024)
+        finally:
+            os.close(stage_fd)
+        (tmp_path / "_mcp").rename(displaced)
+        current = tmp_path / "_mcp"
+        current.mkdir()
+        (current / destination_name).write_bytes(payload)
+        real_publish(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(
+        vault_tools_module,
+        "_atomic_rename_noreplace_at",
+        replace_parent_then_publish,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="directory changed"):
+        append_note(title="Same", body="MCP body", vault_root=tmp_path)
+
+    foreign = tmp_path / "_mcp" / "same.md"
+    owned = displaced / "same.md"
+    assert foreign.read_bytes() == owned.read_bytes()
+    assert (foreign.stat().st_dev, foreign.stat().st_ino) != (
+        owned.stat().st_dev,
+        owned.stat().st_ino,
+    )
 
 
 def test_append_note_falls_back_to_default_vault_when_env_blank(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

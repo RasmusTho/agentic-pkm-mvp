@@ -15,7 +15,8 @@ from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
     KNOWLEDGE_WRITE_ACTION,
     _atomic_rename_noreplace_at,
-    read_create_once_winner_relative,
+    _read_stable_descriptor,
+    _require_live_relative_directory_chain,
     write_note_relative,
 )
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -159,9 +160,38 @@ def _publish_append_note(
             != (stage_identity.st_dev, stage_identity.st_ino)
         ):
             raise KnowledgeWriteConflict("MCP append publication identity changed")
-        relative_path = (directory / candidate_name).as_posix()
-        if read_create_once_winner_relative(relative_path, vault_root=vault_root) != content:
+        published_payload, published_identity = _read_stable_descriptor(stage_fd)
+        if (
+            published_payload.decode("utf-8") != content
+            or (published_identity.st_dev, published_identity.st_ino)
+            != (stage_identity.st_dev, stage_identity.st_ino)
+        ):
             raise KnowledgeWriteConflict("MCP append publication content changed")
+        _require_live_relative_directory_chain(
+            vault_root,
+            directory.parts,
+            descriptors,
+            context="MCP append publication",
+        )
+        canonical_target = os.stat(
+            candidate_name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(canonical_target.st_mode)
+            or canonical_target.st_nlink != 1
+            or (canonical_target.st_dev, canonical_target.st_ino)
+            != (stage_identity.st_dev, stage_identity.st_ino)
+        ):
+            raise KnowledgeWriteConflict("MCP append canonical target changed")
+        _require_live_relative_directory_chain(
+            vault_root,
+            directory.parts,
+            descriptors,
+            context="MCP append acknowledgement",
+        )
+        relative_path = (directory / candidate_name).as_posix()
         return vault_root / relative_path
     finally:
         if stage_fd is not None:
