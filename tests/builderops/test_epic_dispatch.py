@@ -1784,17 +1784,19 @@ def test_dispatch_sessions_cli_requires_external_hash_for_routed_plan(
         "app.builderops.cli.CodexIssueSessionLauncher",
         return_value=launcher,
     ):
-        missing_hash = _run_builderops(
-            [
-                "epic-run-state",
-                "dispatch-sessions",
-                "--plan-file",
-                str(plan_file),
-                "--repo-root",
-                str(tmp_path),
-                "--json",
-            ]
-        )
+        with patch("app.builderops.cli._store") as store:
+            missing_hash = _run_builderops(
+                [
+                    "epic-run-state",
+                    "dispatch-sessions",
+                    "--plan-file",
+                    str(plan_file),
+                    "--repo-root",
+                    str(tmp_path),
+                    "--json",
+                ]
+            )
+        store.assert_not_called()
         accepted = _run_builderops(
             [
                 "epic-run-state",

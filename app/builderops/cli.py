@@ -78,7 +78,7 @@ from app.builderops.evidence_bridge import (
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
     EpicDispatchError,
-    _contains_execution_routing,
+    _contains_canary_execution_routing,
     build_dispatch_plan,
     dispatch_issue_sessions,
     frozen_dispatch_plan_hash,
@@ -2482,7 +2482,7 @@ def dispatch_sessions(
         launcher = CodexIssueSessionLauncher(repo_root=repo_root)
         receipt_store = None
         if (
-            _contains_execution_routing(plan)
+            _contains_canary_execution_routing(plan)
             and expected_plan_hash is not None
             and len(expected_plan_hash) == 64
             and all(

@@ -540,6 +540,19 @@ def _contains_execution_routing(value: object) -> bool:
     return False
 
 
+def _contains_canary_execution_routing(value: object) -> bool:
+    """Return whether a plan needs the durable canary receipt store."""
+
+    if isinstance(value, Mapping):
+        routing = value.get("execution_routing")
+        if isinstance(routing, Mapping) and routing.get("mode") == "canary":
+            return True
+        return any(_contains_canary_execution_routing(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_canary_execution_routing(item) for item in value)
+    return False
+
+
 def dispatch_issue_sessions(
     plan: Mapping[str, Any],
     launcher: IssueSessionLauncher,
