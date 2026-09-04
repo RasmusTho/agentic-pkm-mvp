@@ -228,7 +228,7 @@ async def ask(
 ) -> AskResponse:
     """Legacy compatibility read; migrated clients use ``/ask/scoped``."""
 
-    return _run_ask(req, request, active_scope=req.scope)
+    return _run_ask(req, request, active_scope=req.scope, active_context=None)
 
 
 @router.post("/ask/scoped", response_model=AskResponse)
@@ -239,10 +239,16 @@ async def ask_scoped(
 ) -> AskResponse:
     """Carrier-bound ASK read for migrated multi-vault clients."""
 
-    return _run_ask(req, request, active_scope=context.scope)
+    return _run_ask(req, request, active_scope=context.scope, active_context=context)
 
 
-def _run_ask(req: AskRequest, request: Request, *, active_scope: str | None) -> AskResponse:
+def _run_ask(
+    req: AskRequest,
+    request: Request,
+    *,
+    active_scope: str | None,
+    active_context: ActiveContextSetV1 | None,
+) -> AskResponse:
     if not _HYBRID_WARMED:
         _ensure_hybrid_store_loaded()
     start = time.perf_counter()
@@ -254,6 +260,7 @@ def _run_ask(req: AskRequest, request: Request, *, active_scope: str | None) -> 
             trace_id=trace_id,
             ask_settings=ask_settings,
             active_scope=active_scope,
+            active_context=active_context,
         )
     except LLMBackendTimeout as exc:
         record_ask_error()
