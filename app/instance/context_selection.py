@@ -184,6 +184,12 @@ class ContextSelectionStore:
         #: replacement back -- resurrecting a bearer that was reported cleared. Two
         #: concurrent PUTs could likewise both publish the same generation.
         self._lock = threading.RLock()
+        # Resolver memory belongs to the same ephemeral process/session domain as
+        # selection records.  It is deliberately not a module-global fallback:
+        # it exists only to retain the prior identity needed to rotate a context
+        # generation when live registry or authorization facts drift between
+        # HTTP requests.  A store reset drops it together with every bearer.
+        self._request_resolvers: dict[str, ActiveContextSelectionResolver] = {}
         #: A fresh epoch per store instance. A process restart builds a new store, so a
         #: pre-restart bearer cannot resolve even if its raw value were replayed.
         self._process_epoch = uuid.uuid4().hex
@@ -325,6 +331,26 @@ class ContextSelectionStore:
             for key, record in list(self._records.items()):
                 if record.selection_capability_digest == digest:
                     del self._records[key]
+
+    def request_resolver(
+        self,
+        *,
+        instance_identity: str,
+        factory: Callable[[], ActiveContextSelectionResolver],
+    ) -> ActiveContextSelectionResolver:
+        """Return the process-local resolver that owns drift generations.
+
+        The caller supplies live lookup closures, so retaining the resolver does
+        not retain registry or authorization truth.  The identity key prevents a
+        re-bound instance from inheriting another instance's generation history.
+        """
+
+        with self._lock:
+            resolver = self._request_resolvers.get(instance_identity)
+            if resolver is None:
+                resolver = factory()
+                self._request_resolvers[instance_identity] = resolver
+            return resolver
 
     def __len__(self) -> int:
         with self._lock:
