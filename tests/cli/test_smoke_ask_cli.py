@@ -10,6 +10,7 @@ from app.cli import cli
 
 def test_smoke_ask_cli(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
+    vault.mkdir()
     outbox = tmp_path / "outbox.jsonl"
     env = {
         "STORE_BACKEND": "memory",

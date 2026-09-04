@@ -104,6 +104,8 @@ preventing a restart from duplicating an append whose acknowledgement was lost.
 ## Related GitHub Issues
 
 Issue #3369 follows the delivered #3371 ADR/client-contract writeback and #3368 semantic adapter.
+It stays blocked until #3371's Accepted ADR/client-contract writeback lands; that historical gate
+is now satisfied and remains recorded here for the stable decision-reference contract.
 Its terminal relationship is governed verification and closure after this package's exact-head
 transport, isolation, parity, and no-replay evidence is current. TCD hint: **Codex / xhigh** because
 this is a security-sensitive external transport boundary; require production-entrypoint proof that
