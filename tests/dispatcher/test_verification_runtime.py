@@ -4,6 +4,18 @@ import json
 
 import pytest
 
+from app.builderops.execution_routing import (
+    ExecutionRouteRequest,
+    ResolvedExecutionTarget,
+    admit_phase2_canary,
+    build_execution_routing_canary_receipt,
+    create_execution_attempt,
+)
+from app.builderops.execution_routing_receipts import (
+    append_attempt_intent,
+    append_attempt_outcome,
+)
+from app.builderops.store import SqliteBuilderOpsStore
 from app.builderops.control_plane import LeaseUnavailable
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_consumer import VerificationConsumer
@@ -510,3 +522,99 @@ def test_recovery_waits_for_live_outbox_owner_then_converges() -> None:
     ]
     assert ledger.get(run.run_id).status == "completed"  # type: ignore[union-attr]
     assert outbox.states[operation_key] == "succeeded"
+
+
+def test_host_cycle_consumes_canary_acceptance_on_verified_current_head(
+    tmp_path,
+) -> None:
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    canary_store = SqliteBuilderOpsStore(tmp_path / "builderops.sqlite3")
+    canary_store.initialize()
+    route_request = ExecutionRouteRequest(
+        request_id="execution-route-request-runtime-canary",
+        issue_number=3603,
+        work_class="bounded_fast",
+        risk="low",
+        ambiguity="low",
+        protected_surface=False,
+        decision_at="2026-08-29T15:00:00Z",
+        context_pack_hash="a" * 64,
+        authority_hash="b" * 64,
+        verification_profile_hash="c" * 64,
+        shadow_against_capability="luna",
+    )
+    route_decision = admit_phase2_canary(
+        route_request, opt_in=True, sample_index=1, sample_limit=1
+    )
+    attempt = create_execution_attempt(
+        request=route_request,
+        decision=route_decision,
+        target=ResolvedExecutionTarget(
+            capability="luna",
+            provider="openai",
+            model="gpt-5.6-luna",
+            reasoning_effort="low",
+            configuration_ref="builderops-test",
+        ),
+        attempt_number=1,
+        mode="canary",
+        outcome="started",
+        observed_at="2026-08-29T15:00:01Z",
+    )
+    chain = append_attempt_intent(
+        canary_store, route_request, route_decision, attempt
+    )
+    append_attempt_outcome(
+        canary_store, chain, route_request, route_decision, attempt
+    )
+    canary_receipt = build_execution_routing_canary_receipt(
+        request=route_request,
+        decision=route_decision,
+        attempts=(attempt,),
+        accepted_delivery_verification="not_run",
+    )
+
+    consumer = VerificationConsumer(
+        ledger,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        VerifiedLauncher(),
+        holder="verification-host",
+    )
+    repository = RepositoryAuthority()
+    runtime = HostFencedVerificationCycle(
+        ledger,
+        consumer,
+        VerificationMergeExecutor(ledger, outbox, repository, Credentials()),
+        holder="verification-host",
+        canary_receipt_store=canary_store,
+    )
+
+    cycle_receipt = runtime.run_dry_cycle(
+        request(), canary_receipt=canary_receipt
+    )
+
+    acceptance_records = [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ]
+    assert len(acceptance_records) == 1
+    acceptance = json.loads(acceptance_records[0]["receipt_body"])
+    assert acceptance["acceptance"]["status"] == "passed"
+    assert cycle_receipt["terminal_outcome"] == "dry_run_no_merge"
+
+    assert runtime.recover_dry_cycle(
+        str(cycle_receipt["run_id"]), canary_receipt=canary_receipt
+    ) == cycle_receipt
+    assert len(
+        [
+            record
+            for record in canary_store.list_records("BuilderOpsReceipt")
+            if record["action"] == "canary_acceptance_observation"
+        ]
+    ) == 1

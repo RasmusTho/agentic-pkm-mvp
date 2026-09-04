@@ -78,6 +78,7 @@ from app.builderops.evidence_bridge import (
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
     EpicDispatchError,
+    _contains_execution_routing,
     build_dispatch_plan,
     dispatch_issue_sessions,
 )
@@ -2467,7 +2468,9 @@ def dispatch_plan(
     ),
 )
 @click.option("--json", "as_json", is_flag=True)
+@click.pass_context
 def dispatch_sessions(
+    ctx: click.Context,
     plan_file: Path,
     repo_root: Path,
     expected_plan_hash: str | None,
@@ -2480,6 +2483,9 @@ def dispatch_sessions(
             plan,
             launcher,
             expected_plan_hash=expected_plan_hash,
+            receipt_store=(
+                _store(ctx) if _contains_execution_routing(plan) else None
+            ),
         )
     except EpicDispatchError as exc:
         raise click.ClickException(str(exc)) from exc

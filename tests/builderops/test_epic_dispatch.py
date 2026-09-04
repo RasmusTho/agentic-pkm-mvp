@@ -26,6 +26,7 @@ from app.builderops.epic_run_state import (
     create_epic_run_state,
     epic_run_state_path,
 )
+from app.builderops.store import SqliteBuilderOpsStore
 
 
 def _candidate(
@@ -1086,6 +1087,50 @@ def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launc
     assert "_TCD_CODEX_ROUTE" not in inspect.getsource(epic_dispatch_module)
 
 
+def test_execution_routing_cannot_downgrade_canonical_candidate_protection() -> None:
+    candidate = _candidate(
+        5812,
+        risk="high",
+        files=["app/a.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "shadow",
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+
+    with pytest.raises(EpicDispatchError, match="protected_surface"):
+        build_dispatch_plan(
+            independent_issue_numbers=[5812],
+            run_id="canonical-routing-protection",
+            candidates=[candidate],
+        )
+
+    ambiguous = _candidate(
+        5813,
+        risk="low",
+        files=["app/a.py"],
+        preferred_path="subagent",
+    )
+    ambiguous["authority_ambiguous"] = True
+    ambiguous["execution_routing"] = {
+        "mode": "shadow",
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+    with pytest.raises(EpicDispatchError, match="ambiguity"):
+        build_dispatch_plan(
+            independent_issue_numbers=[5813],
+            run_id="canonical-routing-ambiguity",
+            candidates=[ambiguous],
+        )
+
+
 def test_phase2_canary_preserves_contract_hashes_and_route_lineage() -> None:
     candidate = _candidate(
         5322,
@@ -1154,7 +1199,9 @@ def test_phase2_canary_preserves_contract_hashes_and_route_lineage() -> None:
     assert rejected_launcher.calls == []
 
 
-def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallback() -> None:
+def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallback(
+    tmp_path: Path,
+) -> None:
     candidate = _candidate(
         5323,
         risk="low",
@@ -1192,11 +1239,14 @@ def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallb
         ]
     )
 
+    store = SqliteBuilderOpsStore(tmp_path / "builderops.sqlite3")
+    store.initialize()
     receipt = dispatch_issue_sessions(
         plan,
         launcher,
         expected_plan_hash=frozen_dispatch_plan_hash(plan),
         canary_observed_at="2026-08-29T15:00:01Z",
+        receipt_store=store,
     )
 
     assert receipt["stopped_reason"] == "worker-handoff"
@@ -1208,6 +1258,24 @@ def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallb
     assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
     assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
     assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
+    durable = store.list_records("BuilderOpsReceipt")
+    assert [record["action"] for record in durable] == [
+        "canary_attempt_intent",
+        "canary_attempt_outcome",
+        "canary_attempt_intent",
+        "canary_attempt_outcome",
+    ]
+    replay_launcher = _RecordingSessionLauncher([])
+    replay = dispatch_issue_sessions(
+        plan,
+        replay_launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+        receipt_store=store,
+    )
+    assert replay["stopped_reason"] == "session-launch-failed"
+    assert replay_launcher.calls == []
+    assert len(store.list_records("BuilderOpsReceipt")) == 4
 
 
 def test_phase2_canary_fallback_launcher_failure_records_redacted_receipt() -> None:

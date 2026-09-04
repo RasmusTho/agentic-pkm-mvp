@@ -872,7 +872,7 @@ key before launch. Those actions remain with their live owning workflows.
 
 ### Execution Routing target contract
 
-**Status: target architecture with the Phase 1 shadow seam and a partial Phase 2 canary enabling slice shipped.** Execution Routing is the Builder System policy that selects an
+**Status: target architecture with the Phase 1 shadow seam and a bounded Phase 2 canary enabling slice shipped.** Execution Routing is the Builder System policy that selects an
 adequate execution capability for one already-authorized unit of work. It is a policy/decision seam
 inside the existing Builder control plane, not another orchestrator, lifecycle authority, task
 store, or verification authority. The shipped seam is intentionally evidence-only; the current
@@ -995,9 +995,13 @@ hashes. No retry loop, quota oracle, second orchestrator, or model-specific work
 The canary dispatch result carries redaction-safe, non-authoritative
 `builder_execution_routing_canary.v1` launch/session evidence. It records candidate identity,
 requested and actual capability, route lineage, semantic hashes, bounded attempt outcomes, and
-`accepted_delivery_verification: not_run`; that value is explicitly not acceptance evidence. A
-durable passed/failed accepted-delivery observation, its verification-consumer writer, and any
-restart/recovery correlation remain parent #5322 work. The canary does not alter the
+`accepted_delivery_verification: not_run`; that value is explicitly not acceptance evidence. The
+existing `BuilderOpsReceipt` store now records the pre-launch attempt intent and terminal outcome
+as append-only children, refuses a relaunch after an indeterminate restart, and accepts a later
+current-head verifier result only through the verification-and-closure boundary. Verified or
+delivered results become one idempotent `passed` observation; absent, stale, mismatched, or
+non-success verification becomes typed `not_accepted` evidence. The full verifier receipt is
+hashed into the observation and is never copied into BuilderOps. The canary does not alter the
 general-delivery default, configured capability ladder, independent review, exact-head CI,
 owner-doc, merge, or closure gates. Any sample widening, active-policy change, or default
 promotion remains separately governed work.

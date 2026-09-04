@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from pydantic import ValidationError
 import pytest
 
@@ -13,6 +15,13 @@ from app.builderops.execution_routing import (
     create_execution_attempt,
     resolve_bounded_fast_route,
 )
+from app.builderops.execution_routing_receipts import (
+    CanaryReceiptEvidenceError,
+    append_attempt_intent,
+    append_attempt_outcome,
+    record_acceptance_observation,
+)
+from app.builderops.store import SqliteBuilderOpsStore
 
 
 HASH_A = "a" * 64
@@ -52,6 +61,145 @@ def _target(capability: str) -> ResolvedExecutionTarget:
         reasoning_effort="low",
         configuration_ref="docs/settings/models/providers.yaml#builder_execution.dev",
     )
+
+
+def _durable_canary(tmp_path, *, issue_number: int = 5183):
+    request = _request(issue_number=issue_number)
+    decision = admit_phase2_canary(
+        request, opt_in=True, sample_index=1, sample_limit=1
+    )
+    attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=_target("luna"),
+        attempt_number=1,
+        mode="canary",
+        outcome="started",
+        observed_at="2026-08-29T15:00:01Z",
+    )
+    store = SqliteBuilderOpsStore(tmp_path / f"builderops-{issue_number}.sqlite3")
+    store.initialize()
+    chain = append_attempt_intent(store, request, decision, attempt)
+    append_attempt_outcome(store, chain, request, decision, attempt)
+    receipt = build_execution_routing_canary_receipt(
+        request=request,
+        decision=decision,
+        attempts=(attempt,),
+        accepted_delivery_verification="not_run",
+    )
+    return store, receipt, request, decision, attempt
+
+
+def test_canary_acceptance_consumer_records_verified_delivery_once(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    verification = {
+        "contract": "verification_receipt.v1",
+        "verdict": "verified",
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "pr_number": 5328,
+        "head_sha": "a" * 40,
+        "run_id": "vrun-acceptance",
+    }
+
+    first = record_acceptance_observation(
+        store,
+        receipt,
+        verification,
+        repository="RasmusTho/agentic-pkm-mvp",
+        pr_number=5328,
+        head_sha="a" * 40,
+        governing_issue=5183,
+        run_id="vrun-acceptance",
+    )
+    replay = record_acceptance_observation(
+        store,
+        receipt,
+        verification,
+        repository="RasmusTho/agentic-pkm-mvp",
+        pr_number=5328,
+        head_sha="a" * 40,
+        governing_issue=5183,
+        run_id="vrun-acceptance",
+    )
+
+    assert first == replay
+    body = json.loads(first["receipt_body"])
+    assert body["acceptance"]["status"] == "passed"
+    assert body["acceptance"]["verification"]["verdict"] == "verified"
+    assert body["acceptance"]["verification"]["head_sha"] == "a" * 40
+    assert len(store.list_records("BuilderOpsReceipt")) == 3
+
+
+def test_canary_acceptance_rejects_unbound_verified_delivery(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+
+    observation = record_acceptance_observation(
+        store,
+        receipt,
+        {"verdict": "verified", "head_sha": "a" * 40},
+        repository="RasmusTho/agentic-pkm-mvp",
+        pr_number=5328,
+        head_sha="a" * 40,
+        governing_issue=5183,
+        run_id="vrun-unbound",
+    )
+
+    body = json.loads(observation["receipt_body"])
+    assert body["acceptance"]["status"] == "not_accepted"
+    assert body["acceptance"]["reason"] == "verification_identity_mismatch"
+
+
+def test_canary_acceptance_is_not_accepted_without_verification(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+
+    observation = record_acceptance_observation(
+        store,
+        receipt,
+        None,
+        repository="RasmusTho/agentic-pkm-mvp",
+        pr_number=5328,
+        head_sha="a" * 40,
+        governing_issue=5183,
+        run_id="vrun-not-reached",
+    )
+
+    body = json.loads(observation["receipt_body"])
+    assert body["acceptance"]["status"] == "not_accepted"
+    assert body["acceptance"]["reason"] == "verification_not_reached"
+    assert body["acceptance"]["verification"]["verdict"] is None
+
+
+def test_canary_acceptance_rejects_stale_and_cross_issue_receipts(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    verified = {"verdict": "verified", "head_sha": "a" * 40}
+
+    stale = record_acceptance_observation(
+        store,
+        receipt,
+        verified,
+        repository="RasmusTho/agentic-pkm-mvp",
+        pr_number=5328,
+        head_sha="b" * 40,
+        governing_issue=5183,
+        run_id="vrun-stale",
+    )
+    stale_body = json.loads(stale["receipt_body"])
+    assert stale_body["acceptance"]["status"] == "not_accepted"
+    assert stale_body["acceptance"]["reason"] == "verification_head_mismatch"
+
+    cross_issue = dict(receipt)
+    cross_issue["candidate"] = {"issue_number": 9999, "work_class": "bounded_fast"}
+    with pytest.raises(CanaryReceiptEvidenceError, match="issue identity"):
+        record_acceptance_observation(
+            store,
+            cross_issue,
+            verified,
+            repository="RasmusTho/agentic-pkm-mvp",
+            pr_number=5328,
+            head_sha="a" * 40,
+            governing_issue=5183,
+            run_id="vrun-cross-issue",
+        )
 
 
 def test_bounded_fast_resolver_is_provider_neutral_and_fail_closed() -> None:

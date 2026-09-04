@@ -26,6 +26,12 @@ from app.builderops.execution_routing import (
     resolve_execution_target,
     validate_route_decision,
 )
+from app.builderops.execution_routing_receipts import (
+    ReceiptStore,
+    append_attempt_intent,
+    append_attempt_outcome,
+    attempt_intent_exists,
+)
 from app.components.settings.providers_loader import load_provider_census
 from app.dispatcher.verification_consumer import _is_codex_usage_limit_event
 
@@ -540,6 +546,7 @@ def dispatch_issue_sessions(
     *,
     expected_plan_hash: str | None = None,
     canary_observed_at: str | None = None,
+    receipt_store: ReceiptStore | None = None,
 ) -> dict[str, Any]:
     """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
 
@@ -578,6 +585,7 @@ def dispatch_issue_sessions(
                     routing_payload=routing_payload,
                     launcher=launcher,
                     observed_at=canary_observed_at or _utc_now(),
+                    receipt_store=receipt_store,
                 )
             else:
                 launch_result = launcher.launch(context_pack)
@@ -674,6 +682,7 @@ def _launch_canary(
     routing_payload: Mapping[str, Any],
     launcher: IssueSessionLauncher,
     observed_at: str,
+    receipt_store: ReceiptStore | None,
 ) -> tuple[Mapping[str, Any], dict[str, object]]:
     """Execute one canary attempt and, only on typed capacity failure, one Luna fallback."""
 
@@ -693,6 +702,28 @@ def _launch_canary(
     attempts: list[ExecutionAttemptObservation] = []
     first_result: Mapping[str, Any] | None = None
     first_error: Exception | None = None
+
+    # The intent has a stable attempt identity (outcome is deliberately not
+    # part of that identity) and must be durable before the launcher is called.
+    intent_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=target,
+        attempt_number=1,
+        mode="canary",
+        outcome="started",
+        observed_at=launch_at,
+    )
+    first_chain = None
+    if receipt_store is not None:
+        if attempt_intent_exists(receipt_store, request, decision, intent_attempt):
+            raise IssueSessionLaunchError(
+                "canary receipt recovery is indeterminate; relaunch refused"
+            )
+        first_chain = append_attempt_intent(
+            receipt_store, request, decision, intent_attempt
+        )
+
     if not allocation_unavailable:
         try:
             candidate_result = launcher.launch(
@@ -711,22 +742,28 @@ def _launch_canary(
         except Exception as exc:
             first_error = exc
 
+    first_outcome: Literal["started", "failed", "allocation_unavailable"] = (
+        "failed"
+        if first_error is not None
+        else "allocation_unavailable"
+        if allocation_unavailable
+        else "started"
+    )
     first_attempt = create_execution_attempt(
         request=request,
         decision=decision,
         target=target,
         attempt_number=1,
         mode="canary",
-        outcome=(
-            "failed"
-            if first_error is not None
-            else "allocation_unavailable"
-            if allocation_unavailable
-            else "started"
-        ),
+        outcome=first_outcome,
         observed_at=launch_at,
     )
     attempts.append(first_attempt)
+    if first_chain is not None:
+        assert receipt_store is not None
+        append_attempt_outcome(
+            receipt_store, first_chain, request, decision, first_attempt
+        )
     if first_error is not None:
         receipt = build_execution_routing_canary_receipt(
             request=request,
@@ -762,7 +799,7 @@ def _launch_canary(
         channel="dev",
         capability="luna",
     )
-    fallback_attempt = create_execution_attempt(
+    fallback_intent_attempt = create_execution_attempt(
         request=request,
         decision=decision,
         target=fallback_target,
@@ -776,10 +813,21 @@ def _launch_canary(
     )
     fallback_routing = dict(routing_payload)
     fallback_routing["proposed_target"] = fallback_target.receipt_fields()
-    fallback_routing["attempt_observation"] = fallback_attempt.model_dump(mode="json")
+    fallback_routing["attempt_observation"] = fallback_intent_attempt.model_dump(mode="json")
     fallback_result: Mapping[str, Any] | None = None
     fallback_error: Exception | None = None
     fallback_allocation_state: object = None
+    fallback_chain = None
+    if receipt_store is not None:
+        if attempt_intent_exists(
+            receipt_store, request, decision, fallback_intent_attempt
+        ):
+            raise IssueSessionLaunchError(
+                "canary receipt recovery is indeterminate; relaunch refused"
+            )
+        fallback_chain = append_attempt_intent(
+            receipt_store, request, decision, fallback_intent_attempt
+        )
     try:
         candidate_result = launcher.launch(
             context_pack,
@@ -819,6 +867,11 @@ def _launch_canary(
         attempts=(*attempts, fallback_attempt),
         accepted_delivery_verification="not_run",
     )
+    if fallback_chain is not None:
+        assert receipt_store is not None
+        append_attempt_outcome(
+            receipt_store, fallback_chain, request, decision, fallback_attempt
+        )
     if fallback_error is not None:
         fallback_session_id = getattr(fallback_error, "session_id", None)
         raise IssueSessionLaunchError(
@@ -1536,16 +1589,35 @@ def _build_execution_routing(
         "candidate.risk",
         {"low", "medium", "high", "critical"},
     )
-    ambiguity = _normalize_choice(
-        routing_input.get("ambiguity"),
-        "execution_routing.ambiguity",
-        {"low", "medium", "high"},
+    canonical_ambiguity = (
+        "low" if candidate.get("authority_ambiguous") is False else "high"
     )
-    protected_surface = routing_input.get("protected_surface")
-    if not isinstance(protected_surface, bool):
+    canonical_protected_surface = (
+        route_risk != "low"
+        or candidate.get("authority_ambiguous") is not False
+        or candidate.get("has_migration") is not False
+        or not candidate.get("file_surfaces_known")
+        or not candidate.get("contract_surfaces_known")
+        or bool(candidate.get("contract_surfaces"))
+        or bool(candidate.get("owner_doc_writeback_required"))
+        or str(candidate.get("task_class", "")).lower()
+        in {"complex", "multi-layer", "architecture", "state-machine"}
+    )
+    # Routing input is an assertion about canonical Issue/candidate facts; it
+    # may not lower the ambiguity or protected-surface classification.
+    if "ambiguity" in routing_input and routing_input["ambiguity"] != canonical_ambiguity:
         raise EpicDispatchError(
-            "execution_routing.protected_surface must be a boolean"
+            "execution_routing.ambiguity must match canonical candidate evidence"
         )
+    if (
+        "protected_surface" in routing_input
+        and routing_input["protected_surface"] is not canonical_protected_surface
+    ):
+        raise EpicDispatchError(
+            "execution_routing.protected_surface must match canonical candidate evidence"
+        )
+    ambiguity = canonical_ambiguity
+    protected_surface = canonical_protected_surface
     decision_at = _normalize_string(
         routing_input.get("decision_at"),
         "execution_routing.decision_at",

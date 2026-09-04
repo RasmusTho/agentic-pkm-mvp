@@ -837,6 +837,7 @@ def _build_host_fenced_verification_cycle(
     context_path: Path,
     containment_factory: Callable[[], Any],
     containment_receipt_required: bool = False,
+    canary_receipt_store: Any | None = None,
 ) -> tuple[Any, Callable[[], None]]:
     from app.dispatcher.verification_consumer import (
         CANONICAL_RECEIPT_SCHEMA_PATH,
@@ -900,12 +901,14 @@ def _build_host_fenced_verification_cycle(
             repository_authority,
             credentials,
         )
+        runtime_kwargs: dict[str, Any] = {
+            "holder": holder,
+            "containment_receipt_required": containment_receipt_required,
+        }
+        if canary_receipt_store is not None:
+            runtime_kwargs["canary_receipt_store"] = canary_receipt_store
         runtime = HostFencedVerificationCycle(
-            ledger,
-            consumer,
-            executor,
-            holder=holder,
-            containment_receipt_required=containment_receipt_required,
+            ledger, consumer, executor, **runtime_kwargs
         )
     except Exception:
         repository_authority.close()
@@ -923,6 +926,22 @@ def _cmd_verification_cycle(
                 "provide exactly one request file or --recover-run-id"
             )
         request: dict[str, object] | None = None
+        canary_receipt: dict[str, object] | None = None
+        canary_receipt_store: Any | None = None
+        if args.canary_receipt:
+            loaded_canary = json.loads(
+                Path(args.canary_receipt).read_text(encoding="utf-8")
+            )
+            if not isinstance(loaded_canary, dict):
+                raise ValueError("canary receipt JSON must be an object")
+            canary_receipt = loaded_canary
+            from app.builderops.config import load_paths as load_builderops_paths
+            from app.builderops.store import SqliteBuilderOpsStore
+
+            builderops_paths = load_builderops_paths()
+            builderops_paths.ensure()
+            canary_receipt_store = SqliteBuilderOpsStore(builderops_paths.db_path)
+            canary_receipt_store.initialize()
         repository = (args.repo or "").strip()
         if args.request:
             loaded = json.loads(
@@ -979,14 +998,27 @@ def _cmd_verification_cycle(
                             args.containment_profile
                             == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
                         ),
+                        canary_receipt_store=canary_receipt_store,
                     )
                 )
                 try:
-                    receipt = (
-                        runtime.run_dry_cycle(request)
-                        if request is not None
-                        else runtime.recover_dry_cycle(args.recover_run_id)
-                    )
+                    if request is not None:
+                        receipt = (
+                            runtime.run_dry_cycle(request)
+                            if canary_receipt is None
+                            else runtime.run_dry_cycle(
+                                request, canary_receipt=canary_receipt
+                            )
+                        )
+                    else:
+                        receipt = (
+                            runtime.recover_dry_cycle(args.recover_run_id)
+                            if canary_receipt is None
+                            else runtime.recover_dry_cycle(
+                                args.recover_run_id,
+                                canary_receipt=canary_receipt,
+                            )
+                        )
                 finally:
                     close_repository()
     except Exception as exc:
@@ -1373,6 +1405,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to verification_dispatch_request.v3 JSON",
     )
     p.add_argument("--recover-run-id", default=None)
+    p.add_argument(
+        "--canary-receipt",
+        default=None,
+        help=(
+            "Optional Phase 2 canary receipt JSON. When supplied, the verified "
+            "result is consumed into the existing BuilderOpsReceipt store."
+        ),
+    )
     p.add_argument("--repo", default=None, help="Explicit owner/repo authority")
     p.add_argument("--holder", default="verification-host")
     p.add_argument("--worktree", default=None)
