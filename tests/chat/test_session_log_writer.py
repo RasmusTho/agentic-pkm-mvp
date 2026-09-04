@@ -79,7 +79,7 @@ def test_frontmatter_fields_present(tmp_path: Path) -> None:
     assert f"role_message_format: {ROLE_MESSAGE_FORMAT_BLOCKQUOTE_V1}" in text
 
 
-def test_open_create_once_reuses_existing_session_identity(tmp_path: Path) -> None:
+def test_open_create_once_rejects_different_session_identity(tmp_path: Path) -> None:
     note = _note(tmp_path)
     first_writer = SessionLogWriter(
         vault_root=tmp_path,
@@ -93,13 +93,24 @@ def test_open_create_once_reuses_existing_session_identity(tmp_path: Path) -> No
     )
 
     first = first_writer.open_session(note, "session")
-    second = second_writer.open_session(note, "session")
+    with pytest.raises(ValueError, match="different session"):
+        second_writer.open_session(note, "session")
 
     assert first.session_id == "first-session"
-    assert second.session_id == first.session_id
-    text = second.log_path.read_text(encoding="utf-8")
+    text = first.log_path.read_text(encoding="utf-8")
     assert "session_id: first-session" in text
     assert "session_id: second-session" not in text
+
+
+def test_open_create_once_accepts_same_session_identity_replay(tmp_path: Path) -> None:
+    note = _note(tmp_path)
+    writer = _writer(tmp_path)
+
+    first = writer.open_session(note, "session")
+    replay = writer.open_session(note, "session")
+
+    assert replay.session_id == first.session_id == "session-uuid"
+    assert replay.log_path == first.log_path
 
 
 @pytest.mark.parametrize("replacement", ["leaf_symlink", "parent_symlink", "directory"])

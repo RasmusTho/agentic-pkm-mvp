@@ -61,6 +61,13 @@ _CANDIDATE_STAGE_OPEN_FLAGS = (
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_CLOEXEC", 0)
 )
+_RELATIVE_CREATE_STAGE_OPEN_FLAGS = (
+    os.O_RDWR
+    | os.O_CREAT
+    | os.O_EXCL
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
 CandidateCreateResult = Literal["written", "already_exists"]
 AtomicAppendTransform = Callable[[bytes | None, bytes], tuple[bytes, bytes]]
 _ATOMIC_APPEND_STAGE_RE = re.compile(
@@ -820,8 +827,9 @@ def _create_note_once_at_relative_seam(
     resolved_root = Path(vault_root).expanduser().resolve()
     payload = content.encode("utf-8")
 
-    current_dir_fd: int | None = None
+    directory_fds: list[int] = []
     stage_fd: int | None = None
+    stage_stat: os.stat_result | None = None
     stage_name: str | None = None
     stage_owned = False
     stage_unlink_attempted = False
@@ -832,31 +840,92 @@ def _create_note_once_at_relative_seam(
         if cleanup_error is None:
             cleanup_error = exc
 
+    def require_live_directory_chain() -> None:
+        if not directory_fds:
+            raise KnowledgeWriteConflict(
+                f"create-once publication lost vault authority for {note_rel_path}"
+            )
+        try:
+            named_root = os.stat(resolved_root, follow_symlinks=False)
+            opened_root = os.fstat(directory_fds[0])
+            if (
+                not stat.S_ISDIR(named_root.st_mode)
+                or not _same_file_identity(named_root, opened_root)
+            ):
+                raise KnowledgeWriteConflict(
+                    f"create-once publication directory changed for {note_rel_path}"
+                )
+            for parent_fd, component, child_fd in zip(
+                directory_fds[:-1],
+                parts[:-1],
+                directory_fds[1:],
+                strict=True,
+            ):
+                named = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+                opened = os.fstat(child_fd)
+                if (
+                    not stat.S_ISDIR(named.st_mode)
+                    or not stat.S_ISDIR(opened.st_mode)
+                    or not _same_file_identity(named, opened)
+                ):
+                    raise KnowledgeWriteConflict(
+                        f"create-once publication directory changed for {note_rel_path}"
+                    )
+        except OSError as exc:
+            raise KnowledgeWriteConflict(
+                f"create-once publication directory changed for {note_rel_path}"
+            ) from exc
+
+    def require_named_stage_identity(name: str) -> None:
+        assert stage_fd is not None
+        assert stage_stat is not None
+        try:
+            opened = os.fstat(stage_fd)
+            named = os.stat(
+                name,
+                dir_fd=directory_fds[-1],
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise KnowledgeWriteConflict(
+                f"create-once staged inode changed for {note_rel_path}"
+            ) from exc
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or not stat.S_ISREG(named.st_mode)
+            or named.st_nlink != 1
+            or not _same_file_identity(opened, stage_stat)
+            or not _same_file_identity(named, stage_stat)
+        ):
+            raise KnowledgeWriteConflict(
+                f"create-once staged inode changed for {note_rel_path}"
+            )
+
     try:
-        current_dir_fd = os.open(resolved_root, _DIRECTORY_OPEN_FLAGS)
+        directory_fds.append(os.open(resolved_root, _DIRECTORY_OPEN_FLAGS))
         for component in parts[:-1]:
             try:
-                os.mkdir(component, mode=0o777, dir_fd=current_dir_fd)
+                os.mkdir(component, mode=0o777, dir_fd=directory_fds[-1])
             except OSError as exc:
                 if exc.errno != errno.EEXIST:
                     raise
-            os.fsync(current_dir_fd)
+            os.fsync(directory_fds[-1])
             child_fd = os.open(
                 component,
                 _DIRECTORY_OPEN_FLAGS,
-                dir_fd=current_dir_fd,
+                dir_fd=directory_fds[-1],
             )
-            superseded_fd = current_dir_fd
-            current_dir_fd = child_fd
-            os.close(superseded_fd)
+            directory_fds.append(child_fd)
 
         stage_name = f".{stage_prefix}-{uuid.uuid4().hex}"
         stage_fd = os.open(
             stage_name,
-            _CANDIDATE_STAGE_OPEN_FLAGS,
+            _RELATIVE_CREATE_STAGE_OPEN_FLAGS,
             0o600,
-            dir_fd=current_dir_fd,
+            dir_fd=directory_fds[-1],
         )
+        stage_stat = os.fstat(stage_fd)
         stage_owned = True
         offset = 0
         while offset < len(payload):
@@ -869,31 +938,93 @@ def _create_note_once_at_relative_seam(
                 )
             offset += written
         os.fsync(stage_fd)
-        owned_stage_fd = stage_fd
-        stage_fd = None
-        os.close(owned_stage_fd)
+        staged_payload, observed_stage = _read_stable_descriptor(stage_fd)
+        if (
+            staged_payload != payload
+            or not _same_file_identity(observed_stage, stage_stat)
+        ):
+            raise KnowledgeWriteConflict(
+                f"create-once staged payload changed for {note_rel_path}"
+            )
+        require_named_stage_identity(stage_name)
+        require_live_directory_chain()
 
         try:
             _atomic_rename_noreplace_at(
-                current_dir_fd,
+                directory_fds[-1],
                 stage_name,
-                current_dir_fd,
+                directory_fds[-1],
                 parts[-1],
             )
         except OSError as exc:
             if exc.errno != errno.EEXIST:
                 raise
+            require_named_stage_identity(stage_name)
             stage_unlink_attempted = True
-            os.unlink(stage_name, dir_fd=current_dir_fd)
+            os.unlink(stage_name, dir_fd=directory_fds[-1])
             stage_owned = False
-            os.fsync(current_dir_fd)
-            _require_regular_candidate_target(current_dir_fd, parts[-1])
+            os.fsync(directory_fds[-1])
+            _require_regular_candidate_target(directory_fds[-1], parts[-1])
+            require_live_directory_chain()
             return "already_exists"
 
         stage_owned = False
-        os.fsync(current_dir_fd)
+        os.fsync(directory_fds[-1])
+        published_payload, published_stage = _read_stable_descriptor(stage_fd)
+        try:
+            published_target = os.stat(
+                parts[-1],
+                dir_fd=directory_fds[-1],
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise KnowledgeWriteConflict(
+                f"create-once target changed during publication for {note_rel_path}"
+            ) from exc
+        if (
+            published_payload != payload
+            or not stat.S_ISREG(published_target.st_mode)
+            or published_target.st_nlink != 1
+            or published_stage.st_nlink != 1
+            or not _same_file_identity(published_stage, stage_stat)
+            or not _same_file_identity(published_target, stage_stat)
+        ):
+            raise KnowledgeWriteConflict(
+                f"create-once target changed during publication for {note_rel_path}"
+            )
+        require_live_directory_chain()
+        if not _same_file_identity(
+            os.stat(
+                parts[-1],
+                dir_fd=directory_fds[-1],
+                follow_symlinks=False,
+            ),
+            stage_stat,
+        ):
+            raise KnowledgeWriteConflict(
+                f"create-once target changed during receipt fencing for {note_rel_path}"
+            )
         return "written"
     finally:
+        if (
+            stage_owned
+            and not stage_unlink_attempted
+            and stage_name is not None
+            and directory_fds
+        ):
+            stage_unlink_attempted = True
+            try:
+                require_named_stage_identity(stage_name)
+                os.unlink(stage_name, dir_fd=directory_fds[-1])
+            except BaseException as exc:  # noqa: BLE001 - exact owned-stage cleanup
+                record_cleanup_error(exc)
+            else:
+                stage_owned = False
+                try:
+                    os.fsync(directory_fds[-1])
+                except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
+                    record_cleanup_error(exc)
+
         if stage_fd is not None:
             owned_stage_fd = stage_fd
             stage_fd = None
@@ -902,31 +1033,12 @@ def _create_note_once_at_relative_seam(
             except BaseException as exc:  # noqa: BLE001 - preserve fail-closed cleanup
                 record_cleanup_error(exc)
 
-        if (
-            stage_owned
-            and not stage_unlink_attempted
-            and stage_name is not None
-            and current_dir_fd is not None
-        ):
-            stage_unlink_attempted = True
+        for directory_fd in reversed(directory_fds):
             try:
-                os.unlink(stage_name, dir_fd=current_dir_fd)
-            except BaseException as exc:  # noqa: BLE001 - exact owned-stage cleanup
-                record_cleanup_error(exc)
-            else:
-                stage_owned = False
-                try:
-                    os.fsync(current_dir_fd)
-                except BaseException as exc:  # noqa: BLE001 - cleanup durability is required
-                    record_cleanup_error(exc)
-
-        if current_dir_fd is not None:
-            owned_dir_fd = current_dir_fd
-            current_dir_fd = None
-            try:
-                os.close(owned_dir_fd)
+                os.close(directory_fd)
             except BaseException as exc:  # noqa: BLE001 - every owner gets one close attempt
                 record_cleanup_error(exc)
+        directory_fds.clear()
 
         if cleanup_error is not None:
             raise cleanup_error

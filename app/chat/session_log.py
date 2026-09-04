@@ -113,7 +113,11 @@ class SessionLogWriter:
                     "chat session path is occupied by a different artifact: "
                     f"{log_rel_path.as_posix()}"
                 )
-            session_id = existing_session_id.strip()
+            if existing_session_id.strip() != session_id:
+                raise ValueError(
+                    "chat session path is occupied by a different session: "
+                    f"{log_rel_path.as_posix()}"
+                )
         return SessionLog(
             log_path=log_path,
             session_id=session_id,

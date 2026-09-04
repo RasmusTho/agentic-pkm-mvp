@@ -11,6 +11,7 @@ from typing import BinaryIO
 import pytest
 
 from app.knowledge import adapters as adapters_module
+from app.knowledge import write_ops as write_ops_module
 from app.knowledge.adapters import FsVaultAdapter
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
@@ -1058,6 +1059,83 @@ def test_create_intended_writers_do_not_clobber_existing_artifacts(
     assert second.outcome == "already_exists"
     assert target.read_bytes() == b"first writer\n"
     assert not list(target.parent.glob(".write-note-stage-*"))
+
+
+def test_relative_create_once_rejects_substituted_stage_inode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    (parent / "foreign.md").write_text("foreign bytes\n", encoding="utf-8")
+    real_publish = write_ops_module._atomic_rename_noreplace_at
+
+    def substitute_stage_then_publish(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        os.unlink(source_name, dir_fd=source_fd)
+        os.symlink("foreign.md", source_name, dir_fd=source_fd)
+        real_publish(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        substitute_stage_then_publish,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="target changed"):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "intended bytes\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.stage-substitution",
+            create_once=True,
+        )
+
+    target = parent / "artifact.md"
+    assert target.is_symlink()
+    assert target.read_text(encoding="utf-8") == "foreign bytes\n"
+
+
+def test_relative_create_once_rejects_replaced_parent_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    displaced = tmp_path / "Agent Memory-displaced"
+    real_publish = write_ops_module._atomic_rename_noreplace_at
+
+    def replace_parent_then_publish(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        parent.rename(displaced)
+        parent.mkdir()
+        real_publish(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_atomic_rename_noreplace_at",
+        replace_parent_then_publish,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="directory changed"):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "intended bytes\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.parent-substitution",
+            create_once=True,
+        )
+
+    assert not (parent / "artifact.md").exists()
+    assert (displaced / "artifact.md").read_text(encoding="utf-8") == "intended bytes\n"
 
 
 def test_create_intended_writers_preserve_idempotency_and_provenance(
