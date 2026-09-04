@@ -390,6 +390,27 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "mimer_mcp",
+        (
+            # External Mimer MCP is a bounded protocol adapter over the existing
+            # client HTTP contract. Keep its semantic server and exact contract
+            # proofs owned together so a new adapter module cannot fall through
+            # CI's fail-closed unowned-runtime path (#3368).
+            "app/mimer_mcp/",
+            "tests/mcp/test_mimer_server.py",
+            "tests/architecture/test_mimer_mcp_server_boundaries.py",
+        ),
+        (
+            "tests/mcp/test_mimer_server.py",
+            "tests/architecture/test_mimer_mcp_server_boundaries.py",
+            "tests/api/test_ask_contract.py",
+            "tests/api/test_capture_inbox_api.py",
+            "tests/api/test_search_canonical_substrate.py",
+            "tests/api/test_artifact_note_read_api.py",
+            "tests/api/test_health_contract_api.py",
+        ),
+    ),
+    (
         "companion_ui",
         (
             "companion-ui/",
