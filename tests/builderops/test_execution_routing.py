@@ -8,6 +8,8 @@ from app.builderops.execution_routing import (
     AllocationObservation,
     ExecutionRouteRequest,
     ResolvedExecutionTarget,
+    admit_phase2_canary,
+    build_execution_routing_canary_receipt,
     create_execution_attempt,
     resolve_bounded_fast_route,
 )
@@ -121,6 +123,30 @@ def test_spark_requires_fresh_bonus_observation_otherwise_luna_fallback() -> Non
         assert decision.transition_kind == "capacity_fallback"
         assert decision.transition_reason == reason
         assert decision.delivery_blocked is False
+
+
+def test_phase2_canary_admission_is_explicit_bounded_and_fail_closed() -> None:
+    request = _request()
+
+    with pytest.raises(ValueError, match="explicit opt-in"):
+        admit_phase2_canary(request, opt_in=False, sample_index=1, sample_limit=1)
+    with pytest.raises(ValueError, match="one candidate"):
+        admit_phase2_canary(request, opt_in=True, sample_index=2, sample_limit=2)
+    with pytest.raises(ValueError, match="bounded sample"):
+        admit_phase2_canary(request, opt_in=True, sample_index=2, sample_limit=1)
+    with pytest.raises(ValueError, match="bounded_fast route refused"):
+        admit_phase2_canary(
+            _request(protected_surface=True),
+            opt_in=True,
+            sample_index=1,
+            sample_limit=1,
+        )
+
+    decision = admit_phase2_canary(
+        request, opt_in=True, sample_index=1, sample_limit=1
+    )
+    assert decision.selected_capability == "luna"
+    assert decision.delivery_blocked is False
 
 
 def test_route_decision_deserialization_cannot_fabricate_spark_authority() -> None:
@@ -290,6 +316,69 @@ def test_fallback_preserves_semantic_hashes_and_changes_attempt_identity() -> No
             outcome="not_invoked",
             observed_at="2026-08-29T15:00:01Z",
             transition_reason="misspelled_reason",  # type: ignore[arg-type]
+        )
+
+
+def test_phase2_canary_spark_fallback_is_one_shot_and_semantically_identical() -> None:
+    observation = AllocationObservation(
+        observation_id="spark-observation-phase2",
+        capability="spark",
+        state="bonus_available",
+        observed_at="2026-08-29T14:55:00Z",
+        valid_until="2026-08-29T15:05:00Z",
+        source_kind="operator",
+        source_ref="operator-observation:codex-spark-bonus",
+    )
+    request = _request(allocation_observation=observation)
+    decision = admit_phase2_canary(
+        request, opt_in=True, sample_index=1, sample_limit=1
+    )
+    spark_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=_target("spark"),
+        attempt_number=1,
+        mode="canary",
+        outcome="allocation_unavailable",
+        observed_at="2026-08-29T15:00:01Z",
+    )
+    luna_fallback = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=_target("luna"),
+        attempt_number=2,
+        mode="canary",
+        outcome="succeeded",
+        observed_at="2026-08-29T15:00:02Z",
+        transition_kind="capacity_fallback",
+        transition_reason="spark_allocation_unavailable_at_launch",
+        triggering_attempt=spark_attempt,
+    )
+    receipt = build_execution_routing_canary_receipt(
+        request=request,
+        decision=decision,
+        attempts=(spark_attempt, luna_fallback),
+        accepted_delivery_verification="passed",
+    )
+
+    assert luna_fallback.context_pack_hash == spark_attempt.context_pack_hash
+    assert luna_fallback.authority_hash == spark_attempt.authority_hash
+    assert (
+        luna_fallback.verification_profile_hash
+        == spark_attempt.verification_profile_hash
+    )
+    assert receipt["schema_version"] == "builder_execution_routing_canary.v1"
+    assert receipt["attempt_count"] == 2
+    assert receipt["lifecycle_authority"] == "none"
+    assert receipt["merge_authority"] == "none"
+    assert "source_ref" not in str(receipt)
+
+    with pytest.raises(ValueError, match="one bounded Spark/Luna fallback"):
+        build_execution_routing_canary_receipt(
+            request=request,
+            decision=decision,
+            attempts=(spark_attempt, luna_fallback, luna_fallback),
+            accepted_delivery_verification="passed",
         )
 
 

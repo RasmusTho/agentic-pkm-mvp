@@ -11,6 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops import epic_dispatch as epic_dispatch_module
+from app.builderops.delivery_orchestration_contracts import canonical_hash
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
@@ -96,8 +97,16 @@ class _RecordingSessionLauncher:
         self.responses = iter(responses)
         self.calls: list[dict[str, object]] = []
 
-    def launch(self, context_pack: Mapping[str, object]) -> Mapping[str, object]:
-        self.calls.append(dict(context_pack))
+    def launch(
+        self,
+        context_pack: Mapping[str, object],
+        *,
+        execution_routing: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
+        call = dict(context_pack)
+        if execution_routing is not None:
+            call["_execution_routing"] = dict(execution_routing)
+        self.calls.append(call)
         response = next(self.responses)
         if isinstance(response, Exception):
             raise response
@@ -1075,6 +1084,74 @@ def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launc
     command = launcher.command(pack)
     assert command[command.index("--model") + 1] == "gpt-5.6-luna"
     assert "_TCD_CODEX_ROUTE" not in inspect.getsource(epic_dispatch_module)
+
+
+def test_phase2_canary_preserves_contract_hashes_and_route_lineage() -> None:
+    candidate = _candidate(
+        5322,
+        risk="low",
+        files=["app/builderops/execution_routing.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+    }
+
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5322],
+        run_id="phase2-canary-hash-preservation",
+        candidates=[candidate],
+    )
+
+    routing = plan["decisions"][0]["execution_routing"]
+    request = routing["route_request"]
+    decision = routing["route_decision"]
+    attempt = routing["attempt_observation"]
+    pack = plan["context_packs"][0]
+    assert routing["mode"] == "canary"
+    assert routing["canary_admission"] == {
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+    }
+    assert routing["authority"] == "evidence-only-no-launch-or-lifecycle-effect"
+    assert request["context_pack_hash"] == canonical_hash(pack)
+    assert request["authority_hash"] == canonical_hash(pack["issue_contract"])
+    assert request["verification_profile_hash"] == canonical_hash(pack["validation_ledger"])
+    assert decision["route_lineage_id"] == f"execution-route:{canonical_hash(request)}"
+    assert attempt["route_lineage_id"] == decision["route_lineage_id"]
+    assert attempt["context_pack_hash"] == request["context_pack_hash"]
+
+    valid_launcher = _RecordingSessionLauncher(
+        [{"session_id": "session-5322", "worker_receipt": _worker_receipt(5322)}]
+    )
+    valid = dispatch_issue_sessions(
+        plan, valid_launcher, expected_plan_hash=frozen_dispatch_plan_hash(plan)
+    )
+    assert valid["stopped_reason"] == "worker-handoff"
+    assert valid_launcher.calls[0]["_execution_routing"]["proposed_target"][
+        "capability"
+    ] == "luna"
+
+    tampered = json.loads(json.dumps(plan))
+    tampered["decisions"][0]["execution_routing"]["canary_admission"][
+        "sample_limit"
+    ] = 2
+    rejected_launcher = _RecordingSessionLauncher([])
+    with pytest.raises(EpicDispatchError, match="frozen decisions|canary routing requires"):
+        dispatch_issue_sessions(
+            tampered,
+            rejected_launcher,
+            expected_plan_hash=frozen_dispatch_plan_hash(tampered),
+        )
+    assert rejected_launcher.calls == []
 
 
 def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:

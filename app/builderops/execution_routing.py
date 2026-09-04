@@ -10,7 +10,7 @@ configuration lookup.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import ClassVar, Final, Literal, TypeAlias
+from typing import ClassVar, Final, Literal, Sequence, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,6 +44,9 @@ EXECUTION_ATTEMPT_OBSERVATION_VERSION: Final[
 EXECUTION_ROUTING_POLICY_VERSION: Final[
     Literal["builderops.execution-routing-policy.v1"]
 ] = "builderops.execution-routing-policy.v1"
+PHASE2_CANARY_RECEIPT_VERSION: Final[
+    Literal["builder_execution_routing_canary.v1"]
+] = "builder_execution_routing_canary.v1"
 
 WorkClass: TypeAlias = Literal[
     "deterministic",
@@ -408,6 +411,26 @@ def validate_route_decision(
         raise ValueError("route decision must exactly replay from its bound request")
 
 
+def admit_phase2_canary(
+    request: ExecutionRouteRequest,
+    *,
+    opt_in: bool,
+    sample_index: int,
+    sample_limit: int,
+) -> ExecutionRouteDecision:
+    """Admit exactly one explicit, low-risk Phase 2 canary candidate."""
+
+    if opt_in is not True:
+        raise ValueError("Phase 2 canary requires explicit opt-in")
+    if isinstance(sample_index, bool) or isinstance(sample_limit, bool):
+        raise ValueError("Phase 2 canary sample values must be integers")
+    if sample_limit != 1:
+        raise ValueError("Phase 2 canary admits one candidate only")
+    if sample_index != 1:
+        raise ValueError("Phase 2 canary candidate is outside the bounded sample")
+    return resolve_bounded_fast_route(request)
+
+
 def resolve_execution_target(
     census: ProviderCensus,
     *,
@@ -536,6 +559,88 @@ def create_execution_attempt(
     )
 
 
+def build_execution_routing_canary_receipt(
+    *,
+    request: ExecutionRouteRequest,
+    decision: ExecutionRouteDecision,
+    attempts: Sequence[ExecutionAttemptObservation],
+    accepted_delivery_verification: Literal["passed", "failed", "not_run"],
+) -> dict[str, object]:
+    """Build redaction-safe evidence for one bounded Phase 2 canary outcome.
+
+    This receipt is observational only. It deliberately omits allocation source
+    details and never carries lifecycle, pickup, verification-waiver, merge, or
+    closure authority.
+    """
+
+    validate_route_decision(request, decision)
+    if not 1 <= len(attempts) <= 2:
+        raise ValueError("Phase 2 canary permits at most one bounded Spark/Luna fallback")
+    first = attempts[0]
+    if (
+        first.mode != "canary"
+        or first.route_decision_hash != decision.content_hash
+        or first.context_pack_hash != decision.context_pack_hash
+        or first.authority_hash != decision.authority_hash
+        or first.verification_profile_hash != decision.verification_profile_hash
+    ):
+        raise ValueError("canary attempt must bind the exact route semantic hashes")
+    if decision.selected_capability == "spark":
+        if first.actual_capability != "spark":
+            raise ValueError("Spark canary must begin with the selected Spark capability")
+        if len(attempts) == 2:
+            fallback = attempts[1]
+            if (
+                first.outcome != "allocation_unavailable"
+                or fallback.mode != "canary"
+                or fallback.transition_kind != "capacity_fallback"
+                or fallback.actual_capability != "luna"
+                or fallback.triggering_attempt_id != first.attempt_id
+                or fallback.triggering_attempt_hash != first.content_hash
+                or fallback.context_pack_hash != first.context_pack_hash
+                or fallback.authority_hash != first.authority_hash
+                or fallback.verification_profile_hash
+                != first.verification_profile_hash
+            ):
+                raise ValueError("canary fallback must be one typed Luna fallback")
+    elif len(attempts) != 1 or first.actual_capability != "luna":
+        raise ValueError("Luna canary fallback route permits one Luna attempt")
+
+    return {
+        "schema_version": PHASE2_CANARY_RECEIPT_VERSION,
+        "candidate": {"issue_number": request.issue_number, "work_class": request.work_class},
+        "route": {
+            "route_lineage_id": decision.route_lineage_id,
+            "requested_capability": decision.requested_capability,
+            "selected_capability": decision.selected_capability,
+            "allocation_state": decision.transition_reason,
+        },
+        "semantic_hashes": {
+            "context_pack_hash": decision.context_pack_hash,
+            "authority_hash": decision.authority_hash,
+            "verification_profile_hash": decision.verification_profile_hash,
+        },
+        "attempt_count": len(attempts),
+        "attempts": [
+            {
+                "attempt_id": attempt.attempt_id,
+                "attempt_number": attempt.attempt_number,
+                "requested_capability": attempt.requested_capability,
+                "actual_capability": attempt.actual_capability,
+                "transition_kind": attempt.transition_kind,
+                "transition_reason": attempt.transition_reason,
+                "outcome": attempt.outcome,
+            }
+            for attempt in attempts
+        ],
+        "accepted_delivery_verification": accepted_delivery_verification,
+        "lifecycle_authority": "none",
+        "verification_waiver_authority": "none",
+        "merge_authority": "none",
+        "closure_authority": "none",
+    }
+
+
 __all__ = [
     "ALLOCATION_OBSERVATION_VERSION",
     "AllocationObservation",
@@ -546,9 +651,12 @@ __all__ = [
     "ExecutionAttemptObservation",
     "ExecutionRouteDecision",
     "ExecutionRouteRequest",
+    "PHASE2_CANARY_RECEIPT_VERSION",
     "RESOLVED_EXECUTION_TARGET_VERSION",
     "ResolvedExecutionTarget",
     "WorkClass",
+    "admit_phase2_canary",
+    "build_execution_routing_canary_receipt",
     "create_execution_attempt",
     "resolve_bounded_fast_route",
     "resolve_execution_target",

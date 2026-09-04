@@ -18,6 +18,7 @@ from app.builderops.execution_routing import (
     ExecutionRouteRequest,
     ResolvedExecutionTarget,
     WorkClass,
+    admit_phase2_canary,
     create_execution_attempt,
     resolve_bounded_fast_route,
     resolve_execution_target,
@@ -75,7 +76,12 @@ class IssueSessionLaunchError(RuntimeError):
 class IssueSessionLauncher(Protocol):
     """Minimal transitional seam for one fresh issue-worker session."""
 
-    def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]: ...
+    def launch(
+        self,
+        context_pack: Mapping[str, Any],
+        *,
+        execution_routing: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]: ...
 
 
 _CAPABILITY_FOR_MODEL_CLASS = {
@@ -125,8 +131,21 @@ class CodexIssueSessionLauncher:
         self.developer_instructions = instructions.strip()
         self.sandbox = sandbox
 
-    def command(self, context_pack: Mapping[str, Any]) -> list[str]:
+    def command(
+        self,
+        context_pack: Mapping[str, Any],
+        *,
+        execution_routing: Mapping[str, Any] | None = None,
+    ) -> list[str]:
         model, reasoning_effort = self._tcd_route(context_pack)
+        if execution_routing is not None:
+            if execution_routing.get("mode") != "canary":
+                raise EpicDispatchError("only a validated canary may override the launch target")
+            target = ResolvedExecutionTarget.model_validate(
+                execution_routing.get("proposed_target")
+            )
+            model = target.model
+            reasoning_effort = target.reasoning_effort
         worktree = self._planned_worktree(context_pack)
         return [
             "codex",
@@ -169,10 +188,15 @@ class CodexIssueSessionLauncher:
             f"{serialized}\n"
         )
 
-    def launch(self, context_pack: Mapping[str, Any]) -> Mapping[str, Any]:
+    def launch(
+        self,
+        context_pack: Mapping[str, Any],
+        *,
+        execution_routing: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
         prompt = self.prompt(context_pack)
         result = self.runner(
-            self.command(context_pack),
+            self.command(context_pack, execution_routing=execution_routing),
             cwd=self.repo_root,
             input=prompt,
             capture_output=True,
@@ -386,7 +410,7 @@ def build_dispatch_plan(
                 )
                 routing_input = candidate.get("execution_routing")
                 if routing_input is not None:
-                    decision["execution_routing"] = _build_shadow_routing(
+                    decision["execution_routing"] = _build_execution_routing(
                         candidate,
                         routing_input=routing_input,
                         context_pack=context_pack,
@@ -506,7 +530,16 @@ def dispatch_issue_sessions(
         issue_number = decision["issue_number"]
         context_pack_id = decision["context_pack_id"]
         try:
-            launch_result = launcher.launch(context_pack)
+            routing_payload = decision.get("execution_routing")
+            if (
+                isinstance(routing_payload, Mapping)
+                and routing_payload.get("mode") == "canary"
+            ):
+                launch_result = launcher.launch(
+                    context_pack, execution_routing=routing_payload
+                )
+            else:
+                launch_result = launcher.launch(context_pack)
             if not isinstance(launch_result, Mapping):
                 raise IssueSessionLaunchError(
                     "session launcher returned a non-object result"
@@ -702,6 +735,7 @@ def _validate_execution_routing_context(
         "route_decision",
         "proposed_target",
         "shadow_comparison",
+        "canary_admission",
         "attempt_observation",
         "authority",
     }
@@ -741,15 +775,43 @@ def _validate_execution_routing_context(
             channel="dev",
             capability=route.selected_capability,
         )
+        mode = _normalize_choice(
+            routing_payload.get("mode"), "execution_routing.mode", {"shadow", "canary"}
+        )
+        canary_admission = routing_payload.get("canary_admission")
+        if mode == "canary":
+            if not isinstance(canary_admission, Mapping):
+                raise EpicDispatchError("canary routing requires explicit admission evidence")
+            sample_index = _normalize_positive_int(
+                canary_admission.get("sample_index"), "canary_admission.sample_index"
+            )
+            sample_limit = _normalize_positive_int(
+                canary_admission.get("sample_limit"), "canary_admission.sample_limit"
+            )
+            admit_phase2_canary(
+                request,
+                opt_in=canary_admission.get("opt_in") is True,
+                sample_index=sample_index,
+                sample_limit=sample_limit,
+            )
+            expected_admission: dict[str, object] | None = {
+                "opt_in": True,
+                "sample_index": 1,
+                "sample_limit": 1,
+            }
+        else:
+            expected_admission = None
         expected_attempt = create_execution_attempt(
             request=request,
             decision=route,
             target=expected_target,
             attempt_number=1,
-            mode="shadow",
+            mode=cast(Literal["shadow", "canary"], mode),
             outcome="not_invoked",
             observed_at=request.decision_at,
-            transition_reason="shadow_route_not_invoked",
+            transition_reason=(
+                "shadow_route_not_invoked" if mode == "shadow" else "initial_route"
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise EpicDispatchError(
@@ -759,11 +821,11 @@ def _validate_execution_routing_context(
         "incumbent_capability": route.shadow_against_capability,
         "proposed_capability": route.selected_capability,
         "verification_profile_hash_unchanged": True,
-        "launch_policy_changed": False,
+        "launch_policy_changed": mode == "canary",
     }
     if (
         routing_payload.get("schema_version") != 1
-        or routing_payload.get("mode") != "shadow"
+        or routing_payload.get("mode") not in {"shadow", "canary"}
         or routing_payload.get("authority")
         != "evidence-only-no-launch-or-lifecycle-effect"
         or request.issue_number != issue_contract.get("number")
@@ -771,6 +833,7 @@ def _validate_execution_routing_context(
         or target != expected_target
         or attempt != expected_attempt
         or routing_payload.get("shadow_comparison") != expected_comparison
+        or routing_payload.get("canary_admission") != expected_admission
         or any(
             contract.context_pack_hash != context_hash
             or contract.authority_hash != authority_hash
@@ -1187,15 +1250,16 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_shadow_routing(
+def _build_execution_routing(
     candidate: Mapping[str, Any],
     *,
     routing_input: Mapping[str, Any],
     context_pack: Mapping[str, Any],
     incumbent_capability: str,
 ) -> dict[str, Any]:
-    if routing_input.get("mode") != "shadow":
-        raise EpicDispatchError("Phase 1 execution routing supports shadow mode only")
+    mode = routing_input.get("mode")
+    if mode not in {"shadow", "canary"}:
+        raise EpicDispatchError("execution routing supports shadow or explicit canary mode")
     if "risk" in routing_input:
         raise EpicDispatchError(
             "execution_routing.risk must come from the canonical candidate"
@@ -1263,7 +1327,21 @@ def _build_shadow_routing(
             shadow_against_capability=cast(CapabilityTier, incumbent),
             allocation_observation=observation,
         )
-        route = resolve_bounded_fast_route(request)
+        if mode == "canary":
+            sample_index = _normalize_positive_int(
+                routing_input.get("sample_index"), "execution_routing.sample_index"
+            )
+            sample_limit = _normalize_positive_int(
+                routing_input.get("sample_limit"), "execution_routing.sample_limit"
+            )
+            route = admit_phase2_canary(
+                request,
+                opt_in=routing_input.get("opt_in") is True,
+                sample_index=sample_index,
+                sample_limit=sample_limit,
+            )
+        else:
+            route = resolve_bounded_fast_route(request)
         census = load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH)
         proposed_target = resolve_execution_target(
             census,
@@ -1275,17 +1353,19 @@ def _build_shadow_routing(
             decision=route,
             target=proposed_target,
             attempt_number=1,
-            mode="shadow",
+            mode=cast(Literal["shadow", "canary"], mode),
             outcome="not_invoked",
             observed_at=request.decision_at,
-            transition_reason="shadow_route_not_invoked",
+            transition_reason=(
+                "shadow_route_not_invoked" if mode == "shadow" else "initial_route"
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise EpicDispatchError(f"invalid execution_routing input: {exc}") from exc
 
     return {
         "schema_version": 1,
-        "mode": "shadow",
+        "mode": mode,
         "route_request": request.model_dump(mode="json"),
         "route_decision": route.model_dump(mode="json"),
         "proposed_target": proposed_target.receipt_fields(),
@@ -1293,8 +1373,17 @@ def _build_shadow_routing(
             "incumbent_capability": incumbent,
             "proposed_capability": route.selected_capability,
             "verification_profile_hash_unchanged": True,
-            "launch_policy_changed": False,
+            "launch_policy_changed": mode == "canary",
         },
+        "canary_admission": (
+            {
+                "opt_in": True,
+                "sample_index": 1,
+                "sample_limit": 1,
+            }
+            if mode == "canary"
+            else None
+        ),
         "attempt_observation": attempt.model_dump(mode="json"),
         "authority": "evidence-only-no-launch-or-lifecycle-effect",
     }
