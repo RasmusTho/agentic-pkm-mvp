@@ -612,6 +612,18 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/archival", "tests/architecture/test_governed_archival_contract.py"),
     ),
     (
+        "operations",
+        (
+            "app/operations/",
+            "tests/operations/",
+            "tests/architecture/test_autonomous_operations_boundaries.py",
+        ),
+        (
+            "tests/operations",
+            "tests/architecture/test_autonomous_operations_boundaries.py",
+        ),
+    ),
+    (
         "orchestration",
         (
             "app/orchestrator/",
