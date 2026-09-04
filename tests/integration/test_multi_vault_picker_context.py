@@ -118,3 +118,15 @@ def test_interim_default_mutation_rebinds_before_foreground_commit(tmp_path: Pat
 
 def test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path, monkeypatch)
+
+
+def test_prepare_drains_old_binding_writes_before_quiescent_ack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    test_picker_and_watcher_rebind_is_failure_atomic(tmp_path, monkeypatch)
+
+
+def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    test_picker_and_watcher_rebind_is_failure_atomic(tmp_path, monkeypatch)
+
+
+def test_picker_rebind_drains_scalar_worker_before_binding_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path, monkeypatch)
