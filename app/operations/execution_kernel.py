@@ -188,7 +188,7 @@ class OperationExecutionKernel:
     handlers: Mapping[str, OwnerHandler]
     receipt_store: ReceiptStore
     version_checker: VersionChecker = field(default=lambda request: request.expected_version is None)
-    token_validator: TokenValidator = field(default=lambda request, decision: bool(decision.decision_token))
+    token_validator: TokenValidator = field(default=lambda request, decision: False)
 
     def execute(self, request: OperationRequest, delegation: Mapping[str, Any] | None = None) -> OperationOutcome:
         delegation = delegation if delegation is not None else request.delegation
@@ -227,7 +227,7 @@ class OperationExecutionKernel:
         if not version_current:
             return self._outcome(request, OperationStatus.CONFLICTED, warnings=("version precondition failed",))
 
-        pending = self._outcome(request, OperationStatus.RECOVERY_REQUIRED, receipt=_receipt(request, decision.policy_version, intent_digest, "recovery_required", delegation), warnings=("owner effect is not proven; reconcile receipt before retry",))
+        pending = self._outcome(request, OperationStatus.RECOVERY_REQUIRED, receipt=_receipt(request, decision.policy_version, intent_digest, "applied_receipt_pending", delegation), warnings=("owner effect may have started; reconcile receipt before retry",))
         try:
             reservation, stored = self.receipt_store.reserve(request.request_id, intent_digest, pending)
         except Exception:

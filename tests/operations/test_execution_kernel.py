@@ -51,6 +51,7 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
         handlers={"artifact.move": lambda request: calls.append(request.request_id) or OwnerExecutionResult.succeeded()},
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
     )
 
     missing_context = kernel.execute(_request(context=OperationContext("", "generation-1")), _delegation())
@@ -62,6 +63,7 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
         handlers={"artifact.move": lambda request: calls.append("denied") or OwnerExecutionResult.succeeded()},
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
     ).execute(_request(request_id="request-4"), _delegation())
 
     assert [missing_context.status, wrong_delegation.status, stale_policy.status, denied.status] == [
@@ -82,6 +84,7 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
         handlers={"artifact.move": lambda request: calls.append("stale") or OwnerExecutionResult.succeeded()},
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: False,
+        token_validator=lambda request, decision: True,
     ).execute(_request(request_id="request-5"), _delegation())
     assert version_conflict.status is OperationStatus.CONFLICTED
     assert calls == ["request-1"]
@@ -95,6 +98,7 @@ def test_idempotency_replay_is_stable_and_intent_mismatch_conflicts() -> None:
         handlers={"artifact.move": lambda request: calls.append(request.request_id) or OwnerExecutionResult.succeeded()},
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
     )
     delegation = _delegation()
 
@@ -116,6 +120,7 @@ def test_ambiguous_owner_outcome_is_fail_closed_and_recoverable() -> None:
         handlers={"artifact.move": lambda request: calls.append(request.request_id) or OwnerExecutionResult.ambiguous()},
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
     )
 
     first = kernel.execute(_request(), _delegation())

@@ -34,12 +34,14 @@ def test_receipts_survive_restart_without_sensitive_payloads(tmp_path) -> None:
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
         handlers={"artifact.move": lambda request: OwnerExecutionResult.succeeded()},
         receipt_store=JsonReceiptStore(ledger),
+        token_validator=lambda request, decision: True,
     ).execute(request, delegation)
     restarted = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
         handlers={"artifact.move": lambda request: (_ for _ in ()).throw(AssertionError("must replay"))},
         receipt_store=JsonReceiptStore(ledger),
+        token_validator=lambda request, decision: True,
     ).execute(request, delegation)
 
     assert first.status is OperationStatus.SUCCEEDED
