@@ -13,13 +13,16 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Mapping
+from typing import TYPE_CHECKING, Callable, Iterator, Mapping, TypeVar
 from uuid import uuid4
 
 import yaml
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from app.instance.vault_dimensions import VaultDimensionService
+
+
+_InitializeResult = TypeVar("_InitializeResult")
 
 from app.instance.filesystem_identity import (
     FilesystemIdentityError,
@@ -332,6 +335,31 @@ class InstanceRegistryRuntime:
                 current=current,
                 first_default_provenance=provenance,
             )
+
+    def initialize_and_register_first_vault(
+        self,
+        path: Path,
+        *,
+        initialize: Callable[[], _InitializeResult],
+    ) -> tuple[_InitializeResult, VaultRegistration]:
+        """Keep first-vault content initialization and registration serialized.
+
+        A post-content interruption is recovered forward by recognizing the
+        exact registered root on retry; no later target can steal the first
+        default under this producer lock.
+        """
+
+        with self._bootstrap_locked():
+            current = self.registry.load()
+            if current.registrations or current.default_vault_binding_id is not None:
+                raise RegistryDefaultConflict("first_vault_bootstrap_stale")
+            result = initialize()
+            registration = self._register_first_locked(
+                path,
+                current=current,
+                first_default_provenance=DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+            )
+            return result, registration
 
     def default_vault_service(self) -> InstanceDefaultVaultService:
         """Return the one service both production default producers share."""

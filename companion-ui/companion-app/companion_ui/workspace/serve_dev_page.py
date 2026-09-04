@@ -7217,7 +7217,7 @@ def _render_vault_picker_script() -> str:
     // confirm state on ``data-init-confirmed``; ``errEl`` (optional) shows the
     // confirm/error copy. Reused by the uninitialized-state init button (#2564)
     // and the filesystem-mode "Initialize a vault here" affordance (#2565).
-    function initializeVault(path, button, errEl, confirmLabel) {
+    function initializeVault(path, button, errEl, confirmLabel, bootstrapToken) {
       if (!path) { return; }
       if (button.getAttribute('data-submitting') === 'true') { return; }
       var confirmed = button.getAttribute('data-init-confirmed') === 'true';
@@ -7227,7 +7227,10 @@ def _render_vault_picker_script() -> str:
       if (confirmed) { body.confirm = true; }
       fetch('/api/companion/vault/initialize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: bootstrapToken ? {
+          'Content-Type': 'application/json',
+          'X-Active-Context-Bootstrap': bootstrapToken
+        } : { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       }).then(function(response) {
         return response.text().then(function(text) {
@@ -7244,6 +7247,21 @@ def _render_vault_picker_script() -> str:
         }
         button.removeAttribute('data-submitting');
         var detail = res.data && res.data.detail;
+        if (res.status === 409 && detail === 'first_vault_bootstrap_required' && !bootstrapToken) {
+          // Registry-bound first initialization needs a server-minted,
+          // single-use target/revision precondition. A legacy no-registry
+          // process never returns this marker and keeps its existing journey.
+          jsonPost('/api/companion/vault/initialize/bootstrap', { path: path })
+            .then(function(bootstrap) {
+              initializeVault(path, button, errEl, confirmLabel,
+                bootstrap && bootstrap.bootstrap_precondition);
+            })
+            .catch(function(err) {
+              button.setAttribute('data-affordance-status', 'blocked');
+              if (errEl) { errEl.hidden = false; errEl.textContent = String(err && err.message || err); }
+            });
+          return;
+        }
         if (res.status === 409 && detail && detail.error === 'vault_init_confirmation_required') {
           // The chosen folder already holds the human's content. Surface the
           // confirm gesture; the next click re-posts with confirm:true.
