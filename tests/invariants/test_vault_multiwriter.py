@@ -1209,6 +1209,57 @@ def test_relative_create_once_rejects_replaced_parent_namespace(
     assert (displaced / "artifact.md").read_text(encoding="utf-8") == "intended bytes\n"
 
 
+@pytest.mark.parametrize("replacement", ["delete", "symlink", "regular"])
+def test_relative_create_once_loser_rejects_final_target_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    parent = tmp_path / "Agent Memory"
+    parent.mkdir()
+    target = parent / "artifact.md"
+    target.write_text("winner\n", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    real_chain_check = write_ops_module._require_live_relative_directory_chain
+    checks = 0
+
+    def change_leaf_after_loser_chain_check(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal checks
+        real_chain_check(*args, **kwargs)
+        checks += 1
+        if checks != 2:
+            return
+        target.unlink()
+        if replacement == "symlink":
+            target.symlink_to(outside)
+        elif replacement == "regular":
+            target.write_text("replacement\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        write_ops_module,
+        "_require_live_relative_directory_chain",
+        change_leaf_after_loser_chain_check,
+    )
+
+    with pytest.raises((FileNotFoundError, KnowledgeWriteConflict)):
+        write_note_relative(
+            "Agent Memory/artifact.md",
+            "loser\n",
+            vault_root=tmp_path,
+            writer_identity="vmw.final-loser-fence",
+            create_once=True,
+        )
+
+    if replacement == "delete":
+        assert not target.exists()
+    elif replacement == "symlink":
+        assert target.is_symlink()
+        assert outside.read_text(encoding="utf-8") == "outside\n"
+    else:
+        assert target.read_text(encoding="utf-8") == "replacement\n"
+
+
 def test_create_intended_writers_preserve_idempotency_and_provenance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import errno
-import fcntl
 import os
 import re
 import stat
-from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from pathlib import Path, PurePosixPath
+from typing import Any, Mapping, Sequence
+from uuid import uuid4
 
 import yaml
 
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
-from app.knowledge.write_ops import KNOWLEDGE_WRITE_ACTION, write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import (
+    KNOWLEDGE_WRITE_ACTION,
+    _atomic_rename_noreplace_at,
+    read_create_once_winner_relative,
+    write_note_relative,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD
 
 
@@ -76,18 +81,15 @@ def _slugify(value: str) -> str:
     return normalized or "note"
 
 
-def _next_available_path(directory: Path, slug: str) -> Path:
-    candidate = directory / f"{slug}.md"
-    counter = 2
-    while candidate.exists():
-        candidate = directory / f"{slug}-{counter}.md"
-        counter += 1
-    return candidate
-
-
-@contextmanager
-def _append_allocation_lock(vault_root: Path) -> Iterator[None]:
-    """Serialize MCP append path allocation without changing append semantics."""
+def _publish_append_note(
+    *,
+    vault_root: Path,
+    directory: PurePosixPath,
+    slug: str,
+    content: str,
+    stage_name: str,
+) -> Path:
+    """Publish one MCP append at the first atomically available suffix."""
 
     directory_flags = (
         os.O_RDONLY
@@ -95,73 +97,77 @@ def _append_allocation_lock(vault_root: Path) -> Iterator[None]:
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
-    root_fd = os.open(vault_root, directory_flags)
-    lock_fd: int | None = None
+    descriptors: list[int] = []
+    stage_fd: int | None = None
     try:
-        opened_root = os.fstat(root_fd)
-        named_root = os.stat(vault_root, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(opened_root.st_mode)
-            or not stat.S_ISDIR(named_root.st_mode)
-            or (opened_root.st_dev, opened_root.st_ino)
-            != (named_root.st_dev, named_root.st_ino)
-        ):
-            raise VaultToolError("vault root changed while preparing MCP append")
-        lock_name = ".mcp-append-note.lock"
-        lock_flags = (
-            os.O_RDWR
+        descriptors.append(os.open(vault_root, directory_flags))
+        for component in directory.parts:
+            descriptors.append(
+                os.open(component, directory_flags, dir_fd=descriptors[-1])
+            )
+        parent_fd = descriptors[-1]
+        stage_fd = os.open(
+            stage_name,
+            os.O_RDONLY
             | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_fd,
         )
-        for _attempt in range(9):
-            try:
-                lock_fd = os.open(
-                    lock_name,
-                    lock_flags | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                    dir_fd=root_fd,
-                )
-            except FileExistsError:
-                try:
-                    lock_fd = os.open(lock_name, lock_flags, dir_fd=root_fd)
-                except FileNotFoundError:
-                    continue
-            except OSError as exc:
-                if exc.errno == errno.ENOENT:
-                    continue
-                raise
-            break
-        else:
-            raise VaultToolError("MCP append lock identity did not converge")
-        assert lock_fd is not None
-        opened_lock = os.fstat(lock_fd)
-        named_lock = os.stat(lock_name, dir_fd=root_fd, follow_symlinks=False)
+        stage_identity = os.fstat(stage_fd)
+        named_stage = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
         if (
-            not stat.S_ISREG(opened_lock.st_mode)
-            or opened_lock.st_nlink != 1
-            or not stat.S_ISREG(named_lock.st_mode)
-            or named_lock.st_nlink != 1
-            or (opened_lock.st_dev, opened_lock.st_ino)
-            != (named_lock.st_dev, named_lock.st_ino)
+            not stat.S_ISREG(stage_identity.st_mode)
+            or stage_identity.st_nlink != 1
+            or (stage_identity.st_dev, stage_identity.st_ino)
+            != (named_stage.st_dev, named_stage.st_ino)
         ):
-            raise VaultToolError("MCP append lock is not one stable regular file")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        named_after_lock = os.stat(lock_name, dir_fd=root_fd, follow_symlinks=False)
-        if (named_after_lock.st_dev, named_after_lock.st_ino) != (
-            opened_lock.st_dev,
-            opened_lock.st_ino,
-        ):
-            raise VaultToolError("MCP append lock changed while acquiring authority")
-        yield
-    except OSError as exc:
-        raise VaultToolError(f"could not establish MCP append authority: {exc}") from exc
-    finally:
-        if lock_fd is not None:
+            raise KnowledgeWriteConflict("MCP append stage identity changed")
+
+        counter = 1
+        while True:
+            candidate_name = f"{slug}.md" if counter == 1 else f"{slug}-{counter}.md"
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            finally:
-                os.close(lock_fd)
-        os.close(root_fd)
+                _atomic_rename_noreplace_at(
+                    parent_fd,
+                    stage_name,
+                    parent_fd,
+                    candidate_name,
+                )
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+                current_stage = os.stat(
+                    stage_name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                if (current_stage.st_dev, current_stage.st_ino) != (
+                    stage_identity.st_dev,
+                    stage_identity.st_ino,
+                ):
+                    raise KnowledgeWriteConflict("MCP append stage changed during allocation")
+                counter += 1
+                continue
+            break
+
+        os.fsync(parent_fd)
+        published = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(published.st_mode)
+            or published.st_nlink != 1
+            or (published.st_dev, published.st_ino)
+            != (stage_identity.st_dev, stage_identity.st_ino)
+        ):
+            raise KnowledgeWriteConflict("MCP append publication identity changed")
+        relative_path = (directory / candidate_name).as_posix()
+        if read_create_once_winner_relative(relative_path, vault_root=vault_root) != content:
+            raise KnowledgeWriteConflict("MCP append publication content changed")
+        return vault_root / relative_path
+    finally:
+        if stage_fd is not None:
+            os.close(stage_fd)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def append_note(
@@ -195,12 +201,27 @@ def append_note(
     body_block = body.rstrip()
     content = f"---\n{yaml_block}\n---\n\n{body_block}\n"
     DEFAULT_WRITE_GUARD.assert_writes_allowed(KNOWLEDGE_WRITE_ACTION)
-    with _append_allocation_lock(root):
-        target_dir = root / relative_dir
-        target_dir.mkdir(parents=True, exist_ok=True)
-        note_path = _next_available_path(target_dir, slug)
-        write_note_relative(note_path.relative_to(root).as_posix(), content, vault_root=root)
-    return note_path
+    directory = PurePosixPath(relative_dir)
+    if (
+        directory.is_absolute()
+        or directory.as_posix() != relative_dir
+        or not directory.parts
+        or any(part in {"", ".", ".."} for part in directory.parts)
+    ):
+        raise VaultToolError("relative_dir must be a normalized vault-relative path")
+    stage_name = f".mcp-append-stage-{uuid4().hex}.md"
+    write_note_relative(
+        (directory / stage_name).as_posix(),
+        content,
+        vault_root=root,
+    )
+    return _publish_append_note(
+        vault_root=root,
+        directory=directory,
+        slug=slug,
+        content=content,
+        stage_name=stage_name,
+    )
 
 
 __all__ = ["VaultToolError", "append_note", "get_vault_root"]
