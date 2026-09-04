@@ -52,6 +52,7 @@ from app.episodes.cross_scope_fusion import (
 )
 from app.episodes.notes import episode_note_rel_path, parse_episode_note
 from app.episodes.segmenter import ClosedSegment, _deterministic_episode_id
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -228,6 +229,33 @@ def test_fusion_receipt_precedes_fused_note(tmp_path: Path, monkeypatch: pytest.
     receipts = list((tmp_path / "episodes" / "receipts").glob("*.md"))
     assert len(receipts) == 1
     assert "flow-ere08-test" in receipts[0].read_text(encoding="utf-8")
+
+
+def test_fusion_receipt_rejects_foreign_winner_of_create_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    work = _segment(scope=_WORK, start_min=0, end_min=30, provenance="vault.activity:w1")
+    private = _segment(scope=_PRIVATE, start_min=10, end_min=40, provenance="heimdal.observations:p1")
+    real_write = segmenter.write_note_relative
+
+    def interleaved_write(note_rel_path: str, content: str, **kwargs: object):
+        target = Path(str(kwargs["vault_root"])) / note_rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("foreign raced receipt\n", encoding="utf-8")
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(segmenter, "write_note_relative", interleaved_write)
+
+    with pytest.raises(KnowledgeWriteConflict, match="different artifact"):
+        segmenter._emit_proposals_with_fusion_gate(
+            [work, private],
+            vault_root=tmp_path,
+            write_guard=_allow_guard(),
+            flow_provider=_flow_for(_WORK, _PRIVATE),
+        )
+
+    assert not list(tmp_path.glob("episodes/*/episode.md"))
 
 
 def test_blocked_guard_writes_no_fusion_receipt_or_note(tmp_path: Path) -> None:

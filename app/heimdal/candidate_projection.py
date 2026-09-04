@@ -412,6 +412,16 @@ def write_candidate_note(
         create_once=True,
     )
 
+    if receipt.outcome == "already_exists" and not _is_durable_candidate(
+        candidate_path, candidate
+    ):
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            observation_id=candidate.observation_id,
+            reason=f"candidate path is occupied by a non-durable artifact: {artifact_path}",
+        )
+
     return CandidateWriteResult(
         status="already_exists" if receipt.outcome == "already_exists" else "written",
         artifact_path=artifact_path,
@@ -719,6 +729,15 @@ def write_reading_candidate_note(
         writer_identity=READING_CANDIDATE_WRITE_ACTION,
         create_once=True,
     )
+    if receipt.outcome == "already_exists" and not _is_durable_reading_candidate(
+        candidate_path, candidate
+    ):
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            observation_id=candidate.observation_id,
+            reason=f"reading candidate path is occupied by a non-matching artifact: {artifact_path}",
+        )
     return CandidateWriteResult(
         status="already_exists" if receipt.outcome == "already_exists" else "written",
         artifact_path=artifact_path,

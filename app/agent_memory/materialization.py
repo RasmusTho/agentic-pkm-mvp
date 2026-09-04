@@ -135,7 +135,7 @@ def materialize_promoted_memory(
                     )
                     try:
                         write_guard.assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION)
-                        write_note_relative(
+                        write_receipt = write_note_relative(
                             artifact_path,
                             _render_memory_note(
                                 entry,
@@ -149,6 +149,19 @@ def materialize_promoted_memory(
                             writer_identity=MEMORY_MATERIALIZATION_SOURCE,
                             create_once=True,
                         )
+                        if write_receipt.outcome == "already_exists":
+                            raced_note = _find_materialized_note(
+                                vault_root=vault_root,
+                                memory_dir=memory_dir,
+                                entry=entry,
+                                scope_id=persisted_scope_id,
+                                persisted=persisted,
+                            )
+                            if raced_note is None:
+                                raise MemoryMaterializationError(
+                                    "memory materialization target was won by a different artifact"
+                                )
+                            artifact_uuid, artifact_path = raced_note
                     except Exception as exc:
                         failed_receipt_id = _append_promotion_receipt(
                             outbox_path,

@@ -28,9 +28,11 @@ from app.heimdal.candidate_projection import (
     CandidateProjectionError,
     CandidateWriteResult,
     HeimdalCandidate,
+    ReadingSourceCandidate,
     candidate_note_path,
     fold_observations,
     project_pending_candidates,
+    write_reading_candidate_note,
 )
 from app.heimdal.cursor_store import get_cursor, reset_memory_cursor_store
 from app.heimdal.observation_log import reset_memory_observation_log
@@ -504,6 +506,70 @@ def test_projector_does_not_acknowledge_invalid_existing_candidate(tmp_path: Pat
     assert results[0].status == "blocked"
     assert "non-durable artifact" in results[0].reason
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
+def test_projector_does_not_acknowledge_foreign_candidate_winning_create_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _publish("obs-raced", episode_id="ep-raced")
+    vault = _vault(tmp_path / "vault")
+    real_write = candidate_projection.write_note_relative
+
+    def interleaved_write(note_rel_path: str, content: str, **kwargs: object):
+        target = Path(str(kwargs["vault_root"])) / note_rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("foreign raced winner\n", encoding="utf-8")
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(candidate_projection, "write_note_relative", interleaved_write)
+
+    results = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert results[0].status == "blocked"
+    assert "non-durable artifact" in (results[0].reason or "")
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
+def test_reading_candidate_rejects_foreign_winner_of_create_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    candidate = ReadingSourceCandidate(
+        observation_id="karakeep:item-1:content-hash:profile-hash",
+        episode_id="karakeep:item-1",
+        item_id="item-1",
+        item_kind="link",
+        source_url="https://example.test/item-1",
+        tags=("test",),
+        content_identity="sha256:content-hash",
+        raw_ref="raw:item-1",
+        scope_hint="operator_private",
+        sequence=1,
+        supersedes=None,
+        revision_of=None,
+        tombstone=False,
+        evidence_text="observed evidence",
+    )
+    real_write = candidate_projection.write_note_relative
+
+    def interleaved_write(note_rel_path: str, content: str, **kwargs: object):
+        target = Path(str(kwargs["vault_root"])) / note_rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("foreign raced reading candidate\n", encoding="utf-8")
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(candidate_projection, "write_note_relative", interleaved_write)
+
+    result = write_reading_candidate_note(
+        candidate,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+    )
+
+    assert result.status == "blocked"
+    assert "non-matching artifact" in (result.reason or "")
 
 
 def test_projector_does_not_acknowledge_candidate_with_tampered_provenance(tmp_path: Path) -> None:

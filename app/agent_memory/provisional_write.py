@@ -34,6 +34,7 @@ from app.agent_memory.provisional_memory import (
     rebuild_provisional_memory,
 )
 from app.knowledge.write_ops import write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 PROVISIONAL_MEMORY_WRITE_ACTION = "memory.provisional.write"
@@ -354,7 +355,7 @@ def write_provisional_memory(
 
     note_rel = f"{PROVISIONAL_MEMORY_DIR}/{memory_id}.md"
     try:
-        write_note_relative(
+        receipt = write_note_relative(
             note_rel,
             render_provisional_markdown(artifact),
             vault_root=vault_root,
@@ -363,6 +364,10 @@ def write_provisional_memory(
             writer_identity="agent_memory.provisional_write",
             create_once=True,
         )
+        if receipt.outcome == "already_exists":
+            raise KnowledgeWriteConflict(
+                f"provisional memory create target already exists: {note_rel}"
+            )
     except Exception as exc:
         failed = ProvisionalLifecycleReceipt(
             receipt_id=uuid4(),

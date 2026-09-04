@@ -78,6 +78,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from uuid import uuid4
 
+from app.knowledge.errors import KnowledgeWriteConflict
+
 import yaml
 
 from app.knowledge.write_ops import write_note_relative
@@ -255,7 +257,7 @@ def _write_draft(
 
     rel_path = _safe_rel_path(str(_draft_path(vault_root, draft_id)))
     content = _render_draft_note(draft, title=title)
-    write_note_relative(
+    receipt = write_note_relative(
         rel_path,
         content,
         vault_root=vault_root,
@@ -264,6 +266,10 @@ def _write_draft(
         writer_identity="eval.failure_capture.draft",
         create_once=True,
     )
+    if receipt.outcome == "already_exists":
+        raise KnowledgeWriteConflict(
+            f"eval draft create target already exists: {rel_path}"
+        )
     return DraftEvalCase(
         draft_id=draft.draft_id,
         kind=draft.kind,
