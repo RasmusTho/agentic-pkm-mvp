@@ -1797,19 +1797,21 @@ def test_dispatch_sessions_cli_requires_external_hash_for_routed_plan(
                 ]
             )
         store.assert_not_called()
-        accepted = _run_builderops(
-            [
-                "epic-run-state",
-                "dispatch-sessions",
-                "--plan-file",
-                str(plan_file),
-                "--repo-root",
-                str(tmp_path),
-                "--expected-plan-hash",
-                frozen_dispatch_plan_hash(plan),
-                "--json",
-            ]
-        )
+        with patch("app.builderops.cli._store") as store:
+            accepted = _run_builderops(
+                [
+                    "epic-run-state",
+                    "dispatch-sessions",
+                    "--plan-file",
+                    str(plan_file),
+                    "--repo-root",
+                    str(tmp_path),
+                    "--expected-plan-hash",
+                    frozen_dispatch_plan_hash(plan),
+                    "--json",
+                ]
+            )
+        store.assert_not_called()
 
     assert missing_hash.exit_code != 0
     assert "independently preserved plan hash" in missing_hash.output

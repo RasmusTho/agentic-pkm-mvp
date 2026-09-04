@@ -541,15 +541,18 @@ def _contains_execution_routing(value: object) -> bool:
 
 
 def _contains_canary_execution_routing(value: object) -> bool:
-    """Return whether a plan needs the durable canary receipt store."""
+    """Return whether a selected dispatch decision needs the canary store."""
 
     if isinstance(value, Mapping):
-        routing = value.get("execution_routing")
-        if isinstance(routing, Mapping) and routing.get("mode") == "canary":
-            return True
-        return any(_contains_canary_execution_routing(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_canary_execution_routing(item) for item in value)
+        decisions = value.get("decisions")
+        if isinstance(decisions, list):
+            return any(
+                isinstance(decision, Mapping)
+                and decision.get("selected_for_dispatch") is True
+                and isinstance(decision.get("execution_routing"), Mapping)
+                and decision["execution_routing"].get("mode") == "canary"
+                for decision in decisions
+            )
     return False
 
 
