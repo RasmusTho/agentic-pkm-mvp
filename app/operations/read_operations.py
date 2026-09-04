@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,8 @@ class ReadOperationAdapters:
         return cls(read_operation_handlers(), read_capability_discovery())
 
     def invoke(self, request: OperationRequest) -> OperationOutcome:
+        if request.operation_version != "ygg.operation.v1":
+            return _outcome(request, OperationStatus.NOT_SUPPORTED, "unsupported_operation_version")
         if request.operation_id == "operation.discovery":
             return _outcome(
                 request,
@@ -175,7 +178,10 @@ def _resolve_selected_vault_binding(request: OperationRequest) -> Path | None:
         or request.context.active_context_ref != context.active_vault_id
     ):
         return None
-    return Path(context.active_vault_path).expanduser().resolve()
+    root = Path(context.active_vault_path).expanduser().resolve()
+    if not root.is_dir() or not os.access(root, os.R_OK | os.X_OK):
+        return None
+    return root
 
 
 def _http_exception_type() -> type[Exception]:
@@ -245,12 +251,21 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
     # Bind the caller's immutable identity to the same canonical Companion
     # artifact that owns this resolved locator.  The artifacts route accepts an
     # ID merely to echo it, so it cannot establish that invariant itself.
-    _resolve_related_scope(
-        _collect_relation_notes(vault_root),
-        note_path=safe_locator,
-        artifact_uuid=stable_id,
+    notes = _collect_relation_notes(vault_root)
+    identity_note = next(
+        (note for note in notes if note.get("artifact_uuid") == stable_id), None
     )
-    resolved = _resolve_and_validate(safe_locator, vault_root)
+    if identity_note is None:
+        return ReadOwnerResult("not_found", warning="artifact_not_found")
+    current_locator = str(identity_note.get("note_path") or "")
+    locator_note = next((note for note in notes if note.get("note_path") == safe_locator), None)
+    if locator_note is not None and locator_note is not identity_note:
+        _resolve_related_scope(
+            notes,
+            note_path=safe_locator,
+            artifact_uuid=stable_id,
+        )
+    resolved = _resolve_and_validate(current_locator, vault_root)
     if not resolved.exists() or not resolved.is_file():
         return ReadOwnerResult("not_found", warning="note_not_found")
     body = resolved.read_text(encoding="utf-8")
@@ -259,8 +274,8 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
         (
             {
                 "stable_id": stable_id,
-                "locator": safe_locator,
-                "current_locator": safe_locator,
+                "locator": current_locator,
+                "current_locator": current_locator,
                 "title": _extract_title(body, fallback=resolved.stem),
                 "body": body,
                 "version": _content_hash(body),
@@ -273,29 +288,49 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
 
 
 def _search_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
-    from app.api.routes.companion import _select_vault_notes
+    from app.retrieval.capability import RetrievalRequest, retrieve
 
     query = str(request.arguments.get("query") or "")
     if not query:
-        return ReadOwnerResult("not_found", warning="search query is required")
+        return ReadOwnerResult("invalid", warning="search query is required")
     limit = int(request.arguments.get("limit", 10))
     if not 1 <= limit <= 1000:
         return ReadOwnerResult("invalid", warning="limit must be between 1 and 1000")
-    notes, _, _, _, _ = _select_vault_notes(vault_root, query=query, limit=limit)
+    response = retrieve(RetrievalRequest(query=query, k=1000))
+    root = vault_root.resolve()
+
+    def locator_for(source_ref: str | None) -> str | None:
+        if not source_ref:
+            return None
+        source = Path(source_ref)
+        candidate = source if source.is_absolute() else root / source
+        try:
+            return candidate.resolve().relative_to(root).as_posix()
+        except ValueError:
+            return None
+
+    bound_hits = tuple(
+        (hit, locator)
+        for hit in response.hits
+        if hit.doc_id and (locator := locator_for(hit.source_ref)) is not None
+    )[:limit]
     items = tuple(
         {
-            "stable_id": note.uuid,
-            "locator": note.note_path,
-            "current_locator": note.note_path,
-            "title": note.title,
-            "provenance": "companion.vault_browser_search",
-            "freshness": {"state": "source_read"},
+            "stable_id": hit.doc_id,
+            "locator": locator,
+            "current_locator": locator,
+            "title": str(hit.payload.get("title") or ""),
+            "provenance": {
+                "owner": "retrieval.capability",
+                "source_ref": hit.source_ref,
+                "vault_binding": request.context.active_context_ref,
+            },
+            "freshness": dict(response.metadata.get("temporal_validity") or {}),
             "vault_context": request.context.active_context_ref,
         }
-        for note in notes
-        if note.uuid
+        for hit, locator in bound_hits
     )
-    if len(items) != len(notes):
+    if len(items) != len(bound_hits):
         return ReadOwnerResult(
             "owner_unavailable", items, "one or more search artifacts lack stable identity"
         )
