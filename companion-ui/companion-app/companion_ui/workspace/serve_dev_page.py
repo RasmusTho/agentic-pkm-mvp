@@ -15288,8 +15288,11 @@ def render_index_html(
     function fetchNotes(q) {{
       setStatus('Loading…');
       list.innerHTML = '';
-      var url = '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
-      fetch(url)
+      var scopedBearer = window.sessionStorage.getItem('active-context-session');
+      var scoped = !!scopedBearer;
+      var url = (scoped ? '/api/companion/vault/notes/scoped' : '/api/companion/vault/notes') +
+        (q ? '?q=' + encodeURIComponent(q) : '');
+      fetch(url, scoped ? {{headers: {{'X-Active-Context-Session': scopedBearer}}}} : {{}})
         .then(function(r) {{
           if (!r.ok) throw new Error('API error ' + r.status);
           return r.json();
@@ -16423,13 +16426,17 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
-            if parsed.path == "/api/companion/vault/notes":
+            if parsed.path in {
+                "/api/companion/vault/notes",
+                "/api/companion/vault/notes/scoped",
+            }:
                 params = parse_qs(parsed.query)
                 q = params.get("q", [""])[0]
                 try:
                     data = self._client.get(
-                        "/api/companion/vault/notes",
+                        parsed.path,
                         params={"q": q} if q else {},
+                        headers=self._forwarded_client_headers(parsed.path),
                     )
                 except WorkspaceClientError as exc:
                     self._proxy_error(exc)
@@ -16740,6 +16747,7 @@ def make_handler(
                 "/api/companion/briefing/today",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                "/api/companion/vault/notes/scoped",
                 "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
@@ -16792,6 +16800,7 @@ def make_handler(
                 # the runtime authenticates the real client, not the loopback
                 # proxy (#2565).
                 "/api/companion/vault/browse",
+                "/api/companion/vault/notes/scoped",
             }
         )
         _WRITE_REFUSAL_PICKER_PATHS = frozenset(
@@ -16884,6 +16893,12 @@ def make_handler(
             api_key = self.headers.get("X-API-Key")
             if api_key:
                 headers["X-API-Key"] = api_key
+            scoped_session = self.headers.get("X-Active-Context-Session")
+            if scoped_session:
+                headers["X-Active-Context-Session"] = scoped_session
+            scoped_override = self.headers.get("X-Active-Context-Override")
+            if scoped_override:
+                headers["X-Active-Context-Override"] = scoped_override
             return headers
 
         def do_POST(self) -> None:
