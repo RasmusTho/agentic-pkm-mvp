@@ -14,10 +14,12 @@ SIDECAR_DISTRIBUTION = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
 
 def _installed_entrypoint(tmp_path: Path) -> Path:
     venv = tmp_path / "venv"
-    subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True
-    )
+    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
     pip = venv / "bin" / "pip"
+    subprocess.run(
+        [str(pip), "install", "--requirement", str(SIDECAR_DISTRIBUTION / "requirements.txt")],
+        check=True,
+    )
     subprocess.run([str(pip), "install", "--no-deps", str(SIDECAR_DISTRIBUTION)], check=True)
     return venv / "bin" / "mimer-mcp"
 
