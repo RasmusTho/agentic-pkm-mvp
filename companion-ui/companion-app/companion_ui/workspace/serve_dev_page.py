@@ -15311,17 +15311,21 @@ def render_index_html(
     function fetchNotes(q) {{
       setStatus('Loading…');
       list.innerHTML = '';
-      var scopedBearer = window.sessionStorage.getItem('active-context-session');
+      // The dev-page harness and older embedded shells may not expose Web
+      // Storage. Scoped selection remains optional in that posture.
+      var scopedBearer = null;
+      try {{ scopedBearer = window.sessionStorage && window.sessionStorage.getItem('active-context-session'); }} catch (e) {{ scopedBearer = null; }}
       var scoped = !!scopedBearer;
-      var url = (scoped ? '/api/companion/vault/notes/scoped' : '/api/companion/vault/notes') +
-        (q ? '?q=' + encodeURIComponent(q) : '');
+      var url = '/api/companion/vault/notes';
+      if (scoped) {{ url = '/api/companion/vault/notes/scoped'; }}
+      url += q ? '?q=' + encodeURIComponent(q) : '';
       fetch(url, scoped ? {{headers: {{'X-Active-Context-Session': scopedBearer}}}} : {{}})
         .then(function(r) {{
           if (scoped && r.status === 401) {{
             // A selection store is intentionally ephemeral. Never retry this
             // request on the legacy route or silently remint; make the stale
             // selection visible and require a new picker choice.
-            window.sessionStorage.removeItem('active-context-session');
+            try {{ window.sessionStorage && window.sessionStorage.removeItem('active-context-session'); }} catch (e) {{}}
             setStatus('Your vault selection expired. Choose a vault again.');
             return null;
           }}
