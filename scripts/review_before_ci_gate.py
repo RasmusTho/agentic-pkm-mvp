@@ -1386,6 +1386,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ReviewBeforeCiGateError(
                     "new-PR publication requires GitHub repository identity"
                 )
+            if args.pr_number is not None or args.contract_revalidation_receipt:
+                raise ReviewBeforeCiGateError(
+                    "new-PR publication cannot supply existing-PR identity or revalidation receipt"
+                )
             if _current_branch_has_open_pr(args.github_repository):
                 raise ReviewBeforeCiGateError(
                     "new-PR publication found an existing open PR for the current branch"
@@ -1438,7 +1442,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             value is not None
             for value in (
                 args.pr_number,
-                args.governing_issue,
                 args.contract_revalidation_receipt,
             )
         ) or (args.github_repository is not None and args.publication_mode != "new"):
