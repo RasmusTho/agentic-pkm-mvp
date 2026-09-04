@@ -104,6 +104,18 @@ def test_read_failures_are_typed_and_never_ambiguous_empty_success() -> None:
     )
 
 
+def test_read_adapter_preserves_owner_invalid_outcome() -> None:
+    outcome = ReadOperationAdapters(
+        {"artifact.list": lambda request, vault_root: ReadOwnerResult("invalid")},
+        read_capability_discovery(),
+        context_resolver=lambda request: Path("."),
+    ).invoke(_request("artifact.list"))
+    assert (outcome.status, outcome.extensions["read_state"]) == (
+        OperationStatus.INVALID,
+        "invalid",
+    )
+
+
 def test_read_adapter_rejects_stale_context_and_translates_owner_http_errors() -> None:
     stale = ReadOperationAdapters(
         {"artifact.read": lambda request, vault_root: ReadOwnerResult("succeeded")},

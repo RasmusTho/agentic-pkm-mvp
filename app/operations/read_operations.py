@@ -102,6 +102,7 @@ def _normalize(request: OperationRequest, result: ReadOwnerResult) -> OperationO
         "missing_context": OperationStatus.REJECTED,
         "capability_unavailable": OperationStatus.NOT_SUPPORTED,
         "artifact_inaccessible": OperationStatus.REJECTED,
+        "invalid": OperationStatus.INVALID,
         "not_found": OperationStatus.NOT_FOUND,
         "owner_unavailable": OperationStatus.DEGRADED_READ,
     }
@@ -201,7 +202,7 @@ def _list_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwn
 
     limit = int(request.arguments.get("limit", 250))
     if not 1 <= limit <= 1000:
-        return ReadOwnerResult("capability_unavailable", warning="limit must be between 1 and 1000")
+        return ReadOwnerResult("invalid", warning="limit must be between 1 and 1000")
     notes, _, _, _, _ = _select_vault_notes(vault_root, query="", limit=limit)
     items = tuple(
         {
@@ -299,13 +300,14 @@ def _related_from_companion(request: OperationRequest, vault_root: Path) -> Read
 
     target = request.targets[0] if request.targets else request.arguments
     limit = int(request.arguments.get("limit", 10))
+    notes = _collect_relation_notes(vault_root)
     response = _rank_related_notes(
         _resolve_related_scope(
-            _collect_relation_notes(vault_root),
+            notes,
             note_path=target.get("locator") or target.get("note_path"),
             artifact_uuid=target.get("artifact_id"),
         ),
-        _collect_relation_notes(vault_root),
+        notes,
         limit=limit,
     )
     items = tuple(
