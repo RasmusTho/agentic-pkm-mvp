@@ -14,9 +14,11 @@ from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
     KNOWLEDGE_WRITE_ACTION,
+    _RelativeStage,
     _atomic_rename_noreplace_at,
     _read_stable_descriptor,
     _require_live_relative_directory_chain,
+    _same_file_identity,
     write_note_relative,
 )
 from app.write_guard import DEFAULT_WRITE_GUARD
@@ -84,120 +86,98 @@ def _slugify(value: str) -> str:
 
 def _publish_append_note(
     *,
-    vault_root: Path,
-    directory: PurePosixPath,
+    stage: _RelativeStage,
     slug: str,
-    content: str,
-    stage_name: str,
 ) -> Path:
     """Publish one MCP append at the first atomically available suffix."""
 
-    directory_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
+    parent_fd = stage.directory_fds[-1]
+    stage_fd = stage.stage_fd
+    stage_name = stage.stage_name
+    stage_identity = stage.stage_identity
+    _require_live_relative_directory_chain(
+        stage.vault_root,
+        stage.directory.parts,
+        stage.directory_fds,
+        context="MCP append publication",
     )
-    descriptors: list[int] = []
-    stage_fd: int | None = None
     try:
-        descriptors.append(os.open(vault_root, directory_flags))
-        for component in directory.parts:
-            descriptors.append(
-                os.open(component, directory_flags, dir_fd=descriptors[-1])
-            )
-        parent_fd = descriptors[-1]
-        stage_fd = os.open(
-            stage_name,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
-            dir_fd=parent_fd,
-        )
-        stage_identity = os.fstat(stage_fd)
         named_stage = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(stage_identity.st_mode)
-            or stage_identity.st_nlink != 1
-            or (stage_identity.st_dev, stage_identity.st_ino)
-            != (named_stage.st_dev, named_stage.st_ino)
-        ):
-            raise KnowledgeWriteConflict("MCP append stage identity changed")
+    except OSError as exc:
+        raise KnowledgeWriteConflict("MCP append stage identity changed") from exc
+    if (
+        not stat.S_ISREG(named_stage.st_mode)
+        or named_stage.st_nlink != 1
+        or not stat.S_ISREG(os.fstat(stage_fd).st_mode)
+        or not _same_file_identity(named_stage, stage_identity)
+    ):
+        raise KnowledgeWriteConflict("MCP append stage identity changed")
 
-        counter = 1
-        while True:
-            candidate_name = f"{slug}.md" if counter == 1 else f"{slug}-{counter}.md"
+    counter = 1
+    while True:
+        candidate_name = f"{slug}.md" if counter == 1 else f"{slug}-{counter}.md"
+        try:
+            _atomic_rename_noreplace_at(
+                parent_fd,
+                stage_name,
+                parent_fd,
+                candidate_name,
+            )
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                raise
             try:
-                _atomic_rename_noreplace_at(
-                    parent_fd,
-                    stage_name,
-                    parent_fd,
-                    candidate_name,
-                )
-            except OSError as exc:
-                if exc.errno != errno.EEXIST:
-                    raise
                 current_stage = os.stat(
                     stage_name,
                     dir_fd=parent_fd,
                     follow_symlinks=False,
                 )
-                if (current_stage.st_dev, current_stage.st_ino) != (
-                    stage_identity.st_dev,
-                    stage_identity.st_ino,
-                ):
-                    raise KnowledgeWriteConflict("MCP append stage changed during allocation")
-                counter += 1
-                continue
-            break
+            except OSError as stat_exc:
+                raise KnowledgeWriteConflict(
+                    "MCP append stage changed during allocation"
+                ) from stat_exc
+            if not _same_file_identity(current_stage, stage_identity):
+                raise KnowledgeWriteConflict("MCP append stage changed during allocation")
+            counter += 1
+            continue
+        break
 
-        os.fsync(parent_fd)
-        published = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(published.st_mode)
-            or published.st_nlink != 1
-            or (published.st_dev, published.st_ino)
-            != (stage_identity.st_dev, stage_identity.st_ino)
-        ):
-            raise KnowledgeWriteConflict("MCP append publication identity changed")
-        published_payload, published_identity = _read_stable_descriptor(stage_fd)
-        if (
-            published_payload.decode("utf-8") != content
-            or (published_identity.st_dev, published_identity.st_ino)
-            != (stage_identity.st_dev, stage_identity.st_ino)
-        ):
-            raise KnowledgeWriteConflict("MCP append publication content changed")
-        _require_live_relative_directory_chain(
-            vault_root,
-            directory.parts,
-            descriptors,
-            context="MCP append publication",
-        )
-        canonical_target = os.stat(
-            candidate_name,
-            dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        if (
-            not stat.S_ISREG(canonical_target.st_mode)
-            or canonical_target.st_nlink != 1
-            or (canonical_target.st_dev, canonical_target.st_ino)
-            != (stage_identity.st_dev, stage_identity.st_ino)
-        ):
-            raise KnowledgeWriteConflict("MCP append canonical target changed")
-        _require_live_relative_directory_chain(
-            vault_root,
-            directory.parts,
-            descriptors,
-            context="MCP append acknowledgement",
-        )
-        relative_path = (directory / candidate_name).as_posix()
-        return vault_root / relative_path
-    finally:
-        if stage_fd is not None:
-            os.close(stage_fd)
-        for descriptor in reversed(descriptors):
-            os.close(descriptor)
+    os.fsync(parent_fd)
+    published = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+    published_payload, published_identity = _read_stable_descriptor(stage_fd)
+    if (
+        not stat.S_ISREG(published.st_mode)
+        or published.st_nlink != 1
+        or not _same_file_identity(published, stage_identity)
+        or not _same_file_identity(published_identity, stage_identity)
+        or published_payload != stage.payload
+    ):
+        raise KnowledgeWriteConflict("MCP append publication identity changed")
+    _require_live_relative_directory_chain(
+        stage.vault_root,
+        stage.directory.parts,
+        stage.directory_fds,
+        context="MCP append publication",
+    )
+    canonical_target = os.stat(
+        candidate_name,
+        dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+    if (
+        not stat.S_ISREG(canonical_target.st_mode)
+        or canonical_target.st_nlink != 1
+        or not _same_file_identity(canonical_target, stage_identity)
+    ):
+        raise KnowledgeWriteConflict("MCP append canonical target changed")
+    _require_live_relative_directory_chain(
+        stage.vault_root,
+        stage.directory.parts,
+        stage.directory_fds,
+        context="MCP append acknowledgement",
+    )
+    relative_path = (stage.directory / candidate_name).as_posix()
+    return stage.vault_root / relative_path
 
 
 def append_note(
@@ -240,18 +220,21 @@ def append_note(
     ):
         raise VaultToolError("relative_dir must be a normalized vault-relative path")
     stage_name = f".mcp-append-stage-{uuid4().hex}.md"
+    published_path: Path | None = None
+
+    def publish(stage: _RelativeStage) -> None:
+        nonlocal published_path
+        published_path = _publish_append_note(stage=stage, slug=slug)
+
     write_note_relative(
         (directory / stage_name).as_posix(),
         content,
         vault_root=root,
+        _stage_publisher=publish,
     )
-    return _publish_append_note(
-        vault_root=root,
-        directory=directory,
-        slug=slug,
-        content=content,
-        stage_name=stage_name,
-    )
+    if published_path is None:
+        raise KnowledgeWriteConflict("MCP append did not publish a canonical note")
+    return published_path
 
 
 __all__ = ["VaultToolError", "append_note", "get_vault_root"]

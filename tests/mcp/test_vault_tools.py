@@ -150,6 +150,60 @@ def test_append_note_retries_atomic_suffix_without_clobbering_foreign_winner(
     assert not (tmp_path / ".mcp-append-note.lock").exists()
 
 
+def test_append_note_rejects_parent_and_stage_replacement_with_equal_foreign_content(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.mcp import vault_tools as vault_tools_module
+
+    real_write = vault_tools_module.write_note_relative
+    displaced = tmp_path / "_mcp-displaced"
+    staged_payload_expected: bytes | None = None
+
+    def replace_parent_and_stage_after_staging(
+        note_rel_path: str,
+        content: str,
+        **kwargs: object,
+    ) -> object:
+        publisher = kwargs.pop("_stage_publisher")
+        assert callable(publisher)
+
+        def replace_then_publish(stage: object) -> None:
+            nonlocal staged_payload_expected
+            staged_payload = os.pread(
+                stage.stage_fd,  # type: ignore[attr-defined]
+                os.fstat(stage.stage_fd).st_size,  # type: ignore[attr-defined]
+                0,
+            )
+            staged_payload_expected = staged_payload
+            staged_parent = tmp_path / "_mcp"
+            staged_parent.rename(displaced)
+            replacement_parent = tmp_path / "_mcp"
+            replacement_parent.mkdir()
+            (replacement_parent / stage.stage_name).write_bytes(  # type: ignore[attr-defined]
+                staged_payload
+            )
+            publisher(stage)
+
+        kwargs["_stage_publisher"] = replace_then_publish
+        return real_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(
+        vault_tools_module,
+        "write_note_relative",
+        replace_parent_and_stage_after_staging,
+    )
+
+    with pytest.raises(KnowledgeWriteConflict, match="directory changed"):
+        append_note(title="Same", body="MCP body", vault_root=tmp_path)
+
+    replacement_stages = list(tmp_path.joinpath("_mcp").glob(".mcp-append-stage-*.md"))
+    assert len(replacement_stages) == 1
+    assert staged_payload_expected is not None
+    assert replacement_stages[0].read_bytes() == staged_payload_expected
+    assert not (tmp_path / "_mcp" / "same.md").exists()
+
+
 def test_append_note_rejects_parent_replacement_with_equal_foreign_content(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

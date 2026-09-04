@@ -71,6 +71,22 @@ _RELATIVE_CREATE_STAGE_OPEN_FLAGS = (
 )
 CandidateCreateResult = Literal["written", "already_exists"]
 AtomicAppendTransform = Callable[[bytes | None, bytes], tuple[bytes, bytes]]
+
+
+@dataclass
+class _RelativeStage:
+    """Invocation-owned relative stage handed to one bounded publisher."""
+
+    vault_root: Path
+    directory: PurePosixPath
+    directory_fds: list[int]
+    stage_fd: int
+    stage_name: str
+    stage_identity: os.stat_result
+    payload: bytes
+
+
+RelativeStagePublisher = Callable[[_RelativeStage], None]
 _ATOMIC_APPEND_STAGE_RE = re.compile(
     r"^\.atomic-append-(?P<transaction>[0-9a-f]{32})-"
     r"(?P<digest>[0-9a-f]{64})-(?P<source>absent|[0-9]+-[0-9]+)\.stage$"
@@ -838,6 +854,141 @@ def _require_live_relative_directory_chain(
         raise KnowledgeWriteConflict(f"{context} directory changed") from exc
 
 
+def _stage_note_relative_at_relative_seam(
+    note_rel_path: str,
+    content: str,
+    *,
+    vault_root: Path | str,
+    action: str,
+    write_guard: "WriteGuard | None",
+    stage_publisher: RelativeStagePublisher,
+) -> None:
+    """Create one invocation-owned stage and publish it before closing its FD.
+
+    This private handoff is for append-only callers that need a suffix publisher
+    to retain the exact stage authority. It is deliberately not a generic
+    alternate write primitive: the caller still enters through
+    ``write_note_relative`` and the publisher is synchronous and invocation-
+    local.
+    """
+
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    guard = write_guard or DEFAULT_WRITE_GUARD
+    guard.assert_writes_allowed(action)
+    parts = _candidate_relative_parts(note_rel_path)
+    resolved_root = Path(vault_root).expanduser().resolve()
+    payload = content.encode("utf-8")
+
+    directory_fds: list[int] = []
+    stage_fd: int | None = None
+    stage_stat: os.stat_result | None = None
+    stage_name: str | None = None
+    cleanup_error: BaseException | None = None
+
+    def record_cleanup_error(exc: BaseException) -> None:
+        nonlocal cleanup_error
+        if cleanup_error is None:
+            cleanup_error = exc
+
+    try:
+        directory_fds.append(os.open(resolved_root, _DIRECTORY_OPEN_FLAGS))
+        for component in parts[:-1]:
+            try:
+                os.mkdir(component, mode=0o777, dir_fd=directory_fds[-1])
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+            os.fsync(directory_fds[-1])
+            directory_fds.append(
+                os.open(
+                    component,
+                    _DIRECTORY_OPEN_FLAGS,
+                    dir_fd=directory_fds[-1],
+                )
+            )
+
+        stage_name = parts[-1]
+        stage_fd = os.open(
+            stage_name,
+            _RELATIVE_CREATE_STAGE_OPEN_FLAGS,
+            0o600,
+            dir_fd=directory_fds[-1],
+        )
+        stage_stat = os.fstat(stage_fd)
+        if not stat.S_ISREG(stage_stat.st_mode) or stage_stat.st_nlink != 1:
+            raise KnowledgeWriteConflict(
+                f"relative stage is not one regular inode for {note_rel_path}"
+            )
+        _write_all(stage_fd, payload)
+        os.fsync(stage_fd)
+        staged_payload, observed_stage = _read_stable_descriptor(stage_fd)
+        if (
+            staged_payload != payload
+            or not _same_file_identity(observed_stage, stage_stat)
+        ):
+            raise KnowledgeWriteConflict(
+                f"relative stage payload changed for {note_rel_path}"
+            )
+        _require_live_relative_directory_chain(
+            resolved_root,
+            parts[:-1],
+            directory_fds,
+            context=f"relative stage for {note_rel_path}",
+        )
+        os.fsync(directory_fds[-1])
+        stage_publisher(
+            _RelativeStage(
+                vault_root=resolved_root,
+                directory=PurePosixPath(note_rel_path).parent,
+                directory_fds=directory_fds,
+                stage_fd=stage_fd,
+                stage_name=stage_name,
+                stage_identity=stage_stat,
+                payload=payload,
+            )
+        )
+    finally:
+        if (
+            stage_fd is not None
+            and stage_name is not None
+            and stage_stat is not None
+            and directory_fds
+        ):
+            named_stage: os.stat_result | None
+            try:
+                named_stage = os.stat(
+                    stage_name,
+                    dir_fd=directory_fds[-1],
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                named_stage = None
+            except BaseException as exc:  # noqa: BLE001 - cleanup must fail closed
+                record_cleanup_error(exc)
+                named_stage = None
+            if named_stage is not None and _same_file_identity(named_stage, stage_stat):
+                try:
+                    os.unlink(stage_name, dir_fd=directory_fds[-1])
+                    os.fsync(directory_fds[-1])
+                except BaseException as exc:  # noqa: BLE001 - cleanup must fail closed
+                    record_cleanup_error(exc)
+
+        if stage_fd is not None:
+            try:
+                os.close(stage_fd)
+            except BaseException as exc:  # noqa: BLE001 - every owner gets one close attempt
+                record_cleanup_error(exc)
+        for directory_fd in reversed(directory_fds):
+            try:
+                os.close(directory_fd)
+            except BaseException as exc:  # noqa: BLE001 - every owner gets one close attempt
+                record_cleanup_error(exc)
+        directory_fds.clear()
+        if cleanup_error is not None:
+            raise cleanup_error
+
+
 def read_create_once_winner_relative(
     note_rel_path: str,
     *,
@@ -1270,6 +1421,7 @@ def write_note_relative(
     writer_identity: str | None = None,
     create_once: bool = False,
     accept_staged_conflict: bool = False,
+    _stage_publisher: RelativeStagePublisher | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#2953, extending #2910): assert WriteGuard inside this
     # port too, before any path resolution or filesystem mutation, mirroring
@@ -1293,6 +1445,29 @@ def write_note_relative(
     from app.write_guard import DEFAULT_WRITE_GUARD
 
     guard = write_guard or DEFAULT_WRITE_GUARD
+
+    if _stage_publisher is not None:
+        if create_once or expected_version is not None:
+            raise KnowledgeWriteConflict(
+                "relative stage publication cannot combine with create_once or expected_version"
+            )
+        _stage_note_relative_at_relative_seam(
+            note_rel_path,
+            content,
+            vault_root=vault_root,
+            action=action,
+            write_guard=guard,
+            stage_publisher=_stage_publisher,
+        )
+        return WriteReceipt(
+            operation="write_note",
+            locator=make_note_locator(note_rel_path),
+            adapter="fs_vault",
+            note_class=NoteClass.APPEND_ONLY,
+            writer_identity=writer_identity or "mimer.runtime",
+            written_at=datetime.now(UTC).isoformat(),
+            outcome="written",
+        )
 
     if create_once:
         if expected_version is not None:
