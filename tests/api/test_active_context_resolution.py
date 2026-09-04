@@ -62,8 +62,20 @@ def instance(tmp_path, monkeypatch):
     """An authoritative registry, a provisioned delegated role, two registered vaults."""
 
     runtime, first, extra, record = provisioned_instance(tmp_path, extra_roots=("two",))
+    for registration in (first, *extra):
+        runtime.ledger.reserve(
+            channel_id="dev",
+            vault_binding_id=registration.vault_binding_id,
+            root=Path(registration.path),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        runtime.ledger.activate(
+            registration.vault_binding_id,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
     selection_routes.reset_selection_store_for_tests()
     return runtime, first, extra[0], record
 
