@@ -132,6 +132,10 @@ def test_open_create_once_rejects_raced_non_regular_winner(
             first.log_path.symlink_to(outside)
         elif replacement == "parent_symlink":
             outside.mkdir()
+            (outside / first.log_path.name).write_text(
+                first.log_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
             displaced = tmp_path / ".displaced-chat-directory"
             first.log_path.parent.rename(displaced)
             first.log_path.parent.symlink_to(outside, target_is_directory=True)
@@ -148,6 +152,8 @@ def test_open_create_once_rejects_raced_non_regular_winner(
         if outside.is_file():
             outside.unlink()
         elif outside.is_dir():
+            for child in outside.iterdir():
+                child.unlink()
             outside.rmdir()
 
 

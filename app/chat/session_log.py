@@ -98,7 +98,8 @@ class SessionLogWriter:
                 )
             except OSError as exc:
                 raise ValueError(
-                    "chat session create-once target disappeared after publication"
+                    "chat session create-once target became unavailable or unsafe "
+                    "after publication"
                 ) from exc
             existing_session_id = existing_frontmatter.get("session_id")
             existing_note_uuid = existing_frontmatter.get("note_uuid")
