@@ -15317,10 +15317,19 @@ def render_index_html(
         (q ? '?q=' + encodeURIComponent(q) : '');
       fetch(url, scoped ? {{headers: {{'X-Active-Context-Session': scopedBearer}}}} : {{}})
         .then(function(r) {{
+          if (scoped && r.status === 401) {{
+            // A selection store is intentionally ephemeral. Never retry this
+            // request on the legacy route or silently remint; make the stale
+            // selection visible and require a new picker choice.
+            window.sessionStorage.removeItem('active-context-session');
+            setStatus('Your vault selection expired. Choose a vault again.');
+            return null;
+          }}
           if (!r.ok) throw new Error('API error ' + r.status);
           return r.json();
         }})
         .then(function(data) {{
+          if (data === null) return;
           renderNotes(data.notes, data.vault_identity);
         }})
         .catch(function(err) {{
