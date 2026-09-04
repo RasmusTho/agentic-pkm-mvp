@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 import pytest
 
-from app.mimer_mcp.transport import MimerMcpTransportConfig, parse_config
+SIDECAR_ROOT = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
+sys.path.insert(0, str(SIDECAR_ROOT))
+
+from mimer_mcp_sidecar.transport import MimerMcpTransportConfig, parse_config
 
 
 @pytest.mark.parametrize(
@@ -31,8 +35,13 @@ def test_stdio_production_entrypoint_opens_no_network_listener(tmp_path) -> None
     runner = tmp_path / "deny_sockets.py"
     runner.write_text(
         "import socket, sys\n"
-        "sys.path.insert(0, '.')\n"
-        "from app.mimer_mcp.transport import main\n"
+        "_socket = socket.socket\n"
+        "class NoListener(_socket):\n"
+        "  def bind(self, *args, **kwargs): raise AssertionError('listener bind forbidden')\n"
+        "  def listen(self, *args, **kwargs): raise AssertionError('listener listen forbidden')\n"
+        "socket.socket = NoListener\n"
+        f"sys.path.insert(0, {str(SIDECAR_ROOT)!r})\n"
+        "from mimer_mcp_sidecar.transport import main\n"
         "raise SystemExit(main())\n",
         encoding="utf-8",
     )

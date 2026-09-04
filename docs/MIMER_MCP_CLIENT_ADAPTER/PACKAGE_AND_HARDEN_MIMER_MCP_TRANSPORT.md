@@ -18,7 +18,7 @@ widening the current trust envelope, adding a network listener, or relying on sh
 
 ## What This Task Does
 
-- Adds the owner-selected MCP SDK/runtime dependency and a stable stdio executable entrypoint.
+- Adds the owner-selected MCP SDK/runtime dependency in the standalone sidecar distribution and a stable stdio executable entrypoint.
 - Implements **B1 stdio only**. It opens no network listener and accepts no Streamable HTTP, bind, origin,
   TLS, or per-device-auth configuration in v1.
 - Adds typed, fail-closed configuration that rejects every non-stdio transport or network option.
@@ -29,7 +29,8 @@ widening the current trust envelope, adding a network listener, or relying on sh
 ## Concretely
 
 ```text
-python -m app.mimer_mcp --transport stdio
+pip install ./mimer-mcp-sidecar
+mimer-mcp --transport stdio
   -> validate typed config
   -> reject every network/listener/auth option
   -> start stdio MCP lifecycle with no socket bind

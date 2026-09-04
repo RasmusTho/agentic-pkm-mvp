@@ -838,8 +838,8 @@ make db-dump-prod                           # → .db-snapshots/prod_20260628T..
 ## Mimer MCP adapter
 
 The accepted Mimer MCP v1 adapter is a client-spawned stdio sidecar. Install
-its isolated sidecar dependency set with `pip install -r requirements-mimer-mcp.txt`, then start it
-with `python -m app.mimer_mcp --transport stdio`; it calls only the existing
+the standalone distribution with `pip install ./mimer-mcp-sidecar`, then start it
+with `mimer-mcp --transport stdio`; it calls only the existing
 loopback Mimer HTTP API. It opens no network listener, accepts no bind, TLS, or
 authentication configuration, and exits when its client closes stdio. Network
 transports and per-device authentication are separately gated follow-ons.

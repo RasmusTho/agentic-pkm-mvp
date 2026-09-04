@@ -89,12 +89,6 @@ dev = [
 browser = [
     "playwright>=1.48,<2",
 ]
-mimer-mcp = [
-    # A2 keeps the SDK in the client-spawned sidecar environment, not the
-    # core Mimer runtime dependency set.
-    "mcp>=1.29,<2",
-]
-
 [tool.setuptools.packages.find]
 where = [".", "companion-ui/companion-app"]
 include = ["app*", "llm_contract*", "companion_ui*"]

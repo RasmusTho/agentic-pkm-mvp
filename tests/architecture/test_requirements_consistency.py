@@ -171,12 +171,18 @@ def test_shared_pins_do_not_diverge() -> None:
 
 
 def test_pyproject_and_requirements_are_consistent() -> None:
-    """The A2 sidecar SDK stays out of core requirements but has a pinned lock."""
+    """The standalone A2 sidecar owns its SDK dependency surface and lock."""
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    sidecar = _parse_requirements(REPO_ROOT / "requirements-mimer-mcp.txt")
+    sidecar_pyproject = (REPO_ROOT / "mimer-mcp-sidecar" / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    sidecar = _parse_requirements(REPO_ROOT / "mimer-mcp-sidecar" / "requirements.txt")
     runtime = _parse_requirements(ROOT_REQUIREMENTS)
-    assert "mimer-mcp" in pyproject
-    assert "mcp" in sidecar
+    assert "mcp" not in pyproject
+    assert "mcp" in sidecar_pyproject
+    assert "mimer-mcp" in sidecar_pyproject
+    assert str(sidecar["mcp"].requirement.specifier) == "==1.29.1"
+    assert str(sidecar["httpx"].requirement.specifier) == "==0.27.2"
     assert "mcp" not in runtime
 
 
