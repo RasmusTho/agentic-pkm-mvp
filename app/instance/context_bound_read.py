@@ -9,10 +9,16 @@ read operation; it cannot re-resolve a global vault midway through the request.
 
 from __future__ import annotations
 
+import os
+from contextlib import ExitStack, contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.active_context_service import binding_revision_for
+from app.instance.binding_effect_lease import BindingEffectLeaseError, BindingEffectLeaseManager
+from app.instance.ownership_ledger import OwnershipLedger
 from app.instance.vault_registry import VaultRegistryStore
 from app.vault.active_context_v1 import ActiveContextSetV1, DegradedContextError
 
@@ -71,4 +77,48 @@ def resolve_context_read_roots(
     return tuple(roots)
 
 
-__all__ = ["ContextBoundReadError", "ContextBoundReadRoot", "resolve_context_read_roots"]
+@contextmanager
+def context_bound_read_window(
+    context: ActiveContextSetV1,
+    *,
+    registry_store: VaultRegistryStore,
+) -> Iterator[tuple[ContextBoundReadRoot, ...]]:
+    """Hold every selected binding's shared lease through filesystem I/O.
+
+    The authoritative ownership fence is acquired by the existing lease
+    manager before each binding lock.  Registry/revision validation runs again
+    after all locks are held, so a revocation or relocation cannot cross the
+    request's read-to-publication window.
+    """
+
+    ownership_root = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+    if not ownership_root:
+        raise ContextBoundReadError("instance ownership root is not bound")
+    roots = resolve_context_read_roots(context, registry_store=registry_store)
+    channel = os.getenv("PKM_ENVIRONMENT", "dev").strip() or "dev"
+    leases = BindingEffectLeaseManager(
+        registry_store=registry_store,
+        ownership_ledger=OwnershipLedger(Path(ownership_root).expanduser().resolve(strict=False)),
+        state_root=registry_store.path.parent / "binding-effect-leases",
+        capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+    try:
+        with ExitStack() as stack:
+            for source in roots:
+                stack.enter_context(
+                    leases.shared_effect(source.vault_binding_id, channel_id=channel, root=source.root)
+                )
+            # Do not hand an already-invalidated root to the caller after taking a
+            # lease. This is the final revalidation immediately before I/O.
+            refreshed = resolve_context_read_roots(context, registry_store=registry_store)
+            yield refreshed
+    except BindingEffectLeaseError as exc:
+        raise ContextBoundReadError("active context effect lease is unavailable") from exc
+
+
+__all__ = [
+    "ContextBoundReadError",
+    "ContextBoundReadRoot",
+    "context_bound_read_window",
+    "resolve_context_read_roots",
+]
