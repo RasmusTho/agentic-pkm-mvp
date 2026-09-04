@@ -284,6 +284,26 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             "selection_capability_digest": request.active_context.selection_capability_digest,
             "cache_key": cache_identity.key,
         }
+    if request.active_context is not None:
+        allowed_bindings = set(request.active_context.binding_ids)
+        admitted: list[dict[str, Any]] = []
+        rejected = 0
+        for raw in raw_hits:
+            payload = dict(raw.get("payload") or {})
+            binding_id = payload.get("vault_binding_id")
+            # Legacy un-namespaced index rows are not attributable to a scoped
+            # request.  Excluding them is intentionally fail-closed; the
+            # producer/migration must add provenance before the row can serve a
+            # multi-vault session.
+            if not isinstance(binding_id, str) or binding_id not in allowed_bindings:
+                rejected += 1
+                continue
+            bound = dict(raw)
+            payload["context_generation"] = request.active_context.generation
+            bound["payload"] = payload
+            admitted.append(bound)
+        raw_hits = admitted
+        metadata["provenance"]["active_context"]["rejected_unbound_hits"] = rejected
     hits = _apply_closure_decay([RetrievalHit.from_hybrid(hit) for hit in raw_hits])
     return RetrievalResponse(
         query=request.query,
