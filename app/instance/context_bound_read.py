@@ -116,9 +116,27 @@ def context_bound_read_window(
         raise ContextBoundReadError("active context effect lease is unavailable") from exc
 
 
+@contextmanager
+def context_bound_effect_window(
+    context: ActiveContextSetV1,
+    *,
+    registry_store: VaultRegistryStore,
+) -> Iterator[None]:
+    """Fence a non-filesystem foreground read through response publication.
+
+    Retrieval can publish cached or indexed material derived from a selected
+    binding even where it does not itself open that binding's pathname. Reuse
+    the same final-revalidation/shared-lease window for that effect.
+    """
+
+    with context_bound_read_window(context, registry_store=registry_store):
+        yield
+
+
 __all__ = [
     "ContextBoundReadError",
     "ContextBoundReadRoot",
+    "context_bound_effect_window",
     "context_bound_read_window",
     "resolve_context_read_roots",
 ]

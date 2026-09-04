@@ -93,4 +93,34 @@ def require_scoped_read_context(
     return context
 
 
-__all__ = ["require_scoped_read_context", "resolve_read_context"]
+def reject_scoped_vault_mutation(request: Request) -> None:
+    """Keep legacy vault mutations unable to consume a read-selection bearer.
+
+    MVR-05B deliberately ships only the read-side carrier.  Applying this at
+    the Companion router boundary makes the seal cover every present and
+    future vault-facing mutation, rather than relying on individual handlers
+    to remember a guard before their legacy resolver or writer.  Selection
+    itself is not a vault-content mutation and is the one required exception:
+    a picker may replace its selection while it still presents the old bearer.
+    """
+
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    if request.url.path.endswith("/vault/select"):
+        return
+    if not (
+        request.headers.get("X-Active-Context-Session")
+        or request.headers.get("X-Active-Context-Override")
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"error": "capability_not_ready", "capability": "mvr05c_scoped_write"},
+    )
+
+
+__all__ = [
+    "reject_scoped_vault_mutation",
+    "require_scoped_read_context",
+    "resolve_read_context",
+]

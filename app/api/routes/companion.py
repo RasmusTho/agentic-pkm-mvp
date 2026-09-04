@@ -79,7 +79,10 @@ from app.domain.commitments import (
     query_next_and_waiting_commitments,
 )
 from app.api.routes.ingest_binding import ingest_binding_status
-from app.api.request_active_context import require_scoped_read_context
+from app.api.request_active_context import (
+    reject_scoped_vault_mutation,
+    require_scoped_read_context,
+)
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -137,7 +140,14 @@ from app.vault.settings_service import (
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import register_question_explicitly
 
-router = APIRouter(prefix="/companion", tags=["companion"])
+router = APIRouter(
+    prefix="/companion",
+    tags=["companion"],
+    # A scoped selection is read authority only until MVR-05C installs its
+    # explicit compatibility-write precondition.  Keep the guard at the
+    # router, ahead of every individual legacy vault resolver/writer.
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 
 logger = logging.getLogger(__name__)
 
