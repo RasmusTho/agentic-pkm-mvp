@@ -7,6 +7,8 @@ import pytest
 from app.instance._storage_boundary import RegistryError
 from app.instance.settings_rebind import SettingsRebindStore
 from app.vault.manager import VaultManager
+from app.instance.context_selection import ContextSelectionStore, ReselectionRequiredError
+from app.vault.active_context_v1 import PrincipalContext, WorkspaceState
 from tests.helpers.vault_settings import initialize_test_vault
 from tests.watcher.test_ingest_binding_follows_selection import _registry
 
@@ -41,3 +43,31 @@ def test_picker_and_watcher_rebind_is_failure_atomic(tmp_path: Path, monkeypatch
     recovered = SettingsRebindStore(registry).read()
     assert recovered.phase == "no_lifecycle"
     assert recovered.reload_revision == recovered.desired_revision
+
+
+def test_session_selection_reuses_bindings_with_per_request_server_scope() -> None:
+    store = ContextSelectionStore()
+    token, record = store.create(
+        principal=PrincipalContext("owner", "human", "trusted_loopback"),
+        instance_identity="instance", workspace=WorkspaceState.none(), scope="core",
+        sphere_memberships=(), situated_identity=None, binding_ids=["binding-a"],
+    )
+    assert token
+    assert record.binding_ids == ("binding-a",)
+    assert record.scope == "core"
+
+
+def test_stale_selection_restart_requires_visible_reselection() -> None:
+    store = ContextSelectionStore()
+    token, _ = store.create(
+        principal=PrincipalContext("owner", "human", "trusted_loopback"),
+        instance_identity="instance", workspace=WorkspaceState.none(), scope="core",
+        sphere_memberships=(), situated_identity=None, binding_ids=["binding-a"],
+    )
+    restarted = ContextSelectionStore()
+    with pytest.raises(ReselectionRequiredError):
+        restarted.inspect(
+            token,
+            principal=PrincipalContext("owner", "human", "trusted_loopback"),
+            instance_identity="instance",
+        )
