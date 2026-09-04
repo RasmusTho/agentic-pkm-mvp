@@ -31,9 +31,11 @@ from typing import Any, Sequence
 
 from app.governance.binding_authority import RegistryBindingAuthorizer
 from app.instance.context_selection import (
+    ActiveContextSelectionResolver,
     BindingFact,
     ContextSelectionRecord,
     ContextSelectionStore,
+    ResolutionResult,
 )
 from app.instance.local_operator_principal import (
     AuthPosture,
@@ -405,12 +407,61 @@ class ActiveContextSelectionService:
             instance_identity=derived.instance_identity,
         )
 
+    def resolve_request_context(
+        self,
+        *,
+        derived: DerivedContext,
+        session_bearer: str | None,
+        override_bearer: str | None,
+        action: str,
+        write_class: str,
+        required_permission: str,
+    ) -> ResolutionResult:
+        """Resolve one explicit request carrier into a server-owned snapshot.
+
+        The one-request override has precedence.  Crucially, a supplied override
+        is not allowed to fall back to a valid session/default when it is stale.
+        """
+        bearer = override_bearer if override_bearer is not None else session_bearer
+        selection = (
+            self.inspect(bearer, derived=derived) if bearer is not None else None
+        )
+        snapshot = self._registry.load()
+        resolver = self._selections.request_resolver(
+            instance_identity=snapshot.app_install_id,
+            factory=lambda: ActiveContextSelectionResolver(
+                binding_facts=lambda: binding_facts(self._registry.load()),
+                registry_revision=lambda: self._registry.load().revision,
+                authorizer=_LiveRegistryAuthorizer(self._registry),
+                instance_identity=snapshot.app_install_id,
+                invalidate_selection=self._selections.invalidate_digest,
+            ),
+        )
+        return resolver.resolve(
+            selection=selection,
+            principal=derived.principal,
+            action=action,
+            write_class=write_class,
+            required_permission=required_permission,
+            default_binding_id=snapshot.default_vault_binding_id,
+        )
+
     def clear(self, raw_selection_id: str, *, derived: DerivedContext) -> None:
         self._selections.clear(
             raw_selection_id,
             principal=derived.principal,
             instance_identity=derived.instance_identity,
         )
+
+
+class _LiveRegistryAuthorizer:
+    """Read current registry/GOV truth at the request's authorization fence."""
+
+    def __init__(self, registry: VaultRegistryStore) -> None:
+        self._registry = registry
+
+    def authorize(self, request: Any) -> Any:
+        return build_authorizer(self._registry.load()).authorize(request)
 
 
 def current_auth_posture(*, loopback_listener_proven: bool) -> AuthPosture:

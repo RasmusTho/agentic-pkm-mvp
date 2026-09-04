@@ -4,11 +4,12 @@ import time
 import re
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
+from app.api.request_active_context import require_scoped_read_context
 from app.agents.ask.utils import get_ask_settings
 from app.components.llm.fabric import LLMBackendTimeout
 from app.events.models import new_trace_id
@@ -20,6 +21,7 @@ from app.tts.config import load_tts_config
 from app.tts.planning import build_tts_plan
 from app.tts.service import synthesize_tts
 from app.voice.transcription import transcribe_voice_audio
+from app.vault.active_context_v1 import ActiveContextSetV1
 
 _HYBRID_WARMED = False
 
@@ -220,7 +222,27 @@ _is_return_orientation_question = is_return_orientation_question
 
 
 @router.post("/ask", response_model=AskResponse)
-async def ask(req: AskRequest, request: Request) -> AskResponse:
+async def ask(
+    req: AskRequest,
+    request: Request,
+) -> AskResponse:
+    """Legacy compatibility read; migrated clients use ``/ask/scoped``."""
+
+    return _run_ask(req, request, active_scope=req.scope)
+
+
+@router.post("/ask/scoped", response_model=AskResponse)
+async def ask_scoped(
+    req: AskRequest,
+    request: Request,
+    context: ActiveContextSetV1 = Depends(require_scoped_read_context),
+) -> AskResponse:
+    """Carrier-bound ASK read for migrated multi-vault clients."""
+
+    return _run_ask(req, request, active_scope=context.scope)
+
+
+def _run_ask(req: AskRequest, request: Request, *, active_scope: str | None) -> AskResponse:
     if not _HYBRID_WARMED:
         _ensure_hybrid_store_loaded()
     start = time.perf_counter()
@@ -228,7 +250,10 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
         state = run_ask_graph(
-            req.question, trace_id=trace_id, ask_settings=ask_settings, active_scope=req.scope
+            req.question,
+            trace_id=trace_id,
+            ask_settings=ask_settings,
+            active_scope=active_scope,
         )
     except LLMBackendTimeout as exc:
         record_ask_error()
