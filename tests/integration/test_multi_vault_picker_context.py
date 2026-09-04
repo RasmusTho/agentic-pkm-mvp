@@ -8,6 +8,8 @@ from app.instance._storage_boundary import RegistryError
 from app.instance.settings_rebind import SettingsRebindStore
 from app.vault.manager import VaultManager
 from app.instance.context_selection import ContextSelectionStore, ReselectionRequiredError
+from app.instance.first_vault_bootstrap import BootstrapPreconditionError, FirstVaultBootstrapStore
+from app.instance.vault_registry import VaultRegistryStore
 from app.vault.active_context_v1 import PrincipalContext, WorkspaceState
 from tests.helpers.vault_settings import initialize_test_vault
 from tests.watcher.test_ingest_binding_follows_selection import _registry
@@ -71,3 +73,20 @@ def test_stale_selection_restart_requires_visible_reselection() -> None:
             principal=PrincipalContext("owner", "human", "trusted_loopback"),
             instance_identity="instance",
         )
+
+
+def test_fresh_vault_initialize_returns_usable_scoped_context(tmp_path: Path) -> None:
+    registry = VaultRegistryStore(tmp_path / "registry.md")
+    token = FirstVaultBootstrapStore().issue(
+        subject="trusted_loopback", target=tmp_path / "vault", registry=registry
+    )
+    assert token
+
+
+def test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic(tmp_path: Path) -> None:
+    registry = VaultRegistryStore(tmp_path / "registry.md")
+    store = FirstVaultBootstrapStore()
+    token = store.issue(subject="trusted_loopback", target=tmp_path / "vault", registry=registry)
+    store.consume(token=token, subject="trusted_loopback", target=tmp_path / "vault", registry=registry)
+    with pytest.raises(BootstrapPreconditionError):
+        store.consume(token=token, subject="trusted_loopback", target=tmp_path / "vault", registry=registry)
