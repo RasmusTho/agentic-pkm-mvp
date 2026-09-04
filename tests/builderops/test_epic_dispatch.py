@@ -1154,6 +1154,164 @@ def test_phase2_canary_preserves_contract_hashes_and_route_lineage() -> None:
     assert rejected_launcher.calls == []
 
 
+def test_phase2_canary_production_path_records_spark_and_launches_one_luna_fallback() -> None:
+    candidate = _candidate(
+        5323,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-production",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5323],
+        run_id="phase2-canary-production-fallback",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"allocation_state": "allocation_unavailable"},
+            {"session_id": "session-5323", "worker_receipt": _worker_receipt(5323)},
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["stopped_reason"] == "worker-handoff"
+    assert len(launcher.calls) == 2
+    assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "spark"
+    assert launcher.calls[1]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempt_count"] == 2
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["transition_kind"] == "capacity_fallback"
+    assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
+
+
+def test_phase2_canary_launch_time_staleness_records_fallback_without_spark_launch() -> None:
+    candidate = _candidate(
+        5324,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-stale-at-launch",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:01:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5324],
+        run_id="phase2-canary-launch-time-stale",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [{"session_id": "session-5324", "worker_receipt": _worker_receipt(5324)}]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:01:01Z",
+    )
+
+    assert len(launcher.calls) == 1
+    assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+    canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]
+    assert canary_receipt["attempts"][0]["actual_capability"] == "spark"
+    assert canary_receipt["attempts"][0]["outcome"] == "allocation_unavailable"
+    assert canary_receipt["attempts"][1]["actual_capability"] == "luna"
+
+
+def test_phase2_canary_fallback_allocation_failure_does_not_retry() -> None:
+    candidate = _candidate(
+        5325,
+        risk="low",
+        files=["app/builderops/epic_dispatch.py"],
+        preferred_path="subagent",
+    )
+    candidate["execution_routing"] = {
+        "mode": "canary",
+        "opt_in": True,
+        "sample_index": 1,
+        "sample_limit": 1,
+        "work_class": "bounded_fast",
+        "ambiguity": "low",
+        "protected_surface": False,
+        "decision_at": "2026-08-29T15:00:00Z",
+        "allocation_observation": {
+            "observation_id": "spark-observation-no-retry",
+            "capability": "spark",
+            "state": "bonus_available",
+            "observed_at": "2026-08-29T14:55:00Z",
+            "valid_until": "2026-08-29T15:05:00Z",
+            "source_kind": "operator",
+            "source_ref": "operator-observation:codex-spark-bonus",
+        },
+    }
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5325],
+        run_id="phase2-canary-no-retry",
+        candidates=[candidate],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {"allocation_state": "allocation_unavailable"},
+            {"allocation_state": "allocation_unavailable"},
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(
+        plan,
+        launcher,
+        expected_plan_hash=frozen_dispatch_plan_hash(plan),
+        canary_observed_at="2026-08-29T15:00:01Z",
+    )
+
+    assert receipt["status"] == "stopped"
+    assert receipt["stopped_reason"] == "session-launch-failed"
+    assert len(launcher.calls) == 2
+    assert launcher.calls[0]["_execution_routing"]["proposed_target"]["capability"] == "spark"
+    assert launcher.calls[1]["_execution_routing"]["proposed_target"]["capability"] == "luna"
+
+
 def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:
     candidate = _candidate(
         5812,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, cast
 
@@ -19,6 +20,7 @@ from app.builderops.execution_routing import (
     ResolvedExecutionTarget,
     WorkClass,
     admit_phase2_canary,
+    build_execution_routing_canary_receipt,
     create_execution_attempt,
     resolve_bounded_fast_route,
     resolve_execution_target,
@@ -71,6 +73,10 @@ class IssueSessionLaunchError(RuntimeError):
     def __init__(self, message: str, *, session_id: str | None = None) -> None:
         self.session_id = session_id
         super().__init__(message)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class IssueSessionLauncher(Protocol):
@@ -206,6 +212,7 @@ class CodexIssueSessionLauncher:
         session_id: str | None = None
         worker_receipt: object | None = None
         terminal_error: str | None = None
+        allocation_unavailable = False
         observed_input_tokens: int | None = None
         for line in result.stdout.splitlines():
             try:
@@ -220,6 +227,8 @@ class CodexIssueSessionLauncher:
                     session_id = candidate.strip()
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
+            if event.get("allocation_state") == "allocation_unavailable":
+                allocation_unavailable = True
             usage = event.get("usage")
             if isinstance(usage, Mapping):
                 candidate_tokens = usage.get("input_tokens")
@@ -235,6 +244,8 @@ class CodexIssueSessionLauncher:
                     text = item.get("text")
                     if isinstance(text, str) and text.strip():
                         worker_receipt = _parse_worker_receipt(text)
+        if allocation_unavailable:
+            return {"allocation_state": "allocation_unavailable"}
         if result.returncode != 0 or terminal_error is not None:
             detail = result.stderr.strip() or terminal_error or "codex exec failed"
             raise IssueSessionLaunchError(
@@ -503,13 +514,14 @@ def dispatch_issue_sessions(
     launcher: IssueSessionLauncher,
     *,
     expected_plan_hash: str | None = None,
+    canary_observed_at: str | None = None,
 ) -> dict[str, Any]:
     """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
 
     routing_present = _contains_execution_routing(plan)
     if routing_present and expected_plan_hash is None:
         raise EpicDispatchError(
-            "shadow-routed dispatch requires an independently preserved plan hash"
+            "routed dispatch requires an independently preserved plan hash"
         )
     if expected_plan_hash is not None:
         if (
@@ -535,11 +547,15 @@ def dispatch_issue_sessions(
                 isinstance(routing_payload, Mapping)
                 and routing_payload.get("mode") == "canary"
             ):
-                launch_result = launcher.launch(
-                    context_pack, execution_routing=routing_payload
+                launch_result, canary_receipt = _launch_canary(
+                    context_pack,
+                    routing_payload=routing_payload,
+                    launcher=launcher,
+                    observed_at=canary_observed_at or _utc_now(),
                 )
             else:
                 launch_result = launcher.launch(context_pack)
+                canary_receipt = None
             if not isinstance(launch_result, Mapping):
                 raise IssueSessionLaunchError(
                     "session launcher returned a non-object result"
@@ -572,16 +588,17 @@ def dispatch_issue_sessions(
                 session_id=session_id,
             )
             final_state = worker_receipt["final_state"]
-            sessions.append(
-                {
-                    "issue_number": issue_number,
-                    "context_pack_id": context_pack_id,
-                    "session_id": session_id,
-                    "fresh_session": True,
-                    "status": final_state,
-                    "worker_receipt": worker_receipt,
-                }
-            )
+            session_record: dict[str, Any] = {
+                "issue_number": issue_number,
+                "context_pack_id": context_pack_id,
+                "session_id": session_id,
+                "fresh_session": True,
+                "status": final_state,
+                "worker_receipt": worker_receipt,
+            }
+            if canary_receipt is not None:
+                session_record["execution_routing_canary_receipt"] = canary_receipt
+            sessions.append(session_record)
             return _session_dispatch_receipt(
                 run_id,
                 sessions,
@@ -619,6 +636,93 @@ def dispatch_issue_sessions(
         status="completed",
         stopped_reason=None,
     )
+
+
+def _launch_canary(
+    context_pack: Mapping[str, Any],
+    *,
+    routing_payload: Mapping[str, Any],
+    launcher: IssueSessionLauncher,
+    observed_at: str,
+) -> tuple[Mapping[str, Any], dict[str, object]]:
+    """Execute one canary attempt and, only on typed capacity failure, one Luna fallback."""
+
+    try:
+        request = ExecutionRouteRequest.model_validate(routing_payload["route_request"])
+        decision = ExecutionRouteDecision.model_validate(routing_payload["route_decision"])
+        target = ResolvedExecutionTarget.model_validate(routing_payload["proposed_target"])
+        launch_at = _normalize_string(observed_at, "canary_observed_at")
+        if decision.selected_capability == "spark":
+            observation = request.allocation_observation
+            allocation_unavailable = observation is None or not observation.is_fresh_at(launch_at)
+        else:
+            allocation_unavailable = False
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EpicDispatchError(f"invalid canary launch input: {exc}") from exc
+
+    attempts: list[ExecutionAttemptObservation] = []
+    first_result: Mapping[str, Any] | None = None
+    if not allocation_unavailable:
+        first_result = launcher.launch(context_pack, execution_routing=routing_payload)
+        if not isinstance(first_result, Mapping):
+            raise IssueSessionLaunchError("canary launcher returned a non-object result")
+        allocation_state = first_result.get("allocation_state")
+        if allocation_state not in {None, "available", "allocation_unavailable"}:
+            raise IssueSessionLaunchError("canary launcher returned an invalid allocation state")
+        allocation_unavailable = allocation_state == "allocation_unavailable"
+
+    first_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=target,
+        attempt_number=1,
+        mode="canary",
+        outcome="allocation_unavailable" if allocation_unavailable else "started",
+        observed_at=launch_at,
+    )
+    attempts.append(first_attempt)
+    if not allocation_unavailable:
+        assert first_result is not None  # narrowed by the branch above
+        receipt = build_execution_routing_canary_receipt(
+            request=request,
+            decision=decision,
+            attempts=attempts,
+            accepted_delivery_verification="not_run",
+        )
+        return first_result, receipt
+
+    fallback_target = resolve_execution_target(
+        load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH),
+        channel="dev",
+        capability="luna",
+    )
+    fallback_attempt = create_execution_attempt(
+        request=request,
+        decision=decision,
+        target=fallback_target,
+        attempt_number=2,
+        mode="canary",
+        outcome="started",
+        observed_at=launch_at,
+        transition_kind="capacity_fallback",
+        transition_reason="spark_allocation_unavailable_at_launch",
+        triggering_attempt=first_attempt,
+    )
+    fallback_routing = dict(routing_payload)
+    fallback_routing["proposed_target"] = fallback_target.receipt_fields()
+    fallback_routing["attempt_observation"] = fallback_attempt.model_dump(mode="json")
+    fallback_result = launcher.launch(context_pack, execution_routing=fallback_routing)
+    if not isinstance(fallback_result, Mapping):
+        raise IssueSessionLaunchError("canary fallback launcher returned a non-object result")
+    if fallback_result.get("allocation_state") == "allocation_unavailable":
+        raise IssueSessionLaunchError("canary Luna fallback reported allocation unavailable")
+    receipt = build_execution_routing_canary_receipt(
+        request=request,
+        decision=decision,
+        attempts=(*attempts, fallback_attempt),
+        accepted_delivery_verification="not_run",
+    )
+    return fallback_result, receipt
 
 
 def _validated_session_contexts(
