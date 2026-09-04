@@ -196,7 +196,7 @@ def test_context_bound_read_roots_reject_a_stale_binding_revision(instance) -> N
         resolve_context_read_roots(context, registry_store=runtime.registry)
 
 
-def test_ask_route_uses_one_server_resolved_context_generation_end_to_end(
+def test_request_uses_one_context_generation_end_to_end(
     instance, client, monkeypatch
 ) -> None:
     """MVR-05B seals the HTTP scope carrier behind one immutable snapshot."""
