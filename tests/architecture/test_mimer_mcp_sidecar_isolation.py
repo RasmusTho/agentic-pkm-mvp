@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 
 def test_sidecar_dependency_import_filesystem_credential_and_route_boundaries() -> None:
@@ -59,3 +62,24 @@ def test_sidecar_dependency_import_filesystem_credential_and_route_boundaries() 
         "/api/artifacts/note",
         "/healthz",
     }
+
+
+def test_core_only_wheel_imports_mimer_mcp_compatibility_without_sidecar(tmp_path: Path) -> None:
+    """A core installation must not import or discover the optional sidecar."""
+    target = tmp_path / "core-wheel"
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--no-deps", "--target", str(target), "."],
+        check=True,
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.mimer_mcp; import app.mimer_mcp.server; print('ok')"],
+        check=True,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(target)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "ok"

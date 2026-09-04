@@ -9,10 +9,9 @@ from typing import Any
 
 import httpx
 
-from app.mimer_mcp.server import MimerMcpServer as CompatibilityServer
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"))
 from mimer_mcp_sidecar.semantic import MimerMcpServer as SidecarServer
+from app.mimer_mcp.server import MimerMcpServer as CompatibilityServer
 
 
 @dataclass

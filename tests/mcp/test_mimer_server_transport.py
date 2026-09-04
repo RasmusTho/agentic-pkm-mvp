@@ -1,47 +1,37 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
-import sys
-import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import signal
+import subprocess
+import sys
+import threading
 
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-SIDECAR_ROOT = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
-sys.path.insert(0, str(SIDECAR_ROOT))
 
-from mimer_mcp_sidecar.semantic import McpToolResult
+SIDECAR_DISTRIBUTION = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
 
 
-class _SemanticServer:
-    def list_tools(self):
-        from app.mimer_mcp.server import MimerMcpServer
-
-        # The transport discovers its fixed contract from the semantic layer.
-        return MimerMcpServer.for_loopback().list_tools()
-
-    def call_tool(self, name: str, arguments: dict[str, object]) -> McpToolResult:
-        return McpToolResult(content={"tool": name, "arguments": arguments}, trace_id="trace-test")
+def _installed_entrypoint(tmp_path: Path) -> Path:
+    venv = tmp_path / "venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True
+    )
+    pip = venv / "bin" / "pip"
+    subprocess.run([str(pip), "install", "--no-deps", str(SIDECAR_DISTRIBUTION)], check=True)
+    return venv / "bin" / "mimer-mcp"
 
 
 def test_stdio_transport_lifecycle_negotiates_and_shuts_down_cleanly(tmp_path: Path) -> None:
-    runner = tmp_path / "sidecar.py"
-    runner.write_text(
-        "import asyncio, sys\n"
-        f"sys.path.insert(0, {str(SIDECAR_ROOT)!r})\n"
-        "from mimer_mcp_sidecar.semantic import McpToolResult, MimerMcpServer\n"
-        "from mimer_mcp_sidecar.transport import MimerMcpTransportConfig, serve_stdio\n"
-        "class Semantic:\n"
-        "  def list_tools(self): return MimerMcpServer.for_loopback().list_tools()\n"
-        "  def call_tool(self, name, arguments): return McpToolResult(content={'ok': True}, trace_id='trace-test')\n"
-        "asyncio.run(serve_stdio(MimerMcpTransportConfig(), lambda _: Semantic()))\n",
-        encoding="utf-8",
-    )
+    entrypoint = _installed_entrypoint(tmp_path)
 
     async def negotiate_then_eof() -> list[str]:
-        parameters = StdioServerParameters(command=sys.executable, args=[str(runner)], cwd=".")
+        parameters = StdioServerParameters(command=str(entrypoint), args=["--transport", "stdio"])
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
@@ -53,62 +43,99 @@ def test_stdio_transport_lifecycle_negotiates_and_shuts_down_cleanly(tmp_path: P
     ]
 
 
+def _request(process: subprocess.Popen[str], payload: dict[str, object]) -> dict[str, object]:
+    assert process.stdin is not None and process.stdout is not None
+    process.stdin.write(json.dumps(payload) + "\n")
+    process.stdin.flush()
+    line = process.stdout.readline()
+    assert line, process.stderr.read() if process.stderr is not None else "sidecar exited"
+    response = json.loads(line)
+    assert isinstance(response, dict)
+    return response
+
+
+def _notify(process: subprocess.Popen[str], payload: dict[str, object]) -> None:
+    assert process.stdin is not None
+    process.stdin.write(json.dumps(payload) + "\n")
+    process.stdin.flush()
+
+
 def test_client_spawned_restart_restores_stdio_without_replay(tmp_path: Path) -> None:
-    runner = tmp_path / "sidecar.py"
-    capture_log = tmp_path / "captures.log"
-    runner.write_text(
-        "import asyncio, os, sys\n"
-        f"sys.path.insert(0, {str(SIDECAR_ROOT)!r})\n"
-        "from mimer_mcp_sidecar.semantic import McpToolResult, MimerMcpServer\n"
-        "from mimer_mcp_sidecar.transport import MimerMcpTransportConfig, serve_stdio\n"
-        "class Semantic:\n"
-        "  def list_tools(self): return MimerMcpServer.for_loopback().list_tools()\n"
-        "  def call_tool(self, name, arguments):\n"
-        "    if name == 'mimer.capture':\n"
-        "      open(os.environ['CAPTURE_LOG'], 'a').write('capture\\n')\n"
-        "      open(os.environ['CAPTURE_ENTERED'], 'w').write('entered')\n"
-        "      import time; time.sleep(60)\n"
-        "    return McpToolResult(content={'ok': True}, trace_id='trace-test')\n"
-        "asyncio.run(serve_stdio(MimerMcpTransportConfig(), lambda _: Semantic()))\n",
-        encoding="utf-8",
-    )
+    entrypoint = _installed_entrypoint(tmp_path)
+    capture_started = threading.Event()
+    capture_release = threading.Event()
+    capture_finished = threading.Event()
+    captures: list[bytes] = []
 
-    controller = tmp_path / "controller.py"
-    entered = tmp_path / "capture-entered"
-    controller.write_text(
-        "import asyncio, sys\n"
-        "from mcp.client.session import ClientSession\n"
-        "from mcp.client.stdio import StdioServerParameters, stdio_client\n"
-        "async def run():\n"
-        "  async with stdio_client(StdioServerParameters(command=sys.executable, args=[sys.argv[1]], env={'CAPTURE_LOG': sys.argv[2], 'CAPTURE_ENTERED': sys.argv[3]})) as streams:\n"
-        "    async with ClientSession(*streams) as session:\n"
-        "      await session.initialize(); await session.call_tool('mimer.capture', {'text':'once'})\n"
-        "asyncio.run(run())\n",
-        encoding="utf-8",
-    )
+    class MimerHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            assert self.path == "/healthz"
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
 
-    process = __import__("subprocess").Popen(
-        [sys.executable, str(controller), str(runner), str(capture_log), str(entered)],
-        cwd=".", env={**os.environ, "PYTHONPATH": str(SIDECAR_ROOT)},
-    )
-    deadline = time.monotonic() + 10
-    while not entered.exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert entered.exists(), "capture did not enter the unacknowledged in-flight state"
-    process.terminate()
-    process.wait(timeout=10)
+        def do_POST(self) -> None:  # noqa: N802
+            assert self.path == "/api/companion/capture"
+            captures.append(self.rfile.read(int(self.headers["content-length"])))
+            capture_started.set()
+            assert capture_release.wait(timeout=10)
+            capture_finished.set()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            try:
+                self.wfile.write(b'{"outcome":"written"}')
+            except BrokenPipeError:
+                pass
 
-    async def session_call() -> None:
-        parameters = StdioServerParameters(
-            command=sys.executable,
-            args=[str(runner)],
-            cwd=".",
-            env={"CAPTURE_LOG": str(capture_log)},
+        def log_message(self, *_: object) -> None:
+            return
+
+    runtime = ThreadingHTTPServer(("127.0.0.1", 0), MimerHandler)
+    runtime_thread = threading.Thread(target=runtime.serve_forever, daemon=True)
+    runtime_thread.start()
+    base_url = f"http://127.0.0.1:{runtime.server_port}"
+    initialize = {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+    }
+    first = subprocess.Popen(
+        [str(entrypoint), "--base-url", base_url], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, start_new_session=True,
+    )
+    try:
+        assert _request(first, initialize)["id"] == 1
+        _notify(first, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        assert first.stdin is not None
+        first.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "mimer.capture", "arguments": {"text": "once"}}}) + "\n")
+        first.stdin.flush()
+        assert capture_started.wait(timeout=10), "capture did not enter the unacknowledged in-flight state"
+        os.killpg(first.pid, signal.SIGTERM)
+        first.wait(timeout=10)
+        assert first.poll() is not None
+        children = subprocess.run(["pgrep", "-P", str(first.pid)], capture_output=True, text=True)
+        assert children.returncode == 1 and children.stdout.strip() == ""
+        capture_release.set()
+        assert capture_finished.wait(timeout=10), "interrupted capture request survived process termination"
+
+        second = subprocess.Popen(
+            [str(entrypoint), "--base-url", base_url], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, start_new_session=True,
         )
-        async with stdio_client(parameters) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                await session.list_tools()
-
-    asyncio.run(session_call())
-    assert capture_log.read_text(encoding="utf-8") == "capture\n"
+        try:
+            assert _request(second, initialize)["id"] == 1
+            _notify(second, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+            assert _request(second, {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}})["id"] == 3
+            assert second.stdin is not None
+            second.stdin.close()
+            second.wait(timeout=10)
+        finally:
+            if second.poll() is None:
+                os.killpg(second.pid, signal.SIGTERM)
+                second.wait(timeout=10)
+    finally:
+        capture_release.set()
+        runtime.shutdown()
+        runtime.server_close()
+    assert [json.loads(capture) for capture in captures] == [{"text": "once"}]

@@ -8,29 +8,24 @@ the MCP SDK or a second implementation into the core runtime package.
 from __future__ import annotations
 
 import importlib
-import sys
-from pathlib import Path
-from types import ModuleType
+from typing import Any
 
 
-def _semantic_module() -> ModuleType:
+def _semantic_module() -> Any:
     try:
         return importlib.import_module("mimer_mcp_sidecar.semantic")
     except ModuleNotFoundError as exc:
         if exc.name != "mimer_mcp_sidecar":
             raise
-    source_root = Path(__file__).parents[2] / "mimer-mcp-sidecar"
-    if not source_root.is_dir():
-        raise RuntimeError("The standalone mimer-mcp-sidecar package is unavailable")
-    sys.path.insert(0, str(source_root))
-    return importlib.import_module("mimer_mcp_sidecar.semantic")
+        raise RuntimeError(
+            "Mimer MCP semantics require the separately installed mimer-mcp-sidecar distribution"
+        ) from exc
 
 
-_semantic = _semantic_module()
-McpToolDefinition = _semantic.McpToolDefinition
-McpToolResult = _semantic.McpToolResult
-MimerMcpServer = _semantic.MimerMcpServer
-_GovernedMimerHttpOperations = _semantic._GovernedMimerHttpOperations
-httpx = _semantic.httpx
+__all__ = ["McpToolDefinition", "McpToolResult", "MimerMcpServer"]  # noqa: F822
 
-__all__ = ["McpToolDefinition", "McpToolResult", "MimerMcpServer"]
+
+def __getattr__(name: str) -> Any:
+    if name not in {*__all__, "_GovernedMimerHttpOperations", "httpx"}:
+        raise AttributeError(name)
+    return getattr(_semantic_module(), name)

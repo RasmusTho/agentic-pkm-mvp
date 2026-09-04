@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,10 +10,21 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 import pytest
 
-SIDECAR_ROOT = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
-sys.path.insert(0, str(SIDECAR_ROOT))
-
+SIDECAR_DISTRIBUTION = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
+sys.path.insert(0, str(SIDECAR_DISTRIBUTION))
 from mimer_mcp_sidecar.transport import MimerMcpTransportConfig, parse_config
+
+
+def _installed_entrypoint(tmp_path: Path) -> Path:
+    venv = tmp_path / "venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True
+    )
+    subprocess.run(
+        [str(venv / "bin" / "pip"), "install", "--no-deps", str(SIDECAR_DISTRIBUTION)],
+        check=True,
+    )
+    return venv / "bin" / "mimer-mcp"
 
 
 @pytest.mark.parametrize(
@@ -32,25 +45,23 @@ def test_network_transport_and_listener_configuration_are_rejected(
 
 
 def test_stdio_production_entrypoint_opens_no_network_listener(tmp_path) -> None:
-    runner = tmp_path / "deny_sockets.py"
-    runner.write_text(
-        "import socket, sys\n"
+    entrypoint = _installed_entrypoint(tmp_path)
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    (probe / "sitecustomize.py").write_text(
+        "import socket\n"
         "_socket = socket.socket\n"
         "class NoListener(_socket):\n"
         "  def bind(self, *args, **kwargs): raise AssertionError('listener bind forbidden')\n"
         "  def listen(self, *args, **kwargs): raise AssertionError('listener listen forbidden')\n"
-        "socket.socket = NoListener\n"
-        f"sys.path.insert(0, {str(SIDECAR_ROOT)!r})\n"
-        "from mimer_mcp_sidecar.transport import main\n"
-        "raise SystemExit(main())\n",
+        "socket.socket = NoListener\n",
         encoding="utf-8",
     )
 
     async def negotiate() -> list[str]:
         parameters = StdioServerParameters(
-            command=sys.executable,
-            args=[str(runner), "--transport", "stdio"],
-            cwd=".",
+            command=str(entrypoint), args=["--transport", "stdio"],
+            env={**os.environ, "PYTHONPATH": str(probe)},
         )
         async with stdio_client(parameters) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:

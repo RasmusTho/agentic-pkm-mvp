@@ -45,17 +45,25 @@ capture after a client restart.
 
 ## Acceptance Criteria
 
-- [ ] The packaged entrypoint negotiates stdio and shuts down cleanly on EOF without orphaned
+- [ ] The installed packaged entrypoint negotiates stdio and shuts down cleanly on EOF without orphaned
       requests or durable adapter state.
   Verify: `tests/mcp/test_mimer_server_transport.py::test_stdio_transport_lifecycle_negotiates_and_shuts_down_cleanly`
 - [ ] Typed configuration rejects Streamable HTTP, bind/listener, TLS, and auth options before the
       adapter starts.
   Verify: `tests/mcp/test_mimer_server_security.py::test_network_transport_and_listener_configuration_are_rejected`
-- [ ] The production entrypoint opens no network socket and exposes no transport other than stdio;
-      a unit-only config assertion is insufficient.
+- [ ] The production entrypoint opens no **listening** network socket and exposes no transport other
+      than stdio; the required allowlisted outbound loopback HTTP calls remain permitted and a
+      unit-only config assertion is insufficient.
   Verify: `tests/mcp/test_mimer_server_security.py::test_stdio_production_entrypoint_opens_no_network_listener`
+- [ ] The A2 sidecar keeps the MCP SDK outside core dependencies/imports and cannot access vault
+      files, runtime credentials, authority internals, or routes outside the five-operation allowlist.
+  Verify: `tests/architecture/test_mimer_mcp_sidecar_isolation.py::test_sidecar_dependency_import_filesystem_credential_and_route_boundaries`
+- [ ] The standalone package is the single semantic implementation; compatibility imports do not
+      duplicate behavior and preserve every #3368 schema, trace, error, receipt, and no-retry invariant.
+  Verify: `tests/mcp/test_mimer_sidecar_semantic_parity.py::test_standalone_sidecar_is_single_implementation_with_v1_parity`
 - [ ] Health and diagnostics identify stdio/dependency state without exposing private runtime
-      configuration; a client-spawned restart restores the process without replaying in-flight capture.
+      configuration; a client-spawned restart during an unacknowledged capture leaves no child or
+      in-flight request and does not replay.
   Verify: `tests/mcp/test_mimer_server_transport.py::test_client_spawned_restart_restores_stdio_without_replay`
 - [ ] Dependency metadata, lock surfaces, executable packaging, and operator docs remain consistent.
   Verify: `tests/architecture/test_requirements_consistency.py::test_pyproject_and_requirements_are_consistent` and doc writeback at `docs/OPERATIONS.md :: Mimer MCP adapter`
@@ -95,8 +103,8 @@ preventing a restart from duplicating an append whose acknowledgement was lost.
 
 ## Related GitHub Issues
 
-Issue #3369 stays blocked until #3371's Accepted ADR/client-contract writeback lands and its live
-contract is reconciled to B1 stdio-only; the owner receipt alone is insufficient. It may then run in
-parallel with MIMER-MCP-02 under an isolated worktree. TCD hint: **Codex / xhigh** because this is a
-security-sensitive external transport boundary; require production-entrypoint proof that no
-network listener exists.
+Issue #3369 follows the delivered #3371 ADR/client-contract writeback and #3368 semantic adapter.
+Its terminal relationship is governed verification and closure after this package's exact-head
+transport, isolation, parity, and no-replay evidence is current. TCD hint: **Codex / xhigh** because
+this is a security-sensitive external transport boundary; require production-entrypoint proof that
+no listening network socket exists.
