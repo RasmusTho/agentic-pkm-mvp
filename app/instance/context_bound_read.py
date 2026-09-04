@@ -15,10 +15,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.active_context_service import binding_revision_for
-from app.instance.binding_effect_lease import BindingEffectLeaseError, BindingEffectLeaseManager
-from app.instance.ownership_ledger import OwnershipLedger
+from app.instance.binding_effect_lease import BindingEffectLeaseError, build_effect_lease_manager
 from app.instance.vault_registry import VaultRegistryStore
 from app.vault.active_context_v1 import ActiveContextSetV1, DegradedContextError
 
@@ -96,11 +94,9 @@ def context_bound_read_window(
         raise ContextBoundReadError("instance ownership root is not bound")
     roots = resolve_context_read_roots(context, registry_store=registry_store)
     channel = os.getenv("PKM_ENVIRONMENT", "dev").strip() or "dev"
-    leases = BindingEffectLeaseManager(
+    leases = build_effect_lease_manager(
         registry_store=registry_store,
-        ownership_ledger=OwnershipLedger(Path(ownership_root).expanduser().resolve(strict=False)),
-        state_root=registry_store.path.parent / "binding-effect-leases",
-        capability=_STORAGE_MUTATION_CAPABILITY,
+        ownership_root=Path(ownership_root).expanduser().resolve(strict=False),
     )
     try:
         with ExitStack() as stack:

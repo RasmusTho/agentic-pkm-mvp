@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterator, Mapping, TypedDict, cast
 from uuid import uuid4
 
-from app.instance._storage_boundary import _StorageMutationCapability
+from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY, _StorageMutationCapability
 from app.instance.ownership_ledger import OwnershipLedger
 from app.instance.vault_registry import VaultRegistryStore
 
@@ -1127,9 +1127,25 @@ class BindingEffectLeaseManager:
             os.close(descriptor)
 
 
+def build_effect_lease_manager(
+    *,
+    registry_store: VaultRegistryStore,
+    ownership_root: Path,
+) -> BindingEffectLeaseManager:
+    """Construct the storage-capable lease manager at its protected boundary."""
+
+    return BindingEffectLeaseManager(
+        registry_store=registry_store,
+        ownership_ledger=OwnershipLedger(ownership_root),
+        state_root=registry_store.path.parent / "binding-effect-leases",
+        capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+
+
 __all__ = [
     "BindingEffectLeaseError",
     "BindingEffectLeaseManager",
+    "build_effect_lease_manager",
     "BindingEffectLeaseObservation",
     "BindingEffectLeaseTimeout",
     "LEASE_SCHEMA",
