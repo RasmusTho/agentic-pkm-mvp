@@ -89,7 +89,6 @@ dev = [
 browser = [
     "playwright>=1.48,<2",
 ]
-
 [tool.setuptools.packages.find]
 where = [".", "companion-ui/companion-app"]
 include = ["app*", "llm_contract*", "companion_ui*"]

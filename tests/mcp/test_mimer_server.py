@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from pathlib import Path
+import sys
 from typing import Any
 
 import httpx
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"))
 from app.mimer_mcp.server import _GovernedMimerHttpOperations, MimerMcpServer
 
 

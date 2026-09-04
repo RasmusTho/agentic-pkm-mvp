@@ -1,0 +1,3 @@
+# Standalone sidecar runtime lock; deliberately not installed by core Mimer.
+mcp==1.29.1
+httpx==0.27.2

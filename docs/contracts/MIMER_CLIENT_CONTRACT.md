@@ -35,8 +35,8 @@ A client under this contract operates in two modes simultaneously:
 - **API-mediated caller** — governed writes and retrieval through the HTTP surface (§4). Mediated-write semantics apply (AGENT-FLOWS §4).
 - **Mode (c) direct filesystem agent** — direct reads and writes of vault Markdown under the human's delegation (§5). Observed-write semantics apply: Mimer observes, classifies, and indexes the result; a direct write is not APPLY, produces no Mimer receipt of its own, and confers no authority.
 
-ADR-0061 additionally admits an **MCP protocol adapter** under this same contract, with availability
-still pending downstream implementation and composed acceptance. Its fixed v1 posture is:
+ADR-0061 additionally admits an **MCP protocol adapter** under this same contract. Its standalone
+sidecar packaging and fixed v1 posture are:
 
 - **A2 topology:** a constituent-owned sidecar process with a required, tested boundary to the
   governed HTTP API. Process separation alone is not enforcement: the downstream implementation
@@ -55,7 +55,8 @@ MCP is a third client protocol adapter, **not a third durable mutation path**: g
 still terminates at the HTTP API, returns that API's PolicyDecision, DecisionToken, and
 AuthorityReceipt unchanged, and follows §6 W5 after an ambiguous response. The
 `mcp.vault.append_note` descriptor remains internal orchestrator plumbing, not an external endpoint.
-No MCP server is shipped in `app/` yet. Streamable HTTP over tailnet/LAN plus per-device
+The MCP SDK and executable are shipped only in the separate `mimer-mcp-sidecar` distribution, not
+in `app/` or its runtime dependency surface. Streamable HTTP over tailnet/LAN plus per-device
 authentication are deferred, separately gated follow-ons and must not be enabled implicitly.
 
 ## 3. Authority envelope — the three hard invariants
