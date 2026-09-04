@@ -835,3 +835,10 @@ make db-dump-prod                           # → .db-snapshots/prod_20260628T..
   by `com.yggdrasil.prod-backup-probe` — see *Prod backup watcher* above.
 - These dumps must not become a production DR restore path.
 - pg_dump / pg_restore must be installed on the host (they are not bundled in containers).
+## Mimer MCP adapter
+
+The accepted Mimer MCP v1 adapter is a client-spawned stdio sidecar. Start it
+with `python -m app.mimer_mcp --transport stdio`; it calls only the existing
+loopback Mimer HTTP API. It opens no network listener, accepts no bind, TLS, or
+authentication configuration, and exits when its client closes stdio. Network
+transports and per-device authentication are separately gated follow-ons.

@@ -398,10 +398,14 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # CI's fail-closed unowned-runtime path (#3368).
             "app/mimer_mcp/",
             "tests/mcp/test_mimer_server.py",
+            "tests/mcp/test_mimer_server_transport.py",
+            "tests/mcp/test_mimer_server_security.py",
             "tests/architecture/test_mimer_mcp_server_boundaries.py",
         ),
         (
             "tests/mcp/test_mimer_server.py",
+            "tests/mcp/test_mimer_server_transport.py",
+            "tests/mcp/test_mimer_server_security.py",
             "tests/architecture/test_mimer_mcp_server_boundaries.py",
             "tests/api/test_ask_contract.py",
             "tests/api/test_capture_inbox_api.py",

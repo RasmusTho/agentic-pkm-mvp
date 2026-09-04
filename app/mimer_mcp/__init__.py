@@ -1,9 +1,6 @@
-"""Protocol-neutral external Mimer MCP semantic adapter.
-
-The wire/process package is deliberately owned by MIMER-MCP-03.  This package
-only maps the five accepted MCP operations to Mimer's governed HTTP contract.
-"""
+"""External Mimer MCP adapter, with semantic and stdio transport layers."""
 
 from .server import MimerMcpServer, McpToolResult
+from .transport import MimerMcpTransportConfig, create_stdio_server
 
-__all__ = ["MimerMcpServer", "McpToolResult"]
+__all__ = ["MimerMcpServer", "McpToolResult", "MimerMcpTransportConfig", "create_stdio_server"]
