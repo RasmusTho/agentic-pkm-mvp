@@ -9,6 +9,11 @@ import re
 from typing import Any
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
+from app.builderops.execution_routing_receipts import (
+    CanaryReceiptEvidenceError,
+    ReceiptStore,
+    record_acceptance_observation,
+)
 from app.dispatcher.verification_consumer import VerificationConsumer
 from app.dispatcher.verification_dispatch import (
     VerificationSubscriptionBusy,
@@ -199,6 +204,7 @@ class HostFencedVerificationCycle:
         *,
         holder: str,
         containment_receipt_required: bool = False,
+        canary_receipt_store: ReceiptStore | None = None,
     ) -> None:
         if consumer.ledger is not ledger or not consumer.host_fenced_merge:
             raise ValueError(
@@ -220,23 +226,35 @@ class HostFencedVerificationCycle:
         self.merge_executor = merge_executor
         self.holder = holder
         self.containment_receipt_required = containment_receipt_required
+        self.canary_receipt_store = canary_receipt_store
 
     def run_dry_cycle(
-        self, request: Mapping[str, object]
+        self,
+        request: Mapping[str, object],
+        *,
+        canary_receipt: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         run = self.consumer.consume(request)
+        self._observe_canary(run, canary_receipt)
         return self._finish_ready_dry_cycle(run.run_id)
 
-    def recover_dry_cycle(self, run_id: str) -> Mapping[str, object]:
+    def recover_dry_cycle(
+        self,
+        run_id: str,
+        *,
+        canary_receipt: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
         run = self.ledger.get(run_id)
         if run is None:
             raise ValueError("verification cycle run is unavailable")
         if run.status == "completed":
+            self._observe_canary(run, canary_receipt)
             receipt = run.terminal_receipt
             return self._validated_receipt(
                 run, receipt, allowed_outcomes={"dry_run_no_merge"}
             )
         if run.status == "backoff":
+            self._observe_canary(run, canary_receipt)
             receipt = run.terminal_receipt
             return self._validated_receipt(
                 run, receipt, allowed_outcomes={"retry_after_readback"}
@@ -248,6 +266,7 @@ class HostFencedVerificationCycle:
         pending = self.ledger.pending_effect_binding(run_id)
         merge_ready = self.ledger.merge_ready_receipt(run_id)
         if merge_ready is not None:
+            self._observe_canary(run, canary_receipt)
             if (
                 self.containment_receipt_required
                 and "containment" not in merge_ready
@@ -278,7 +297,66 @@ class HostFencedVerificationCycle:
             return self._settle(run_id, merge_receipt)
         if merge_ready is None:
             run = self.consumer.recover(run_id)
+            self._observe_canary(run, canary_receipt)
         return self._finish_ready_dry_cycle(run.run_id)
+
+    def _observe_canary(
+        self,
+        run: Any,
+        canary_receipt: Mapping[str, object] | None,
+    ) -> None:
+        """Consume the verifier result without changing verifier authority."""
+
+        if canary_receipt is None:
+            return
+        if self.canary_receipt_store is None:
+            raise CanaryReceiptEvidenceError(
+                "canary acceptance requires the BuilderOps receipt store"
+            )
+        linked_issue = run.request.get("linked_issue")
+        if (
+            not isinstance(linked_issue, int)
+            or isinstance(linked_issue, bool)
+            or linked_issue <= 0
+        ):
+            raise CanaryReceiptEvidenceError(
+                "verification run lacks a governing issue for canary acceptance"
+            )
+        verification_receipt: Mapping[str, object] | None = None
+        merge_ready = self.ledger.merge_ready_receipt(run.run_id)
+        if isinstance(merge_ready, Mapping):
+            candidate = merge_ready.get("coordinator_receipt")
+            if isinstance(candidate, Mapping):
+                # The coordinator receipt carries the verifier verdict, while
+                # the durable merge-ready wrapper carries the exact runtime
+                # identity.  Bind both before the evidence-only consumer sees
+                # the result; a bare verdict is never accepted as delivery.
+                verification_receipt = dict(candidate)
+                runtime_identity = {
+                    "repository": run.repository,
+                    "pr_number": run.pr_number,
+                    "head_sha": run.current_head_sha,
+                    "run_id": run.run_id,
+                }
+                for key, value in runtime_identity.items():
+                    if key not in verification_receipt:
+                        verification_receipt[key] = value
+        if verification_receipt is None:
+            verification_receipt = run.terminal_receipt
+        reason = None
+        if verification_receipt is None:
+            reason = "verification_not_reached"
+        record_acceptance_observation(
+            self.canary_receipt_store,
+            canary_receipt,
+            verification_receipt,
+            repository=run.repository,
+            pr_number=run.pr_number,
+            head_sha=run.current_head_sha,
+            governing_issue=linked_issue,
+            run_id=run.run_id,
+            not_accepted_reason=reason,
+        )
 
     @staticmethod
     def _lease_is_live(run: object) -> bool:

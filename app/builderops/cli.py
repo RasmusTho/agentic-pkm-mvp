@@ -78,8 +78,10 @@ from app.builderops.evidence_bridge import (
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
     EpicDispatchError,
+    _contains_canary_execution_routing,
     build_dispatch_plan,
     dispatch_issue_sessions,
+    frozen_dispatch_plan_hash,
 )
 from app.builderops.epic_delivery_ledger import (
     EpicDeliveryLedgerError,
@@ -2467,7 +2469,9 @@ def dispatch_plan(
     ),
 )
 @click.option("--json", "as_json", is_flag=True)
+@click.pass_context
 def dispatch_sessions(
+    ctx: click.Context,
     plan_file: Path,
     repo_root: Path,
     expected_plan_hash: str | None,
@@ -2476,10 +2480,23 @@ def dispatch_sessions(
     plan = _load_json_object_file(plan_file, field="plan-file")
     try:
         launcher = CodexIssueSessionLauncher(repo_root=repo_root)
+        receipt_store = None
+        if (
+            _contains_canary_execution_routing(plan)
+            and expected_plan_hash is not None
+            and len(expected_plan_hash) == 64
+            and all(
+                character in "0123456789abcdef"
+                for character in expected_plan_hash
+            )
+            and frozen_dispatch_plan_hash(plan) == expected_plan_hash
+        ):
+            receipt_store = _store(ctx)
         receipt = dispatch_issue_sessions(
             plan,
             launcher,
             expected_plan_hash=expected_plan_hash,
+            receipt_store=receipt_store,
         )
     except EpicDispatchError as exc:
         raise click.ClickException(str(exc)) from exc

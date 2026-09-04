@@ -611,6 +611,8 @@ def build_execution_routing_canary_receipt(
         "candidate": {"issue_number": request.issue_number, "work_class": request.work_class},
         "route": {
             "route_lineage_id": decision.route_lineage_id,
+            "route_decision_id": decision.decision_id,
+            "route_decision_hash": decision.content_hash,
             "requested_capability": decision.requested_capability,
             "selected_capability": decision.selected_capability,
             "allocation_state": decision.transition_reason,
@@ -624,12 +626,31 @@ def build_execution_routing_canary_receipt(
         "attempts": [
             {
                 "attempt_id": attempt.attempt_id,
+                "attempt_hash": attempt.content_hash,
                 "attempt_number": attempt.attempt_number,
+                "mode": attempt.mode,
                 "requested_capability": attempt.requested_capability,
                 "actual_capability": attempt.actual_capability,
+                "provider": attempt.provider,
+                "model": attempt.model,
+                "reasoning_effort": attempt.reasoning_effort,
                 "transition_kind": attempt.transition_kind,
                 "transition_reason": attempt.transition_reason,
+                "triggering_attempt_id": attempt.triggering_attempt_id,
+                "triggering_attempt_hash": attempt.triggering_attempt_hash,
+                "context_pack_hash": attempt.context_pack_hash,
+                "authority_hash": attempt.authority_hash,
+                "verification_profile_hash": attempt.verification_profile_hash,
                 "outcome": attempt.outcome,
+                "observed_at": attempt.observed_at,
+                "route_lineage_id": attempt.route_lineage_id,
+                "route_decision_id": attempt.route_decision_id,
+                "route_decision_hash": attempt.route_decision_hash,
+                "semantic_hashes": {
+                    "context_pack_hash": attempt.context_pack_hash,
+                    "authority_hash": attempt.authority_hash,
+                    "verification_profile_hash": attempt.verification_profile_hash,
+                },
             }
             for attempt in attempts
         ],
