@@ -56,7 +56,15 @@ async def search_scoped(
         else contextlib.nullcontext()
     )
     with span_cm:
-        response = retrieve(RetrievalRequest(query=q, k=10, trace_id=trace_id, scope=context.scope))
+        response = retrieve(
+            RetrievalRequest(
+                query=q,
+                k=10,
+                trace_id=trace_id,
+                scope=context.scope,
+                active_context=context,
+            )
+        )
     return {
         "results": [
             {"uuid": hit.doc_id, "title": str(hit.payload.get("title") or "")}
