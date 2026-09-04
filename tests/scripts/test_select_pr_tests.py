@@ -41,9 +41,17 @@ def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -
     assert selection.full_suite is False
     assert selection.subsystems == ("mimer_mcp",)
     assert selection.unowned_paths == ()
-    assert "tests/mcp/test_mimer_server.py" in selection.targets
-    assert "tests/architecture/test_mimer_mcp_server_boundaries.py" in selection.targets
-    assert "tests/api/test_capture_inbox_api.py" in selection.targets
+    feature_targets = set(selection.targets) - set(selector.ALWAYS_TARGETS)
+    assert feature_targets == {
+        "tests/mcp/test_mimer_server.py",
+        "tests/architecture/test_mimer_mcp_server_boundaries.py",
+        "tests/api/test_ask_contract.py",
+        "tests/api/test_capture_inbox_api.py",
+        "tests/api/test_search_canonical_substrate.py",
+        "tests/api/test_artifact_note_read_api.py",
+        "tests/api/test_health_contract_api.py",
+    }
+    assert "tests/api" not in selection.targets
 
 
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
