@@ -61,6 +61,11 @@ Related docs:
 
 ## Runtime settings (compiled)
 
+For a scoped MVR-05B read, the compiled bundle contributes cache provenance only: the server
+resolves the authenticated active-context binding set first, then hashes the current typed bundle
+into that context's retrieval cache identity. `VAULT_ROOT`, compiled settings, and the single
+compatibility watcher never select or widen a scoped request binding.
+
 Runtime settings are compiled from vault-backed Markdown settings into `runtime/settings/`.
 
 Primary source folder:
