@@ -16806,6 +16806,7 @@ def make_handler(
                 "/api/companion/vault-browser/actions/queue-review",
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 VAULT_RELOAD_ENDPOINT,
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/canvas/sessions",
@@ -16818,6 +16819,7 @@ def make_handler(
             {
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 # GET /vault/browse is require_loopback_or_api_key-gated and
                 # enumerates folder names; forward the client's auth context so
                 # the runtime authenticates the real client, not the loopback
@@ -16922,6 +16924,9 @@ def make_handler(
             scoped_override = self.headers.get("X-Active-Context-Override")
             if scoped_override:
                 headers["X-Active-Context-Override"] = scoped_override
+            bootstrap = self.headers.get("X-Active-Context-Bootstrap")
+            if bootstrap:
+                headers["X-Active-Context-Bootstrap"] = bootstrap
             return headers
 
         def do_POST(self) -> None:
