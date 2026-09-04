@@ -433,6 +433,9 @@ foreign, stale, malformed, or partial evidence fails closed. The executable gate
 authority only against the canonical `origin/main...HEAD` selectors; workflow-risk analysis may use
 alternate selectors only when it is not issuing publication authority. Publication invokes the gate
 with an explicit `new` or `existing` mode, and scope revalidation is valid only in `existing` mode.
+For an issue-backed `new` publication, the governing Issue identity is valid publication authority,
+but it is not existing-PR scope-revalidation evidence. A new publication must reject a caller-supplied
+PR number or revalidation receipt.
 `existing` derives a unique open PR whose base repository
 and ref match the publication base and whose head repository and ref match the authenticated current
 branch, then requires the supplied PR identity and scope
