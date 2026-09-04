@@ -40,7 +40,7 @@ def read_operation_handlers() -> dict[str, ReadOwner]:
     return {
         "artifact.list": _list_from_companion,
         "artifact.read": _read_from_artifacts,
-        "artifact.search": _search_from_retrieval,
+        "artifact.search": _search_from_companion,
         "artifact.related": _related_from_companion,
     }
 
@@ -90,6 +90,8 @@ class ReadOperationAdapters:
         except _http_exception_type() as exc:
             return _http_exception_outcome(request, exc)
         except (ConnectionError, RuntimeError):
+            return _outcome(request, OperationStatus.DEGRADED_READ, "owner_unavailable")
+        except UnicodeDecodeError:
             return _outcome(request, OperationStatus.DEGRADED_READ, "owner_unavailable")
         except (TypeError, ValueError):
             return _outcome(request, OperationStatus.INVALID, "invalid_arguments")
@@ -226,6 +228,11 @@ def _list_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwn
 
 def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
     from app.api.routes.artifacts import _content_hash, _extract_title, _resolve_and_validate
+    from app.api.routes.companion import (
+        _collect_relation_notes,
+        _resolve_related_scope,
+        _validate_workspace_markdown_note_path,
+    )
 
     target = request.targets[0] if request.targets else request.arguments
     locator = str(target.get("locator") or target.get("note_path") or "")
@@ -234,7 +241,16 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
         return ReadOwnerResult("not_found", warning="artifact locator is required")
     if not stable_id:
         return ReadOwnerResult("not_found", warning="stable artifact identity is required")
-    resolved = _resolve_and_validate(locator, vault_root)
+    safe_locator = _validate_workspace_markdown_note_path(locator)
+    # Bind the caller's immutable identity to the same canonical Companion
+    # artifact that owns this resolved locator.  The artifacts route accepts an
+    # ID merely to echo it, so it cannot establish that invariant itself.
+    _resolve_related_scope(
+        _collect_relation_notes(vault_root),
+        note_path=safe_locator,
+        artifact_uuid=stable_id,
+    )
+    resolved = _resolve_and_validate(safe_locator, vault_root)
     if not resolved.exists() or not resolved.is_file():
         return ReadOwnerResult("not_found", warning="note_not_found")
     body = resolved.read_text(encoding="utf-8")
@@ -243,8 +259,8 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
         (
             {
                 "stable_id": stable_id,
-                "locator": locator,
-                "current_locator": locator,
+                "locator": safe_locator,
+                "current_locator": safe_locator,
                 "title": _extract_title(body, fallback=resolved.stem),
                 "body": body,
                 "version": _content_hash(body),
@@ -256,38 +272,33 @@ def _read_from_artifacts(request: OperationRequest, vault_root: Path) -> ReadOwn
     )
 
 
-def _search_from_retrieval(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
-    from app.retrieval.capability import RetrievalRequest, retrieve
+def _search_from_companion(request: OperationRequest, vault_root: Path) -> ReadOwnerResult:
+    from app.api.routes.companion import _select_vault_notes
 
     query = str(request.arguments.get("query") or "")
     if not query:
         return ReadOwnerResult("not_found", warning="search query is required")
-    response = retrieve(
-        RetrievalRequest(
-            query=query,
-            k=int(request.arguments.get("limit", 10)),
-            scope=request.context.active_context_ref,
-        )
-    )
-    freshness = dict(response.metadata.get("temporal_validity") or {})
+    limit = int(request.arguments.get("limit", 10))
+    if not 1 <= limit <= 1000:
+        return ReadOwnerResult("invalid", warning="limit must be between 1 and 1000")
+    notes, _, _, _, _ = _select_vault_notes(vault_root, query=query, limit=limit)
     items = tuple(
         {
-            "stable_id": hit.doc_id,
-            "locator": hit.source_ref,
-            "current_locator": hit.source_ref,
-            "title": str(hit.payload.get("title") or ""),
-            "provenance": {
-                "owner": "retrieval.capability",
-                "source_ref": hit.source_ref,
-                "metadata": dict(response.metadata.get("provenance") or {}),
-            },
-            "freshness": freshness
-            or {"state": "unknown", "reason": "retrieval projection may lag"},
+            "stable_id": note.uuid,
+            "locator": note.note_path,
+            "current_locator": note.note_path,
+            "title": note.title,
+            "provenance": "companion.vault_browser_search",
+            "freshness": {"state": "source_read"},
             "vault_context": request.context.active_context_ref,
         }
-        for hit in response.hits
-        if hit.doc_id
+        for note in notes
+        if note.uuid
     )
+    if len(items) != len(notes):
+        return ReadOwnerResult(
+            "owner_unavailable", items, "one or more search artifacts lack stable identity"
+        )
     return ReadOwnerResult("succeeded", items)
 
 
@@ -296,16 +307,25 @@ def _related_from_companion(request: OperationRequest, vault_root: Path) -> Read
         _collect_relation_notes,
         _rank_related_notes,
         _resolve_related_scope,
+        _validate_workspace_markdown_note_path,
     )
 
     target = request.targets[0] if request.targets else request.arguments
     limit = int(request.arguments.get("limit", 10))
+    if not 1 <= limit <= 50:
+        return ReadOwnerResult("invalid", warning="limit must be between 1 and 50")
+    note_path = target.get("locator") or target.get("note_path")
+    safe_note_path = (
+        _validate_workspace_markdown_note_path(str(note_path))
+        if note_path is not None
+        else None
+    )
     notes = _collect_relation_notes(vault_root)
     response = _rank_related_notes(
         _resolve_related_scope(
             notes,
-            note_path=target.get("locator") or target.get("note_path"),
-            artifact_uuid=target.get("artifact_id"),
+            note_path=safe_note_path,
+            artifact_uuid=target.get("artifact_id") or target.get("stable_id"),
         ),
         notes,
         limit=limit,
