@@ -9,6 +9,7 @@ from .contracts import (
     OperationRequest,
     OperationStatus,
 )
+from .execution_kernel import InMemoryReceiptStore, JsonReceiptStore, OperationExecutionKernel, OwnerExecutionResult, PolicyDecision
 
 __all__ = [
     "CapabilityAvailability",
@@ -18,4 +19,9 @@ __all__ = [
     "OperationOutcome",
     "OperationRequest",
     "OperationStatus",
+    "InMemoryReceiptStore",
+    "JsonReceiptStore",
+    "OperationExecutionKernel",
+    "OwnerExecutionResult",
+    "PolicyDecision",
 ]
