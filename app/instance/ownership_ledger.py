@@ -1526,6 +1526,8 @@ class OwnershipLedger:
         *,
         key: _KeyMaterial,
     ) -> OwnershipLease:
+        if not owner.vault_binding_id.strip():
+            raise LedgerError("legacy owner binding identity is required")
         if owner.root_identity is None and not owner.ancestor_identities:
             return self._lease_for_root(
                 channel_id=owner.channel_id,
@@ -2042,6 +2044,8 @@ class OwnershipLedger:
         lease: OwnershipLease,
         root: Path,
         key: _KeyMaterial,
+        *,
+        allow_path_ancestors: bool = True,
     ) -> bool:
         """Verify v1 ancestry without trusting a remounted container root."""
 
@@ -2050,17 +2054,21 @@ class OwnershipLedger:
             _fingerprint(item, key.secret)
             for item in _legacy_ancestor_material(root)
         )
-        converged = tuple(
-            _fingerprint(item, key.secret)
-            for item in _identity_material(root)[1]
-        )
+        candidates = [legacy]
+        if allow_path_ancestors:
+            candidates.append(
+                tuple(
+                    _fingerprint(item, key.secret)
+                    for item in _identity_material(root)[1]
+                )
+            )
         if any(
             len(stored) == len(candidate)
             and all(
                 hmac.compare_digest(left, right)
                 for left, right in zip(stored, candidate, strict=True)
             )
-            for candidate in (legacy, converged)
+            for candidate in candidates
         ):
             return True
         portable = _portable_legacy_ancestor_material(root)
@@ -2108,27 +2116,27 @@ class OwnershipLedger:
                 }
                 owner_ancestors = set(owner.ancestor_identities)
                 # The host inventory is authoritative for the current
-                # path-bound ancestry, but it is not enough by itself: a
-                # schema-v1 lease may carry arbitrary HMACs with a valid root
-                # fingerprint.  Require the stored chain to authenticate as
-                # the current v2 path chain, the host-captured v1 chain, or a
-                # locally recomputable complete/portable v1 segment.
-                path_chain_match = self._matches_host_validated_identity(
-                    lease, owner, key
-                )
+                # path-bound ancestry is consistency evidence only. A
+                # schema-v1 lease must authenticate its stored chain as the
+                # host-captured v1 inode chain or a locally recomputable
+                # complete/portable v1 segment; path-only evidence is not a
+                # migration authority.
                 legacy_chain_match = self._matches_host_validated_legacy_ancestors(
                     lease, owner, key
                 )
                 local_chain_match = False
                 try:
                     local_chain_match = self._legacy_ancestor_proof_matches(
-                        lease, resolved, key
+                        lease,
+                        resolved,
+                        key,
+                        allow_path_ancestors=False,
                     )
                 except (FilesystemIdentityError, LedgerError, OSError, ValueError):
                     local_chain_match = False
                 if owner_ancestors != expected_ancestors and not local_chain_match:
                     return False
-                if not (path_chain_match or legacy_chain_match or local_chain_match):
+                if not (legacy_chain_match or local_chain_match):
                     return False
                 return (
                     sealed_root_text == str(resolved)

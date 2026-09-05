@@ -655,6 +655,79 @@ def test_mount_blind_legacy_ancestor_tampering_fails_closed_before_migration(
     assert ledger.path.read_bytes() == before
 
 
+def test_mount_blind_v1_path_only_ancestor_evidence_fails_closed(
+    tmp_path,
+) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
+    secret = base64.b64decode(key_payload["secret"], validate=True)
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["schema"] = ownership_ledger_module.LEGACY_LEDGER_SCHEMA
+    payload["leases"]["binding-existing"]["ancestor_fingerprints"] = [
+        hmac.new(
+            secret,
+            f"path:{ancestor}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        for ancestor in root.resolve(strict=False).parents
+    ]
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    ledger.path.chmod(0o600)
+    before = ledger.path.read_bytes()
+    root_identity = resolve_filesystem_root_identity(root)
+    owner = LegacyOwner(
+        "dev",
+        "binding-existing",
+        root,
+        root_identity=f"inode:{root_identity.device}:{root_identity.inode}",
+        ancestor_identities=tuple(
+            f"path:{ancestor}" for ancestor in root.resolve(strict=False).parents
+        ),
+    )
+    root.rmdir()
+
+    with pytest.raises(LedgerError, match="owner fields are not registry-authenticated"):
+        ledger.require_registry_consistency(
+            channel_id="dev",
+            registrations={"binding-existing": None},
+            tombstones={},
+            transfer_lineage=(),
+            global_live_owners=(owner,),
+            require_materialized_roots=False,
+        )
+
+    assert ledger.path.read_bytes() == before
+
+
+def test_fresh_legacy_bootstrap_rejects_missing_binding_before_write(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    ledger = OwnershipLedger(ownership_root)
+    ledger.load()
+    before = ledger.path.read_bytes()
+
+    with pytest.raises(LedgerError, match="binding identity is required"):
+        ledger.bootstrap_legacy_owners(
+            [LegacyOwner("prod", "", tmp_path / "foreign-vault")],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert ledger.path.read_bytes() == before
+
+
 def test_v1_schema_accepts_an_already_converged_ancestor_representation(tmp_path) -> None:
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)

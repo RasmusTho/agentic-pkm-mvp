@@ -2833,6 +2833,10 @@ def _prepare_legacy_registry_for_mvr05_floor(
         quiescence_proof=bound_proof,
     )
     established = ledger.require_existing()
+    if any(not owner.vault_binding_id.strip() for owner in owners):
+        raise InstanceStatePreflightError(
+            "legacy-owner inventory contains an owner without an authenticated binding identity"
+        )
     if not established.legacy_bootstrap_complete:
         ledger.bootstrap_legacy_owners(
             owners,
