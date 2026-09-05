@@ -2658,6 +2658,60 @@ def _load_legacy_owner_inventory(
     return owners
 
 
+def _converge_authenticated_legacy_ledger(
+    *,
+    channel: str,
+    registry: RegistrySnapshot,
+    ledger: OwnershipLedger,
+    owners: tuple[LegacyOwner, ...],
+) -> LedgerSnapshot:
+    """Converge a schema-v1 ledger only through its authenticated inventory seam."""
+
+    try:
+        resolved_owners = ledger.resolve_live_owner_bindings(
+            owners,
+            allow_legacy=True,
+        )
+    except LedgerError as exc:
+        raise InstanceStatePreflightError(
+            f"registry/ledger consistency verification failed: {exc}"
+        ) from exc
+    registrations = {binding_id: None for binding_id in registry.registrations}
+    if registry.revision == 0:
+        # A dormant registry has no registrations to compare, but it is not a
+        # second authority: the complete host-validated inventory supplies the
+        # exact existing bindings solely for the ledger authentication check.
+        registrations.update(
+            {
+                owner.vault_binding_id: None
+                for owner in resolved_owners
+                if owner.channel_id == channel
+            }
+        )
+    try:
+        return ledger.require_registry_consistency(
+            channel_id=channel,
+            registrations=registrations,
+            tombstones={binding_id: None for binding_id in registry.removal_tombstones},
+            transfer_lineage=tuple(
+                {
+                    "ownership_transfer_id": item.ownership_transfer_id,
+                    "source_channel_id": item.source_channel_id,
+                    "source_binding_id": item.source_binding_id,
+                    "destination_channel_id": item.destination_channel_id,
+                    "destination_binding_id": item.destination_binding_id,
+                }
+                for item in registry.transfer_lineage
+            ),
+            global_live_owners=resolved_owners,
+            require_materialized_roots=False,
+        )
+    except LedgerError as exc:
+        raise InstanceStatePreflightError(
+            f"registry/ledger consistency verification failed: {exc}"
+        ) from exc
+
+
 def _finish_instance_state_deployment(
     *,
     channel: str,
@@ -4063,6 +4117,7 @@ def main(argv: list[str] | None = None) -> int:
     mvr05_floor.add_argument("--channel", required=True)
     mvr05_floor.add_argument("--registry-path", type=Path, required=True)
     mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
+    mvr05_floor.add_argument("--inventory-path", type=Path, required=True)
     mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
     mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
     rebind_install = subparsers.add_parser("settings-rebind-install-dormant")
@@ -4190,7 +4245,31 @@ def main(argv: list[str] | None = None) -> int:
                 # paired protected authority artifacts. Established registries
                 # stay fail-closed and require the explicit recovery path.
                 if registry.load().revision == 0:
-                    ledger.load()
+                    try:
+                        ledger.load()
+                    except LedgerError:
+                        if not ledger.path.is_file() or not ledger.key_path.is_file():
+                            raise
+                        proof = _bind_legacy_owner_inventory_to_proof(
+                            inventory_path=args.inventory_path,
+                            quiescence_proof=_load_deployment_quiescence_proof(
+                                args.quiescence_proof_path
+                            ),
+                            channel=args.channel,
+                            host_global_root=args.host_global_root,
+                        )
+                        owners = _load_legacy_owner_inventory(
+                            args.inventory_path,
+                            registry=registry.load(),
+                            channel=args.channel,
+                            quiescence_proof=proof,
+                        )
+                        _converge_authenticated_legacy_ledger(
+                            channel=args.channel,
+                            registry=registry.load(),
+                            ledger=ledger,
+                            owners=tuple(owners),
+                        )
                 else:
                     ledger.require_existing()
                 result = record_mvr05_runtime_floor(

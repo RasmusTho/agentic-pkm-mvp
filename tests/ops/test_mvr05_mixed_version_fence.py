@@ -145,6 +145,8 @@ def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
             str(registry_path),
             "--host-global-root",
             str(host_global_root),
+            "--inventory-path",
+            str(host_global_root / "legacy-owner-inventory.json"),
             "--quiescence-proof-path",
             str(proof_path),
             "--fence-plan",
@@ -240,6 +242,63 @@ def test_floor_producer_preserves_established_ledger_identity(tmp_path, monkeypa
     after = OwnershipLedger(host_global_root).require_existing()
     assert (after.key_id, after.generation) == (before.key_id, before.generation)
     assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+def test_established_legacy_ledger_converges_before_mvr05_floor(tmp_path) -> None:
+    """A dormant registry must not strand an authenticated v1 host ledger."""
+
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    foreign_root = tmp_path / "foreign-vault"
+    foreign_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.reserve(
+        channel_id="prod",
+        vault_binding_id="binding-foreign",
+        root=foreign_root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-foreign", _capability=STORAGE_MUTATION_CAPABILITY)
+    _rewrite_ledger_as_authenticated_v1(ledger, root, foreign_root)
+    registry = VaultRegistryStore(tmp_path / "instance" / "vault-registry.md").load()
+
+    def host_owner(channel: str, owner_root: Path) -> LegacyOwner:
+        root_identity = resolve_filesystem_root_identity(owner_root)
+        ancestor_identities = tuple(
+            f"inode:{identity.device}:{identity.inode}"
+            for ancestor in owner_root.resolve().parents
+            for identity in (resolve_filesystem_root_identity(ancestor),)
+        )
+        return LegacyOwner(
+            channel,
+            "",
+            owner_root,
+            root_identity=f"inode:{root_identity.device}:{root_identity.inode}",
+            ancestor_identities=ancestor_identities,
+        )
+
+    migrated = runtime_module._converge_authenticated_legacy_ledger(
+        channel="dev",
+        registry=registry,
+        ledger=ledger,
+        owners=(
+            host_owner("dev", root),
+            host_owner("prod", foreign_root),
+        ),
+    )
+
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert ledger.require_existing().legacy_bootstrap_complete
+    assert set(migrated.leases) == {"binding-existing", "binding-foreign"}
 
 
 def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_path) -> None:

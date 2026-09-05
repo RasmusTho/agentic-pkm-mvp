@@ -307,6 +307,7 @@ class OwnershipLedger:
         owners: Sequence[LegacyOwner],
         *,
         skip_unadopted: bool = False,
+        allow_legacy: bool = False,
     ) -> tuple[LegacyOwner, ...]:
         """Fill omitted owner binding IDs from the authenticated live ledger.
 
@@ -321,12 +322,22 @@ class OwnershipLedger:
         — there the verifier can adjudicate, and a missing lease is
         indistinguishable from a ledger that lost one. An ambiguous match
         always fails.
+
+        ``allow_legacy`` is reserved for the fenced deployment convergence
+        seam. It permits reading schema-v1 only so the caller can immediately
+        authenticate and persist the current schema through
+        :meth:`require_registry_consistency`; ordinary consumers retain the
+        fail-closed schema-v2-only default.
         """
 
         self._assert_existing_artifacts()
         with self._locked():
             key = self._load_or_create_key_locked(allow_create=False)
-            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            current = self._load_or_create_ledger_locked(
+                key,
+                allow_create=False,
+                allow_legacy=allow_legacy,
+            )
             resolved: list[LegacyOwner] = []
             for owner in owners:
                 if owner.vault_binding_id:
