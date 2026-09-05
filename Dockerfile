@@ -120,10 +120,12 @@ COPY docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md ./docs/EPISODE_RESOLUTION
 COPY companion-ui/companion-app/ ./companion-ui/companion-app/
 COPY alembic.ini ./
 COPY scripts/start_api.sh scripts/run_migrations.sh \
+     scripts/prepare_instance_state_permissions.sh \
      scripts/__init__.py scripts/yaml_roundtrip.py \
      scripts/validate_issue_readiness.py scripts/validate_source_anchors.py \
      ./scripts/
-RUN chmod +x scripts/start_api.sh scripts/run_migrations.sh
+RUN chmod +x scripts/start_api.sh scripts/run_migrations.sh \
+    scripts/prepare_instance_state_permissions.sh
 
 # Pre-create the runtime scratch dir with open perms so the container can create
 # it even when run under host-uid remapping (compose `user: ${LOCAL_UID}:${LOCAL_GID}`
