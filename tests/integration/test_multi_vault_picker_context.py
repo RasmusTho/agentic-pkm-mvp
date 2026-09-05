@@ -149,6 +149,11 @@ def test_unregistered_picker_path_stops_before_manager_or_filesystem_resolution(
             raise AssertionError("unregistered request path reached vault manager")
 
     monkeypatch.setattr(companion, "get_vault_manager", lambda: _Manager())
+    symlink_alias = tmp_path / "symlink-a"
+    try:
+        symlink_alias.symlink_to(vault_a, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink aliases are unavailable on this platform: {exc}")
     aliases = (
         str(tmp_path / "../unregistered"),
         str(vault_a.parent / "a/../a"),
@@ -156,6 +161,7 @@ def test_unregistered_picker_path_stops_before_manager_or_filesystem_resolution(
         f"{vault_a.parent}/./a",
         "~/a",
         str(vault_a).upper(),
+        str(symlink_alias),
     )
     for alias in aliases:
         with pytest.raises(HTTPException, match="active_context_binding_unresolved"):
