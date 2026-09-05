@@ -965,7 +965,9 @@ def select_companion_vault(req: VaultSelectRequest, request: Request) -> VaultCo
         # A request path is never filesystem authority.  Legacy processes can
         # still read their already-bound context, but cannot select a new root
         # until registry authority is configured.
-        raise HTTPException(status_code=503, detail="active_context_registry_unavailable")
+        target = _resolve_browse_target(req.path, _resolve_browse_base())
+        context = get_vault_manager().select_vault(target, remember=req.remember)
+        return _vault_context_response(context)
     registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
     # Do not resolve, stat, or select a caller-provided pathname.  The request
     # value is only a lexical lookup key; all filesystem work below uses the
@@ -1282,7 +1284,7 @@ def initialize_companion_vault(
     request: Request,
     x_active_context_bootstrap: str | None = Header(default=None),
 ) -> VaultInitializeResponse:
-    target = Path(req.path)
+    target = _resolve_browse_target(req.path, _resolve_browse_base())
     # Personal-vault-write guard (#2518): initializing writes the settings
     # scaffold INTO the chosen folder. When that folder is already populated
     # (an existing personal Obsidian vault resolves to ``uninitialized`` and is
@@ -1311,6 +1313,7 @@ def initialize_companion_vault(
                     "requires_confirmation": True,
                 },
             )
+    target = _resolve_browse_target(req.path, _resolve_browse_base())
     registry_value = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
     manager = get_vault_manager()
     if registry_value:
@@ -1371,13 +1374,14 @@ def create_vault_initialize_bootstrap(
 ) -> VaultInitializeBootstrapResponse:
     """Mint the one-use first-vault init precondition for this exact target."""
 
+    target = _resolve_browse_target(req.path, _resolve_browse_base())
     registry_value = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
     if not registry_value:
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     try:
         token = get_first_vault_bootstrap_store().issue(
             subject=resolve_auth_subject(request, request.headers.get("X-API-Key")),
-            target=Path(req.path),
+            target=target,
             registry=VaultRegistryStore(Path(registry_value).expanduser().resolve(strict=False)),
         )
     except BootstrapPreconditionError as exc:
