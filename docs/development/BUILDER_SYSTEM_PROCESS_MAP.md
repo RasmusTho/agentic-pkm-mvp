@@ -1016,7 +1016,9 @@ second mutable receipt copy. The consumer validates the canonical primary-to-fal
 and the final attempt outcome, and the runtime terminalizes and reads back the verification cycle
 before recording the observation. Cross-repository, non-canonical, non-delivery-eligible, or
 pre-terminalization evidence remains non-accepted or fails closed; this evidence-only repair adds
-no lifecycle, merge, closure, or Product/Runtime authority.
+no lifecycle, merge, closure, or Product/Runtime authority. The canary request/run identity uses one
+shared derivation across the API and SQLite dispatcher consumers, so a bound request cannot be
+accepted under a different durable run id.
 
 ```mermaid
 flowchart TD

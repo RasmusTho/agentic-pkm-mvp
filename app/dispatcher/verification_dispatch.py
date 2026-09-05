@@ -15,7 +15,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence, TypeGuard
 
 from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS
-from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    verification_run_id_for_canary,
+)
 from app.dispatcher.store import (
     SqliteStore,
     recognized_ambiguous_v1_closure_request,
@@ -593,7 +596,7 @@ def _validate_canary_identity(
         or value.get("pr_number") != pr_number
         or value.get("head_sha") != head_sha
         or value.get("verification_run_id")
-        != f"vrun-{hashlib.sha256(_json([repository.casefold(), pr_number, 'verification']).encode()).hexdigest()[:16]}"
+        != verification_run_id_for_canary(repository, pr_number, "verification")
         or not isinstance(value.get("route_lineage_id"), str)
         or not value.get("route_lineage_id")
         or not isinstance(value.get("route_decision_id"), str)
@@ -813,12 +816,22 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     request = _validated_stored_request(row["request_json"])
     idempotency_key = request["idempotency_key"]
     assert isinstance(idempotency_key, str)
+    expected_run_id = (
+        verification_run_id_for_canary(
+            str(request["repository"]),
+            _required_positive_int(request, "pr_number"),
+            _required_string(request, "stage"),
+        )
+        if request.get("contract_version") == CONTRACT_VERSION
+        and "canary_identity" in request
+        else f"vrun-{idempotency_key[:16]}"
+    )
     legacy_recovery_audit = _validated_legacy_recovery_audit(row)
     current_head_sha = row["current_head_sha"]
     verified_head_sha = row["verified_head_sha"]
     if (
         (
-            row["run_id"] != f"vrun-{idempotency_key[:16]}"
+            row["run_id"] != expected_run_id
             and legacy_recovery_audit is None
         )
         or row["idempotency_key"] != request["idempotency_key"]
@@ -2301,7 +2314,16 @@ class VerificationDispatchLedger:
         request = _canonical_request_projection(request)
         _validate_request(request)
         now = _now()
-        run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
+        run_id = (
+            verification_run_id_for_canary(
+                str(request["repository"]),
+                _required_positive_int(request, "pr_number"),
+                _required_string(request, "stage"),
+            )
+            if request.get("contract_version") == CONTRACT_VERSION
+            and "canary_identity" in request
+            else f"vrun-{str(request['idempotency_key'])[:16]}"
+        )
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
             inert_audits = list(conn.execute(

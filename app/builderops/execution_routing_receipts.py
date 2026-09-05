@@ -19,6 +19,7 @@ from app.builderops.execution_routing import (
     ExecutionRouteRequest,
 )
 from app.builderops.models import BuilderOpsValidationError, utc_now
+from app.dispatcher.verification_contract import verification_run_id_for_canary
 
 CHAIN_VERSION = "builder_execution_routing_canary_chain.v1"
 _EVENT_TYPE = "execution_routing_canary"
@@ -1094,6 +1095,7 @@ def _canary_identity(
         raise CanaryReceiptEvidenceError(
             "canary receipt does not match verification request identity"
         )
+    assert stage == "verification"
     identity_attempts = [
         {
             key: attempt[key]
@@ -1107,8 +1109,8 @@ def _canary_identity(
         "issue_number": issue_number,
         "pr_number": pr_number,
         "head_sha": head_sha,
-        "verification_run_id": (
-            f"vrun-{canonical_hash([repository, pr_number, stage])[:16]}"
+        "verification_run_id": verification_run_id_for_canary(
+            repository, pr_number, "verification"
         ),
         "route_lineage_id": lineage,
         "route_decision_id": decision_id,
