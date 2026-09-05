@@ -1006,6 +1006,14 @@ general-delivery default, configured capability ladder, independent review, exac
 owner-doc, merge, or closure gates. Any sample widening, active-policy change, or default
 promotion remains separately governed work.
 
+The accepted-delivery observation is valid only when the originating repository is carried through
+the canary candidate, durable intent/outcome, and the verification request, with the exact PR/head
+and runtime identity. The consumer validates the canonical primary-to-fallback attempt order and
+the final attempt outcome, and the runtime terminalizes and reads back the verification cycle before
+recording the observation. Cross-repository, non-canonical, non-delivery-eligible, or
+pre-terminalization evidence remains non-accepted or fails closed; this evidence-only repair adds
+no lifecycle, merge, closure, or Product/Runtime authority.
+
 ```mermaid
 flowchart TD
   Issue["GitHub Issue"] --> Shape{"Contract + Verify valid?"}
