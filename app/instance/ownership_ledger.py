@@ -1943,10 +1943,17 @@ class OwnershipLedger:
         # opaque compatibility data and must not be used to require the old
         # namespace's parent count.
         identity = resolve_filesystem_root_identity(resolved)
-        if not identity.materialized:
-            raise ValueError
         primary, ancestors = _identity_material(resolved)
-        if not hmac.compare_digest(root_fingerprint, _fingerprint(primary, key.secret)):
+        if identity.materialized:
+            if not hmac.compare_digest(root_fingerprint, _fingerprint(primary, key.secret)):
+                raise ValueError
+        elif require_complete_legacy_chain:
+            # A complete v1 ancestry proof is namespace-bound.  The fenced
+            # deployment path deliberately uses the portable, already
+            # authenticated owner evidence below with
+            # ``require_complete_legacy_chain=False``; it must not attempt to
+            # materialize a selected-vault mount just to derive path-bound v2
+            # parent fingerprints.
             raise ValueError
         converged_fingerprints = tuple(
             _fingerprint(item, key.secret) for item in ancestors

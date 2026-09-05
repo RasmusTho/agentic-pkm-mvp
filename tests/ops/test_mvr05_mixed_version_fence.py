@@ -161,13 +161,17 @@ def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
 def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
     identities = []
     for owner in owners:
-        metadata = os.stat(owner["root"])
+        identity = resolve_filesystem_root_identity(owner["root"])
         identities.append(
             {
                 "channel_id": owner["channel_id"],
                 "root": owner["root"],
-                "identity": f"inode:{metadata.st_dev}:{metadata.st_ino}",
-                "ancestor_identities": sorted(
+                "identity": (
+                    f"inode:{identity.device}:{identity.inode}"
+                    if identity.materialized
+                    else f"path:{identity.canonical_path}"
+                ),
+                "ancestor_identities": [
                     (
                         f"inode:{identity.device}:{identity.inode}"
                         if identity.materialized
@@ -175,7 +179,7 @@ def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
                     )
                     for ancestor in Path(owner["root"]).resolve().parents
                     for identity in (resolve_filesystem_root_identity(ancestor),)
-                ),
+                ],
             }
         )
     source_evidence = {
@@ -352,9 +356,7 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)
     dev_root = tmp_path / "existing-vault"
-    dev_root.mkdir()
     prod_root = tmp_path / "foreign-vault"
-    prod_root.mkdir()
     ledger = OwnershipLedger(ownership_root)
     for channel, binding_id, root in (
         ("dev", "binding-existing", dev_root),
@@ -436,8 +438,6 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(runtime_module, "_require_proved_deployment_lease", lambda **_: None)
-
     assert (
         runtime_module.main(
             [
