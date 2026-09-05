@@ -122,7 +122,7 @@ Before any physical deploy step, resolve the target channel's deployment model:
 13. Reads and records the deploy receipt at `ops/deployments/prod-latest.json`, including the deployed SHA and health/smoke outcome.
 
 14. Appends the promotion execution receipt to the plan file: timestamp, operator, deployment model, merged PR URL or deploy receipt path, which ref/SHA was authorized, which migrations applied, and process recreate/restart confirmation.
-15. Reports to the operator: "Promotion executed. Run verify-promotion to confirm health."
+15. Invokes `verify-promotion` with the plan, then reports the verified acceptance or governed recovery result.
 
 ## Pre-conditions
 
@@ -186,3 +186,10 @@ verify-promotion
 - Produced by: `prepare-promotion`
 - On success → `verify-promotion`
 - On failure → `rollback-promotion`
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After execution, invoke
+`verify-promotion` with the plan and retain ownership through its acceptance receipt or governed
+recovery. On failure invoke `rollback-promotion` within the existing rollback authority and
+migration gates; never leave successful execution unverified.

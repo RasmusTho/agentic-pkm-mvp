@@ -104,7 +104,7 @@ Before rollback, resolve the prod channel's deployment model:
    URL, `stable-prev` rollback target, failed promotion checkout used for migration
    reversal when applicable, merged `origin/stable` rollback commit or deploy receipt path, which migrations were reversed,
    which were skipped (forward-only), process restart confirmation.
-14. Reports to the operator: "Rollback complete. Run verify-promotion."
+14. Invokes `verify-promotion` with the plan, then reports verified recovery or the required operator triage.
 
 ## Pre-conditions
 
@@ -166,3 +166,10 @@ The operator must have acknowledged these limits at promotion time via the opera
 - Called after: `execute-promotion` failure, or `verify-promotion` FAIL post-promotion
 - After completion → always call `verify-promotion`
 - If verify fails after rollback → escalate to operator; do not loop
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After rollback, invoke `verify-promotion`
+with the plan and return its verified result to the caller. A failed migration reversal or failed
+verification retains the operator triage gate; continuation never permits a second automated
+rollback or reversal of forward-only migrations.

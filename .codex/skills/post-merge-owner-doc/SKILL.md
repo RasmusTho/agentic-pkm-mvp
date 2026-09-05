@@ -62,7 +62,7 @@ Classify the claim into one of three lanes: immediate action, queued follow-up, 
 
 **1. Yes, and the wording change is clear. Immediate action.**
 
-Open a docs-only PR via `docs-authoring` that updates the owner doc(s). Title: `docs: owner-doc promotion for #<closed-issue>`. Body links back to the closed issue and names the specific claim(s) being corrected. On every required receipt target, add: `post-merge owner-doc check: PR #<PR>; docs PR opened at #<docs-pr>`.
+Execute `docs-authoring` to correct the owner doc(s), then its publication and closure chain. Title: `docs: owner-doc promotion for #<closed-issue>`. Body links back to the closed issue and names the specific claim(s) being corrected. On every required receipt target, record the docs PR link and observed merge SHA. An opened PR is interim evidence only; if stop-loss prevents its merge, record the exact blocker instead of claiming the correction is complete.
 
 **2. Yes, but the right wording needs human judgment. Queue a follow-up.**
 
@@ -112,7 +112,7 @@ work with `Verify:` targets.
 
 - You write owner-doc PRs through `docs-authoring`. You do not write code.
 - You file follow-up issues following the canonical issue contract (`.codex/skills/_shared/ISSUE_CONTRACT.md`), with `Verify:` markers on every AC.
-- You do not add `agent:needs-human`. Follow-up issues are `agent:ready` when the wording is bounded; otherwise they stay `Backlog` with no agent label and wait for the user's next pass.
+- You do not add `agent:needs-human` yourself. Execute bounded authorized corrections now; invoke `owner-decision-brief` for genuine unresolved wording or authority decisions and let the owning lifecycle workflow record any resulting blocker. Do not defer executable corrections to the user's next pass.
 
 ## Backfill mode
 
@@ -124,7 +124,7 @@ When invoked against a batch of recent closed issues (not a single just-merged P
 - Do not ask the user to classify the merge or approve the check.
 - Do not edit owner docs in-place as part of this skill; always route through a docs-only PR.
 - Do not touch plan docs, spec directories, or target-state docs.
-- Do not block anything. Your only outputs are: a docs PR, a follow-up issue, or a receipt comment.
+- Do not retroactively invalidate a verified implementation merge for optional future work. Complete required correction PRs through closure, or record their stop-loss; return the PR-specific result to the calling verification workflow.
 
 
 ## Capturing learning
@@ -136,3 +136,14 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 One receipt line per invocation, printed to the orchestrator:
 
 - `POST-MERGE OWNER-DOC RECEIPT: PR #<n> targets #<m>[, #<parent>]. Outcome: docs-pr #<p> | follow-up #<f> | no-change. Evidence: <one-sentence justification>.`
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+For a clear correction, execute `docs-authoring` and its publication/verification/closure chain,
+then read back the merged correction and update the original PR-specific receipt targets. Return to
+the suspended closure caller. A docs correction PR gets its own owner-doc assessment; if no further
+claim changes are implied, record that result and return, rather than reopening the original
+assessment recursively. A genuine wording/authority decision uses `owner-decision-brief`; a bounded
+ready correction must not wait for a future human pass.

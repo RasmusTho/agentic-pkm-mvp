@@ -143,3 +143,10 @@ When updating, also report:
 ## Capturing learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. For authorized document corrections,
+invoke `docs-authoring` and follow publication through closure. For operational records or
+projections, verify the recorded result and resume the caller. Audit-only scope returns the
+freshness findings without inventing writeback authority.

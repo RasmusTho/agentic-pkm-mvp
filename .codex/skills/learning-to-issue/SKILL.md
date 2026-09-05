@@ -176,3 +176,10 @@ DELIVERY RECEIPT: Issue #N delivered by PR #M. Merge commit: <sha>. CI: passed. 
 ## Capturing learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After verifying issue receipts, invoke
+`issue-to-code` for ready repair in delivery scope, or `deliver-issue-set` for the authorized set.
+Invoke `issue-maintenance-change-control` if readiness needs repair. Intake-only scope returns the
+canonical issue references to its caller.

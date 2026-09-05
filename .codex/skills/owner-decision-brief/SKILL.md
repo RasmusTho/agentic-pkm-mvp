@@ -135,3 +135,11 @@ waiting on that decision. Never block unrelated reversible work while waiting.
 
 After the decision, use the repo-local skill's activation handoff and route any longer-lived execution
 to the existing domain or delivery workflow. Do not track it here.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. When evidence establishes an agent-owned
+action, return to the owning workflow and execute it. When a real owner decision remains, present
+the concrete brief and preserve that gate; after the answer, resume the same workflow with its
+authority and evidence. Do not replace operator gates with inferred approval or turn ordinary
+technical recovery into an owner question.

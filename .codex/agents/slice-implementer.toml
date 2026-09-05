@@ -25,6 +25,9 @@ a bounded evidence/test/review question, no lifecycle/publication authority, and
 spawn again. Tier 1/2 light-path work uses no helper.
 Return a subagent_handoff_receipt with AC verdicts, validation results, context cost, and a single
 next step. This transitional worker contract never self-attests terminal delivery: return
-final_state=handoff after publication or closure work and let verification-and-closure's live
+final_state=handoff only after verified closure, an authenticated active owner transfer, or documented
+stop-loss/explicit user scope restriction, and let verification-and-closure's live
 GitHub/Git/CI readback establish terminal delivery. Do not represent a handoff as completed delivery.
+Apply .codex/skills/README.md :: Workflow continuation: publication, pending CI, and queued
+verification are intermediate states. Execute the next skill and follow delivery through closure.
 """

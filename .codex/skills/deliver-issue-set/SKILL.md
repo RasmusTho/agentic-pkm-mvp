@@ -506,3 +506,14 @@ mutated.
 ## Capturing Learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+In delivery mode, require each issue owner to execute publication, conditional integration, and
+`verification-and-closure`. Resume a worker that returns only a published PR, pending checks, or a
+verification queue entry; do not treat its handoff as delivery. Follow any required executor to
+reconciled delivery or documented stop-loss before relinquishing ownership. Continue other
+independent authorized work when one slice is blocked; plan-only mode ends at its requested verified
+plan.

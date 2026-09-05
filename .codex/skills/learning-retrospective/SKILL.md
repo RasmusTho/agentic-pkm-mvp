@@ -25,7 +25,9 @@ pressure, or a terminal receipt too weak to avoid reopening raw worker context.
 pre-BuilderOps entries or explicit compatibility fallback entries that are not yet represented as
 `LearningSignal` records.
 
-Default mode is proposal-only: do not execute edits unless the human explicitly asks the agent to handle the retro, apply safe workflow fixes, or create Issues for unresolved work.
+Select mode from the task: a request to handle the retro or improve the workflow authorizes
+autonomous maintenance within its scope; an explicit review/proposal-only request produces
+proposals. Do not require a second acceptance step for already-authorized safe repairs.
 
 ## Trigger
 
@@ -111,7 +113,8 @@ Output all proposals clearly. State:
 - How many clusters were formed
 - How many proposals are being made
 
-Wait for human response (which proposals to accept, which to reject).
+In proposal-only mode, return the proposals for human review. In authorized autonomous maintenance
+mode, continue directly to Step 5; do not request approval already supplied by the task.
 
 ### Step 5: Autonomous maintenance mode
 
@@ -147,7 +150,8 @@ If `complete` is false, do not record a retrospective completion receipt. Resolv
 Issue, staging a PromotionIntent, recording debt/fitness, or discarding/superseding it with a
 receipt.
 
-After human responds and every in-scope signal has a terminal outcome, append a BuilderOps receipt
+After the required proposal decision, or autonomous maintenance disposition, and once every
+in-scope signal has a terminal outcome, append a BuilderOps receipt
 targeting the processed LearningSignals (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`).
 Use the ledger's `receipt_body` or equivalent text so the receipt names the processed signal IDs and
 their outcomes:
@@ -173,8 +177,8 @@ Append the old `--- retro YYYY-MM-DD: applied N/M proposals ---` marker to `docs
 only when the retrospective processed historical compatibility entries from that file.
 
 In autonomous maintenance mode, N = entries with terminal outcomes and M = entries considered.
-Accepted proposals should be committed as governance-lane PRs — either by the human or a follow-up
-agent run using the `publish-pr` skill.
+In an authorized maintenance task, invoke `publish-pr` for accepted governance changes and follow
+its verification and closure chain before reporting those changes delivered.
 
 ## Success signal
 
@@ -192,3 +196,11 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 2. Clusters formed (upstream artifact → entry count)
 3. Proposals or autonomous actions (numbered, concrete, with artifact path and exact edit text or Issue receipt); when a cluster shows a task class was under/over-modeled, used the wrong context topology, or had the wrong review/verification depth, include a `tcd_retrospective` block using `docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Output blocks` and route its `routing_policy_update_recommendation` as a concrete proposed `AGENTS.md` or TCD-reference edit through the Step 3 proposal mechanic.
 4. BuilderOps retrospective receipt, plus historical compatibility marker only if `docs/learning-log.md` entries were processed
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. In autonomous maintenance mode, invoke
+`publish-pr` for applied governance changes and `learning-to-issue` for bounded unresolved repairs,
+following authorized delivery through closure. Proposal-only scope returns proposals; accepted
+proposals in an active maintenance task are executed in that task, not deferred to another agent
+run.
