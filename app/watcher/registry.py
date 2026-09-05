@@ -143,31 +143,38 @@ def _scan_markdown_many(
     if summary is None:
         summary = {}
     seen: set[Path] = set()
-    for scan_root in scan_roots:
-        for path in iter_vault_markdown_files(
-            vault_root, subtree_root=scan_root, include_settings=True
+
+    def _iter_paths() -> Iterable[Path]:
+        for scan_root in scan_roots:
+            try:
+                yield from iter_vault_markdown_files(
+                    vault_root, subtree_root=scan_root, include_settings=True
+                )
+            except OSError:
+                _mark_scan_incomplete(summary, reason="traversal")
+
+    for path in _iter_paths():
+        try:
+            rel = path.relative_to(vault_root)
+        except Exception:
+            _mark_scan_incomplete(summary, reason="relative_path")
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        # Settings sources are a runtime control surface, not ordinary
+        # watcher content.  Always include them even when a user narrows
+        # the note scope, otherwise an edit silently cannot take effect.
+        if rel in seen or (
+            not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel)
         ):
-            try:
-                rel = path.relative_to(vault_root)
-            except Exception:
-                _mark_scan_incomplete(summary, reason="relative_path")
-                continue
-            if any(part.startswith(".") for part in rel.parts):
-                continue
-            # Settings sources are a runtime control surface, not ordinary
-            # watcher content.  Always include them even when a user narrows
-            # the note scope, otherwise an edit silently cannot take effect.
-            if rel in seen or (
-                not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel)
-            ):
-                continue
-            try:
-                mtime = path.stat().st_mtime
-            except Exception:
-                _mark_scan_incomplete(summary, reason="stat")
-                continue
-            seen.add(rel)
-            yield rel, mtime, path
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            _mark_scan_incomplete(summary, reason="stat")
+            continue
+        seen.add(rel)
+        yield rel, mtime, path
 
 
 def _mark_scan_incomplete(

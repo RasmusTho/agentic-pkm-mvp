@@ -355,6 +355,7 @@ Watcher auto-exec enablement rule:
 - Registry checkpoint JSON stays bounded to cursor/counter metadata. Per-file observations are stored in an adjacent SQLite sidecar under `WATCHER_STATE_DIR`; deletion reconciliation and stale observation pruning run only after a clean full scan generation drains.
 
 ### Watcher caveats
+- No-vault startup stops the existing watcher before recording `no_lifecycle` and fails without acknowledgement if stop fails. Traversal errors prevent rebind acknowledgement; a durable `drained` receipt remains non-terminal until a fresh resumed old-root scan succeeds and its observations are receipted.
 - The registry watcher remains polling-based; each observation generation walks the configured scope incrementally across bounded ticks. No OS file-event hooks are used.
 - Paths with spaces are supported; wrap vault paths in quotes.
 - When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
