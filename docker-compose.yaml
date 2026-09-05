@@ -134,9 +134,8 @@ services:
       - /bin/bash
       - -c
       - >-
-        test -d /app/instance-state -a -d /app/instance-ownership &&
-        chown -R "$${LOCAL_UID}:$${LOCAL_GID}" /app/instance-state /app/instance-ownership &&
-        chmod 0700 /app/instance-state /app/instance-ownership
+        bash /app/scripts/prepare_instance_state_permissions.sh
+        /app/instance-state /app/instance-ownership
     environment:
       LOCAL_UID: ${LOCAL_UID:-0}
       LOCAL_GID: ${LOCAL_GID:-0}
