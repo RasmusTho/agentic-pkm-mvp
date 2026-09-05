@@ -2313,7 +2313,7 @@ class VaultRegistryStore:
         raw_rebind = copy.deepcopy(frontmatter.get(rebind_key)) if rebind_key else None
         if raw_rebind is not None and not isinstance(raw_rebind, dict):
             raise RegistryMigrationError("settings_rebind.v1 must be a mapping")
-        binding_by_ref: dict[str, str] = {}
+        provisional_by_ref: dict[str, str] = {}
         rewritten_rebind = copy.deepcopy(raw_rebind)
         if rewritten_rebind is not None:
             for key in ("prior", "candidate", "applied"):
@@ -2326,17 +2326,21 @@ class VaultRegistryStore:
                 if binding_id is None:
                     raise RegistryMigrationError(f"settings rebind {key} has no provisional vaultBindingId")
                 matched_ref = _resolve_legacy_reference(value, candidates, aliases)
-                previous = binding_by_ref.get(matched_ref)
+                previous = provisional_by_ref.get(matched_ref)
                 if previous is not None and previous != binding_id:
                     raise RegistryMigrationError("conflicting provisional binding identities")
-                if binding_id in binding_by_ref.values() and previous != binding_id:
+                if binding_id in provisional_by_ref.values() and previous != binding_id:
                     raise RegistryMigrationError("one provisional binding identity matches multiple registrations")
-                binding_by_ref[matched_ref] = binding_id
+                provisional_by_ref[matched_ref] = binding_id
                 value["ref"] = matched_ref
-                value["vaultBindingId"] = binding_id
+                value["vaultBindingId"] = resolved_bindings.get(matched_ref) or binding_id
         registrations: dict[str, VaultRegistration] = {}
         for ref, raw in candidates.items():
-            binding_id = resolved_bindings.get(ref) or f"binding-{uuid4()}"
+            binding_id = (
+                resolved_bindings.get(ref)
+                or provisional_by_ref.get(ref)
+                or f"binding-{uuid4()}"
+            )
             if binding_id in registrations:
                 raise RegistryMigrationError(f"duplicate vault_binding_id during migration: {binding_id}")
             registrations[binding_id] = VaultRegistration(

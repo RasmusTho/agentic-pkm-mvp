@@ -474,12 +474,12 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 2893): (
+    ("app/instance/vault_registry.py", 2930): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
         "plane Sigma (formal-model.md sec 2.3), not a Human Knowledge Artifact. "
-        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2330 -> 2357 -> 2496 -> 2503 -> 2745 -> 2838 -> 2893 "
+        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2330 -> 2357 -> 2496 -> 2503 -> 2745 -> 2838 -> 2893 -> 2926 -> 2930 "
         "(site unchanged); re-pinned after directly related SETTINGS-05A (#4967) inserted "
         "the durable dormant-rebind schema and producers earlier in vault_registry.py. "
         "SETTINGS-05A adds no new "
