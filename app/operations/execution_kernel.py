@@ -46,6 +46,7 @@ class OwnerExecutionResult:
     status: OperationStatus
     items: tuple[Mapping[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
+    receipt_bindings: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def succeeded(cls, *, items: tuple[Mapping[str, Any], ...] = ()) -> "OwnerExecutionResult":
@@ -293,7 +294,7 @@ class OperationExecutionKernel:
 
     def _owner_outcome(self, request: OperationRequest, policy_version: str, intent_digest: str, result: OwnerExecutionResult, delegation: Mapping[str, Any]) -> OperationOutcome:
         if result.status is OperationStatus.SUCCEEDED:
-            return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "completed", delegation), warnings=result.warnings)
+            return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "completed", delegation, result.receipt_bindings), warnings=result.warnings)
         if result.status is OperationStatus.RECOVERY_REQUIRED:
             return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "recovery_required", delegation), warnings=result.warnings + ("read receipt before retry",))
         return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "not_acknowledged", delegation), warnings=result.warnings)
@@ -310,9 +311,9 @@ def _intent_digest(request: OperationRequest, delegation: Mapping[str, Any]) -> 
     return sha256(encoded).hexdigest()
 
 
-def _receipt(request: OperationRequest, policy_version: str, intent_digest: str, state: str, delegation: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _receipt(request: OperationRequest, policy_version: str, intent_digest: str, state: str, delegation: Mapping[str, Any] | None = None, bindings: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Receipt projection intentionally excludes arguments, secrets, and raw delegation."""
-    return {
+    receipt = {
         "request_id": request.request_id,
         "operation_id": request.operation_id,
         "operation_version": request.operation_version,
@@ -327,6 +328,9 @@ def _receipt(request: OperationRequest, policy_version: str, intent_digest: str,
         "state": state,
         "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
     }
+    allowed = {"artifact_id", "generation", "liveness", "policy", "receipt_ref", "recovery_guidance"}
+    receipt["archival_bindings"] = {key: value for key, value in (bindings or {}).items() if key in allowed}
+    return receipt
 
 
 def _redact_items(items: tuple[Mapping[str, Any], ...]) -> tuple[Mapping[str, Any], ...]:
