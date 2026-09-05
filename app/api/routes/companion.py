@@ -119,7 +119,6 @@ from app.vault.active_context import ActiveContextResolver
 from app.vault.active_context_v1 import ActiveContextSetV1
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_read_window
 from app.instance.vault_registry import VaultRegistryStore
-from app.instance.filesystem_identity import resolve_filesystem_root_identity, same_filesystem_root
 from app.instance.first_vault_bootstrap import (
     BootstrapPreconditionError,
     get_first_vault_bootstrap_store,
@@ -961,21 +960,26 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     dependencies=[Depends(require_loopback_or_api_key)],
 )
 def select_companion_vault(req: VaultSelectRequest, request: Request) -> VaultContextResponse:
-    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-    response = _vault_context_response(context)
     registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
     if not registry_path:
-        return response
+        # Legacy single-vault processes have no registry authority to bind.
+        context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
+        return _vault_context_response(context)
     registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
-    selected = Path(req.path).expanduser().resolve(strict=False)
-    selected_identity = resolve_filesystem_root_identity(selected)
+    # Do not resolve, stat, or select a caller-provided pathname.  The request
+    # value is only a lexical lookup key; all filesystem work below uses the
+    # server-owned registered path after a unique registry match.
+    selected_token = os.path.normcase(os.path.normpath(os.path.expanduser(req.path)))
     matches = [
         registration
         for registration in registry.load().registrations.values()
-        if same_filesystem_root(resolve_filesystem_root_identity(registration.path), selected_identity)
+        if os.path.normcase(os.path.normpath(os.path.expanduser(registration.path))) == selected_token
     ]
     if len(matches) != 1:
         raise HTTPException(status_code=409, detail="active_context_binding_unresolved")
+    registered_path = Path(matches[0].path)
+    context = get_vault_manager().select_vault(registered_path, remember=req.remember)
+    response = _vault_context_response(context)
     try:
         service = build_selection_service(get_selection_store())
         derived = service.derive(
