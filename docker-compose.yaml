@@ -256,9 +256,6 @@ services:
       INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
-      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
-      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
-      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       # Trust the companion-ui container's own server-side proxy call to the
       # loopback/API-key-gated vault-selection routes (#3102). The browser never
@@ -358,9 +355,6 @@ services:
       INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
-      VAULT_SYSTEM_DIR_REL: ${VAULT_SYSTEM_DIR_REL:-}
-      VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
-      VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       # Opt-in worker /metrics endpoint (builder-ops-stability Issue 6):
       # empty/unset keeps it off; see ops/observability/prometheus.yml.
@@ -443,9 +437,6 @@ services:
       - INSTANCE_OWNERSHIP_ROOT=/app/instance-ownership
       - DESIGN_HANDOFF_APP_LOCAL_SETTINGS=${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
-      - VAULT_SYSTEM_DIR_REL=${VAULT_SYSTEM_DIR_REL:-}
-      - VAULT_INBOX_DIR_REL=${VAULT_INBOX_DIR_REL:-}
-      - VAULT_DESK_DIR_REL=${VAULT_DESK_DIR_REL:-}
       # Bare base-stack startup gets this non-secret selector from .env/the
       # shell. deploy_channel_compose pins it from governed channel/runtime env.
       - LLM_PROVIDER=${LLM_PROVIDER}
