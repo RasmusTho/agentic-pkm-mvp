@@ -3136,6 +3136,21 @@ def _finish_instance_state_deployment_locked(
     ledger = OwnershipLedger(ownership_root)
     backup = InstanceStateBackup(layout, ledger)
     store = VaultRegistryStore(layout.registry_path)
+    source = Path(legacy_path).expanduser().resolve(strict=False)
+    if source.is_file() and store.load().revision == 0:
+        # The finalizer is independently callable after a stopped-window
+        # failure. Route its dormant import through the same complete
+        # preflight as MVR-05 floor admission so a rejected foreign owner
+        # cannot leave a revision-one registry behind for the next retry.
+        _prepare_legacy_registry_for_mvr05_floor(
+            channel=channel,
+            layout=layout,
+            registry=store,
+            ledger=ledger,
+            legacy_path=source,
+            inventory_path=inventory_path,
+            quiescence_proof=quiescence_proof,
+        )
     receipt_value = active_lease.get("scalar_roll_forward")
     scalar_roll_forward_merged = False
     if "scalar_roll_forward" in active_lease:
@@ -3169,7 +3184,6 @@ def _finish_instance_state_deployment_locked(
         store.snapshot_path.is_file() and store.snapshot_checksum_path.is_file()
     )
     had_populated_registry = has_registry_state and store.load().revision > 0
-    source = Path(legacy_path).expanduser().resolve(strict=False)
     final_fingerprint: str | None = None
     if source.is_file():
         exporter = LegacyRegistryFinalExport(layout)

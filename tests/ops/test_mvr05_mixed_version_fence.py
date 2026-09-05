@@ -561,6 +561,80 @@ def test_fresh_dormant_import_rejects_unbound_foreign_before_registry_import(
         assert ledger.require_existing().leases == {}
 
 
+def test_finalizer_routes_fresh_dormant_import_through_preflight(
+    tmp_path, monkeypatch
+) -> None:
+    state_root = tmp_path / "instance-state"
+    host_root = tmp_path / "host-global"
+    host_root.mkdir(mode=0o700)
+    lease_path = host_root / "deployment-public-lease.json"
+    lease_path.parent.mkdir(mode=0o700, exist_ok=True)
+    lease_path.write_text("placeholder", encoding="utf-8")
+    legacy_path = tmp_path / "app-local.md"
+    legacy_path.write_text("placeholder", encoding="utf-8")
+
+    class Proof:
+        nonce = "nonce"
+
+        def require_valid(self, **_kwargs) -> None:
+            return None
+
+    proof = Proof()
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_assert_mount_root",
+        lambda path, _label: Path(path),
+    )
+    monkeypatch.setattr(runtime_module, "_deployment_lease_path", lambda _root: lease_path)
+    monkeypatch.setattr(
+        runtime_module,
+        "_read_deployment_lease",
+        lambda _root: {"channel_id": "dev", "phase": "active"},
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_require_matching_compatibility_block",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_module, "_read_deployment_fence", lambda *_args: None)
+    monkeypatch.setattr(
+        runtime_module,
+        "_bind_legacy_owner_inventory_to_proof",
+        lambda **_kwargs: proof,
+    )
+
+    def guarded_preflight(**kwargs):
+        calls.append(kwargs)
+        raise runtime_module.InstanceStatePreflightError("preflight sentinel")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_prepare_legacy_registry_for_mvr05_floor",
+        guarded_preflight,
+    )
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="preflight sentinel",
+    ):
+        runtime_module._finish_instance_state_deployment_locked(
+            channel="dev",
+            instance_state_root=state_root,
+            host_global_root=host_root,
+            legacy_path=legacy_path,
+            inventory_path=tmp_path / "legacy-owner-inventory.json",
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+
+    assert calls and calls[0]["legacy_path"] == legacy_path
+    layout = InstanceStateLayout.for_channel(state_root, "dev")
+    assert VaultRegistryStore(layout.registry_path).load().revision == 0
+
+
 def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_path) -> None:
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)
