@@ -969,11 +969,11 @@ def select_companion_vault(req: VaultSelectRequest, request: Request) -> VaultCo
     # Do not resolve, stat, or select a caller-provided pathname.  The request
     # value is only a lexical lookup key; all filesystem work below uses the
     # server-owned registered path after a unique registry match.
-    selected_token = os.path.normcase(os.path.normpath(os.path.expanduser(req.path)))
+    selected_token = req.path
     matches = [
         registration
         for registration in registry.load().registrations.values()
-        if os.path.normcase(os.path.normpath(os.path.expanduser(registration.path))) == selected_token
+        if registration.path == selected_token
     ]
     if len(matches) != 1:
         raise HTTPException(status_code=409, detail="active_context_binding_unresolved")

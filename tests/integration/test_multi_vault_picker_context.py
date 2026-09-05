@@ -149,8 +149,17 @@ def test_unregistered_picker_path_stops_before_manager_or_filesystem_resolution(
             raise AssertionError("unregistered request path reached vault manager")
 
     monkeypatch.setattr(companion, "get_vault_manager", lambda: _Manager())
-    with pytest.raises(HTTPException, match="active_context_binding_unresolved"):
-        companion.select_companion_vault(
-            companion.VaultSelectRequest(path=str(tmp_path / "../unregistered")),
-            SimpleNamespace(headers={}),
-        )
+    aliases = (
+        str(tmp_path / "../unregistered"),
+        str(vault_a.parent / "a/../a"),
+        f"{vault_a.parent}/a//",
+        f"{vault_a.parent}/./a",
+        "~/a",
+        str(vault_a).upper(),
+    )
+    for alias in aliases:
+        with pytest.raises(HTTPException, match="active_context_binding_unresolved"):
+            companion.select_companion_vault(
+                companion.VaultSelectRequest(path=alias),
+                SimpleNamespace(headers={}),
+            )
