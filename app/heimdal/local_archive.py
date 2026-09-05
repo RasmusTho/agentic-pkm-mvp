@@ -45,6 +45,10 @@ class ArchiveDegradedError(RuntimeError):
         super().__init__(f"Heimdal local archive degraded: {reason}")
 
 
+class OperationTargetRefused(RuntimeError):
+    """A dormant operations caller did not resolve to an owner-approved target."""
+
+
 @dataclass(frozen=True)
 class ArchiveHealth:
     healthy: bool
@@ -112,6 +116,14 @@ class ArchiveResult:
     receipt: ArchiveReceipt
     health: ArchiveHealth
     active_representation: RawRepresentation
+
+
+@dataclass(frozen=True)
+class HeimdalOperationResult:
+    """Exact transition and owner receipt from one invocation, never reconstructed."""
+
+    transition: object
+    receipt: object
 
 
 @dataclass(frozen=True)
@@ -788,6 +800,8 @@ def relocate_raw_record(
     vault_root: Optional[Path] = None,
     key: Optional[bytes] = None,
     volume_ready: Callable[[], ArchiveVolumeReady],
+    operation_idempotency_key: str | None = None,
+    transition_result_sink: Callable[[object], None] | None = None,
 ) -> ArchiveResult:
     """Run HAR-04's owner-native atomic relocation through the public GAF kernel."""
 
@@ -896,13 +910,15 @@ def relocate_raw_record(
     )
     source = adapter.ref_for(source_hot)
     target = adapter.ref_for(target_id)
-    idempotency_key = f"heimdal-raw-archive:{record.id}:{source_hot.raw_generation}:{target_id}"
+    idempotency_key = operation_idempotency_key or f"heimdal-raw-archive:{record.id}:{source_hot.raw_generation}:{target_id}"
     outcome = ArchivalTransitionKernel(adapter).transition(
         adapter.artifact,
         source,
         target,
         idempotency_key,
     )
+    if transition_result_sink is not None:
+        transition_result_sink(outcome)
     if adapter.failure_reason is not None:
         raise ArchiveDegradedError(adapter.failure_reason)
     if outcome.stage is not TransitionStage.RETIRED:
@@ -927,6 +943,78 @@ def relocate_raw_record(
             current_active_cold,
         )
     return cast(ArchiveResult, adapter.archive_result)
+
+
+OPERATION_RESTORE_SERVICE = "yggdrasil_operation_restore"
+
+
+def resolve_operation_restore_target(
+    raw_ref: str, *, service_reader: str = OPERATION_RESTORE_SERVICE
+) -> raw_read_gate.OperationTargetProof:
+    """Resolve one opaque operation target without plaintext reads or receipts."""
+    if service_reader != OPERATION_RESTORE_SERVICE:
+        raise OperationTargetRefused("operation_restore_service_not_allowed")
+    try:
+        return raw_read_gate.resolve_operation_target(raw_ref, service_reader=service_reader)
+    except raw_read_gate.RawReadRefusedError as exc:
+        raise OperationTargetRefused("operation_target_refused") from exc
+
+
+def run_single_record_archive_operation(
+    proof: raw_read_gate.OperationTargetProof,
+    *,
+    config_root: Path,
+    channel: str,
+    vault_root: Path,
+    request_id: str,
+) -> HeimdalOperationResult:
+    """Owner-held single-record archive operation for dormant operation adapters."""
+    with raw_store.archive_relocation_lease():
+        try:
+            proof = raw_read_gate.revalidate_operation_target(proof, service_reader=OPERATION_RESTORE_SERVICE)
+        except raw_read_gate.RawReadRefusedError as exc:
+            raise OperationTargetRefused("operation_target_changed") from exc
+        record = raw_store.resolve_active_raw_record(proof.artifact_id)
+        active = [] if record is None else [item for item in raw_store.all_raw_representations(record.id) if item.active]
+        if record is None or len(active) != 1 or active[0].id != proof.representation_id or active[0].raw_generation != proof.generation:
+            raise OperationTargetRefused("operation_target_changed")
+        metadata = load_channel_archive_metadata(config_root=config_root, channel=channel)
+        require_archive_volume_ready(metadata, expected_channel=channel)
+        retention_window_days = resolve_retention_window_days(vault_root)
+        transition: list[object] = []
+        result = relocate_raw_record(
+            record,
+            archive_root=metadata.mountpoint,
+            archive_ref=metadata.archive_id,
+            retention_window_days=retention_window_days,
+            vault_root=vault_root,
+            volume_ready=lambda: require_archive_volume_ready(metadata, expected_channel=channel),
+            operation_idempotency_key=request_id,
+            transition_result_sink=transition.append,
+        )
+    if len(transition) != 1:
+        raise ArchiveDegradedError("archive_transition_readback_unavailable")
+    return HeimdalOperationResult(transition[0], result.receipt)
+
+
+def run_single_record_restore_operation(
+    proof: raw_read_gate.OperationTargetProof,
+    *,
+    service_reader: str = OPERATION_RESTORE_SERVICE,
+    request_id: str,
+) -> HeimdalOperationResult:
+    """Run the sanctioned owner restore once under the fixed service identity."""
+    if service_reader != OPERATION_RESTORE_SERVICE:
+        raise OperationTargetRefused("operation_restore_service_not_allowed")
+    try:
+        proof = raw_read_gate.revalidate_operation_target(proof, service_reader=service_reader)
+    except raw_read_gate.RawReadRefusedError as exc:
+        raise OperationTargetRefused("operation_target_changed") from exc
+    transition: list[object] = []
+    receipt = run_restore_drill(proof.raw_ref, reader=service_reader, operation_id=request_id, transition_result_sink=transition.append)
+    if len(transition) != 1:
+        raise ArchiveDegradedError("restore_transition_readback_unavailable")
+    return HeimdalOperationResult(transition[0], receipt)
 
 
 def _pass_receipt(
@@ -965,6 +1053,8 @@ def run_restore_drill(
     *,
     reader: str,
     key: Optional[bytes] = None,
+    operation_id: str | None = None,
+    transition_result_sink: Callable[[object], None] | None = None,
 ) -> RestoreDrillReceipt:
     """Restore one archived identity through the production gated read path.
 
@@ -996,6 +1086,7 @@ def run_restore_drill(
         record,
         generation=active[0].raw_generation,
         read_key=key,
+        restore_operation_id=operation_id,
     )
     authority = AccessAuthority(
         OwnerAuthority.CLASS_ADAPTER,
@@ -1006,6 +1097,8 @@ def run_restore_drill(
         authority,
         adapter.ref_for(active[0]),
     )
+    if transition_result_sink is not None:
+        transition_result_sink(outcome)
     if outcome.receipt is None:
         raise ArchiveDegradedError("restore_identity_mismatch")
     if adapter.restored_storage_kind != ARCHIVE_STORAGE_KIND:

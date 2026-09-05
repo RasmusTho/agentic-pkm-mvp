@@ -123,12 +123,14 @@ class HeimdalRawMediaAdapter:
         | None = None,
         operation_reader: Callable[[str], Mapping[str, object] | None] | None = None,
         read_key: bytes | None = None,
+        restore_operation_id: str | None = None,
     ) -> None:
         self.record = record
         self.artifact = describe_raw_media(record, generation=generation)
         self._archive_action = archive_action
         self._operation_reader = operation_reader
         self._read_key = read_key
+        self._restore_operation_id = restore_operation_id
         self._binding: OperationBinding | None = None
         self._archive_result: object | None = None
         self._validated_owner_archive_receipt: object | None = None
@@ -213,9 +215,7 @@ class HeimdalRawMediaAdapter:
         if len(active) != 1:
             raise TransitionFailure(FaultStage.AUTHORIZATION, "active raw representation unavailable")
         representation = self.ref_for(active[0])
-        attempt = _RestoreAttempt(
-            str(uuid4()), artifact, authority, representation
-        )
+        attempt = _RestoreAttempt(self._restore_operation_id or str(uuid4()), artifact, authority, representation)
         self._restore_attempt.set(attempt)
         return self._receipt(
             stage=TransitionStage.ACTIVE,

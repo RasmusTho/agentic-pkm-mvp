@@ -9,7 +9,8 @@ from .contracts import (
     OperationRequest,
     OperationStatus,
 )
-from .execution_kernel import InMemoryReceiptStore, JsonReceiptStore, OperationExecutionKernel, OwnerExecutionResult, PolicyDecision
+from .archival_operations import ARCHIVE_OPERATION_ID, RESTORE_OPERATION_ID, ArchivalOperationServerConfig, build_archival_operation_handlers
+from .execution_kernel import ArchivalOperationReceipt, InMemoryReceiptStore, JsonReceiptStore, OperationExecutionKernel, OwnerExecutionResult, PolicyDecision
 
 __all__ = [
     "CapabilityAvailability",
@@ -24,4 +25,9 @@ __all__ = [
     "OperationExecutionKernel",
     "OwnerExecutionResult",
     "PolicyDecision",
+    "ArchivalOperationReceipt",
+    "ARCHIVE_OPERATION_ID",
+    "RESTORE_OPERATION_ID",
+    "ArchivalOperationServerConfig",
+    "build_archival_operation_handlers",
 ]
