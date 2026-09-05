@@ -1342,6 +1342,7 @@ def initialize_companion_vault(
                     vault_name=req.vault_name,
                     machine_role=req.machine_role,
                     remember=req.remember,
+                    select=False,
                 ),
             )
         except BootstrapPreconditionError as exc:

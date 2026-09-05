@@ -291,6 +291,7 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     if request.active_context is not None:
         for raw in raw_hits:
             raw.setdefault("payload", {})["context_generation"] = request.active_context.generation
+        metadata["provenance"]["active_context"]["rejected_unbound_hits"] = scoped.rejected_unbound_hits
     hits = _apply_closure_decay([RetrievalHit.from_hybrid(hit) for hit in raw_hits])
     return RetrievalResponse(
         query=request.query,

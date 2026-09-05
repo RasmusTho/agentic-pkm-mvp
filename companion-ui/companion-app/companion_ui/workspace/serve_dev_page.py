@@ -16843,6 +16843,11 @@ def make_handler(
                 # proxy (#2565).
                 "/api/companion/vault/browse",
                 "/api/companion/vault/notes/scoped",
+                "/api/operator/ask",
+                "/api/companion/capture",
+                "/api/companion/note/save",
+                "/api/companion/workspace/body",
+                "/api/companion/workspace/update",
             }
         )
         _WRITE_REFUSAL_PICKER_PATHS = frozenset(

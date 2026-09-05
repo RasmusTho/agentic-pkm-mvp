@@ -691,6 +691,7 @@ class VaultManager:
         vault_name: str | None = None,
         machine_role: MachineRole = "primary",
         remember: bool = True,
+        select: bool = True,
     ) -> VaultInitializationResult:
         expanded = vault_path.expanduser()
         expanded.mkdir(parents=True, exist_ok=True)
@@ -760,7 +761,7 @@ class VaultManager:
                 exc_info=True,
             )
 
-        context = self.select_vault(expanded, remember=remember)
+        context = self.select_vault(expanded, remember=remember) if select else self._context
         return VaultInitializationResult(
             context=context,
             created_files=tuple(created),
