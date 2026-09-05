@@ -21,7 +21,7 @@ from typing import Iterator, Mapping, TypedDict, cast
 from uuid import uuid4
 
 from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY, _StorageMutationCapability
-from app.instance.ownership_ledger import OwnershipLedger
+from app.instance.ownership_ledger import LedgerError, OwnershipLedger
 from app.instance.vault_registry import VaultRegistryStore
 
 
@@ -137,6 +137,10 @@ class _DarwinProcBsdShortInfo(ctypes.Structure):
 
 class BindingEffectLeaseError(RuntimeError):
     """The binding effect window cannot be entered or recovered safely."""
+
+
+class OwnershipFenceUnavailable(BindingEffectLeaseError, LedgerError):
+    """The ledger refused a foreground binding effect acquisition."""
 
 
 class BindingEffectLeaseTimeout(BindingEffectLeaseError):
@@ -396,6 +400,8 @@ class BindingEffectLeaseManager:
             if held is None:
                 raise BindingEffectLeaseError("binding effect acquisition ended without a holder")
             yield held
+        except LedgerError as exc:
+            raise OwnershipFenceUnavailable(str(exc)) from exc
         finally:
             try:
                 if held is not None:
