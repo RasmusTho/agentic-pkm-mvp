@@ -90,7 +90,7 @@ ambiguous. Review remains responsible for those cases.
   - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
   - otherwise run lightweight repo checks that are still appropriate
 - Code-affecting changes:
-  - `ruff check app tests`
+  - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
   - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests
 - Settings/runtime contract changes:

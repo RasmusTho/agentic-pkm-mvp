@@ -41,9 +41,9 @@ This is a cold-path repair step, not a hot-path delivery routine.
 ### Step 1: Read BuilderOps learning material
 
 ```bash
-python -m app.cli builderops list --type LearningSignal --json
-python -m app.cli builderops list --type BuilderOpsReceipt --json
-python -m app.cli builderops generate-projections \
+python -m app.builderops builderops list --type LearningSignal --json
+python -m app.builderops builderops list --type BuilderOpsReceipt --json
+python -m app.builderops builderops generate-projections \
   --type learning-summary \
   --output-dir tmp/builderops-learning-retro \
   --json
@@ -57,8 +57,13 @@ Before deciding which signals are unprocessed, filter the `BuilderOpsReceipt` re
 `LearningSignal` IDs. `LearningSignal` records are not mutated when a retrospective receipt is
 appended, so the receipt stream is the processing ledger.
 
-If there are fewer than 3 unprocessed LearningSignals since the last retrospective receipt, note
-this and ask whether to proceed or wait for more signal.
+Declare the snapshot time, record count, date range, and requested scope. A full-history request
+includes all LearningSignals, including previously processed records, plus all dated historical
+compatibility entries. Prior receipts describe treatment; they do not exclude a signal from pattern
+analysis. Recheck repairs against the current target branch, not a stale working checkout.
+
+For an automatic cadence pass, fewer than 3 unprocessed signals may justify waiting. An explicit
+human request proceeds regardless of count; do not add a confirmation gate.
 
 Do not use raw `AgentWorklog` records as authoritative learning material. A raw worklog may support
 a signal through `source_refs`; if it contains a durable learning, create or request a
@@ -70,9 +75,11 @@ a signal through `source_refs`; if it contains a durable learning, create or req
 cat docs/learning-log.md
 ```
 
-Find the last line matching `--- retro YYYY-MM-DD: applied N/M proposals ---`. Read entries after
-that marker only if they are historical pre-BuilderOps entries or explicit compatibility fallbacks
-not yet represented by `LearningSignal` records.
+For an incremental pass, use the last retrospective marker to select new compatibility entries.
+For a full-history pass, read all dated entries, including those before markers. Match represented
+entries to their LearningSignal by provenance and divergence, and count a duplicate event once in
+pattern totals. Preserve old entries; convert unmatched operational fallbacks through
+`capture-learning` with stable idempotency keys when the configured store is available.
 
 ### Step 2: Cluster by upstream artifact
 
@@ -85,6 +92,15 @@ clusters:
 - `unknown — flag for retro` — signals where the artifact was unresolved at capture time
 
 Prefer batching similar low-signal entries into one repair proposal when they point at the same upstream artifact.
+Also compare repeated mechanisms across time and artifacts: a local wording fix may leave the
+same failure elsewhere. Distinguish a missing rule from an existing rule that is ineffective,
+contradictory, obsolete, or unnecessarily strict. Prefer deleting duplication or narrowing an
+existing rule to adding another gate. Bound concurrency and threat assumptions to this owner's
+supported deployment; do not introduce enterprise or adversarial guarantees without a concrete
+in-scope requirement. A policy edit does not prove a reported runtime defect is fixed.
+
+Full-history maintenance trace: 2026-09-05, owner request and historical compatibility review;
+retain per-signal evidence and terminal outcomes in BuilderOps rather than another repo ledger.
 
 Build the retrospective from LearningSignals, compact delivery receipts, and measured or named-proxy
 `context_cost` data, not full historical chat transcripts. Independent clusters may use fresh
@@ -157,7 +173,7 @@ Use the ledger's `receipt_body` or equivalent text so the receipt names the proc
 their outcomes:
 
 ```bash
-python -m app.cli builderops append-receipt \
+python -m app.builderops builderops append-receipt \
   --summary "Learning retrospective YYYY-MM-DD" \
   --event-type learning_retrospective \
   --actor "<agent-id>" \
