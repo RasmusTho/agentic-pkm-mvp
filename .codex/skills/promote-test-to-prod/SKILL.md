@@ -185,6 +185,9 @@ promote-test-to-prod \
 ## Workflow continuation
 
 Follow `.codex/skills/README.md :: Workflow continuation`. Execute the prepare → execute → verify
-chain through acceptance and return the receipt to the caller. On failure, follow the authorized
-rollback → verification route. Existing operator acknowledgments, migration limits, and live
+chain through acceptance and return the receipt to the caller. On failure, use `execute-promotion`'s
+observed-effect recovery classification: failures before deployment effects require diagnosis/repair
+without rollback; unknown effects require state reconciliation. Only an observed deployment effect
+requiring recovery permits the authorized rollback → verification route. Existing operator
+acknowledgments, migration limits, and live
 deployment-model applicability remain gates.

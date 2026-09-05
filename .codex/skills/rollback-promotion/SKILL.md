@@ -11,7 +11,14 @@ description: "Roll prod back: in checkout mode merge the governed rollback PR, u
 > **dormant** and is not an ancestor of `origin/main`. A revert PR against dormant `stable` is not
 > meaningful under the current baseline — confirm with the operator before invoking.
 
-Use this skill when `execute-promotion` fails or when `verify-promotion` returns FAIL after a promotion. Its job is to return prod to the last known-good state as defined by the rollback contract.
+Use this skill when a promotion has produced an observed deployment effect requiring recovery,
+including failed post-promotion verification. A failed prepare/execute preflight alone is not a
+rollback trigger. Its job is to return prod to the last known-good state as defined by the rollback contract.
+
+Before any rollback effect, read back the deployed pin, stable ref, applied migrations, and relevant
+process state against the failed promotion's evidence. Require an observed effect needing recovery
+and the existing rollback authority. No deployment effect means return to the caller for repair
+without production mutation; unknown effects mean reconcile state first, not blind rollback.
 
 Do not use this skill to:
 - produce the promotion plan (use `prepare-promotion`)

@@ -714,3 +714,33 @@ def test_supporting_workflows_do_not_park_followup_work() -> None:
     retro = _read(".codex/skills/learning-retrospective/SKILL.md")
     assert "do not request approval already supplied by the task" in retro
     assert "follow-up\nagent run using" not in retro
+
+
+def test_promotion_continuation_requires_observed_effect_before_rollback() -> None:
+    skill = _read(".codex/skills/execute-promotion/SKILL.md")
+    continuation = " ".join(skill.split("## Workflow continuation", 1)[1].split())
+    for requirement in (
+        "does not authorize rollback", "actually advanced",
+        "no deployment effect occurred", "without production mutation",
+        "effect is unknown", "reconcile observed state",
+        "only after evidence establishes a deployment effect requiring recovery",
+        "rollback authority and migration gates hold",
+    ):
+        assert requirement in continuation, requirement
+    routing = _section_between(skill, "## Routing", "## Workflow continuation")
+    assert "On failure before deployment effects" in routing
+    assert "On failure after observed deployment effects" in routing
+    assert "- On failure → `rollback-promotion`" not in routing
+
+    orchestrator = " ".join(_read(".codex/skills/promote-test-to-prod/SKILL.md").split(
+        "## Workflow continuation", 1
+    )[1].split())
+    assert "observed-effect recovery classification" in orchestrator
+    assert "without rollback" in orchestrator
+    assert "unknown effects require state reconciliation" in orchestrator
+    rollback = " ".join(_read(".codex/skills/rollback-promotion/SKILL.md").split(
+        "## Capability boundary", 1
+    )[0].split())
+    assert "Before any rollback effect" in rollback
+    assert "No deployment effect means return to the caller" in rollback
+    assert "unknown effects mean reconcile state first" in rollback

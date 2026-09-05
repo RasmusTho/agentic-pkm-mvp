@@ -58,7 +58,7 @@ Detailed capability policy and output blocks belong in the selected skill and
 ## Agency default
 
 Execute every applicable Builder skill transition under `.codex/skills/README.md :: Workflow continuation`; do not stop at a skill output or queued handoff. Delivery includes publication → verification-and-closure → verified merge and reconciliation until end-to-end automation is explicitly accepted. Leave an unmerged delivery PR only for documented stop-loss or an explicit user scope restriction.
-Proceed with authorized work; preserve operator gates and explicit planning/review-only scope. A retry count, failed check, or safe technical pause is not an owner decision. Route genuine authority decisions through `owner-decision-brief`; stop-loss follows `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
+Proceed with authorized work; preserve operator gates and explicit planning/review-only scope. A retry count, a failed local/CI/type check, or a safe technical pause is not an owner decision; only its explicit authority categories may create `agent:needs-human`. Route real owner asks through `owner-decision-brief`; stop-loss follows `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
 
 ## Parallel-agent execution
 
