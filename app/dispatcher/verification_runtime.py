@@ -239,7 +239,10 @@ class HostFencedVerificationCycle:
             validate_canary_receipt_request_binding(canary_receipt, request)
         run = self.consumer.consume(request)
         receipt = self._finish_ready_dry_cycle(run.run_id)
-        if canary_receipt is not None:
+        if (
+            canary_receipt is not None
+            and receipt.get("terminal_outcome") == "dry_run_no_merge"
+        ):
             completed_run = self.ledger.get(run.run_id)
             if completed_run is None:
                 raise CanaryReceiptEvidenceError(
@@ -320,7 +323,10 @@ class HostFencedVerificationCycle:
         if merge_ready is None:
             run = self.consumer.recover(run_id)
         final_receipt = self._finish_ready_dry_cycle(run.run_id)
-        if canary_receipt is not None:
+        if (
+            canary_receipt is not None
+            and final_receipt.get("terminal_outcome") == "dry_run_no_merge"
+        ):
             completed_run = self.ledger.get(run.run_id)
             if completed_run is None:
                 raise CanaryReceiptEvidenceError(

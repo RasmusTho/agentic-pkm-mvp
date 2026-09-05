@@ -737,3 +737,59 @@ def test_terminalization_failure_does_not_record_canary_acceptance(
         for record in canary_store.list_records("BuilderOpsReceipt")
         if record["action"] == "canary_acceptance_observation"
     ] == []
+
+
+def test_retry_after_readback_does_not_record_canary_acceptance(
+    tmp_path, monkeypatch
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    retry_receipt = {"terminal_outcome": "retry_after_readback"}
+    monkeypatch.setattr(
+        runtime,
+        "_finish_ready_dry_cycle",
+        lambda _run_id: retry_receipt,
+    )
+
+    assert (
+        runtime.run_dry_cycle(
+            verification_request, canary_receipt=canary_receipt
+        )
+        == retry_receipt
+    )
+    assert [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ] == []
+
+
+def test_recovery_retry_after_readback_does_not_record_canary_acceptance(
+    tmp_path, monkeypatch
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    run = runtime.consumer.consume(verification_request)
+    task = runtime.ledger.client.tasks[run.run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    retry_receipt = {"terminal_outcome": "retry_after_readback"}
+    monkeypatch.setattr(
+        runtime,
+        "_finish_ready_dry_cycle",
+        lambda _run_id: retry_receipt,
+    )
+
+    assert (
+        runtime.recover_dry_cycle(
+            run.run_id, canary_receipt=canary_receipt
+        )
+        == retry_receipt
+    )
+    assert [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ] == []
