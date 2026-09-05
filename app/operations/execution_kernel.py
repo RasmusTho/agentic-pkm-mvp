@@ -18,6 +18,8 @@ from threading import RLock
 from time import time
 from typing import Any, Callable, Iterator, Mapping, Protocol
 
+from app.archival.contracts import ArtifactClass, LivenessState, PolicyProfile, TransitionStage
+
 from .contracts import OperationOutcome, OperationRequest, OperationStatus
 
 
@@ -46,7 +48,7 @@ class OwnerExecutionResult:
     status: OperationStatus
     items: tuple[Mapping[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
-    receipt_bindings: Mapping[str, Any] = field(default_factory=dict)
+    archival_receipt: "ArchivalOperationReceipt | None" = None
 
     @classmethod
     def succeeded(cls, *, items: tuple[Mapping[str, Any], ...] = ()) -> "OwnerExecutionResult":
@@ -59,6 +61,30 @@ class OwnerExecutionResult:
     @classmethod
     def failed(cls, warning: str) -> "OwnerExecutionResult":
         return cls(OperationStatus.NOT_ACKNOWLEDGED, warnings=(warning,))
+
+
+@dataclass(frozen=True)
+class ArchivalOperationReceipt:
+    """Small, redacted projection of an already validated GAF receipt."""
+
+    artifact_ref: str
+    receipt_ref: str
+    generation: int
+    artifact_class: ArtifactClass
+    policy: PolicyProfile
+    stage: TransitionStage
+    liveness: LivenessState
+    recovery_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.generation) is not int or self.generation < 0:
+            raise ValueError("archival receipt generation must be a non-negative integer")
+        for value in (self.artifact_ref, self.receipt_ref, self.recovery_ref):
+            if value is not None and (not isinstance(value, str) or not value or "/" in value or "\\" in value):
+                raise ValueError("archival receipt references must be opaque tokens")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"artifact_ref": self.artifact_ref, "receipt_ref": self.receipt_ref, "generation": self.generation, "artifact_class": self.artifact_class.value, "policy": self.policy.value, "stage": self.stage.value, "liveness": self.liveness.value, "recovery_ref": self.recovery_ref}
 
 
 @dataclass(frozen=True)
@@ -294,7 +320,7 @@ class OperationExecutionKernel:
 
     def _owner_outcome(self, request: OperationRequest, policy_version: str, intent_digest: str, result: OwnerExecutionResult, delegation: Mapping[str, Any]) -> OperationOutcome:
         if result.status is OperationStatus.SUCCEEDED:
-            return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "completed", delegation, result.receipt_bindings), warnings=result.warnings)
+            return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "completed", delegation, result.archival_receipt), warnings=result.warnings)
         if result.status is OperationStatus.RECOVERY_REQUIRED:
             return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "recovery_required", delegation), warnings=result.warnings + ("read receipt before retry",))
         return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "not_acknowledged", delegation), warnings=result.warnings)
@@ -311,7 +337,7 @@ def _intent_digest(request: OperationRequest, delegation: Mapping[str, Any]) -> 
     return sha256(encoded).hexdigest()
 
 
-def _receipt(request: OperationRequest, policy_version: str, intent_digest: str, state: str, delegation: Mapping[str, Any] | None = None, bindings: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _receipt(request: OperationRequest, policy_version: str, intent_digest: str, state: str, delegation: Mapping[str, Any] | None = None, archival_receipt: ArchivalOperationReceipt | None = None) -> dict[str, Any]:
     """Receipt projection intentionally excludes arguments, secrets, and raw delegation."""
     receipt = {
         "request_id": request.request_id,
@@ -328,8 +354,8 @@ def _receipt(request: OperationRequest, policy_version: str, intent_digest: str,
         "state": state,
         "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
     }
-    allowed = {"artifact_id", "generation", "liveness", "policy", "receipt_ref", "recovery_guidance"}
-    receipt["archival_bindings"] = {key: value for key, value in (bindings or {}).items() if key in allowed}
+    if archival_receipt is not None:
+        receipt["archival"] = archival_receipt.to_dict()
     return receipt
 
 
@@ -342,6 +368,7 @@ __all__ = [
     "InMemoryReceiptStore",
     "JsonReceiptStore",
     "OperationExecutionKernel",
+    "ArchivalOperationReceipt",
     "OwnerExecutionResult",
     "PolicyDecision",
     "ReceiptStore",

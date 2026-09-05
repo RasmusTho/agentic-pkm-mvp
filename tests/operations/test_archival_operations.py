@@ -1,49 +1,54 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.archival.contracts import ArtifactClass
+from app.archival.contracts import ArtifactClass, Liveness, LivenessState, OpaqueReference, PolicyProfile, TransitionStage
 from app.operations import InMemoryReceiptStore, OperationContext, OperationExecutionKernel, OperationRequest, OperationStatus, PolicyDecision
-from app.operations.archival_operations import ArchivalOperationAdapters, SourceArchiveInvocation, SourceRestoreInvocation
+from app.operations.archival_operations import ARCHIVE_OPERATION_ID, RESTORE_OPERATION_ID, ArchivalOperationServerConfig, build_archival_operation_handlers
 
 
-def _request(kind: str, *, request_id: str = "request-1", artifact_class: ArtifactClass = ArtifactClass.SOURCE) -> OperationRequest:
-    return OperationRequest(kind, request_id, OperationContext("vault", "gen-1"), targets=({"artifact_id": "raw-1", "artifact_class": artifact_class.value},))
+def _request(operation_id: str, *, request_id: str = "request-1", version: object = 7, artifact_class: ArtifactClass = ArtifactClass.SOURCE) -> OperationRequest:
+    return OperationRequest(operation_id, request_id, OperationContext("vault", "gen-1"), targets=({"artifact_class": artifact_class.value, "raw_ref": "raw-ref-raw-1"},), expected_version=version)  # type: ignore[arg-type]
 
 
-def _delegation(kind: str) -> dict[str, object]:
-    return {"active_context_ref": "vault", "vault_generation": "gen-1", "operation_ids": [kind], "policy_version": "policy-1", "principal": "owner", "client": "test", "surface": "test", "receipt_ref": "delegation-1", "authority_class": "governed_effect", "target_ids": ["raw-1"], "max_targets": 1, "allowed_effects": [kind], "expires_at": 4102444800, "revoked": False}
+def _delegation(operation_id: str) -> dict[str, object]:
+    return {"active_context_ref": "vault", "vault_generation": "gen-1", "operation_ids": [operation_id], "policy_version": "policy-1", "principal": "owner", "client": "test", "surface": "test", "receipt_ref": "delegation-1", "authority_class": "governed_effect", "target_ids": [""], "max_targets": 1, "allowed_effects": [operation_id], "expires_at": 4102444800, "revoked": False}
 
 
-def _kernel(adapters: ArchivalOperationAdapters) -> OperationExecutionKernel:
-    return OperationExecutionKernel(context_resolver=lambda _context: True, policy_evaluator=lambda _request, _delegation: PolicyDecision.allowed("policy-1"), handlers=adapters.handlers(), receipt_store=InMemoryReceiptStore(), version_checker=lambda _request: True, token_validator=lambda _request, _decision: True)
+def _kernel(config: ArchivalOperationServerConfig) -> OperationExecutionKernel:
+    return OperationExecutionKernel(context_resolver=lambda _context: True, policy_evaluator=lambda _request, _delegation: PolicyDecision.allowed("policy-1"), handlers=build_archival_operation_handlers(config), receipt_store=InMemoryReceiptStore(), version_checker=lambda _request: True, token_validator=lambda _request, _decision: True)
+
+
+def _owner_result(stage: TransitionStage) -> object:
+    receipt = SimpleNamespace(generation=SimpleNamespace(value=7), artifact=SimpleNamespace(owner_native_id=SimpleNamespace(token="raw-1")), receipt_ref=SimpleNamespace(token="receipt-1"), policy_profile=PolicyProfile.RAW_EVIDENCE, stage=stage, liveness=Liveness(LivenessState.ACTIVE, OpaqueReference("test", "evidence")))
+    return SimpleNamespace(transition=SimpleNamespace(stage=stage, liveness=receipt.liveness, receipt=receipt))
 
 
 def test_operations_dispatch_to_governed_archival_providers(monkeypatch) -> None:
-    calls: list[tuple[object, Path, str]] = []
-    monkeypatch.setattr("app.heimdal.local_archive.relocate_raw_record", lambda record, *, archive_root, archive_ref, volume_ready: calls.append((record, archive_root, archive_ref)) or SimpleNamespace(receipt=SimpleNamespace(record_id="raw-1", raw_generation=7, receipt_id="archive-r")))
-    adapters = ArchivalOperationAdapters.production(lambda _request: SourceArchiveInvocation("record", Path("/archive"), "archive-ref", lambda: object()))
-    outcome = _kernel(adapters).execute(_request("archive"), _delegation("archive"))
+    calls: list[str] = []
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(record=SimpleNamespace(id="raw-1"), generation=7))
+    monkeypatch.setattr("app.operations.archival_operations.run_single_record_archive_operation", lambda proof, **kwargs: calls.append(kwargs["request_id"]) or _owner_result(TransitionStage.RETIRED))
+    config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
+    outcome = _kernel(config).execute(_request(ARCHIVE_OPERATION_ID), _delegation(ARCHIVE_OPERATION_ID))
     assert outcome.status is OperationStatus.SUCCEEDED
-    assert calls == [("record", Path("/archive"), "archive-ref")]
+    assert calls == ["request-1"]
 
 
 def test_archival_outcomes_preserve_liveness_generation_policy_and_receipts(monkeypatch) -> None:
-    monkeypatch.setattr("app.heimdal.local_archive.run_restore_drill", lambda raw_ref, *, reader, key: SimpleNamespace(read_receipt_id="restore-r"))
-    adapters = ArchivalOperationAdapters.production(lambda _request: SourceRestoreInvocation("opaque-raw-ref", "reader", "raw-1", "g-7", "restored"))
-    outcome = _kernel(adapters).execute(_request("restore"), _delegation("restore"))
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(record=SimpleNamespace(id="raw-1"), generation=7))
+    monkeypatch.setattr("app.operations.archival_operations.run_single_record_restore_operation", lambda proof, **kwargs: _owner_result(TransitionStage.RESTORED))
+    config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
+    outcome = _kernel(config).execute(_request(RESTORE_OPERATION_ID), _delegation(RESTORE_OPERATION_ID))
     assert outcome.status is OperationStatus.SUCCEEDED
     assert outcome.receipt is not None
-    assert outcome.receipt["archival_bindings"] == {"artifact_id": "raw-1", "generation": "g-7", "liveness": "restored", "policy": "raw_evidence", "receipt_ref": "restore-r"}
-    assert outcome.items[0]["generation"] == "[redacted]"
+    assert outcome.receipt["archival"] == {"artifact_ref": "raw-1", "receipt_ref": "receipt-1", "generation": 7, "artifact_class": "source", "policy": "raw_evidence", "stage": "restored", "liveness": "active", "recovery_ref": None}
 
 
-def test_archival_failures_are_typed_and_recoverable() -> None:
-    resolver_calls: list[str] = []
-    adapters = ArchivalOperationAdapters.production(lambda request: resolver_calls.append(request.request_id) or SourceRestoreInvocation("opaque", "reader", "raw-1", "g-7", "restored"))
-    kernel = _kernel(adapters)
-    assert kernel.execute(_request("archive", request_id="derived", artifact_class=ArtifactClass.DERIVED), _delegation("archive")).status is OperationStatus.NOT_SUPPORTED
-    human = kernel.execute(_request("archive", request_id="human", artifact_class=ArtifactClass.HUMAN), _delegation("archive"))
-    assert human.status is OperationStatus.NOT_SUPPORTED
-    assert human.warnings == ("owner_decision_required:#5325",)
-    assert kernel.execute(_request("archive", request_id="mismatch"), _delegation("archive")).status is OperationStatus.NOT_ACKNOWLEDGED
-    assert resolver_calls == ["mismatch"]
+def test_archival_failures_are_typed_and_recoverable(monkeypatch) -> None:
+    config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
+    kernel = _kernel(config)
+    assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="human", artifact_class=ArtifactClass.HUMAN), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.NOT_SUPPORTED
+    assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="derived", artifact_class=ArtifactClass.DERIVED), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.NOT_SUPPORTED
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(record=SimpleNamespace(id="raw-1"), generation=7))
+    assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="stale", version=6), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.CONFLICTED
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: (_ for _ in ()).throw(RuntimeError()))
+    assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="unknown"), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.RECOVERY_REQUIRED

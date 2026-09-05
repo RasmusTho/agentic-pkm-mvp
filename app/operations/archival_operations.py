@@ -1,106 +1,124 @@
-"""Operation-kernel adapters for governed archival owners.
+"""Dormant direct-composition handlers for governed archival operations.
 
-No generic provider registry is admitted here. The only mutable effects this
-adapter composes are existing Heimdal raw-evidence calls, fed with a concrete
-server-resolved invocation rather than a client-selected path or authority.
+This module intentionally does not install routes, discovery, GUI, MCP, or a
+runtime singleton. Issue #5352 owns that later authenticated integration.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from app.archival.contracts import ArtifactClass, PolicyProfile
+from app.archival.contracts import ArtifactClass, LivenessState, TransitionStage
+from app.heimdal.local_archive import (
+    OPERATION_RESTORE_SERVICE,
+    ArchiveDegradedError,
+    OperationTargetRefused,
+    run_single_record_archive_operation,
+    run_single_record_restore_operation,
+    resolve_operation_restore_target,
+)
 
 from .contracts import OperationRequest, OperationStatus
-from .execution_kernel import OwnerExecutionResult
+from .execution_kernel import ArchivalOperationReceipt, OwnerExecutionResult
+
+ARCHIVE_OPERATION_ID = "artifact.archive"
+RESTORE_OPERATION_ID = "artifact.restore"
 
 
 @dataclass(frozen=True)
-class SourceArchiveInvocation:
-    record: Any
-    archive_root: Path
-    archive_ref: str
-    volume_ready: Callable[[], Any]
+class ArchivalOperationServerConfig:
+    """Server-origin configuration; never populated from an operation request."""
+
+    config_root: Path
+    channel: str
+    vault_root: Path
+    restore_service: str = OPERATION_RESTORE_SERVICE
 
 
-@dataclass(frozen=True)
-class SourceRestoreInvocation:
-    raw_ref: str
-    reader: str
-    artifact_id: str
-    generation: str
-    liveness: str
-    policy: PolicyProfile = PolicyProfile.RAW_EVIDENCE
-    key: bytes | None = None
+def build_archival_operation_handlers(
+    server_config: ArchivalOperationServerConfig,
+) -> dict[str, Callable[[OperationRequest], OwnerExecutionResult]]:
+    """Return dormant handlers for explicit direct kernel composition only."""
+    return {
+        ARCHIVE_OPERATION_ID: lambda request: _execute(request, server_config),
+        RESTORE_OPERATION_ID: lambda request: _execute(request, server_config),
+    }
 
 
-class SourceInvocationResolver(Protocol):
-    """Server composition resolves opaque identity to concrete owner inputs."""
-
-    def __call__(self, request: OperationRequest) -> SourceArchiveInvocation | SourceRestoreInvocation: ...
-
-
-@dataclass(frozen=True)
-class ArchivalOperationAdapters:
-    """Compose archive/restore to the existing class-native owner calls."""
-
-    resolve_source_invocation: SourceInvocationResolver
-
-    @classmethod
-    def production(cls, resolve_source_invocation: SourceInvocationResolver) -> "ArchivalOperationAdapters":
-        return cls(resolve_source_invocation)
-
-    def handlers(self) -> dict[str, Callable[[OperationRequest], OwnerExecutionResult]]:
-        return {"archive": self.execute, "restore": self.execute}
-
-    def execute(self, request: OperationRequest) -> OwnerExecutionResult:
-        if len(request.targets) != 1:
-            return OwnerExecutionResult.failed("archival operation requires exactly one target")
-        artifact_class = _artifact_class(request.targets[0])
-        if artifact_class is None:
-            return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("archival artifact class is unavailable",))
-        if artifact_class is ArtifactClass.HUMAN:
-            return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("owner_decision_required:#5325",))
-        if artifact_class in {ArtifactClass.DERIVED, ArtifactClass.RECEIPT}:
-            return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("archival mutation is not owned for artifact class",))
-        try:
-            invocation = self.resolve_source_invocation(request)
-            if request.operation_id == "archive" and isinstance(invocation, SourceArchiveInvocation):
-                return _archive_source(invocation)
-            if request.operation_id == "restore" and isinstance(invocation, SourceRestoreInvocation):
-                return _restore_source(invocation)
-        except Exception:
-            return OwnerExecutionResult.ambiguous()
-        return OwnerExecutionResult.failed("server-resolved archival invocation does not match operation")
-
-
-def _artifact_class(target: Mapping[str, Any]) -> ArtifactClass | None:
+def _execute(request: OperationRequest, config: ArchivalOperationServerConfig) -> OwnerExecutionResult:
+    target = _source_target(request)
+    if isinstance(target, OwnerExecutionResult):
+        return target
+    if type(request.expected_version) is not int or request.expected_version < 0:
+        return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("expected generation is required",))
     try:
-        return ArtifactClass(str(target["artifact_class"]))
+        proof = resolve_operation_restore_target(target, service_reader=config.restore_service)
+    except OperationTargetRefused as exc:
+        return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(str(exc),))
+    except Exception:
+        return OwnerExecutionResult.ambiguous()
+    if request.expected_version != proof.generation:
+        return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("expected generation is stale",))
+    try:
+        if request.operation_id == ARCHIVE_OPERATION_ID:
+            result = run_single_record_archive_operation(proof, config_root=config.config_root, channel=config.channel, vault_root=config.vault_root, request_id=request.request_id)
+        else:
+            result = run_single_record_restore_operation(proof, service_reader=config.restore_service)
+    except OperationTargetRefused as exc:
+        return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(str(exc),))
+    except ArchiveDegradedError:
+        return OwnerExecutionResult.ambiguous()
+    except Exception:
+        return OwnerExecutionResult.ambiguous()
+    return _map_owner_result(request, proof, result.transition)
+
+
+def _source_target(request: OperationRequest) -> str | OwnerExecutionResult:
+    if len(request.targets) != 1:
+        return OwnerExecutionResult.failed("archival operation requires exactly one target")
+    target = request.targets[0]
+    try:
+        artifact_class = ArtifactClass(str(target["artifact_class"]))
     except (KeyError, TypeError, ValueError):
-        return None
+        return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("archival artifact class is unavailable",))
+    if artifact_class is ArtifactClass.HUMAN:
+        return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("owner_decision_required:#5325",))
+    if artifact_class in {ArtifactClass.DERIVED, ArtifactClass.RECEIPT}:
+        return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("archival mutation is not owned for artifact class",))
+    raw_ref = target.get("raw_ref")
+    if not isinstance(raw_ref, str) or not raw_ref:
+        return OwnerExecutionResult.failed("source target requires an opaque raw_ref")
+    return raw_ref
 
 
-def _archive_source(invocation: SourceArchiveInvocation) -> OwnerExecutionResult:
-    from app.heimdal.local_archive import relocate_raw_record
+def _map_owner_result(request: OperationRequest, proof: Any, transition: Any) -> OwnerExecutionResult:
+    receipt = getattr(transition, "receipt", None)
+    stage = getattr(transition, "stage", None)
+    liveness = getattr(getattr(transition, "liveness", None), "state", None)
+    if stage is TransitionStage.CONFLICT or liveness is LivenessState.CONFLICT:
+        return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("owner transition conflicted",))
+    if stage is TransitionStage.REFUSED or liveness is LivenessState.REFUSED:
+        return OwnerExecutionResult(OperationStatus.REJECTED, warnings=("owner transition refused",))
+    expected_stage = TransitionStage.RETIRED if request.operation_id == ARCHIVE_OPERATION_ID else TransitionStage.RESTORED
+    if stage is not expected_stage or receipt is None:
+        return OwnerExecutionResult.ambiguous()
+    try:
+        if receipt.generation.value != proof.generation or receipt.artifact.owner_native_id.token != proof.record.id:
+            return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("owner receipt binding mismatch",))
+        projection = ArchivalOperationReceipt(
+            artifact_ref=receipt.artifact.owner_native_id.token,
+            receipt_ref=receipt.receipt_ref.token,
+            generation=receipt.generation.value,
+            artifact_class=receipt.policy_profile and ArtifactClass.SOURCE,
+            policy=receipt.policy_profile,
+            stage=receipt.stage,
+            liveness=receipt.liveness.state,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return OwnerExecutionResult.ambiguous()
+    return OwnerExecutionResult(OperationStatus.SUCCEEDED, archival_receipt=projection)
 
-    result = relocate_raw_record(invocation.record, archive_root=invocation.archive_root, archive_ref=invocation.archive_ref, volume_ready=invocation.volume_ready)
-    receipt = result.receipt
-    return _complete(receipt.record_id, str(receipt.raw_generation), "retired", PolicyProfile.RAW_EVIDENCE, receipt.receipt_id)
 
-
-def _restore_source(invocation: SourceRestoreInvocation) -> OwnerExecutionResult:
-    from app.heimdal.local_archive import run_restore_drill
-
-    receipt = run_restore_drill(invocation.raw_ref, reader=invocation.reader, key=invocation.key)
-    return _complete(invocation.artifact_id, invocation.generation, invocation.liveness, invocation.policy, receipt.read_receipt_id)
-
-
-def _complete(artifact_id: str, generation: str, liveness: str, policy: PolicyProfile, receipt_ref: str) -> OwnerExecutionResult:
-    bindings = {"artifact_id": artifact_id, "generation": generation, "liveness": liveness, "policy": policy.value, "receipt_ref": receipt_ref}
-    return OwnerExecutionResult(OperationStatus.SUCCEEDED, items=(bindings,), receipt_bindings=bindings)
-
-
-__all__ = ["ArchivalOperationAdapters", "SourceArchiveInvocation", "SourceInvocationResolver", "SourceRestoreInvocation"]
+__all__ = ["ARCHIVE_OPERATION_ID", "RESTORE_OPERATION_ID", "ArchivalOperationServerConfig", "build_archival_operation_handlers"]
