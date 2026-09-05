@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import re
-from typing import Any
+from typing import Any, Callable
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.builderops.execution_routing_receipts import (
@@ -207,6 +207,7 @@ class HostFencedVerificationCycle:
         holder: str,
         containment_receipt_required: bool = False,
         canary_receipt_store: ReceiptStore | None = None,
+        canary_receipt_store_factory: Callable[[], ReceiptStore] | None = None,
     ) -> None:
         if consumer.ledger is not ledger or not consumer.host_fenced_merge:
             raise ValueError(
@@ -229,6 +230,7 @@ class HostFencedVerificationCycle:
         self.holder = holder
         self.containment_receipt_required = containment_receipt_required
         self.canary_receipt_store = canary_receipt_store
+        self.canary_receipt_store_factory = canary_receipt_store_factory
 
     def run_dry_cycle(
         self,
@@ -349,9 +351,11 @@ class HostFencedVerificationCycle:
         if request.get("canary_identity") is None:
             return None
         if self.canary_receipt_store is None:
-            raise CanaryReceiptEvidenceError(
-                "canary acceptance requires the BuilderOps receipt store"
-            )
+            if self.canary_receipt_store_factory is None:
+                raise CanaryReceiptEvidenceError(
+                    "canary acceptance requires the BuilderOps receipt store"
+                )
+            self.canary_receipt_store = self.canary_receipt_store_factory()
         resolved = load_canary_receipt_for_verification_request(
             self.canary_receipt_store, request
         )
@@ -368,9 +372,11 @@ class HostFencedVerificationCycle:
         if canary_receipt is None:
             return
         if self.canary_receipt_store is None:
-            raise CanaryReceiptEvidenceError(
-                "canary acceptance requires the BuilderOps receipt store"
-            )
+            if self.canary_receipt_store_factory is None:
+                raise CanaryReceiptEvidenceError(
+                    "canary acceptance requires the BuilderOps receipt store"
+                )
+            self.canary_receipt_store = self.canary_receipt_store_factory()
         linked_issue = run.request.get("linked_issue")
         if (
             not isinstance(linked_issue, int)

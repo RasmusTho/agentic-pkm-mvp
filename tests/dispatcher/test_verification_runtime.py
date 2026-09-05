@@ -636,16 +636,23 @@ def test_recovery_reconstructs_canary_receipt_from_persisted_request(
         verification_request, canary_receipt=canary_receipt
     )
 
+    factory_calls = []
+
+    def load_store():
+        factory_calls.append(True)
+        return canary_store
+
     restarted = HostFencedVerificationCycle(
         runtime.ledger,
         runtime.consumer,
         runtime.merge_executor,
         holder="verification-host-restarted",
-        canary_receipt_store=canary_store,
+        canary_receipt_store_factory=load_store,
     )
     recovered = restarted.recover_dry_cycle(str(initial["run_id"]))
 
     assert recovered == initial
+    assert factory_calls == [True]
     assert len(
         [
             record
