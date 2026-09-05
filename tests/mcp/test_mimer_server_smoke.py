@@ -241,6 +241,21 @@ def test_restart_recovers_without_capture_replay(tmp_path: Path) -> None:
     second = _start(entry, f"http://127.0.0.1:{runtime.server_port}")
     try:
         assert "result" in _call(second, 3, "mimer.health", {})
+        assert second.stdin and second.stdout
+        second.stdin.write(
+            json.dumps({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}})
+            + "\n"
+        )
+        second.stdin.flush()
+        assert [
+            tool["name"] for tool in json.loads(second.stdout.readline())["result"]["tools"]
+        ] == [
+            "mimer.ask",
+            "mimer.capture",
+            "mimer.retrieve",
+            "mimer.read_note",
+            "mimer.health",
+        ]
         assert calls.count("/api/companion/capture") == 1
     finally:
         second.terminate()
