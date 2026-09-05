@@ -12,8 +12,10 @@ from app.builderops.execution_routing import (
     create_execution_attempt,
 )
 from app.builderops.execution_routing_receipts import (
+    CanaryReceiptEvidenceError,
     append_attempt_intent,
     append_attempt_outcome,
+    bind_canary_receipt_to_verification_request,
 )
 from app.builderops.store import SqliteBuilderOpsStore
 from app.builderops.control_plane import LeaseUnavailable
@@ -536,6 +538,7 @@ def test_host_cycle_consumes_canary_acceptance_on_verified_current_head(
     canary_store.initialize()
     route_request = ExecutionRouteRequest(
         request_id="execution-route-request-runtime-canary",
+        repository=REPO,
         issue_number=3603,
         work_class="bounded_fast",
         risk="low",
@@ -594,8 +597,11 @@ def test_host_cycle_consumes_canary_acceptance_on_verified_current_head(
         canary_receipt_store=canary_store,
     )
 
+    verification_request = bind_canary_receipt_to_verification_request(
+        request(), canary_receipt
+    )
     cycle_receipt = runtime.run_dry_cycle(
-        request(), canary_receipt=canary_receipt
+        verification_request, canary_receipt=canary_receipt
     )
 
     acceptance_records = [
@@ -618,3 +624,208 @@ def test_host_cycle_consumes_canary_acceptance_on_verified_current_head(
             if record["action"] == "canary_acceptance_observation"
         ]
     ) == 1
+
+
+def test_recovery_reconstructs_canary_receipt_from_persisted_request(
+    tmp_path,
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    initial = runtime.run_dry_cycle(
+        verification_request, canary_receipt=canary_receipt
+    )
+
+    factory_calls = []
+
+    def load_store():
+        factory_calls.append(True)
+        return canary_store
+
+    restarted = HostFencedVerificationCycle(
+        runtime.ledger,
+        runtime.consumer,
+        runtime.merge_executor,
+        holder="verification-host-restarted",
+        canary_receipt_store_factory=load_store,
+    )
+    recovered = restarted.recover_dry_cycle(str(initial["run_id"]))
+
+    assert recovered == initial
+    assert factory_calls == [True]
+    assert len(
+        [
+            record
+            for record in canary_store.list_records("BuilderOpsReceipt")
+            if record["action"] == "canary_acceptance_observation"
+        ]
+    ) == 1
+
+
+def _canary_runtime_fixture(tmp_path):
+    api = FakeBuilderOpsClient()
+    outbox = FakeVerificationOutbox(api)
+    ledger = BuilderOpsVerificationLedger(
+        api, repository=REPO, effect_outbox=outbox
+    )
+    canary_store = SqliteBuilderOpsStore(tmp_path / "builderops-lineage.sqlite3")
+    canary_store.initialize()
+    route_request = ExecutionRouteRequest(
+        request_id="execution-route-request-runtime-lineage",
+        repository=REPO,
+        issue_number=3603,
+        work_class="bounded_fast",
+        risk="low",
+        ambiguity="low",
+        protected_surface=False,
+        decision_at="2026-08-29T15:00:00Z",
+        context_pack_hash="a" * 64,
+        authority_hash="b" * 64,
+        verification_profile_hash="c" * 64,
+        shadow_against_capability="luna",
+    )
+    route_decision = admit_phase2_canary(
+        route_request, opt_in=True, sample_index=1, sample_limit=1
+    )
+    attempt = create_execution_attempt(
+        request=route_request,
+        decision=route_decision,
+        target=ResolvedExecutionTarget(
+            capability="luna",
+            provider="openai",
+            model="gpt-5.6-luna",
+            reasoning_effort="low",
+            configuration_ref="builderops-test",
+        ),
+        attempt_number=1,
+        mode="canary",
+        outcome="started",
+        observed_at="2026-08-29T15:00:01Z",
+    )
+    chain = append_attempt_intent(
+        canary_store, route_request, route_decision, attempt
+    )
+    append_attempt_outcome(
+        canary_store, chain, route_request, route_decision, attempt
+    )
+    canary_receipt = build_execution_routing_canary_receipt(
+        request=route_request,
+        decision=route_decision,
+        attempts=(attempt,),
+        accepted_delivery_verification="not_run",
+    )
+    consumer = VerificationConsumer(
+        ledger,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        VerifiedLauncher(),
+        holder="verification-host",
+    )
+    repository = RepositoryAuthority()
+    runtime = HostFencedVerificationCycle(
+        ledger,
+        consumer,
+        VerificationMergeExecutor(ledger, outbox, repository, Credentials()),
+        holder="verification-host",
+        canary_receipt_store=canary_store,
+    )
+    verification_request = bind_canary_receipt_to_verification_request(
+        request(), canary_receipt
+    )
+    return runtime, canary_store, canary_receipt, verification_request
+
+
+def test_canary_acceptance_requires_request_bound_lineage(tmp_path) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    unbound_request = dict(verification_request)
+    unbound_request.pop("canary_identity")
+
+    with pytest.raises(CanaryReceiptEvidenceError, match="request lineage"):
+        runtime.run_dry_cycle(unbound_request, canary_receipt=canary_receipt)
+
+    assert [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ] == []
+
+
+def test_terminalization_failure_does_not_record_canary_acceptance(
+    tmp_path, monkeypatch
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+
+    def fail_terminalization(_run_id, _receipt):
+        raise RuntimeError("terminalization failed")
+
+    monkeypatch.setattr(runtime, "_complete", fail_terminalization)
+    with pytest.raises(RuntimeError, match="terminalization failed"):
+        runtime.run_dry_cycle(
+            verification_request, canary_receipt=canary_receipt
+        )
+
+    assert [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ] == []
+
+
+def test_retry_after_readback_does_not_record_canary_acceptance(
+    tmp_path, monkeypatch
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    retry_receipt = {"terminal_outcome": "retry_after_readback"}
+    monkeypatch.setattr(
+        runtime,
+        "_finish_ready_dry_cycle",
+        lambda _run_id: retry_receipt,
+    )
+
+    assert (
+        runtime.run_dry_cycle(
+            verification_request, canary_receipt=canary_receipt
+        )
+        == retry_receipt
+    )
+    assert [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ] == []
+
+
+def test_recovery_retry_after_readback_does_not_record_canary_acceptance(
+    tmp_path, monkeypatch
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    run = runtime.consumer.consume(verification_request)
+    task = runtime.ledger.client.tasks[run.run_id]
+    assert task["lease"] is not None
+    task["lease"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+    retry_receipt = {"terminal_outcome": "retry_after_readback"}
+    monkeypatch.setattr(
+        runtime,
+        "_finish_ready_dry_cycle",
+        lambda _run_id: retry_receipt,
+    )
+
+    assert (
+        runtime.recover_dry_cycle(
+            run.run_id, canary_receipt=canary_receipt
+        )
+        == retry_receipt
+    )
+    assert [
+        record
+        for record in canary_store.list_records("BuilderOpsReceipt")
+        if record["action"] == "canary_acceptance_observation"
+    ] == []

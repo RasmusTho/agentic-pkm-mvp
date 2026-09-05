@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.builderops.delivery_orchestration_contracts import (
     CanonicalDeliveryContract,
     NonEmptyStr,
+    RepositoryId,
     Sha256,
     UtcTimestamp,
     canonical_hash,
@@ -129,6 +130,7 @@ class ExecutionRouteRequest(CanonicalDeliveryContract):
     policy_version: Literal[
         "builderops.execution-routing-policy.v1"
     ] = EXECUTION_ROUTING_POLICY_VERSION
+    repository: RepositoryId | None = None
     issue_number: int = Field(gt=0)
     work_class: WorkClass
     risk: Literal["low", "medium", "high", "critical"]
@@ -574,6 +576,8 @@ def build_execution_routing_canary_receipt(
     """
 
     validate_route_decision(request, decision)
+    if request.repository is None:
+        raise ValueError("canary receipt requires a canonical originating repository")
     if not 1 <= len(attempts) <= 2:
         raise ValueError("Phase 2 canary permits at most one bounded Spark/Luna fallback")
     first = attempts[0]
@@ -608,7 +612,11 @@ def build_execution_routing_canary_receipt(
 
     return {
         "schema_version": PHASE2_CANARY_RECEIPT_VERSION,
-        "candidate": {"issue_number": request.issue_number, "work_class": request.work_class},
+        "candidate": {
+            "repository": request.repository,
+            "issue_number": request.issue_number,
+            "work_class": request.work_class,
+        },
         "route": {
             "route_lineage_id": decision.route_lineage_id,
             "route_decision_id": decision.decision_id,
@@ -627,6 +635,7 @@ def build_execution_routing_canary_receipt(
             {
                 "attempt_id": attempt.attempt_id,
                 "attempt_hash": attempt.content_hash,
+                "repository": request.repository,
                 "attempt_number": attempt.attempt_number,
                 "mode": attempt.mode,
                 "requested_capability": attempt.requested_capability,

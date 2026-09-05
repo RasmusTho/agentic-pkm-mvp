@@ -15,7 +15,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence, TypeGuard
 
 from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS
-from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    verification_run_id_for_canary,
+)
 from app.dispatcher.store import (
     SqliteStore,
     recognized_ambiguous_v1_closure_request,
@@ -68,6 +71,35 @@ _REQUEST_FIELDS = (
     *_REQUEST_FIELDS_V2[:6],
     "final_review_rounds",
     *_REQUEST_FIELDS_V2[6:],
+)
+_REQUEST_FIELDS_WITH_CANARY = (*_REQUEST_FIELDS, "canary_identity")
+_CANARY_IDENTITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "repository",
+        "issue_number",
+        "pr_number",
+        "head_sha",
+        "verification_run_id",
+        "route_lineage_id",
+        "route_decision_id",
+        "route_decision_hash",
+        "semantic_hashes",
+        "attempts",
+        "receipt_hash",
+    }
+)
+_CANARY_ATTEMPT_IDENTITY_FIELDS = frozenset(
+    {
+        "attempt_id",
+        "attempt_hash",
+        "attempt_number",
+        "repository",
+        "route_lineage_id",
+        "route_decision_id",
+        "route_decision_hash",
+        "semantic_hashes",
+    }
 )
 _NESTED_REQUEST_FIELDS = {
     "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
@@ -519,6 +551,8 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
         if version == LEGACY_CONTRACT_VERSION
         else _REQUEST_FIELDS_V2
         if version == PREVIOUS_CONTRACT_VERSION
+        else _REQUEST_FIELDS_WITH_CANARY
+        if version == CONTRACT_VERSION and "canary_identity" in request
         else _REQUEST_FIELDS
     )
     projected = _closed_projection(request, fields=fields, location="request")
@@ -536,6 +570,79 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
     if isinstance(closing_issues, list):
         projected["closing_issues"] = list(closing_issues)
     return projected
+
+
+def _validate_canary_identity(
+    request: Mapping[str, object],
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+    head_sha: str,
+    idempotency_key: str,
+) -> None:
+    value = request.get("canary_identity")
+    if value is None:
+        return
+    if not isinstance(value, Mapping) or set(value) != _CANARY_IDENTITY_FIELDS:
+        raise ValueError("verification request canary identity is malformed")
+    if (
+        value.get("schema_version") != "builder_execution_routing_canary.v1"
+        or not isinstance(value.get("repository"), str)
+        or value.get("repository", "").casefold() != repository.casefold()
+        or not _positive_int(value.get("issue_number"))
+        or not _positive_int(value.get("pr_number"))
+        or value.get("issue_number") != issue_number
+        or value.get("pr_number") != pr_number
+        or value.get("head_sha") != head_sha
+        or value.get("verification_run_id")
+        != verification_run_id_for_canary(repository, pr_number, "verification")
+        or not isinstance(value.get("route_lineage_id"), str)
+        or not value.get("route_lineage_id")
+        or not isinstance(value.get("route_decision_id"), str)
+        or not value.get("route_decision_id")
+        or not isinstance(value.get("route_decision_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["route_decision_hash"]) is None
+        or not isinstance(value.get("receipt_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["receipt_hash"]) is None
+    ):
+        raise ValueError("verification request canary identity is malformed")
+    semantic_hashes = value.get("semantic_hashes")
+    if (
+        not isinstance(semantic_hashes, Mapping)
+        or set(semantic_hashes)
+        != {"context_pack_hash", "authority_hash", "verification_profile_hash"}
+        or any(
+            not isinstance(semantic_hashes.get(key), str)
+            or re.fullmatch(r"[0-9a-f]{64}", semantic_hashes[key]) is None
+            for key in semantic_hashes
+        )
+    ):
+        raise ValueError("verification request canary identity is malformed")
+    attempts = value.get("attempts")
+    if not isinstance(attempts, list) or not 1 <= len(attempts) <= 2:
+        raise ValueError("verification request canary identity is malformed")
+    for expected_number, attempt in enumerate(attempts, start=1):
+        if (
+            not isinstance(attempt, Mapping)
+            or set(attempt) != _CANARY_ATTEMPT_IDENTITY_FIELDS
+        ):
+            raise ValueError("verification request canary identity is malformed")
+        attempt_hashes = attempt.get("semantic_hashes")
+        if (
+            not _positive_int(attempt.get("attempt_number"))
+            or attempt.get("attempt_number") != expected_number
+            or not isinstance(attempt.get("attempt_id"), str)
+            or not attempt.get("attempt_id")
+            or not isinstance(attempt.get("attempt_hash"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", attempt["attempt_hash"]) is None
+            or attempt.get("repository") != value.get("repository")
+            or attempt.get("route_lineage_id") != value.get("route_lineage_id")
+            or attempt.get("route_decision_id") != value.get("route_decision_id")
+            or attempt.get("route_decision_hash") != value.get("route_decision_hash")
+            or attempt_hashes != semantic_hashes
+        ):
+            raise ValueError("verification request canary identity is malformed")
 
 
 def _required_string(request: Mapping[str, object], field: str) -> str:
@@ -684,6 +791,14 @@ def _validate_request(
     expected = hashlib.sha256(_json(identity).encode()).hexdigest()
     if strings["idempotency_key"] != expected:
         raise ValueError("verification request idempotency key does not match identity")
+    _validate_canary_identity(
+        request,
+        repository=repository,
+        issue_number=linked_issue,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        idempotency_key=strings["idempotency_key"],
+    )
 
 
 def _validated_stored_request(value: str | None) -> dict[str, object]:
@@ -701,12 +816,22 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     request = _validated_stored_request(row["request_json"])
     idempotency_key = request["idempotency_key"]
     assert isinstance(idempotency_key, str)
+    expected_run_id = (
+        verification_run_id_for_canary(
+            str(request["repository"]),
+            _required_positive_int(request, "pr_number"),
+            _required_string(request, "stage"),
+        )
+        if request.get("contract_version") == CONTRACT_VERSION
+        and "canary_identity" in request
+        else f"vrun-{idempotency_key[:16]}"
+    )
     legacy_recovery_audit = _validated_legacy_recovery_audit(row)
     current_head_sha = row["current_head_sha"]
     verified_head_sha = row["verified_head_sha"]
     if (
         (
-            row["run_id"] != f"vrun-{idempotency_key[:16]}"
+            row["run_id"] != expected_run_id
             and legacy_recovery_audit is None
         )
         or row["idempotency_key"] != request["idempotency_key"]
@@ -2189,7 +2314,16 @@ class VerificationDispatchLedger:
         request = _canonical_request_projection(request)
         _validate_request(request)
         now = _now()
-        run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
+        run_id = (
+            verification_run_id_for_canary(
+                str(request["repository"]),
+                _required_positive_int(request, "pr_number"),
+                _required_string(request, "stage"),
+            )
+            if request.get("contract_version") == CONTRACT_VERSION
+            and "canary_identity" in request
+            else f"vrun-{str(request['idempotency_key'])[:16]}"
+        )
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
             inert_audits = list(conn.execute(
