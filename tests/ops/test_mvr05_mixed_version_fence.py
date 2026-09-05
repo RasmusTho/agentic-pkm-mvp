@@ -171,15 +171,11 @@ def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
                     if identity.materialized
                     else f"path:{identity.canonical_path}"
                 ),
-                "ancestor_identities": [
-                    (
-                        f"inode:{identity.device}:{identity.inode}"
-                        if identity.materialized
-                        else f"path:{identity.canonical_path}"
-                    )
+                "ancestor_identities": sorted(
+                    f"path:{identity.canonical_path}"
                     for ancestor in Path(owner["root"]).resolve().parents
                     for identity in (resolve_filesystem_root_identity(ancestor),)
-                ],
+                ),
             }
         )
     source_evidence = {
@@ -357,6 +353,8 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
     ownership_root.mkdir(mode=0o700)
     dev_root = tmp_path / "existing-vault"
     prod_root = tmp_path / "foreign-vault"
+    dev_root.mkdir()
+    prod_root.mkdir()
     ledger = OwnershipLedger(ownership_root)
     for channel, binding_id, root in (
         ("dev", "binding-existing", dev_root),
@@ -430,6 +428,10 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
         encoding="utf-8",
     )
     owner_inventory.chmod(0o600)
+    # The host producer captured both roots while mounted; the one-shot
+    # instance-state-init process then runs without either vault mount.
+    dev_root.rmdir()
+    prod_root.rmdir()
     registry_path = state_root / "agentic-pkm" / "vault-registry.md"
     fence_plan = tmp_path / "mvr05-fence-plan.json"
     fence_plan.write_text(
