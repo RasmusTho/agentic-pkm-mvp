@@ -11,7 +11,14 @@ description: "Roll prod back: in checkout mode merge the governed rollback PR, u
 > **dormant** and is not an ancestor of `origin/main`. A revert PR against dormant `stable` is not
 > meaningful under the current baseline — confirm with the operator before invoking.
 
-Use this skill when `execute-promotion` fails or when `verify-promotion` returns FAIL after a promotion. Its job is to return prod to the last known-good state as defined by the rollback contract.
+Use this skill when a promotion has produced an observed deployment effect requiring recovery,
+including failed post-promotion verification. A failed prepare/execute preflight alone is not a
+rollback trigger. Its job is to return prod to the last known-good state as defined by the rollback contract.
+
+Before any rollback effect, read back the deployed pin, stable ref, applied migrations, and relevant
+process state against the failed promotion's evidence. Require an observed effect needing recovery
+and the existing rollback authority. No deployment effect means return to the caller for repair
+without production mutation; unknown effects mean reconcile state first, not blind rollback.
 
 Do not use this skill to:
 - produce the promotion plan (use `prepare-promotion`)
@@ -104,7 +111,7 @@ Before rollback, resolve the prod channel's deployment model:
    URL, `stable-prev` rollback target, failed promotion checkout used for migration
    reversal when applicable, merged `origin/stable` rollback commit or deploy receipt path, which migrations were reversed,
    which were skipped (forward-only), process restart confirmation.
-14. Reports to the operator: "Rollback complete. Run verify-promotion."
+14. Invokes `verify-promotion` with the plan, then reports verified recovery or the required operator triage.
 
 ## Pre-conditions
 
@@ -166,3 +173,10 @@ The operator must have acknowledged these limits at promotion time via the opera
 - Called after: `execute-promotion` failure, or `verify-promotion` FAIL post-promotion
 - After completion → always call `verify-promotion`
 - If verify fails after rollback → escalate to operator; do not loop
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After rollback, invoke `verify-promotion`
+with the plan and return its verified result to the caller. A failed migration reversal or failed
+verification retains the operator triage gate; continuation never permits a second automated
+rollback or reversal of forward-only migrations.

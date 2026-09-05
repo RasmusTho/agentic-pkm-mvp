@@ -292,3 +292,10 @@ route it through `capture-learning` — it owns the invocation timing and the "n
 artifact or don't log" gate. Builder workflow learning remains Builder System material; do not
 classify it as runtime/user memory or HKA/MEM authority unless a Product System owner path explicitly
 promotes it.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After canonical intake, resume the
+caller. For repair in scope, invoke `issue-to-code` for a ready bug or `deliver-issue-set` for a bug
+set. A valid deferred Known Defects disposition returns to the active review/delivery chain; intake
+does not expand scope or waive protected-finding repair.

@@ -59,3 +59,11 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 ## Capturing learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+Execute the selected `issue-to-code`, `docs-governance`, or governance publication workflow for the
+authorized task; do not stop at proposing checks. After validation, invoke `publish-pr` and follow
+its closure transition when delivery is in scope.

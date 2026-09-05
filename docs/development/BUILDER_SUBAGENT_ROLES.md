@@ -109,6 +109,14 @@ owning workflow skill or produce a truthful handoff, but its recommendation does
 handoff contract: `final_state` remains only `blocked | needs-human | handoff`; a worker must never
 self-attest `done`.
 
+Apply `.codex/skills/README.md :: Workflow continuation` at every role boundary. A helper returns
+evidence to its active caller; an issue owner executes the next skill through verified closure.
+Publication-only, pending-CI, and queued-verification receipts are intermediate progress, not
+terminal delivery handoffs. The coordinator resumes premature returns and follows any fenced host
+executor through reconciled effects. Only documented stop-loss, explicit user scope restriction,
+or an authenticated active successor transfer permits the originating issue session to stop early.
+These rules preserve the receipt enum and the lifecycle transfer protocol below.
+
 A `subagent_handoff_receipt` reports work to a coordinator; it does not by itself transfer Issue
 lifecycle authority. Replacing the sole writer or lifecycle owner requires a durable
 `lifecycle_handoff_receipt.v1` on the governing Issue or PR. It records the Issue, current lifecycle

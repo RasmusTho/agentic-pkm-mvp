@@ -233,3 +233,11 @@ promotion evidence.
 - Do not automate another desktop app or copy turns between apps.
 - Do not write inquiry artifacts to Companion UI or a human knowledge vault.
 - Do not print adapter or credential configuration while diagnosing a failure.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After validating the single launcher
+result and performing allowed cleanup, return the receipt to the originating research or promotion
+workflow so it can execute its next authorized step. This skill does not create Issues or retry the
+inquiry; ambiguous launcher outcomes retain the lock/cleanup and operator-resolution boundaries
+specified here.

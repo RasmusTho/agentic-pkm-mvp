@@ -136,3 +136,10 @@ If no drift is found, say that explicitly and still report residual risks:
 - oversized umbrella issues
 - docs that are still too broad to anchor safely
 - project states that depend on manual GitHub updates
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Invoke `issue-maintenance-change-control`
+for authorized corrective actions, verify the repaired lifecycle state, then resume the interrupted
+workflow. Audit-only scope returns evidence and recommendations; an audit finding alone does not
+authorize external mutations.

@@ -100,3 +100,10 @@ Invoke before continuing only when the divergence needs immediate upstream repai
 1. BuilderOps `LearningSignal` id and JSON summary, or the explicit compatibility fallback entry
 2. Upstream artifact named
 3. Continue with interrupted task
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After capturing the signal, resume the
+interrupted workflow. If immediate upstream repair is required and authorized, invoke its owning
+docs/governance or issue workflow, then resume. Capturing a signal does not require starting a
+retrospective or parking active delivery.

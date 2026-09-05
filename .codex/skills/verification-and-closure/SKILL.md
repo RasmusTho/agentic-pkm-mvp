@@ -614,6 +614,9 @@ Rules for the restore:
 
 ## When Not to Merge
 
+Refusing a merge does not end the delivery loop. Execute the authorized repair/maintenance route,
+then resume verification; suspend only under the shared workflow stop-loss or explicit user stop.
+
 - any issue-backed acceptance criterion is not met -> create a follow-up Issue instead
 - any issue-backed behavioral AC `Verify:` test is missing, skipped, xfailed, or excluded from CI -> do not merge
 - any issue-backed non-behavioral AC `Verify:` target is absent -> do not merge
@@ -755,3 +758,16 @@ Include the delivery receipt line.
 ### 4. Follow-up Issues
 
 If work is partial, do not merge. Create bounded follow-up Issue(s) using the exact task-contract shape.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+Execute required CI/review, repair, merge, reconciliation, and `post-merge-owner-doc` before
+returning a delivery receipt. Follow queued execution through its observed terminal effects; a
+`verified` worker verdict alone is intermediate. In `host_fenced_executor` mode the worker must
+preserve its mutation prohibition and return evidence to the host; the originating delivery owner
+follows the host through merge and reconciliation. Missing host prerequisites trigger bounded
+diagnosis and authorized recovery, not credential fabrication or a weaker merge route. After
+closure, return evidence to the caller for its remaining authorized work; do not start unrelated
+delivery or deployment.

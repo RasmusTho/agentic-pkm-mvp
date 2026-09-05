@@ -43,7 +43,7 @@ This is a decision/routing skill. It does not replace `docs-authoring`, `docs-to
 3. Decide the docs action using the anti-sprawl rules.
 4. Preserve traceability from source docs, source anchors, acceptance criteria, and `Verify:` targets.
 5. Apply interface-ownership rules when the artifact describes a boundary.
-6. Route to exactly one narrower skill, or produce a no-change receipt.
+6. Invoke the selected narrower skill, or return a no-change receipt to the caller.
 7. Output a short Docs Governance Decision receipt.
 
 ## Artifact roles
@@ -135,7 +135,7 @@ If the interface owner cannot be assigned without inventing a system, use a Huma
 - Use `post-merge-owner-doc` after a merged PR to decide whether owner docs need an immediate PR, a
   follow-up issue, or a no-change receipt.
 
-Do not route to multiple narrower skills unless the first skill explicitly hands off to the next one.
+Select one initial narrower skill; execute its applicable next transition instead of treating its handoff as session completion.
 
 ## Output format
 
@@ -172,3 +172,10 @@ safe no-change or follow-up posture until the decision exists.
 
 On a plan divergence, route it through `capture-learning`; that skill owns invocation timing and the
 "name an upstream artifact or do not log" gate.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Invoke the selected narrower skill with
+the ownership decision and source anchors; do not stop at naming that skill. Return a no-change
+receipt to the caller when no correction is needed. A genuine Human Exception follows
+`owner-decision-brief`; resolve safe factual gaps first.

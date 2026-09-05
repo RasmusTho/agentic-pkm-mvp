@@ -61,9 +61,30 @@ Every delivery carries a default budget of **2 CI-repair rounds per failure mech
 path keeps the 2+2 capability-escalated repair budget owned by `verification-and-closure`). When
 the budget is spent, stop grinding: ship the smallest passing subset of the change, or hand the
 work back with a one-paragraph stop report and a `LearningSignal` naming the artifact that made it
-expensive. Budgets are never rebound to a new mechanism key to reset accounting. Light (Tier 1/2)
+expensive. A handback requires the stop-loss assessment below; budget exhaustion first triggers
+the applicable shrink/replan or capability-escalation path, not automatic abandonment. Budgets are
+never rebound to a new mechanism key to reset accounting. Light (Tier 1/2)
 deliveries run without sub-agent fan-out. Repeated failure on a bounded change is evidence the
 solution is too big — shrink the solution before escalating capability.
+
+For every Builder workflow, a stop-loss permits suspending unfinished work only when continued
+execution is unsafe, unauthorized, or demonstrably non-convergent after the applicable bounded
+diagnosis, repair, and capability-escalation process. It includes an unresolved authority/scope
+boundary, required operator acknowledgment not yet given, or indispensable infrastructure still
+unavailable after authorized recovery. Explicit user stop or limited scope is separately sufficient;
+do not describe a completed analysis-only task as blocked delivery.
+
+Ordinary CI/review waits, queue acceptance, first failures, repairable conflicts, missing optional
+projection, and publication success are not stop-loss. A missing executor manifest requires diagnosis
+and authorized recovery, not automatic credential provisioning or bypass. Preserve separate P0/P1
+convergence rules; never merge a partial contract or waive verification to avoid leaving a PR open.
+
+Before stopping, record the exact step and artifact/PR head, failed gate and evidence, attempts and
+remaining budget, why no safe authorized continuation exists, preserved work/owner, and one next
+recovery action in the existing task/Issue/PR receipt. Reuse `blocker_action.v1` when its lifecycle
+applies and the existing lifecycle handoff receipt for an actual owner transfer; add no new schema.
+Technical stop-loss alone does not create `agent:needs-human`. Invoke `owner-decision-brief` only for
+a genuine owner decision. Once the condition clears, `resume-work` continues the suspended chain.
 
 ## Post-validation base-drift evidence reuse
 

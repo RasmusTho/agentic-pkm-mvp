@@ -495,3 +495,12 @@ Use this when the user asks for a maintenance run across everything not done.
 
 11. Output a receipt listing edited issues, label changes, Issue/PR state changes, verification
     reads, and optional Project before/after counts only when step 2 ran.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+After validating and reading back the correction, resume the calling workflow at its blocked step.
+Invoke `issue-to-code` or `deliver-issue-set` only when delivery belongs to the authorized task;
+backlog maintenance alone does not authorize implementation. Publish any authorized repo governance
+correction through `publish-pr` and follow closure, rather than merely recommending that transition.

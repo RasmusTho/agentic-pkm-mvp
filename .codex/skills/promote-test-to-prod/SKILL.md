@@ -181,3 +181,13 @@ promote-test-to-prod \
 - Calls: `prepare-promotion → execute-promotion → verify-promotion`
 - On verify FAIL: calls `rollback-promotion → verify-promotion`
 - On rollback verify FAIL: escalates to operator; does not loop
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Execute the prepare → execute → verify
+chain through acceptance and return the receipt to the caller. On failure, use `execute-promotion`'s
+observed-effect recovery classification: failures before deployment effects require diagnosis/repair
+without rollback; unknown effects require state reconciliation. Only an observed deployment effect
+requiring recovery permits the authorized rollback → verification route. Existing operator
+acknowledgments, migration limits, and live
+deployment-model applicability remain gates.

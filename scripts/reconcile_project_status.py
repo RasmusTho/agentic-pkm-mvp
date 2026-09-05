@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 Reconcile GitHub Project v2 Status for repository issues and pull requests.
+
+The migration mode copies repository-backed Issue and PullRequest cards from a
+legacy Project into the governed Project, then derives destination Status from
+live Issue/PR truth. It never removes source cards and is dry-run by default.
 """
 
 from __future__ import annotations
@@ -38,7 +42,9 @@ PROJECT_STATUS_VALUES = (
     "Review",
     "Done",
 )
-SCAN_WATERMARK_PATH = REPO_ROOT / "runtime" / "dispatcher" / "project_status_reconcile_scan_watermark.json"
+SCAN_WATERMARK_PATH = (
+    REPO_ROOT / "runtime" / "dispatcher" / "project_status_reconcile_scan_watermark.json"
+)
 PROJECT_ITEM_LIST_INITIAL_LIMIT = 200
 PROJECT_ITEM_SCAN_PAGE_SIZE = 100
 GH_RETRY_ATTEMPTS = 5
@@ -99,6 +105,26 @@ query($owner: String!, $number: Int!, $after: String) {{
 PROJECT_ITEMS_WITH_UPDATED_AT_QUERY = _project_items_query("organization")
 PROJECT_ITEMS_FOR_USER_WITH_UPDATED_AT_QUERY = _project_items_query("user")
 
+ISSUE_WITH_PARENT_EVIDENCE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number
+      state
+      url
+      title
+      body
+      labels(first: 100) {
+        nodes { name }
+      }
+      subIssues(first: 1) {
+        totalCount
+      }
+    }
+  }
+}
+"""
+
 # GitHub's shared GraphQL pool (~5000 points/hr, shared across every tool/agent
 # on this identity) exhausts long before REST core. Below these remaining-budget
 # floors we shed the most expensive GraphQL work instead of pushing an already
@@ -106,14 +132,10 @@ PROJECT_ITEMS_FOR_USER_WITH_UPDATED_AT_QUERY = _project_items_query("user")
 # See issues #2681 (daily, budget-gated reconcile) and #2684 (GitHub-API
 # observability) for the rationale and thresholds.
 GRAPHQL_SCAN_MIN_BUDGET = int(os.environ.get("RECONCILE_GRAPHQL_SCAN_MIN_BUDGET", "500"))
-GRAPHQL_OPTIONAL_MIN_BUDGET = int(
-    os.environ.get("RECONCILE_GRAPHQL_OPTIONAL_MIN_BUDGET", "250")
-)
+GRAPHQL_OPTIONAL_MIN_BUDGET = int(os.environ.get("RECONCILE_GRAPHQL_OPTIONAL_MIN_BUDGET", "250"))
 # Never block a CI runner waiting on a far-off reset; above this many seconds we
 # stop retrying and defer to the next (daily / event-driven) reconcile.
-GH_MAX_RATE_LIMIT_WAIT_SECONDS = int(
-    os.environ.get("RECONCILE_MAX_RATE_LIMIT_WAIT_SECONDS", "120")
-)
+GH_MAX_RATE_LIMIT_WAIT_SECONDS = int(os.environ.get("RECONCILE_MAX_RATE_LIMIT_WAIT_SECONDS", "120"))
 
 
 class ProjectItemListDeferred(RuntimeError):
@@ -144,9 +166,7 @@ def _rw_class(args: tuple[str, ...]) -> str:
 def _log_event(event: dict[str, Any]) -> None:
     """Emit one structured JSON record to stderr (stdout stays human-readable)."""
     try:
-        sys.stderr.write(
-            json.dumps({"component": "reconcile_project_status", **event}) + "\n"
-        )
+        sys.stderr.write(json.dumps({"component": "reconcile_project_status", **event}) + "\n")
     except Exception:
         pass
 
@@ -164,9 +184,7 @@ def _github_timestamp(value: str | None) -> datetime | None:
 
 
 def _format_github_timestamp(value: datetime) -> str:
-    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
-    )
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _scan_started_at() -> datetime:
@@ -256,7 +274,7 @@ def _rate_limit_wait_seconds(exc: subprocess.CalledProcessError) -> int | None:
     return None
 
 
-def run_gh(*args: str) -> str:
+def run_gh(*args: str, use_repo_token: bool = False) -> str:
     op = " ".join(args[:2])
     api = _api_class(args)
     rw = _rw_class(args)
@@ -264,7 +282,9 @@ def run_gh(*args: str) -> str:
         started = time.monotonic()
         try:
             env = None
-            if args and args[0] in {"issue", "pr"} and os.environ.get("REPO_GH_TOKEN"):
+            if (use_repo_token or (args and args[0] in {"issue", "pr"})) and os.environ.get(
+                "REPO_GH_TOKEN"
+            ):
                 env = os.environ.copy()
                 env["GH_TOKEN"] = os.environ["REPO_GH_TOKEN"]
             result = subprocess.run(
@@ -363,7 +383,9 @@ def discover_project(owner: str, title: str) -> dict[str, Any]:
 
 
 def warn_and_exit_if_project_unavailable(args: argparse.Namespace, exc: Exception) -> int:
-    target = f"issue #{args.issue}" if args.issue else f"pr #{args.pr}" if args.pr else "project scan"
+    target = (
+        f"issue #{args.issue}" if args.issue else f"pr #{args.pr}" if args.pr else "project scan"
+    )
     print(
         "skip project reconciliation for"
         f" {target}: project board is unavailable to current credentials; "
@@ -374,7 +396,9 @@ def warn_and_exit_if_project_unavailable(args: argparse.Namespace, exc: Exceptio
 
 
 def get_status_field(owner: str, project_number: int) -> tuple[str, dict[str, str]]:
-    payload = json.loads(run_gh_project(owner, "field-list", str(project_number), "--format", "json"))
+    payload = json.loads(
+        run_gh_project(owner, "field-list", str(project_number), "--format", "json")
+    )
     for field in payload.get("fields", []):
         if field.get("name") != "Status":
             continue
@@ -477,7 +501,7 @@ def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[st
             cmd.extend(["-F", f"after={after}"])
         payload = json.loads(run_gh(*cmd))
         data = payload.get("data") or {}
-        project = ((data.get(owner_type) or {}).get("projectV2"))
+        project = (data.get(owner_type) or {}).get("projectV2")
         if not project:
             raise RuntimeError(f'Project #{project_number} not found for owner "{owner}"')
         page = project.get("items") or {}
@@ -490,12 +514,12 @@ def list_project_items_for_scan(owner: str, project_number: int) -> list[dict[st
             return items
         after = page_info.get("endCursor")
         if not after:
-            raise ProjectItemListDeferred(
-                "project scan pagination did not return an end cursor"
-            )
+            raise ProjectItemListDeferred("project scan pagination did not return an end cursor")
 
 
-def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> dict[str, Any] | None:
+def find_item_by_number(
+    items: list[dict[str, Any]], kind: str, number: int
+) -> dict[str, Any] | None:
     for item in items:
         content = item.get("content") or {}
         if content.get("type") == kind and content.get("number") == number:
@@ -503,24 +527,89 @@ def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> 
     return None
 
 
+def project_item_repo_key(item: dict[str, Any], repo: str) -> str | None:
+    """Return a stable repository content key, excluding drafts and other repos."""
+    content = item.get("content") or {}
+    kind = content.get("type")
+    number = content.get("number")
+    url = content.get("url")
+    if kind == "Issue":
+        expected = f"https://github.com/{repo}/issues/{number}"
+    elif kind == "PullRequest":
+        expected = f"https://github.com/{repo}/pull/{number}"
+    else:
+        return None
+    return expected if url == expected else None
+
+
 def get_issue(repo: str, number: int) -> dict[str, Any]:
+    owner, name = repo.split("/", 1)
+    payload = json.loads(
+        run_gh(
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={number}",
+            "-f",
+            f"query={ISSUE_WITH_PARENT_EVIDENCE_QUERY}",
+            use_repo_token=True,
+        )
+    )
+    issue = ((payload.get("data") or {}).get("repository") or {}).get("issue")
+    if not issue:
+        raise RuntimeError(f"issue #{number} not found in {repo}")
+    issue["labels"] = (issue.get("labels") or {}).get("nodes", [])
+    return issue
+
+
+def get_pr(repo: str, number: int) -> dict[str, Any]:
     return json.loads(
         run_gh(
-            "issue",
+            "pr",
             "view",
             str(number),
             "--repo",
             repo,
             "--json",
-            "number,state,labels,url,title,body,subIssues",
+            "number,state,isDraft,mergedAt,url,title",
         )
     )
 
 
-def get_pr(repo: str, number: int) -> dict[str, Any]:
-    return json.loads(
-        run_gh("pr", "view", str(number), "--repo", repo, "--json", "number,state,isDraft,mergedAt,url,title")
-    )
+def desired_migration_status(
+    repo: str,
+    source_item: dict[str, Any],
+    destination_item: dict[str, Any] | None,
+) -> tuple[str, str | None]:
+    """Derive migration Status from live content truth.
+
+    Review is the sole Project-only override: preserve it when already present
+    on either Project so retries converge after an interrupted add. Other stale
+    Project columns never override repository lifecycle state.
+    """
+    content = source_item["content"]
+    kind = content["type"]
+    number = content["number"]
+    if kind == "Issue":
+        issue = get_issue(repo, number)
+        failure = None
+        label_names = _issue_label_names(issue)
+        if issue.get("state") != "CLOSED" and "agent:ready" in label_names:
+            failure = issue_ready_validation_failure(issue)
+        destination_status = destination_item.get("status") if destination_item else None
+        preserve_review = destination_status == "Review" or source_item.get("status") == "Review"
+        desired = desired_issue_status(issue, "Review" if preserve_review else None) or "Backlog"
+        return desired, failure
+
+    pr = get_pr(repo, number)
+    pr_desired = desired_pr_status(pr, None)
+    if pr_desired is None:
+        raise RuntimeError(f"no derived status for pr #{number}")
+    return pr_desired, None
 
 
 def _issue_label_names(issue: dict[str, Any]) -> set[str]:
@@ -551,9 +640,7 @@ def _has_epic_or_parent_evidence(issue: dict[str, Any]) -> bool:
     return bool((issue.get("subIssues") or {}).get("totalCount"))
 
 
-def desired_issue_status(
-    issue: dict[str, Any], current_status: str | None = None
-) -> str | None:
+def desired_issue_status(issue: dict[str, Any], current_status: str | None = None) -> str | None:
     if issue.get("state") == "CLOSED":
         return "Done"
     if current_status == "Review":
@@ -775,7 +862,11 @@ def reconcile_scan(
         if kind not in {"Issue", "PullRequest"} or not number:
             continue
         content_updated_at = _github_timestamp(content.get("updatedAt"))
-        if watermark is not None and content_updated_at is not None and content_updated_at < watermark:
+        if (
+            watermark is not None
+            and content_updated_at is not None
+            and content_updated_at < watermark
+        ):
             continue
         current = item.get("status")
         desired = None
@@ -819,6 +910,180 @@ def reconcile_scan(
     return 0
 
 
+def reconcile_migration(
+    args: argparse.Namespace,
+    destination_owner: str,
+    destination_project: dict[str, Any],
+    status_field_id: str,
+    status_options: dict[str, str],
+    source_owner: str,
+    source_project: dict[str, Any],
+) -> int:
+    """Copy source Project cards into the destination and reconcile Status.
+
+    Source membership is intentionally preserved. The operation is idempotent:
+    existing destination cards are reused and every apply ends with a fresh
+    coverage and Status verification read.
+    """
+    if source_project.get("id") == destination_project.get("id"):
+        print("migration failed: source and destination resolve to the same project")
+        return 1
+
+    try:
+        source_items = list_project_items_for_scan(source_owner, source_project["number"])
+        destination_items = list_project_items_for_scan(
+            destination_owner, destination_project["number"]
+        )
+    except ProjectItemListDeferred as exc:
+        print(f"migration failed: {exc}")
+        return 1
+
+    source_repo_items: dict[str, dict[str, Any]] = {}
+    unsupported = 0
+    for item in source_items:
+        key = project_item_repo_key(item, args.repo)
+        if key is None:
+            unsupported += 1
+            continue
+        source_repo_items[key] = item
+
+    destination_by_key = {
+        key: item
+        for item in destination_items
+        if (key := project_item_repo_key(item, args.repo)) is not None
+    }
+
+    plan: list[tuple[str, dict[str, Any], str]] = []
+    invalid_ready_keys: set[str] = set()
+    already_present = 0
+    planned_adds = 0
+    planned_status_updates = 0
+
+    for key, source_item in sorted(source_repo_items.items()):
+        content = source_item["content"]
+        kind = content["type"]
+        number = content["number"]
+        destination_item = destination_by_key.get(key)
+        if destination_item is None:
+            planned_adds += 1
+        else:
+            already_present += 1
+
+        current_status = destination_item.get("status") if destination_item else None
+        try:
+            desired, ready_failure = desired_migration_status(
+                args.repo, source_item, destination_item
+            )
+        except RuntimeError as exc:
+            print(f"migration failed: {exc}")
+            return 1
+        if ready_failure is not None:
+            print(f"invalid issue #{number}: {ready_failure}")
+            invalid_ready_keys.add(key)
+
+        if destination_item is None or current_status != desired:
+            planned_status_updates += 1
+        action = "add" if destination_item is None else "keep"
+        status_action = f"set {desired}" if current_status != desired else f"already {desired}"
+        print(f"plan {kind.lower()} #{number}: {action}; {status_action}")
+        plan.append((key, source_item, desired))
+
+    print(
+        "migration plan: "
+        f"source={len(source_repo_items)} already_present={already_present} "
+        f"add={planned_adds} status_update={planned_status_updates} "
+        f"unsupported={unsupported} invalid_ready={len(invalid_ready_keys)}"
+    )
+    if args.dry_run:
+        print("migration dry-run complete: no Project items were changed")
+        return 1 if invalid_ready_keys else 0
+
+    for key, source_item, _desired in plan:
+        if key in destination_by_key:
+            continue
+        content = source_item["content"]
+        print(f"add {content['type'].lower()} #{content['number']} to destination")
+        add_item_to_project(destination_owner, destination_project["number"], content["url"])
+
+    # Refresh once after the add phase so status writes bind to destination item IDs.
+    destination_items = list_project_items_for_scan(
+        destination_owner, destination_project["number"]
+    )
+    destination_by_key = {
+        key: item
+        for item in destination_items
+        if (key := project_item_repo_key(item, args.repo)) is not None
+    }
+
+    for key, source_item, desired in plan:
+        destination_item = destination_by_key.get(key)
+        content = source_item["content"]
+        if destination_item is None:
+            print(
+                f"migration failed: {content['type'].lower()} #{content['number']} "
+                "was not visible in the destination after add"
+            )
+            return 1
+        if destination_item.get("status") == desired:
+            continue
+        print(
+            f"{content['type'].lower()} #{content['number']}: "
+            f"{destination_item.get('status') or '<none>'} -> {desired}"
+        )
+        set_project_status(
+            destination_owner,
+            destination_project["id"],
+            destination_item["id"],
+            status_field_id,
+            status_options[desired],
+            False,
+        )
+
+    verified_source_items = list_project_items_for_scan(source_owner, source_project["number"])
+    verified_source_by_key = {
+        key: item
+        for item in verified_source_items
+        if (key := project_item_repo_key(item, args.repo)) is not None
+    }
+    verified_items = list_project_items_for_scan(destination_owner, destination_project["number"])
+    verified_by_key = {
+        key: item
+        for item in verified_items
+        if (key := project_item_repo_key(item, args.repo)) is not None
+    }
+    missing_after = sorted(set(verified_source_by_key) - set(verified_by_key))
+    status_drift_after: list[str] = []
+    for key, source_item in sorted(verified_source_by_key.items()):
+        destination_item = verified_by_key.get(key)
+        if destination_item is None:
+            continue
+        try:
+            fresh_desired, ready_failure = desired_migration_status(
+                args.repo, source_item, destination_item
+            )
+        except RuntimeError as exc:
+            print(f"migration failed during final verification: {exc}")
+            return 1
+        if ready_failure is not None:
+            invalid_ready_keys.add(key)
+        if destination_item.get("status") != fresh_desired:
+            status_drift_after.append(key)
+    print(
+        "migration receipt: "
+        f"source={len(verified_source_by_key)} added={planned_adds} "
+        f"already_present={already_present} missing_after={len(missing_after)} "
+        f"status_drift_after={len(status_drift_after)} "
+        f"invalid_ready={len(invalid_ready_keys)}"
+    )
+    if missing_after:
+        for key in missing_after:
+            print(f"missing after migration: {key}")
+    if status_drift_after:
+        for key in status_drift_after:
+            print(f"status drift after migration: {key}")
+    return 1 if missing_after or status_drift_after or invalid_ready_keys else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True, help="owner/repo")
@@ -826,13 +1091,32 @@ def main() -> int:
     parser.add_argument("--issue", type=int, help="Issue number to reconcile")
     parser.add_argument("--pr", type=int, help="Pull request number to reconcile")
     parser.add_argument("--scan", action="store_true", help="Reconcile all existing project items")
+    parser.add_argument(
+        "--migrate-from-owner",
+        help="Copy this owner's same-named legacy Project into --owner",
+    )
     parser.add_argument("--status", choices=PROJECT_STATUS_VALUES)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply migration writes; migration is dry-run by default",
+    )
     args = parser.parse_args()
 
-    mode_count = sum(bool(value) for value in (args.issue, args.pr, args.scan))
+    mode_count = sum(
+        bool(value) for value in (args.issue, args.pr, args.scan, args.migrate_from_owner)
+    )
     if mode_count != 1:
-        parser.error("pass exactly one of --issue, --pr, or --scan")
+        parser.error("pass exactly one of --issue, --pr, --scan, or --migrate-from-owner")
+    if args.apply and not args.migrate_from_owner:
+        parser.error("--apply is only valid with --migrate-from-owner")
+    if args.apply and args.dry_run:
+        parser.error("pass only one of --apply or --dry-run")
+    if args.migrate_from_owner and args.status:
+        parser.error("--status is not valid with --migrate-from-owner")
+    if args.migrate_from_owner:
+        args.dry_run = not args.apply
 
     owner = args.owner or args.repo.split("/", 1)[0]
     project_name = load_governance_project_name()
@@ -844,7 +1128,11 @@ def main() -> int:
     # probe itself is the free REST rate_limit endpoint. Scan uses the higher
     # floor; event reconciles use the optional floor.
     budget = graphql_budget_remaining()
-    budget_floor = GRAPHQL_SCAN_MIN_BUDGET if args.scan else GRAPHQL_OPTIONAL_MIN_BUDGET
+    budget_floor = (
+        GRAPHQL_SCAN_MIN_BUDGET
+        if args.scan or args.migrate_from_owner
+        else GRAPHQL_OPTIONAL_MIN_BUDGET
+    )
     # The block decision also consults the SHARED GitHub-API kill switch
     # (app/dispatcher/github_call_logger.py::is_kill_switch_active — the single
     # enforcement point for #2746/GHAPI-C2). The kill-switch threshold lives
@@ -853,7 +1141,9 @@ def main() -> int:
     budget_low = budget is not None and budget < budget_floor
     if kill_switch or budget_low:
         target = (
-            "project scan"
+            f"project migration from {args.migrate_from_owner}"
+            if args.migrate_from_owner
+            else "project scan"
             if args.scan
             else f"issue #{args.issue}"
             if args.issue
@@ -878,14 +1168,31 @@ def main() -> int:
         if kill_switch:
             event["kill_switch_active"] = True
         _log_event(event)
-        return 0
+        return 1 if args.migrate_from_owner else 0
 
     try:
         project = discover_project(owner, project_name)
         status_field_id, status_options = get_status_field(owner, project["number"])
+        source_project = (
+            discover_project(args.migrate_from_owner, project_name)
+            if args.migrate_from_owner
+            else None
+        )
     except (RuntimeError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-        return warn_and_exit_if_project_unavailable(args, exc)
+        result = warn_and_exit_if_project_unavailable(args, exc)
+        return 1 if args.migrate_from_owner else result
 
+    if args.migrate_from_owner:
+        assert source_project is not None
+        return reconcile_migration(
+            args,
+            owner,
+            project,
+            status_field_id,
+            status_options,
+            args.migrate_from_owner,
+            source_project,
+        )
     if args.scan:
         return reconcile_scan(args, owner, project, status_field_id, status_options)
     if args.issue:

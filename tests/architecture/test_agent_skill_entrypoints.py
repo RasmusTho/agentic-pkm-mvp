@@ -642,3 +642,105 @@ def test_publish_pr_full_path_owner_is_exact_and_resolvable() -> None:
         "Ambiguous transport/readback",
     ):
         assert trigger in full_path
+
+
+def test_every_builder_skill_executes_or_returns_its_next_step() -> None:
+    # Inventory from disk, not a fixed list: new Builder entrypoints must carry the contract.
+    for path in sorted((REPO_ROOT / ".codex/skills").glob("*/SKILL.md")):
+        if path.parent.name.startswith("mimer-"):
+            assert "## Workflow continuation" not in path.read_text(), path
+            continue
+        text = path.read_text()
+        assert text.count("## Workflow continuation") == 1, path
+        continuation = " ".join(text.split("## Workflow continuation", 1)[1].split())
+        assert ".codex/skills/README.md :: Workflow continuation" in continuation, path
+        assert any(word in continuation.lower() for word in ("execute", "invoke", "return")), path
+
+
+def test_continuation_preserves_scope_and_fenced_execution() -> None:
+    contract = _section_between(
+        _read(".codex/skills/README.md"), "## Workflow continuation", "## BuilderOps Vault routing"
+    )
+    for invariant in (
+        "mimer-*", "external plugin skills", "analysis-only", "draft-only",
+        "not authorize", "stop-loss", "host_fenced_executor", "never synthesize credentials",
+        "explicitly accepted", "recovery evidence", "suspended caller", "recursively reopen",
+        "human involvement is reserved for genuine exceptions",
+    ):
+        assert invariant in contract, invariant
+    assert "Workflow continuation" in _read("AGENTS.md")
+
+
+def test_publication_cannot_be_terminal_delivery_handoff() -> None:
+    issue = _read(".codex/skills/issue-to-code/SKILL.md")
+    assert "19. Immediately execute `verification-and-closure`" in issue
+    assert "If the slice merges" not in issue
+    publish = _read(".codex/skills/publish-pr/SKILL.md")
+    assert "immediately load and execute" in publish
+    assert "Publication does not make the Issue or delivery Done" in publish
+    adapter = _read(".codex/agents/slice-implementer.toml")
+    assert "handoff after publication or closure work" not in adapter
+    assert "stop-loss/explicit user scope restriction" in adapter
+    for name in ("slice-implementer", "verification-closer", "issue-set-coordinator"):
+        assert "Workflow continuation" in _read(f".codex/agents/{name}.toml")
+
+
+def test_stop_loss_distinguishes_failed_operation_from_session_end() -> None:
+    contract = _section_between(
+        _read("docs/development/GOVERNANCE_PROPORTIONALITY.md"),
+        "## Delivery budgets and stop-loss", "## Post-validation base-drift evidence reuse",
+    )
+    for requirement in (
+        "authorized recovery", "not stop-loss", "first failures", "repairable conflicts",
+        "exact step and artifact/PR head", "remaining budget", "no safe authorized continuation",
+        "Technical stop-loss alone does not create", "separate P0/P1",
+    ):
+        assert requirement in contract, requirement
+    closeout = " ".join(_read(".codex/skills/klart/SKILL.md").split())
+    assert "Before suspending an open delivery PR" in closeout
+    assert "proposed successor or copyable prompt is insufficient" in closeout
+
+
+def test_supporting_workflows_do_not_park_followup_work() -> None:
+    owner_doc = _read(".codex/skills/post-merge-owner-doc/SKILL.md")
+    assert "opened PR is interim evidence only" in owner_doc
+    assert "wait for the user's next pass" not in owner_doc
+    assert "Do not block anything" not in owner_doc
+    for name in ("execute-promotion", "rollback-promotion"):
+        continuation = _read(f".codex/skills/{name}/SKILL.md").split(
+            "## Workflow continuation", 1
+        )[1]
+        assert "verify-promotion" in continuation
+    retro = _read(".codex/skills/learning-retrospective/SKILL.md")
+    assert "do not request approval already supplied by the task" in retro
+    assert "follow-up\nagent run using" not in retro
+
+
+def test_promotion_continuation_requires_observed_effect_before_rollback() -> None:
+    skill = _read(".codex/skills/execute-promotion/SKILL.md")
+    continuation = " ".join(skill.split("## Workflow continuation", 1)[1].split())
+    for requirement in (
+        "does not authorize rollback", "actually advanced",
+        "no deployment effect occurred", "without production mutation",
+        "effect is unknown", "reconcile observed state",
+        "only after evidence establishes a deployment effect requiring recovery",
+        "rollback authority and migration gates hold",
+    ):
+        assert requirement in continuation, requirement
+    routing = _section_between(skill, "## Routing", "## Workflow continuation")
+    assert "On failure before deployment effects" in routing
+    assert "On failure after observed deployment effects" in routing
+    assert "- On failure → `rollback-promotion`" not in routing
+
+    orchestrator = " ".join(_read(".codex/skills/promote-test-to-prod/SKILL.md").split(
+        "## Workflow continuation", 1
+    )[1].split())
+    assert "observed-effect recovery classification" in orchestrator
+    assert "without rollback" in orchestrator
+    assert "unknown effects require state reconciliation" in orchestrator
+    rollback = " ".join(_read(".codex/skills/rollback-promotion/SKILL.md").split(
+        "## Capability boundary", 1
+    )[0].split())
+    assert "Before any rollback effect" in rollback
+    assert "No deployment effect means return to the caller" in rollback
+    assert "unknown effects mean reconcile state first" in rollback

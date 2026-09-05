@@ -45,7 +45,8 @@ Hand off only when all of these are true:
 - all blocking review feedback is addressed or explicitly classified
 - no escalation trigger remains unresolved
 
-If any condition fails, stop and use the relevant escalation path.
+If any condition fails, stop the failing operation and execute the relevant escalation/repair path.
+Do not end the session unless the shared workflow stop-loss or explicit user scope boundary applies.
 
 ## Hot-Path Execution
 
@@ -100,6 +101,16 @@ Declare exactly one outcome:
 - `blocked-ci-failure`
 - `blocked-contract-drift`
 - `blocked-review-feedback`
+
+These are intermediate routing results, not permission to leave an authorized delivery unfinished.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`. On `ready-for-verification`, immediately
+execute `verification-and-closure`. For a blocked result, execute the corresponding authorized
+repair or `issue-maintenance-change-control` route and resume verification with fresh affected
+evidence. Do not recursively republish an already reconciled commit. End only at the requested scope
+boundary or documented stop-loss, not at a pending check or handoff decision.
 
 ## Lifecycle Truth Rules During Integration
 

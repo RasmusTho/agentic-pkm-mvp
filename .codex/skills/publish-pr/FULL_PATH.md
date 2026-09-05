@@ -61,6 +61,7 @@ promotion remain with their named skills.
 
 ## Handoff
 
-Use `pr-integration` for concrete repair/readiness or ambiguity. Otherwise hand the exact PR to
-`verification-and-closure`. The active claim and worktree lifecycle stay with `issue-to-code` until
+Execute `pr-integration` for concrete repair/readiness or ambiguity. Otherwise immediately execute
+`verification-and-closure` under `.codex/skills/README.md :: Workflow continuation`; reporting the
+next workflow is not a terminal handoff. The active claim and worktree lifecycle stay with `issue-to-code` until
 that workflow performs governed closure.

@@ -57,9 +57,8 @@ Detailed capability policy and output blocks belong in the selected skill and
 
 ## Agency default
 
-Proceed autonomously with reversible, in-scope work. Ask the owner only for an irreversible, external-facing, strategic,
-or genuinely ambiguous-authority decision. A retry count, a failed local/CI/type check, or a safe technical pause
-is not an owner decision; only its explicit authority categories may create `agent:needs-human`. Route real owner asks through `owner-decision-brief`.
+Execute every applicable Builder skill transition under `.codex/skills/README.md :: Workflow continuation`; do not stop at a skill output or queued handoff. Delivery includes publication → verification-and-closure → verified merge and reconciliation until end-to-end automation is explicitly accepted. Leave an unmerged delivery PR only for documented stop-loss or an explicit user scope restriction.
+Proceed with authorized work; preserve operator gates and explicit planning/review-only scope. A retry count, a failed local/CI/type check, or a safe technical pause is not an owner decision; only its explicit authority categories may create `agent:needs-human`. Route real owner asks through `owner-decision-brief`; stop-loss follows `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
 
 ## Parallel-agent execution
 
@@ -158,4 +157,4 @@ assessment and does not govern Product/Runtime agents. Its terminal response mus
 headings, in order: `### Rekommendation`, `### Trådhantering`, `### Mål`, `### Statusverifiering`,
 `### Klart`, `### Kvar`, `### Åtgärd`, `### Nästa steg`, `### Värde`, `### Risk vid avslut`.
 This is a Builder System instruction, not a platform-level response interceptor; a skill cannot mechanically rewrite a response that bypasses it. An unqualified end requires `destination: end` and
-`secure_first: false`; every other result routes through the owning workflow or returns a truthful blocker/handoff. `klart` never establishes Issue/PR delivery.
+`secure_first: false`; otherwise execute the owning workflow, or document stop-loss/explicit user stop before a terminal handoff. `klart` never establishes Issue/PR delivery.
