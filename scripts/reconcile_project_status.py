@@ -1039,15 +1039,21 @@ def reconcile_migration(
             False,
         )
 
+    verified_source_items = list_project_items_for_scan(source_owner, source_project["number"])
+    verified_source_by_key = {
+        key: item
+        for item in verified_source_items
+        if (key := project_item_repo_key(item, args.repo)) is not None
+    }
     verified_items = list_project_items_for_scan(destination_owner, destination_project["number"])
     verified_by_key = {
         key: item
         for item in verified_items
         if (key := project_item_repo_key(item, args.repo)) is not None
     }
-    missing_after = sorted(set(source_repo_items) - set(verified_by_key))
+    missing_after = sorted(set(verified_source_by_key) - set(verified_by_key))
     status_drift_after: list[str] = []
-    for key, source_item, _planned_desired in plan:
+    for key, source_item in sorted(verified_source_by_key.items()):
         destination_item = verified_by_key.get(key)
         if destination_item is None:
             continue
@@ -1064,7 +1070,7 @@ def reconcile_migration(
             status_drift_after.append(key)
     print(
         "migration receipt: "
-        f"source={len(source_repo_items)} added={planned_adds} "
+        f"source={len(verified_source_by_key)} added={planned_adds} "
         f"already_present={already_present} missing_after={len(missing_after)} "
         f"status_drift_after={len(status_drift_after)} "
         f"invalid_ready={len(invalid_ready_keys)}"

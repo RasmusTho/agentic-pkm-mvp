@@ -1271,6 +1271,74 @@ def test_migration_final_verification_detects_lifecycle_race(monkeypatch, capsys
     assert "status_drift_after=1" in capsys.readouterr().out
 
 
+def test_migration_final_verification_detects_source_growth(monkeypatch, capsys) -> None:
+    first_source_item = {
+        "id": "source-10",
+        "content": {
+            "type": "Issue",
+            "number": 10,
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/10",
+        },
+        "status": "Backlog",
+    }
+    late_source_item = {
+        "id": "source-11",
+        "content": {
+            "type": "Issue",
+            "number": 11,
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/11",
+        },
+        "status": "Backlog",
+    }
+    source_reads = 0
+
+    def fake_list(owner: str, _number: int) -> list[dict[str, object]]:
+        nonlocal source_reads
+        if owner == "RasmusTho":
+            source_reads += 1
+            return (
+                [first_source_item] if source_reads == 1 else [first_source_item, late_source_item]
+            )
+        return [
+            {
+                "id": "destination-10",
+                "content": first_source_item["content"],
+                "status": "Backlog",
+            }
+        ]
+
+    monkeypatch.setattr(reconcile_project_status, "list_project_items_for_scan", fake_list)
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda _repo, number: {
+            "number": number,
+            "state": "OPEN",
+            "labels": [],
+            "body": "",
+        },
+    )
+
+    args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp", dry_run=False
+    )
+    result = reconcile_migration(
+        args,
+        "Yggdrasil-PKM",
+        {"id": "destination", "number": 1},
+        "status-field",
+        {"Backlog": "backlog"},
+        "RasmusTho",
+        {"id": "source", "number": 1},
+    )
+
+    assert result == 1
+    output = capsys.readouterr().out
+    assert "source=2" in output
+    assert "missing_after=1" in output
+    assert "https://github.com/RasmusTho/agentic-pkm-mvp/issues/11" in output
+
+
 def test_migration_cli_is_dry_run_by_default(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
