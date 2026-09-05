@@ -169,3 +169,14 @@ def test_unregistered_picker_path_stops_before_manager_or_filesystem_resolution(
                 companion.VaultSelectRequest(path=alias),
                 SimpleNamespace(headers={}),
             )
+
+
+def test_picker_without_registry_refuses_raw_path_before_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.routes import companion
+
+    monkeypatch.delenv("INSTANCE_VAULT_REGISTRY_PATH", raising=False)
+    monkeypatch.setattr(companion, "get_vault_manager", lambda: pytest.fail("raw path reached manager"))
+    with pytest.raises(HTTPException, match="active_context_registry_unavailable"):
+        companion.select_companion_vault(
+            companion.VaultSelectRequest(path="/untrusted"), SimpleNamespace(headers={})
+        )

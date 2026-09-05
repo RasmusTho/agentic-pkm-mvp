@@ -962,9 +962,10 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
 def select_companion_vault(req: VaultSelectRequest, request: Request) -> VaultContextResponse:
     registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
     if not registry_path:
-        # Legacy single-vault processes have no registry authority to bind.
-        context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-        return _vault_context_response(context)
+        # A request path is never filesystem authority.  Legacy processes can
+        # still read their already-bound context, but cannot select a new root
+        # until registry authority is configured.
+        raise HTTPException(status_code=503, detail="active_context_registry_unavailable")
     registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
     # Do not resolve, stat, or select a caller-provided pathname.  The request
     # value is only a lexical lookup key; all filesystem work below uses the
