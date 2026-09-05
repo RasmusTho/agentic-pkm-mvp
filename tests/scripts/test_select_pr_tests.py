@@ -47,6 +47,7 @@ def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -
         "tests/mcp/test_mimer_sidecar_semantic_parity.py",
         "tests/mcp/test_mimer_server_transport.py",
         "tests/mcp/test_mimer_server_security.py",
+        "tests/mcp/test_mimer_server_smoke.py",
         "tests/architecture/test_mimer_mcp_server_boundaries.py",
         "tests/architecture/test_mimer_mcp_sidecar_isolation.py",
         "tests/architecture/test_requirements_consistency.py",
