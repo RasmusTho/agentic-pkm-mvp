@@ -423,6 +423,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 ## Current Snapshot
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
+- The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
+  ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP
+  operations, with no listener, generic vault write, receipt read-back, or adapter-owned durable
+  state. Its current acceptance evidence is one hermetic JSON-RPC stdio-client journey against an
+  isolated governed runtime (parent #3366); this is not a claim of general third-party-client or
+  production deployment support.
 - Context Bundles production runtime integration is shipped and closed: parent #1559 closed
   2026-06-04 after the read-only construction route (#1560), real retrieval emission (#1562),
   orientation/resurfacing consumption (#1563), governed write-proposal linkage (#1564), and the
