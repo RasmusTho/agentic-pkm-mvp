@@ -2409,7 +2409,7 @@ def _load_legacy_owner_inventory_payload(inventory_path: Path) -> dict[str, obje
 
 def _legacy_owner_identity_evidence(
     payload: Mapping[str, object],
-) -> dict[tuple[str, str], tuple[str, tuple[str, ...]]]:
+) -> dict[tuple[str, str], tuple[str, tuple[str, ...], tuple[str, ...]]]:
     """Validate the host-produced physical identity carried by a private receipt.
 
     The caller may be in a mount namespace where the recorded roots cannot be
@@ -2424,7 +2424,7 @@ def _legacy_owner_identity_evidence(
     rows = source_evidence.get("owner_identities")
     if not isinstance(rows, list) or len(rows) != len(owners):
         raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
-    evidence: dict[tuple[str, str], tuple[str, tuple[str, ...]]] = {}
+    evidence: dict[tuple[str, str], tuple[str, tuple[str, ...], tuple[str, ...]]] = {}
     for owner, row in zip(owners, rows, strict=True):
         if not isinstance(owner, dict) or not isinstance(row, dict):
             raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
@@ -2432,6 +2432,7 @@ def _legacy_owner_identity_evidence(
         root = str(owner.get("root") or "").strip()
         identity = str(row.get("identity") or "").strip()
         ancestors = row.get("ancestor_identities")
+        legacy_ancestors = row.get("legacy_ancestor_identities", [])
         if (
             not channel
             or not root
@@ -2448,12 +2449,20 @@ def _legacy_owner_identity_evidence(
             )
             or len(set(ancestors)) != len(ancestors)
             or identity in ancestors
+            or not isinstance(legacy_ancestors, list)
+            or any(
+                not isinstance(value, str)
+                or not value.startswith("inode:")
+                or _LEGACY_OWNER_IDENTITY_RE.fullmatch(value) is None
+                for value in legacy_ancestors
+            )
+            or len(set(legacy_ancestors)) != len(legacy_ancestors)
         ):
             raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
         key = (channel, root)
         if key in evidence:
             raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
-        evidence[key] = (identity, tuple(ancestors))
+        evidence[key] = (identity, tuple(ancestors), tuple(legacy_ancestors))
     return evidence
 
 
@@ -2626,7 +2635,11 @@ def _load_legacy_owner_inventory(
         if not owner_channel or not root_text or not root.is_absolute():
             raise InstanceStatePreflightError("legacy-owner inventory entry is invalid")
         try:
-            root_identity, ancestor_identities = identity_evidence[(owner_channel, root_text)]
+            (
+                root_identity,
+                ancestor_identities,
+                legacy_ancestor_identities,
+            ) = identity_evidence[(owner_channel, root_text)]
         except KeyError as exc:
             raise InstanceStatePreflightError(
                 "legacy-owner inventory entries are invalid"
@@ -2647,6 +2660,7 @@ def _load_legacy_owner_inventory(
                 root,
                 root_identity,
                 ancestor_identities,
+                legacy_ancestor_identities,
             )
         )
     represented = {owner.vault_binding_id for owner in owners if owner.channel_id == channel}
@@ -2710,6 +2724,130 @@ def _converge_authenticated_legacy_ledger(
         raise InstanceStatePreflightError(
             f"registry/ledger consistency verification failed: {exc}"
         ) from exc
+
+
+def _prepare_legacy_registry_for_mvr05_floor(
+    *,
+    channel: str,
+    layout: InstanceStateLayout,
+    registry: VaultRegistryStore,
+    ledger: OwnershipLedger,
+    legacy_path: Path,
+    inventory_path: Path,
+    quiescence_proof: DeploymentQuiescenceProof | None,
+) -> RegistrySnapshot:
+    """Finish dormant legacy import while the MVR-05 fence is still held."""
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    snapshot = registry.load()
+    if snapshot.revision != 0:
+        return snapshot
+
+    try:
+        established = ledger.load()
+    except LedgerError:
+        if not ledger.path.is_file() or not ledger.key_path.is_file():
+            raise
+        if quiescence_proof is None:
+            raise InstanceStatePreflightError("durable quiescence proof is required")
+        bound_proof = _bind_legacy_owner_inventory_to_proof(
+            inventory_path=inventory_path,
+            quiescence_proof=quiescence_proof,
+            channel=channel,
+            host_global_root=ledger.root,
+        )
+        owners = _load_legacy_owner_inventory(
+            inventory_path,
+            registry=snapshot,
+            channel=channel,
+            quiescence_proof=bound_proof,
+        )
+        _converge_authenticated_legacy_ledger(
+            channel=channel,
+            registry=snapshot,
+            ledger=ledger,
+            owners=tuple(owners),
+        )
+        owners = list(
+            ledger.resolve_live_owner_bindings(owners, allow_legacy=True)
+        )
+        established = ledger.require_existing()
+
+    if not legacy_path.is_file():
+        return snapshot
+
+    if quiescence_proof is None:
+        raise InstanceStatePreflightError("durable quiescence proof is required")
+    bound_proof = _bind_legacy_owner_inventory_to_proof(
+        inventory_path=inventory_path,
+        quiescence_proof=quiescence_proof,
+        channel=channel,
+        host_global_root=ledger.root,
+    )
+    owners = _load_legacy_owner_inventory(
+        inventory_path,
+        registry=snapshot,
+        channel=channel,
+        quiescence_proof=bound_proof,
+    )
+    if established.legacy_bootstrap_complete:
+        owners = list(
+            ledger.resolve_live_owner_bindings(owners, allow_legacy=True)
+        )
+    binding_by_ref: dict[str, str] = {}
+    legacy_settings = AppLocalSettingsStore(legacy_path).load()
+    for ref, known in legacy_settings.known_vaults.items():
+        matches = [
+            owner.vault_binding_id
+            for owner in owners
+            if owner.vault_binding_id
+            and owner.root.expanduser().resolve(strict=False)
+            == Path(known.path).expanduser().resolve(strict=False)
+        ]
+        if len(set(matches)) > 1:
+            raise InstanceStatePreflightError(
+                "legacy import binding correlation is ambiguous"
+            )
+        if matches:
+            binding_by_ref[ref] = matches[0]
+    exporter = LegacyRegistryFinalExport(layout)
+    final = exporter.export_final_after_stop(
+        legacy_path,
+        quiescence_proof=bound_proof,
+        host_global_root=ledger.root,
+        owner_receipt_path=inventory_path,
+    )
+    exporter.import_final_export(
+        final,
+        quiescence_proof=bound_proof,
+        host_global_root=ledger.root,
+        owner_receipt_path=inventory_path,
+        binding_by_ref=binding_by_ref or None,
+    )
+    snapshot = registry.load()
+    owners = _load_legacy_owner_inventory(
+        inventory_path,
+        registry=snapshot,
+        channel=channel,
+        quiescence_proof=bound_proof,
+    )
+    established = ledger.require_existing()
+    if not established.legacy_bootstrap_complete:
+        ledger.bootstrap_legacy_owners(
+            owners,
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+    else:
+        _converge_authenticated_legacy_ledger(
+            channel=channel,
+            registry=snapshot,
+            ledger=ledger,
+            owners=tuple(owners),
+        )
+    return snapshot
 
 
 def _finish_instance_state_deployment(
@@ -4117,6 +4255,7 @@ def main(argv: list[str] | None = None) -> int:
     mvr05_floor.add_argument("--channel", required=True)
     mvr05_floor.add_argument("--registry-path", type=Path, required=True)
     mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
+    mvr05_floor.add_argument("--legacy-path", type=Path, required=True)
     mvr05_floor.add_argument("--inventory-path", type=Path, required=True)
     mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
     mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
@@ -4241,37 +4380,28 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 registry = VaultRegistryStore(args.registry_path)
                 ledger = OwnershipLedger(args.host_global_root)
-                # A revision-zero registry is the only state that may create the
-                # paired protected authority artifacts. Established registries
-                # stay fail-closed and require the explicit recovery path.
-                if registry.load().revision == 0:
-                    try:
-                        ledger.load()
-                    except LedgerError:
-                        if not ledger.path.is_file() or not ledger.key_path.is_file():
-                            raise
-                        proof = _bind_legacy_owner_inventory_to_proof(
-                            inventory_path=args.inventory_path,
-                            quiescence_proof=_load_deployment_quiescence_proof(
-                                args.quiescence_proof_path
-                            ),
-                            channel=args.channel,
-                            host_global_root=args.host_global_root,
-                        )
-                        owners = _load_legacy_owner_inventory(
-                            args.inventory_path,
-                            registry=registry.load(),
-                            channel=args.channel,
-                            quiescence_proof=proof,
-                        )
-                        _converge_authenticated_legacy_ledger(
-                            channel=args.channel,
-                            registry=registry.load(),
-                            ledger=ledger,
-                            owners=tuple(owners),
-                        )
-                else:
-                    ledger.require_existing()
+                # Complete any dormant legacy import while the deployment and
+                # restart fences are still held.  This keeps a floor write from
+                # advancing an empty registry past the import-only revision.
+                registry_snapshot = registry.load()
+                quiescence_proof = None
+                if registry_snapshot.revision == 0 and (
+                    args.legacy_path.is_file()
+                    or (ledger.path.is_file() and ledger.key_path.is_file())
+                ):
+                    quiescence_proof = _load_deployment_quiescence_proof(
+                        args.quiescence_proof_path
+                    )
+                _prepare_legacy_registry_for_mvr05_floor(
+                    channel=args.channel,
+                    layout=layout,
+                    registry=registry,
+                    ledger=ledger,
+                    legacy_path=args.legacy_path,
+                    inventory_path=args.inventory_path,
+                    quiescence_proof=quiescence_proof,
+                )
+                ledger.require_existing()
                 result = record_mvr05_runtime_floor(
                     registry,
                     fence=load_mvr05_fence_plan(args.fence_plan),

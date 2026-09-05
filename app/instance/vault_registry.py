@@ -633,7 +633,9 @@ class VaultRegistryStore:
                 payloads[name] = source.read_bytes()
             return payloads
 
-    def load_or_migrate(self) -> RegistrySnapshot:
+    def load_or_migrate(
+        self, *, binding_by_ref: Mapping[str, str] | None = None
+    ) -> RegistrySnapshot:
         legacy_upgrade = self._is_owned_legacy_source()
         with self._locked(allow_legacy_directory_upgrade=legacy_upgrade):
             if not self.path.exists():
@@ -656,7 +658,10 @@ class VaultRegistryStore:
                 return self._snapshot_from_frontmatter(document.frontmatter)
             if schema != APP_LOCAL_SCHEMA:
                 raise RegistryMigrationError(f"unsupported registry migration schema: {schema or '<missing>'}")
-            migrated = self._migrate_legacy_frontmatter(document.frontmatter)
+            migrated = self._migrate_legacy_frontmatter(
+                document.frontmatter,
+                existing_binding_by_ref=binding_by_ref,
+            )
             self._write_locked(migrated)
             return migrated
 
@@ -2249,7 +2254,12 @@ class VaultRegistryStore:
             default_vault_provenance=default_provenance,
         )
 
-    def _migrate_legacy_frontmatter(self, frontmatter: Mapping[str, Any]) -> RegistrySnapshot:
+    def _migrate_legacy_frontmatter(
+        self,
+        frontmatter: Mapping[str, Any],
+        *,
+        existing_binding_by_ref: Mapping[str, str] | None = None,
+    ) -> RegistrySnapshot:
         app_install_id = _optional_str(frontmatter.get("appInstallId"))
         if app_install_id is None:
             raise RegistryMigrationError("legacy appInstallId is missing")
@@ -2273,6 +2283,29 @@ class VaultRegistryStore:
             raw_candidates,
             last_active_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
         )
+        resolved_bindings: dict[str, str] = {}
+        for raw_ref, raw_binding_id in (existing_binding_by_ref or {}).items():
+            normalized_ref = _optional_str(raw_ref)
+            binding = _optional_str(raw_binding_id)
+            if normalized_ref is None or binding is None:
+                raise RegistryMigrationError(
+                    "legacy migration binding correlation is malformed"
+                )
+            canonical_ref = aliases.get(normalized_ref, normalized_ref)
+            if canonical_ref not in candidates:
+                raise RegistryMigrationError(
+                    "legacy migration binding correlation names an unknown registration"
+                )
+            previous = resolved_bindings.get(canonical_ref)
+            if previous is not None and previous != binding:
+                raise RegistryMigrationError(
+                    "conflicting legacy migration binding correlations"
+                )
+            resolved_bindings[canonical_ref] = binding
+        if len(set(resolved_bindings.values())) != len(resolved_bindings):
+            raise RegistryMigrationError(
+                "one legacy migration binding identity matches multiple registrations"
+            )
         rebind_key = next(
             (key for key in ("settingsRebind", "settingsRebindV1", "settings_rebind.v1") if key in frontmatter),
             None,
@@ -2303,7 +2336,7 @@ class VaultRegistryStore:
                 value["vaultBindingId"] = binding_id
         registrations: dict[str, VaultRegistration] = {}
         for ref, raw in candidates.items():
-            binding_id = binding_by_ref.get(ref) or f"binding-{uuid4()}"
+            binding_id = resolved_bindings.get(ref) or f"binding-{uuid4()}"
             if binding_id in registrations:
                 raise RegistryMigrationError(f"duplicate vault_binding_id during migration: {binding_id}")
             registrations[binding_id] = VaultRegistration(

@@ -770,6 +770,7 @@ prepare_instance_state_deployment() {
       --channel "${channel}" \
       --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
       --host-global-root /app/instance-ownership \
+      --legacy-path "${legacy_path}" \
       --inventory-path "${inventory_path}" \
       --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
       --fence-plan "/app/instance-ownership/mvr05-fence-plan-${controller_pid}.json"

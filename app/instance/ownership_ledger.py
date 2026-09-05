@@ -51,6 +51,12 @@ class LegacyOwner:
     root: Path
     root_identity: str | None = None
     ancestor_identities: tuple[str, ...] = ()
+    # Host-side inode material is retained only for the one-time migration of
+    # schema-v1 leases.  Current leases use path-bound parent identities, but a
+    # v1 lease may still contain HMACs over the host namespace's inode chain;
+    # the deployment container cannot recompute those after the vault mount is
+    # removed.
+    legacy_ancestor_identities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -402,6 +408,7 @@ class OwnershipLedger:
                         owner.root,
                         owner.root_identity,
                         owner.ancestor_identities,
+                        owner.legacy_ancestor_identities,
                     )
                 )
             return tuple(resolved)
@@ -1438,6 +1445,29 @@ class OwnershipLedger:
             )
         )
 
+    def _matches_host_validated_legacy_ancestors(
+        self,
+        lease: OwnershipLease,
+        owner: LegacyOwner,
+        key: _KeyMaterial,
+    ) -> bool:
+        """Match the host-captured inode chain used by an established v1 lease."""
+
+        if not owner.legacy_ancestor_identities:
+            return False
+        expected = tuple(
+            _fingerprint(item, key.secret)
+            for item in owner.legacy_ancestor_identities
+        )
+        stored = tuple(lease.ancestor_fingerprints)
+        # A v1 producer may have persisted only the portable prefix.  A full
+        # host-captured chain is required for a full match; a shorter prefix is
+        # accepted only when every captured element authenticates in order.
+        return bool(stored) and len(stored) <= len(expected) and all(
+            hmac.compare_digest(left, right)
+            for left, right in zip(stored, expected, strict=False)
+        )
+
     def _has_complete_self_identity(
         self,
         lease: OwnershipLease,
@@ -2078,19 +2108,27 @@ class OwnershipLedger:
                 }
                 owner_ancestors = set(owner.ancestor_identities)
                 # The host inventory is authoritative for the current
-                # path-bound ancestry.  A schema-v1 lease may still carry the
-                # old inode-bound ancestry, which cannot be recomputed after
-                # this container loses the vault mount; it is compatibility
-                # data and is replaced by the v2 path-bound representation
-                # below once the root and host evidence authenticate.
-                legacy_ancestor_match = sorted(lease.ancestor_fingerprints) == sorted(
-                    _fingerprint(item, key.secret)
-                    for item in owner.ancestor_identities
+                # path-bound ancestry, but it is not enough by itself: a
+                # schema-v1 lease may carry arbitrary HMACs with a valid root
+                # fingerprint.  Require the stored chain to authenticate as
+                # the current v2 path chain, the host-captured v1 chain, or a
+                # locally recomputable complete/portable v1 segment.
+                path_chain_match = self._matches_host_validated_identity(
+                    lease, owner, key
                 )
-                if (
-                    owner_ancestors != expected_ancestors
-                    and not legacy_ancestor_match
-                ):
+                legacy_chain_match = self._matches_host_validated_legacy_ancestors(
+                    lease, owner, key
+                )
+                local_chain_match = False
+                try:
+                    local_chain_match = self._legacy_ancestor_proof_matches(
+                        lease, resolved, key
+                    )
+                except (FilesystemIdentityError, LedgerError, OSError, ValueError):
+                    local_chain_match = False
+                if owner_ancestors != expected_ancestors and not local_chain_match:
+                    return False
+                if not (path_chain_match or legacy_chain_match or local_chain_match):
                     return False
                 return (
                     sealed_root_text == str(resolved)

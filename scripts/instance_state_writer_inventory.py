@@ -1047,7 +1047,9 @@ def _config_legacy_owner_sources(
     return owners, sorted(fingerprints)
 
 
-def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[str, frozenset[str]]:
+def _owner_identity_material(
+    root: Path, *, domain: str, source: str
+) -> tuple[str, frozenset[str], tuple[str, ...]]:
     resolved = root.expanduser().resolve(strict=False)
     # A stable digest of the resolved path, not the path itself: enough to
     # correlate the same offending root across two runs of the inventory
@@ -1067,9 +1069,10 @@ def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[s
         )
     primary = f"inode:{metadata.st_dev}:{metadata.st_ino}"
     ancestors: set[str] = set()
+    legacy_ancestors: list[str] = []
     for ancestor in resolved.parents:
         try:
-            os.stat(ancestor)
+            ancestor_metadata = os.stat(ancestor)
         except OSError as exc:
             raise InventoryError(
                 "legacy owner ancestor identity is unavailable: "
@@ -1078,32 +1081,43 @@ def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[s
         # Root identity is inode-bound, but the parent chain is path-bound so
         # the authenticated lease remains portable across container mounts.
         ancestors.add(f"path:{ancestor}")
-    return primary, frozenset(ancestors)
+        # Keep the host namespace's v1 material only as migration evidence.
+        # It is private receipt data and is never used for current v2 identity.
+        legacy_ancestors.append(
+            f"inode:{ancestor_metadata.st_dev}:{ancestor_metadata.st_ino}"
+        )
+    return primary, frozenset(ancestors), tuple(legacy_ancestors)
 
 
 def _normalize_legacy_owners(
     records: list[LegacyOwnerRecord],
-) -> tuple[list[LegacyOwnerRecord], list[dict[str, str]]]:
-    normalized: dict[tuple[str, str], tuple[LegacyOwnerRecord, frozenset[str]]] = {}
+) -> tuple[list[LegacyOwnerRecord], list[dict[str, object]]]:
+    normalized: dict[
+        tuple[str, str], tuple[LegacyOwnerRecord, frozenset[str], tuple[str, ...]]
+    ] = {}
     for record in records:
         if record.channel_id not in DOMAINS:
             raise InventoryError(
                 f"legacy owner domain is invalid: domain={record.channel_id} source={record.source}"
             )
         root = Path(record.root).expanduser().resolve(strict=False)
-        primary, ancestors = _owner_identity_material(
+        primary, ancestors, legacy_ancestors = _owner_identity_material(
             root, domain=record.channel_id, source=record.source
         )
         normalized.setdefault(
             (record.channel_id, primary),
-            (LegacyOwnerRecord(record.channel_id, str(root), source=record.source), ancestors),
+            (
+                LegacyOwnerRecord(record.channel_id, str(root), source=record.source),
+                ancestors,
+                legacy_ancestors,
+            ),
         )
     values = [
-        (record, primary, ancestors)
-        for (_, primary), (record, ancestors) in normalized.items()
+        (record, primary, ancestors, legacy_ancestors)
+        for (_, primary), (record, ancestors, legacy_ancestors) in normalized.items()
     ]
-    for index, (left, left_primary, left_ancestors) in enumerate(values):
-        for right, right_primary, right_ancestors in values[index + 1 :]:
+    for index, (left, left_primary, left_ancestors, _) in enumerate(values):
+        for right, right_primary, right_ancestors, _ in values[index + 1 :]:
             if left.channel_id == right.channel_id:
                 continue
             if (
@@ -1129,8 +1143,9 @@ def _normalize_legacy_owners(
                 "root": record.root,
                 "identity": primary,
                 "ancestor_identities": sorted(ancestors),
+                "legacy_ancestor_identities": list(legacy_ancestors),
             }
-            for record, primary, ancestors in ordered
+            for record, primary, ancestors, legacy_ancestors in ordered
         ],
     )
 
