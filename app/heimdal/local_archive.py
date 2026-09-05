@@ -974,12 +974,16 @@ def run_single_record_archive_operation(
             proof = raw_read_gate.revalidate_operation_target(proof, service_reader=OPERATION_RESTORE_SERVICE)
         except raw_read_gate.RawReadRefusedError as exc:
             raise OperationTargetRefused("operation_target_changed") from exc
+        record = raw_store.resolve_active_raw_record(proof.artifact_id)
+        active = [] if record is None else [item for item in raw_store.all_raw_representations(record.id) if item.active]
+        if record is None or len(active) != 1 or active[0].id != proof.representation_id or active[0].raw_generation != proof.generation:
+            raise OperationTargetRefused("operation_target_changed")
         metadata = load_channel_archive_metadata(config_root=config_root, channel=channel)
         require_archive_volume_ready(metadata, expected_channel=channel)
         retention_window_days = resolve_retention_window_days(vault_root)
         transition: list[object] = []
         result = relocate_raw_record(
-            proof.record,
+            record,
             archive_root=metadata.mountpoint,
             archive_ref=metadata.archive_id,
             retention_window_days=retention_window_days,

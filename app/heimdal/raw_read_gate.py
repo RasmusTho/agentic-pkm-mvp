@@ -179,9 +179,10 @@ class OperationTargetProof:
     """Public non-plaintext proof for a fixed owner execution identity."""
 
     raw_ref: str
-    record: "raw_store.RawRecord"
+    artifact_id: str
     generation: int
     representation_id: str
+    liveness: str
 
 
 def resolve_operation_target(raw_ref: str, *, service_reader: str) -> OperationTargetProof:
@@ -193,13 +194,13 @@ def resolve_operation_target(raw_ref: str, *, service_reader: str) -> OperationT
     active = [item for item in raw_store.all_raw_representations(record_id) if item.active]
     if record is None or len(active) != 1:
         raise RawReadRefusedError("operation target has no exact active representation")
-    return OperationTargetProof(raw_ref, record, active[0].raw_generation, active[0].id)
+    return OperationTargetProof(raw_ref, record.id, active[0].raw_generation, active[0].id, "active")
 
 
 def revalidate_operation_target(proof: OperationTargetProof, *, service_reader: str) -> OperationTargetProof:
     """Fence target drift immediately before an owner effect."""
     current = resolve_operation_target(proof.raw_ref, service_reader=service_reader)
-    if (current.record.id, current.generation, current.representation_id) != (proof.record.id, proof.generation, proof.representation_id):
+    if (current.artifact_id, current.generation, current.representation_id, current.liveness) != (proof.artifact_id, proof.generation, proof.representation_id, proof.liveness):
         raise RawReadRefusedError("operation target changed before effect")
     return current
 

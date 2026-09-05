@@ -87,9 +87,9 @@ def _source_target(request: OperationRequest) -> str | OwnerExecutionResult:
         return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("owner_decision_required:#5325",))
     if artifact_class in {ArtifactClass.DERIVED, ArtifactClass.RECEIPT}:
         return OwnerExecutionResult(OperationStatus.NOT_SUPPORTED, warnings=("archival mutation is not owned for artifact class",))
-    raw_ref = target.get("raw_ref")
-    if not isinstance(raw_ref, str) or not raw_ref:
-        return OwnerExecutionResult.failed("source target requires an opaque raw_ref")
+    raw_ref = target.get("artifact_id")
+    if not isinstance(raw_ref, str) or not raw_ref or "raw_ref" in target:
+        return OwnerExecutionResult.failed("source target requires artifact_id as the sole opaque raw_ref")
     return raw_ref
 
 
@@ -107,7 +107,7 @@ def _map_owner_result(request: OperationRequest, proof: Any, transition: Any) ->
     try:
         if (
             receipt.generation.value != proof.generation
-            or receipt.artifact.owner_native_id.token != proof.record.id
+            or receipt.artifact.owner_native_id.token != proof.artifact_id
             or receipt.policy_profile.value != "raw_evidence"
             or receipt.stage is not stage
             or receipt.liveness.state is not liveness
