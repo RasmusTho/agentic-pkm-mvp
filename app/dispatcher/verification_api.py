@@ -59,6 +59,7 @@ from app.dispatcher.verification_dispatch import (
 from app.dispatcher.linux_containment import (
     validated_linux_containment_receipt,
 )
+from app.dispatcher.verification_contract import verification_run_id_for_canary
 
 _TASK_PREFIX = "vrun-"
 _PAYLOAD_CONTRACT = "builderops_verification_run.v1"
@@ -208,11 +209,11 @@ def project_verification_run(
     supporting = projected["supporting_issues"]
     if not isinstance(supporting, builtins.list):
         raise ValueError("verification supporting_issues is malformed")
-    run_id = "vrun-" + _digest(
-        repository.lower(),
-        projected["pr_number"],
-        projected["stage"],
-    )[:16]
+    run_id = verification_run_id_for_canary(
+        repository,
+        _required_int(projected["pr_number"], "pr_number"),
+        str(projected["stage"]),
+    )
     return VerificationRun(
         run_id=run_id,
         idempotency_key=str(projected["idempotency_key"]),

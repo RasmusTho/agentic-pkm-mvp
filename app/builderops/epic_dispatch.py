@@ -1490,8 +1490,10 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     execution_routing = candidate.get("execution_routing")
     if execution_routing is not None and not isinstance(execution_routing, Mapping):
         raise EpicDispatchError("execution_routing must be an object when supplied")
+    repository = _normalize_optional_string(candidate.get("repository"))
     return {
         "issue_number": issue_number,
+        "repository": repository,
         "title": _normalize_string(candidate.get("title"), "title"),
         "url": _normalize_optional_string(candidate.get("url")),
         "state": _normalize_string(candidate.get("state", "OPEN"), "state").upper(),
@@ -1580,6 +1582,11 @@ def _build_execution_routing(
     mode = routing_input.get("mode")
     if mode not in {"shadow", "canary"}:
         raise EpicDispatchError("execution routing supports shadow or explicit canary mode")
+    repository = _normalize_optional_string(candidate.get("repository"))
+    if mode == "canary" and repository is None:
+        raise EpicDispatchError(
+            "execution_routing canary requires candidate.repository"
+        )
     if "risk" in routing_input:
         raise EpicDispatchError(
             "execution_routing.risk must come from the canonical candidate"
@@ -1653,6 +1660,7 @@ def _build_execution_routing(
                 f"execution-route-request:{candidate['issue_number']}:{context_pack_hash}"
             ),
             issue_number=candidate["issue_number"],
+            repository=repository,
             work_class=cast(WorkClass, work_class),
             risk=cast(
                 Literal["low", "medium", "high", "critical"], route_risk

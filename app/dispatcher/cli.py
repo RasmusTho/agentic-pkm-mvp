@@ -838,6 +838,7 @@ def _build_host_fenced_verification_cycle(
     containment_factory: Callable[[], Any],
     containment_receipt_required: bool = False,
     canary_receipt_store: Any | None = None,
+    canary_receipt_store_factory: Callable[[], Any] | None = None,
 ) -> tuple[Any, Callable[[], None]]:
     from app.dispatcher.verification_consumer import (
         CANONICAL_RECEIPT_SCHEMA_PATH,
@@ -907,6 +908,10 @@ def _build_host_fenced_verification_cycle(
         }
         if canary_receipt_store is not None:
             runtime_kwargs["canary_receipt_store"] = canary_receipt_store
+        if canary_receipt_store_factory is not None:
+            runtime_kwargs["canary_receipt_store_factory"] = (
+                canary_receipt_store_factory
+            )
         runtime = HostFencedVerificationCycle(
             ledger, consumer, executor, **runtime_kwargs
         )
@@ -928,6 +933,7 @@ def _cmd_verification_cycle(
         request: dict[str, object] | None = None
         canary_receipt: dict[str, object] | None = None
         canary_receipt_store: Any | None = None
+        canary_receipt_store_factory: Callable[[], Any] | None = None
         if args.canary_receipt:
             loaded_canary = json.loads(
                 Path(args.canary_receipt).read_text(encoding="utf-8")
@@ -960,6 +966,43 @@ def _cmd_verification_cycle(
                     "--repo does not match the verification request"
                 )
             repository = request_repository
+            if canary_receipt is not None:
+                from app.builderops.execution_routing_receipts import (
+                    bind_canary_receipt_to_verification_request,
+                )
+
+                request = bind_canary_receipt_to_verification_request(
+                    request, canary_receipt
+                )
+            if (
+                canary_receipt_store is None
+                and isinstance(request.get("canary_identity"), Mapping)
+            ):
+                from app.builderops.config import load_paths as load_builderops_paths
+                from app.builderops.store import SqliteBuilderOpsStore
+
+                builderops_paths = load_builderops_paths()
+                builderops_paths.ensure()
+                canary_receipt_store = SqliteBuilderOpsStore(
+                    builderops_paths.db_path
+                )
+                canary_receipt_store.initialize()
+        elif canary_receipt_store is None:
+            # Recovery learns whether the durable request is canary-bound only
+            # after the API ledger is opened.  Keep ordinary recovery free of
+            # BuilderOps host-store preconditions, while still resolving the
+            # existing store before a canary receipt is reconstructed.
+            def _load_existing_canary_receipt_store() -> Any:
+                from app.builderops.config import load_paths as load_builderops_paths
+                from app.builderops.store import SqliteBuilderOpsStore
+
+                builderops_paths = load_builderops_paths()
+                builderops_paths.ensure()
+                store = SqliteBuilderOpsStore(builderops_paths.db_path)
+                store.initialize()
+                return store
+
+            canary_receipt_store_factory = _load_existing_canary_receipt_store
         if not repository:
             repository = os.getenv(
                 "BUILDEROPS_VERIFICATION_REPOSITORY", ""
@@ -999,6 +1042,9 @@ def _cmd_verification_cycle(
                             == LINUX_SYSTEMD_CGROUP_V2_SCOPE_PROFILE
                         ),
                         canary_receipt_store=canary_receipt_store,
+                        canary_receipt_store_factory=(
+                            canary_receipt_store_factory
+                        ),
                     )
                 )
                 try:

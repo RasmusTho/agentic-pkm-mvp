@@ -51,6 +51,7 @@ def _candidate(
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "issue_number": issue_number,
+        "repository": "RasmusTho/agentic-pkm-mvp",
         "title": f"child {issue_number}",
         "url": f"https://example.test/issues/{issue_number}",
         "state": "OPEN",

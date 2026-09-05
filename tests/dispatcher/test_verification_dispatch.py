@@ -11,11 +11,15 @@ from threading import Event, Lock, Thread
 import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
-from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    verification_run_id_for_canary,
+)
 from app.dispatcher.verification_dispatch import (
     REPAIR_INTENT_ATTEMPT_KIND,
     VerificationDispatchLedger,
     VerificationRun,
+    _authenticated_verification_request,
     build_repair_transition_evidence,
     plan_repair_progress_intents,
 )
@@ -34,6 +38,52 @@ CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 MECHANISM_PATH_SHA = hashlib.sha256(
     b"app/dispatcher/verification_dispatch.py"
 ).hexdigest()
+
+
+def test_sqlite_ingestion_uses_the_bound_canary_run_identity(tmp_path) -> None:
+    payload = request()
+    payload["canary_identity"] = {
+        "schema_version": "builder_execution_routing_canary.v1",
+        "repository": payload["repository"],
+        "issue_number": payload["linked_issue"],
+        "pr_number": payload["pr_number"],
+        "head_sha": payload["current_head_sha"],
+        "verification_run_id": verification_run_id_for_canary(
+            str(payload["repository"]),
+            int(payload["pr_number"]),
+            str(payload["stage"]),
+        ),
+        "route_lineage_id": "execution-route:lineage",
+        "route_decision_id": "execution-route-decision:decision",
+        "route_decision_hash": "b" * 64,
+        "semantic_hashes": {
+            "context_pack_hash": "c" * 64,
+            "authority_hash": "d" * 64,
+            "verification_profile_hash": "e" * 64,
+        },
+        "attempts": [
+            {
+                "attempt_id": "execution-attempt:attempt",
+                "attempt_hash": "f" * 64,
+                "attempt_number": 1,
+                "repository": payload["repository"],
+                "route_lineage_id": "execution-route:lineage",
+                "route_decision_id": "execution-route-decision:decision",
+                "route_decision_hash": "b" * 64,
+                "semantic_hashes": {
+                    "context_pack_hash": "c" * 64,
+                    "authority_hash": "d" * 64,
+                    "verification_profile_hash": "e" * 64,
+                },
+            }
+        ],
+        "receipt_hash": "a" * 64,
+    }
+
+    state = ledger(tmp_path)
+    run = state.ingest(_authenticated_verification_request(payload))
+
+    assert run.run_id == payload["canary_identity"]["verification_run_id"]
 
 
 def _repair_transition(base_head: str, repaired_head: str) -> dict[str, object]:
