@@ -119,15 +119,17 @@ def test_hot_path_doc_defers_escalation_and_names_direct_repair_contract() -> No
         assert fragment in text, fragment
 
 
-def test_pr_integration_skill_allows_issue_backed_or_direct_repair_prs() -> None:
+def test_pr_integration_skill_allows_all_approved_pr_lanes() -> None:
     text = _read(".codex/skills/pr-integration/SKILL.md")
 
     for fragment in (
         "an issue-backed PR exists with a bounded governing slice Issue",
-        "a bounded direct repair PR exists whose body contains a complete `Direct Repair` block.",
-        "A governing issue is required for normal planned workflow; a bounded direct repair PR may proceed without one",
+        "a bounded direct repair PR exists whose body contains a complete `Direct Repair` block, or",
+        "an issue-free docs-authoring or governance PR satisfies its approved lane contract.",
+        "A governing issue is required for issue-backed implementation.",
+        "do not invent an Issue or require a lane detour for routine integration.",
         "Do not require a separate governance/docs lane checkbox when the `Direct Repair` block already states `Type` and `Validation`.",
-        "Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.",
+        "Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor an approved issue-free docs/governance or Direct Repair PR.",
     ):
         assert fragment in text, fragment
 

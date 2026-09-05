@@ -153,8 +153,7 @@ GitHub Issue state, blocked-state, and review-handoff labels remain durable trut
 ## Builder-session closeout gate
 
 Before a development-time builder session or builder agent returns a terminal response, hands off, goes idle, or otherwise stops, run `.codex/skills/klart/SKILL.md`. It is a read-only closeout
-assessment and does not govern Product/Runtime agents. Its terminal response must use exactly these H3
-headings, in order: `### Rekommendation`, `### Trådhantering`, `### Mål`, `### Statusverifiering`,
-`### Klart`, `### Kvar`, `### Åtgärd`, `### Nästa steg`, `### Värde`, `### Risk vid avslut`.
+assessment and does not govern Product/Runtime agents. Report the outcome, verification, and any
+remaining action or material risk concisely in the user's language; no fixed headings are required.
 This is a Builder System instruction, not a platform-level response interceptor; a skill cannot mechanically rewrite a response that bypasses it. An unqualified end requires `destination: end` and
 `secure_first: false`; otherwise execute the owning workflow, or document stop-loss/explicit user stop before a terminal handoff. `klart` never establishes Issue/PR delivery.

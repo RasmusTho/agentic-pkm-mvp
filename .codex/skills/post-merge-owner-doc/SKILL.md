@@ -56,9 +56,9 @@ After posting, read back every required target and verify the exact PR-specific 
 authority receipt remains on the PR and binds the target set even while the body is neutralized.
 [owner-doc-receipt-gate]
 
-## Three outcomes
+## Outcomes
 
-Classify the claim into one of three lanes: immediate action, queued follow-up, or no change.
+Check whether the merge already updated the affected claims before choosing follow-up work.
 
 **1. Yes, and the wording change is clear. Immediate action.**
 
@@ -79,6 +79,12 @@ On every required receipt target, add: `post-merge owner-doc check: PR #<PR>; fo
 On every required receipt target, add one comment verbatim:
 `post-merge owner-doc check: PR #<PR>; no owner-doc change implied.` Nothing else.
 
+**4. Owner docs were already updated in the merged PR.**
+
+Verify the merged doc diff against the changed behavior. On every required receipt target, record:
+`post-merge owner-doc check: PR #<PR>; owner docs updated in this PR: <paths and corrected claims>.`
+Do not open another docs PR or describe this outcome as no owner-doc change implied.
+
 Those comments are the receipts. If one is missing on an exact closed issue or a distinct open
 governing parent, this skill did not run.
 
@@ -94,9 +100,8 @@ work with `Verify:` targets.
 - **Owner docs claim current-state truth.** If a shipped change makes an owner-doc sentence false, outdated, or misleading, the sentence needs to change. Stylistic preference is not a reason to open a PR.
 - **Target-state and plan docs are not owner docs.** `docs/plans/*`, `docs/{CAPABILITY}/*` specs, and v6.0 target docs describe intent, not current-state truth. Do not open promotion PRs against them unless the merge itself changes target-state intent, which is rare.
 - **Prefer the smallest correct change.** A single sentence fix in `STATUS.md` beats a chapter rewrite. If the wording gap is small, just fix it (outcome 1). Only escalate to outcome 2 when the correct phrasing genuinely needs the user's judgment.
-- **Split immediate action from queued repair.** If the owner-doc claim is clearly wrong, open the docs PR now. If the claim is only plausibly wrong or needs interpretation, queue one bounded follow-up issue instead of creating churn or guessing.
-- **When unsure between outcomes 1 and 2, pick 2.** A follow-up issue is cheaper than an incorrect owner-doc PR.
-- **When unsure between outcomes 2 and 3, pick 2.** A false negative (silent drift) is worse than a spurious follow-up issue the user can close in ten seconds.
+- **Split immediate action from queued repair.** Fix a concrete wording error directly; queue a bounded follow-up only when the evidenced gap needs a decision or work beyond the current scope.
+- **Resolve uncertainty with a bounded evidence check.** A follow-up needs a concrete false or incomplete claim, or a genuine owner decision. Uncertainty alone does not justify a new Issue; record the inspected scope and any material evidence limitation in the PR-specific receipt. Preserve known gaps rather than claiming they are resolved.
 - **Never open more than one PR or one issue per merge.** If multiple owner docs need changes, bundle them. If the bundle is too large to review, that is signal that the merge itself should have been split — file one follow-up issue noting the scope, not many.
 
 ## Inputs you can rely on
@@ -135,7 +140,7 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 
 One receipt line per invocation, printed to the orchestrator:
 
-- `POST-MERGE OWNER-DOC RECEIPT: PR #<n> targets #<m>[, #<parent>]. Outcome: docs-pr #<p> | follow-up #<f> | no-change. Evidence: <one-sentence justification>.`
+- `POST-MERGE OWNER-DOC RECEIPT: PR #<n> targets #<m>[, #<parent>]. Outcome: docs-pr #<p> | follow-up #<f> | already-updated | no-change. Evidence: <one-sentence justification>.`
 
 ## Workflow continuation
 

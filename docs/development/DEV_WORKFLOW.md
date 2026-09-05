@@ -90,7 +90,7 @@ ambiguous. Review remains responsible for those cases.
   - when `.codex/skills/**` changed, run `python3 scripts/lint_skills_consistency.py` (exit 0, zero output = clean)
   - otherwise run lightweight repo checks that are still appropriate
 - Code-affecting changes:
-  - `ruff check app tests`
+  - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
   - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests
 - Settings/runtime contract changes:
@@ -236,9 +236,9 @@ command aligned with the allowlist.
 Enforcement note:
 - The applicable command list above is a required pre-merge gate, not advisory; do not substitute a
   repo-wide suite for identifying and running the affected subsystem's verification targets.
-- Any PR that changes files under `app/` or `tests/` must run the repo-standard lint gate, currently `ruff check app tests`, before merge.
+- For code-affecting PRs, run the lint and type commands in the applicable baseline above before merge.
 - Docs and governance PRs keep validation focused and do not run full smoke by default unless their touched surface requires it.
-- When `app/` or `tests/` changed, include the `ruff check app tests` output or an explicit tooling limitation in the PR body.
+- Record the applicable baseline results or an explicit tooling limitation in the PR body.
 - If CI is not currently blocking these checks, treat merge as blocked until either:
   - the checks pass locally and evidence is attached to the PR, or
   - blocking CI coverage is added for the missing check and enabled.

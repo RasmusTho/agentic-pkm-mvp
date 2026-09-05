@@ -323,6 +323,21 @@ The implementation agent must stop point-fixing and build one convergence packet
 - all prior findings and attempted fixes bound to the same mechanism key; and
 - a test matrix mapping each invariant, transition, crash point, and race to focused proof.
 
+The matrix is evidence for the bounded mechanism, not a request for more gates or hypothetical
+scope. For each applicable row, name the production entrypoint, relevant initial state, injected
+failure or transition, and observable postcondition. An existing test may cover several rows; a
+matching test name, header string, or mocked helper result alone does not prove the claimed path.
+For a repair, explain which property changed and which focused assertion would detect the prior
+failure before repeating expensive proof. Reuse unaffected rows.
+
+Choose cases from the actual lifecycle and deployment: fresh and retained schema/payload states,
+restart and compensation ordering, downstream consumers of changed identity, and replacement or
+replay races only where that mechanism supports them. State supported writer cardinality and trust
+assumptions before adding concurrency machinery. The personal deployment does not imply distributed
+writers or hostile in-process code. Do not invent a new test class or expand the Issue for an
+inapplicable case. This clarifies the existing matrix; it adds no new receipt, reviewer round,
+execution flag, or automatic full-suite requirement.
+
 ### Dormant-capability proof placement
 
 For a dormant capability, the slice that makes storage, schema, or sealing changes proves only
