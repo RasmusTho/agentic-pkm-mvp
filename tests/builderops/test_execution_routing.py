@@ -20,6 +20,7 @@ from app.builderops.execution_routing_receipts import (
     append_attempt_intent,
     append_attempt_outcome,
     bind_canary_receipt_to_verification_request,
+    load_canary_receipt_for_verification_request,
     record_acceptance_observation,
 )
 from app.builderops.store import SqliteBuilderOpsStore
@@ -164,6 +165,17 @@ def test_canary_acceptance_consumer_records_verified_delivery_once(tmp_path) -> 
     assert body["acceptance"]["verification"]["verdict"] == "verified"
     assert body["acceptance"]["verification"]["head_sha"] == "a" * 40
     assert len(store.list_records("BuilderOpsReceipt")) == 3
+
+
+def test_canary_receipt_rebuilds_from_persisted_request_lineage(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    verification_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID
+    )
+
+    assert load_canary_receipt_for_verification_request(
+        store, verification_request
+    ) == receipt
 
 
 def test_canary_acceptance_rejects_unbound_verified_delivery(tmp_path) -> None:

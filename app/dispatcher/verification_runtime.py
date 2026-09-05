@@ -12,6 +12,7 @@ from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.builderops.execution_routing_receipts import (
     CanaryReceiptEvidenceError,
     ReceiptStore,
+    load_canary_receipt_for_verification_request,
     record_acceptance_observation,
     validate_canary_receipt_request_binding,
 )
@@ -235,8 +236,7 @@ class HostFencedVerificationCycle:
         *,
         canary_receipt: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
-        if canary_receipt is not None:
-            validate_canary_receipt_request_binding(canary_receipt, request)
+        canary_receipt = self._resolve_canary_receipt(request, canary_receipt)
         run = self.consumer.consume(request)
         receipt = self._finish_ready_dry_cycle(run.run_id)
         if (
@@ -260,8 +260,9 @@ class HostFencedVerificationCycle:
         run = self.ledger.get(run_id)
         if run is None:
             raise ValueError("verification cycle run is unavailable")
-        if canary_receipt is not None:
-            validate_canary_receipt_request_binding(canary_receipt, run.request)
+        canary_receipt = self._resolve_canary_receipt(
+            run.request, canary_receipt
+        )
         if run.status == "completed":
             receipt = run.terminal_receipt
             validated = self._validated_receipt(
@@ -334,6 +335,28 @@ class HostFencedVerificationCycle:
                 )
             self._observe_canary(completed_run, canary_receipt)
         return final_receipt
+
+    def _resolve_canary_receipt(
+        self,
+        request: Mapping[str, object],
+        canary_receipt: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        """Use an explicit receipt or rebuild it from durable request lineage."""
+
+        if canary_receipt is not None:
+            validate_canary_receipt_request_binding(canary_receipt, request)
+            return canary_receipt
+        if request.get("canary_identity") is None:
+            return None
+        if self.canary_receipt_store is None:
+            raise CanaryReceiptEvidenceError(
+                "canary acceptance requires the BuilderOps receipt store"
+            )
+        resolved = load_canary_receipt_for_verification_request(
+            self.canary_receipt_store, request
+        )
+        validate_canary_receipt_request_binding(resolved, request)
+        return resolved
 
     def _observe_canary(
         self,

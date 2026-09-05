@@ -968,6 +968,32 @@ def _cmd_verification_cycle(
                 request = bind_canary_receipt_to_verification_request(
                     request, canary_receipt
                 )
+            if (
+                canary_receipt_store is None
+                and isinstance(request.get("canary_identity"), Mapping)
+            ):
+                from app.builderops.config import load_paths as load_builderops_paths
+                from app.builderops.store import SqliteBuilderOpsStore
+
+                builderops_paths = load_builderops_paths()
+                builderops_paths.ensure()
+                canary_receipt_store = SqliteBuilderOpsStore(
+                    builderops_paths.db_path
+                )
+                canary_receipt_store.initialize()
+        elif canary_receipt_store is None:
+            # Recovery receives only the durable run id.  Open the existing
+            # BuilderOps store so the runtime can resolve a bound canary
+            # receipt from its intent/outcome chain after a restart.
+            from app.builderops.config import load_paths as load_builderops_paths
+            from app.builderops.store import SqliteBuilderOpsStore
+
+            builderops_paths = load_builderops_paths()
+            builderops_paths.ensure()
+            canary_receipt_store = SqliteBuilderOpsStore(
+                builderops_paths.db_path
+            )
+            canary_receipt_store.initialize()
         if not repository:
             repository = os.getenv(
                 "BUILDEROPS_VERIFICATION_REPOSITORY", ""

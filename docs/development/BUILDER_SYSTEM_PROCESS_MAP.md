@@ -1007,10 +1007,14 @@ owner-doc, merge, or closure gates. Any sample widening, active-policy change, o
 promotion remains separately governed work.
 
 The accepted-delivery observation is valid only when the originating repository is carried through
-the canary candidate, durable intent/outcome, and the verification request, with the exact PR/head
-and runtime identity. The consumer validates the canonical primary-to-fallback attempt order and
-the final attempt outcome, and the runtime terminalizes and reads back the verification cycle before
-recording the observation. Cross-repository, non-canonical, non-delivery-eligible, or
+the canary candidate, durable intent/outcome, and an explicitly canary-bound verification request,
+with the exact PR/head and runtime identity. The owner-controlled request-builder/CLI handoff binds
+that request; the GitHub Actions artifact workflow intentionally emits only an ordinary verifier
+request and never invents canary identity from CI metadata. After restart, the runtime resolves the
+bound identity back to the existing durable BuilderOps intent/outcome chain rather than requiring a
+second mutable receipt copy. The consumer validates the canonical primary-to-fallback attempt order
+and the final attempt outcome, and the runtime terminalizes and reads back the verification cycle
+before recording the observation. Cross-repository, non-canonical, non-delivery-eligible, or
 pre-terminalization evidence remains non-accepted or fails closed; this evidence-only repair adds
 no lifecycle, merge, closure, or Product/Runtime authority.
 

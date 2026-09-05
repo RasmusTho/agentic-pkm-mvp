@@ -626,6 +626,35 @@ def test_host_cycle_consumes_canary_acceptance_on_verified_current_head(
     ) == 1
 
 
+def test_recovery_reconstructs_canary_receipt_from_persisted_request(
+    tmp_path,
+) -> None:
+    runtime, canary_store, canary_receipt, verification_request = (
+        _canary_runtime_fixture(tmp_path)
+    )
+    initial = runtime.run_dry_cycle(
+        verification_request, canary_receipt=canary_receipt
+    )
+
+    restarted = HostFencedVerificationCycle(
+        runtime.ledger,
+        runtime.consumer,
+        runtime.merge_executor,
+        holder="verification-host-restarted",
+        canary_receipt_store=canary_store,
+    )
+    recovered = restarted.recover_dry_cycle(str(initial["run_id"]))
+
+    assert recovered == initial
+    assert len(
+        [
+            record
+            for record in canary_store.list_records("BuilderOpsReceipt")
+            if record["action"] == "canary_acceptance_observation"
+        ]
+    ) == 1
+
+
 def _canary_runtime_fixture(tmp_path):
     api = FakeBuilderOpsClient()
     outbox = FakeVerificationOutbox(api)
