@@ -1,8 +1,10 @@
 """MVR-05B picker/watch compatibility recovery checks."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from app.instance._storage_boundary import RegistryError
 from app.instance.settings_rebind import SettingsRebindStore
@@ -130,3 +132,25 @@ def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_
 
 def test_picker_rebind_drains_scalar_worker_before_binding_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(tmp_path, monkeypatch)
+
+
+def test_unregistered_picker_path_stops_before_manager_or_filesystem_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An arbitrary client path is only a lexical key, never a filesystem input."""
+    vault_a, vault_b = tmp_path / "a", tmp_path / "b"
+    initialize_test_vault(vault_a); initialize_test_vault(vault_b)
+    registry = _registry(tmp_path, vault_a, vault_b)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(registry.path))
+    from app.api.routes import companion
+
+    class _Manager:
+        def select_vault(self, *_args, **_kwargs):
+            raise AssertionError("unregistered request path reached vault manager")
+
+    monkeypatch.setattr(companion, "get_vault_manager", lambda: _Manager())
+    with pytest.raises(HTTPException, match="active_context_binding_unresolved"):
+        companion.select_companion_vault(
+            companion.VaultSelectRequest(path=str(tmp_path / "../unregistered")),
+            SimpleNamespace(headers={}),
+        )
