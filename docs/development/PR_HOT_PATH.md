@@ -184,8 +184,9 @@ false-green coordination evidence.
 Classifier output is advisory coordination evidence only:
 - `wait`: pending checks are still within the bounded threshold; keep waiting with the REST/backoff
   path.
-- `stalled`: queued or in-progress checks exceeded the threshold; record a CI-pending handoff or
-  consider an explicit rerun workflow if one owns that action.
+- `stalled`: queued or in-progress checks exceeded the threshold; execute the owning diagnosis and
+  authorized recovery workflow. A threshold alone does not justify a terminal CI-pending handoff;
+  apply `GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss` before suspending delivery.
 - `flaky_or_external_failure`: latest failed conclusions point to infrastructure-style behavior
   such as timeout/cancel/stale; rerun guidance is advisory and does not make the check acceptable.
 - `actionable_failure`: latest failed checks need repair or failure-context collection, not waiting.
@@ -224,6 +225,8 @@ bucket list cannot override this canonical routing.
 - record PR number, issue number(s), current head SHA, lane, risk, checks run, review classification, and next handoff
 - record BuilderOps routing: records/projections/receipts created, or `none` with a short reason
 - include enough traceability to prove the current delivery state without replaying the full procedure
+- execute that next workflow under `.codex/skills/README.md :: Workflow continuation`; the receipt
+  is intermediate until verification-and-closure observes merge and reconciliation or records stop-loss
 
 5. Issue/PR lifecycle and post-merge proof placement
 - a closing slice Issue may require only `Verify:` evidence that is available before its PR merges;

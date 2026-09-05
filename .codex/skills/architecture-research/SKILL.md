@@ -127,7 +127,7 @@ must never be used as a proxy.
   spec directories, and issues; where a task overlaps, extend or supersede explicitly (name the
   issue and which half stays where — see the audit's reconciliation-notes pattern) instead of
   filing a parallel hub.
-- Hand the accepted-PromotionIntent-backed, reconciled backlog to
+- Invoke the next workflow for the accepted-PromotionIntent-backed, reconciled backlog through
   `.codex/skills/feature-breakdown/SKILL.md` to produce the specification directory, parent
   feature issue, and child issues. Record their resulting source/result references, then use the
   same gateway to transition the intent to `promoted`. This skill does not file implementation
@@ -215,3 +215,10 @@ this skill specifically:
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong),
 route it through `capture-learning` — it owns the invocation timing and the "name an upstream
 artifact or don't log" gate.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Invoke `feature-breakdown` for accepted,
+reconciled findings after the PromotionIntent boundary is satisfied; publish authorized
+audit/specification changes through `publish-pr`. Research-only scope returns the completed evidence
+to its caller without inventing backlog authority.

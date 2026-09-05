@@ -25,9 +25,9 @@ secure_first: true | false
 
 Interpret the pair as follows:
 
-- `continue_here`, `false`: remaining work is small and depends on this session's context; keep working.
+- `continue_here`, `false`: authorized work remains; execute its owning workflow, including bounded repair or escalation when needed.
 - `existing_successor`, `false`: a verified successor already carries the same task and authority; hand off there.
-- `new_session_thread`, `false`: remaining work is bounded but no verified successor exists; provide a copyable start prompt. Creating, navigating to, or archiving a Codex task/thread still requires the user's explicit request.
+- `new_session_thread`, `false`: only after documented stop-loss or explicit user-directed transfer, provide recovery context when no verified successor exists. A copyable prompt does not execute delivery. Creating, navigating to, or archiving a Codex task/thread still requires the user's explicit request.
 - Any destination with `true`: secure the work first through the owning workflow, then perform one fresh closeout assessment.
 - `end`, `false`: the goal is verified, no important work is unsaved or unfinished, and the session may close.
 
@@ -98,9 +98,10 @@ tool that owns it in the same response:
 
 Do not perform those mutations directly from this skill. `klart` owns only read-only assessment and
 routing. The owning skill retains its authority, verification requirements, and stop conditions.
-Do not ask a general "should I continue?" question. Stop only for an owning skill's contractual
-operator approval, a genuine owner decision, an external or irreversible action, unclear authority,
-missing permission, or a verified blocking failure. Route a genuine owner decision through
+Do not ask a general "should I continue?" question. Apply
+`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss` before stopping;
+already-authorized external actions and repairable verification failures require continuation.
+Preserve an owning skill's unsatisfied operator gate. Route a genuine owner decision through
 `owner-decision-brief`.
 
 If securing is recommended, do not blindly stash, commit, or push. The owning skill determines
@@ -136,3 +137,14 @@ This is the skill's response contract, not a platform-level response interceptor
 mechanically rewrite a response from an agent that bypasses the required closeout invocation.
 
 Do not claim `end` unless the final fresh assessment satisfies the contract above.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+Apply the shared continuation contract to the entire authorized task, not only the last skill
+output. Invoke the unfinished owning workflow and reassess once it returns. Pending CI, publication,
+review requests, queued verification, and verified-but-unmerged execution cannot justify a terminal
+handoff. Before suspending an open delivery PR, verify a documented stop-loss or explicit user scope
+restriction. An accepted active successor may continue under the authenticated lifecycle handoff
+contract; a proposed successor or copyable prompt is insufficient.

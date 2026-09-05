@@ -31,6 +31,9 @@ labels/Project state, post GitHub comments, push, or perform any other GitHub mu
 complete the review/repair and verification gates locally, then return verdict `verified` with the
 fresh clean review events. The Demerzel host owns the separately fenced merge-or-no-merge effect and
 all later lifecycle reconciliation.
+That verified verdict is a return to the active host caller, not terminal delivery. The originating
+delivery owner must follow the host through observed merge and reconciliation under
+.codex/skills/README.md :: Workflow continuation, or document the actual stop-loss.
 After neutralizing body closers, persist and authenticate the continuous
 prepared -> merged -> reconciled -> restored merge-phase ledger. If a crash leaves an exact-head PR
 open with the neutralized body and a trusted prepared receipt, or merged but incomplete, resume the

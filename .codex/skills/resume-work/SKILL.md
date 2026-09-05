@@ -226,3 +226,13 @@ while work is unfinished. Progressive and opportunistic — not a report after e
 - One line naming the situation (1–4) and the chosen action.
 - Then either continue, or the single decision brief per
   `.codex/skills/owner-decision-brief` when escalating.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+Execute the recovered owning workflow at its next incomplete step. An open delivery PR proceeds
+through `pr-integration` when repair is needed and then `verification-and-closure`; a scratch
+handoff or queued verifier is not completion. Preserve the authenticated lifecycle-owner transfer
+procedure above. Recovery ends only when the requested outcome is verified or the documented
+stop-loss still applies.

@@ -189,3 +189,11 @@ When used for Yggdrasil or Agentic PKM work:
 ## Output standard
 
 Be concise enough to be used. State exactly what cannot yet be decided, the smallest evidence that could change that, and whether the agent can safely act now. Do not expose internal process detail unless it is material to the person's decision or they ask for it.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. For a repo Builder workflow, return an
+agent-owned decision to the calling skill and execute its next authorized action. A genuine
+human-owned choice retains the decision gate; continue independent evidence work where useful.
+Standalone decision support ends with its requested assessment and does not automatically create a
+delivery task.

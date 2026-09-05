@@ -524,8 +524,11 @@ When continuing through anchor drift:
 16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md :: Mandatory Hot-Path Gates` through `pr-integration` only as needed. Read `:: Escalation Triggers` to decide whether a trigger applies; read `:: CI Status Handling` only once CI is attached and a check is failing or stuck.
 18. If any hot-path trigger applies, read the matching procedure section in `docs/development/PR_ESCALATION_PATHS.md` (whole-file read only when the trigger is unclassified) and use it.
-19. **Execute Action: Request Review** only when review is explicitly requested.
-20. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
+19. Immediately execute `verification-and-closure`: run the applicable current-head CI/review gates,
+    repair through `pr-integration` when needed, merge, reconcile exact Issues, and finish required
+    post-merge receipts. **Execute Action: Request Review** only when review is explicitly requested;
+    this does not waive independent review required by the delivery tier.
+20. After verified slice merge, if this is not the final child slice, keep the parent issue open for later acceptance.
 21. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
 
 ## PR handoff requirements
@@ -575,3 +578,12 @@ If blocked:
 - recommend Issue maintenance when the task contract itself needs correction
 
 Do not block solely because an exact anchor label is absent if the governing doc passages still make the bounded task clear.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+After publication, execute `pr-integration` only for triggered repair, then
+`verification-and-closure` through merge and exact lifecycle reconciliation. Return verified
+delivery evidence to the issue-set caller, which continues the next authorized slice. A published PR
+or requested review is not a terminal handoff.

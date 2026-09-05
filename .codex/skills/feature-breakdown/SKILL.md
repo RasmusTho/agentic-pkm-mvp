@@ -222,7 +222,7 @@ By contrast, additive work on a single surface that mirrors an existing pattern 
 6. Decide where post-merge evidence will live:
    - parent feature issue body, comments, or both
    - owner-doc promotion trigger
-7. If docs are still too vague, stop at `enrich-docs` instead of creating weak specs.
+7. If docs are still too vague, invoke `docs-governance` and its `docs-authoring` route to resolve the gaps within existing authority, then resume decomposition. A genuine missing owner decision uses `owner-decision-brief`; do not create weak specs.
 8. Immediately before the first `gh issue create` (parent or child), run the **Live duplicate re-check — immediately before creation** step from `.codex/skills/docs-to-issue/SKILL.md :: Before creating any Issue`. The step-3 search is an analysis-time snapshot, and spec authoring (steps 4–7) leaves a wide gap in which a concurrent session can file the same backlog (seen 2026-07-29: hub #4286 + children #4287–#4292 duplicated by #4298–#4304).
 9. Create or update the parent feature issue on GitHub (if needed).
    - If you create it, immediately update the local `PARENT_FEATURE_ISSUE.md` to state that the GitHub issue now exists and is the authoritative backlog/validation surface.
@@ -342,3 +342,10 @@ When creating issues, include:
 - `TASK RECEIPT: Issue #124 created from LOCAL_TEST_BOOTSTRAP/RESET_RUNTIME_STATE, label=agent:ready; optional Project repair: none.`
 
 If no parent feature issue is needed, say so explicitly and explain why the work should remain a single bounded issue instead.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Publish changed governing specifications
+through `publish-pr`. When implementation is in scope, invoke `deliver-issue-set` for the child
+chain, or `issue-to-code` for a single ready slice. Return verified specification and issue receipts
+when the requested scope is breakdown only.
