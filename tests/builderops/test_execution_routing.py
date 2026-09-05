@@ -19,6 +19,7 @@ from app.builderops.execution_routing_receipts import (
     CanaryReceiptEvidenceError,
     append_attempt_intent,
     append_attempt_outcome,
+    bind_canary_receipt_to_verification_request,
     record_acceptance_observation,
 )
 from app.builderops.store import SqliteBuilderOpsStore
@@ -27,11 +28,16 @@ from app.builderops.store import SqliteBuilderOpsStore
 HASH_A = "a" * 64
 HASH_B = "b" * 64
 HASH_C = "c" * 64
+REPOSITORY = "RasmusTho/agentic-pkm-mvp"
+VERIFICATION_RUN_ID = (
+    f"vrun-{canonical_hash([REPOSITORY.lower(), 5328, 'verification'])[:16]}"
+)
 
 
 def _request(**overrides: object) -> ExecutionRouteRequest:
     values: dict[str, object] = {
         "request_id": "route-request-5183",
+        "repository": REPOSITORY,
         "issue_number": 5183,
         "work_class": "bounded_fast",
         "risk": "low",
@@ -63,7 +69,9 @@ def _target(capability: str) -> ResolvedExecutionTarget:
     )
 
 
-def _durable_canary(tmp_path, *, issue_number: int = 5183):
+def _durable_canary(
+    tmp_path, *, issue_number: int = 5183, outcome: str = "started"
+):
     request = _request(issue_number=issue_number)
     decision = admit_phase2_canary(
         request, opt_in=True, sample_index=1, sample_limit=1
@@ -74,7 +82,7 @@ def _durable_canary(tmp_path, *, issue_number: int = 5183):
         target=_target("luna"),
         attempt_number=1,
         mode="canary",
-        outcome="started",
+        outcome=outcome,
         observed_at="2026-08-29T15:00:01Z",
     )
     store = SqliteBuilderOpsStore(tmp_path / f"builderops-{issue_number}.sqlite3")
@@ -90,16 +98,42 @@ def _durable_canary(tmp_path, *, issue_number: int = 5183):
     return store, receipt, request, decision, attempt
 
 
+def _verification_request(
+    receipt: dict[str, object],
+    *,
+    run_id: str,
+    repository: str = REPOSITORY,
+    issue_number: int = 5183,
+    pr_number: int = 5328,
+    head_sha: str = "a" * 40,
+) -> dict[str, object]:
+    assert run_id == VERIFICATION_RUN_ID
+    return bind_canary_receipt_to_verification_request(
+        {
+            "repository": repository,
+            "pr_number": pr_number,
+            "linked_issue": issue_number,
+            "current_head_sha": head_sha,
+            "stage": "verification",
+            "idempotency_key": "0" * 64,
+        },
+        receipt,
+    )
+
+
 def test_canary_acceptance_consumer_records_verified_delivery_once(tmp_path) -> None:
     store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
     verification = {
         "contract": "verification_receipt.v1",
         "verdict": "verified",
-        "repository": "RasmusTho/agentic-pkm-mvp",
+        "repository": REPOSITORY,
         "pr_number": 5328,
         "head_sha": "a" * 40,
-        "run_id": "vrun-acceptance",
+        "run_id": VERIFICATION_RUN_ID,
     }
+    verification_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID
+    )
 
     first = record_acceptance_observation(
         store,
@@ -109,7 +143,8 @@ def test_canary_acceptance_consumer_records_verified_delivery_once(tmp_path) -> 
         pr_number=5328,
         head_sha="a" * 40,
         governing_issue=5183,
-        run_id="vrun-acceptance",
+        run_id=VERIFICATION_RUN_ID,
+        verification_request=verification_request,
     )
     replay = record_acceptance_observation(
         store,
@@ -119,7 +154,8 @@ def test_canary_acceptance_consumer_records_verified_delivery_once(tmp_path) -> 
         pr_number=5328,
         head_sha="a" * 40,
         governing_issue=5183,
-        run_id="vrun-acceptance",
+        run_id=VERIFICATION_RUN_ID,
+        verification_request=verification_request,
     )
 
     assert first == replay
@@ -132,6 +168,9 @@ def test_canary_acceptance_consumer_records_verified_delivery_once(tmp_path) -> 
 
 def test_canary_acceptance_rejects_unbound_verified_delivery(tmp_path) -> None:
     store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    verification_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID
+    )
 
     observation = record_acceptance_observation(
         store,
@@ -141,7 +180,8 @@ def test_canary_acceptance_rejects_unbound_verified_delivery(tmp_path) -> None:
         pr_number=5328,
         head_sha="a" * 40,
         governing_issue=5183,
-        run_id="vrun-unbound",
+        run_id=VERIFICATION_RUN_ID,
+        verification_request=verification_request,
     )
 
     body = json.loads(observation["receipt_body"])
@@ -151,6 +191,9 @@ def test_canary_acceptance_rejects_unbound_verified_delivery(tmp_path) -> None:
 
 def test_canary_acceptance_is_not_accepted_without_verification(tmp_path) -> None:
     store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    verification_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID
+    )
 
     observation = record_acceptance_observation(
         store,
@@ -160,7 +203,8 @@ def test_canary_acceptance_is_not_accepted_without_verification(tmp_path) -> Non
         pr_number=5328,
         head_sha="a" * 40,
         governing_issue=5183,
-        run_id="vrun-not-reached",
+        run_id=VERIFICATION_RUN_ID,
+        verification_request=verification_request,
     )
 
     body = json.loads(observation["receipt_body"])
@@ -172,6 +216,9 @@ def test_canary_acceptance_is_not_accepted_without_verification(tmp_path) -> Non
 def test_canary_acceptance_rejects_stale_and_cross_issue_receipts(tmp_path) -> None:
     store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
     verified = {"verdict": "verified", "head_sha": "a" * 40}
+    stale_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID, head_sha="b" * 40
+    )
 
     stale = record_acceptance_observation(
         store,
@@ -181,15 +228,20 @@ def test_canary_acceptance_rejects_stale_and_cross_issue_receipts(tmp_path) -> N
         pr_number=5328,
         head_sha="b" * 40,
         governing_issue=5183,
-        run_id="vrun-stale",
+        run_id=VERIFICATION_RUN_ID,
+        verification_request=stale_request,
     )
     stale_body = json.loads(stale["receipt_body"])
     assert stale_body["acceptance"]["status"] == "not_accepted"
     assert stale_body["acceptance"]["reason"] == "verification_head_mismatch"
 
     cross_issue = dict(receipt)
-    cross_issue["candidate"] = {"issue_number": 9999, "work_class": "bounded_fast"}
-    with pytest.raises(CanaryReceiptEvidenceError, match="issue identity"):
+    cross_issue["candidate"] = {
+        "repository": REPOSITORY,
+        "issue_number": 9999,
+        "work_class": "bounded_fast",
+    }
+    with pytest.raises(CanaryReceiptEvidenceError, match="verification request"):
         record_acceptance_observation(
             store,
             cross_issue,
@@ -198,7 +250,80 @@ def test_canary_acceptance_rejects_stale_and_cross_issue_receipts(tmp_path) -> N
             pr_number=5328,
             head_sha="a" * 40,
             governing_issue=5183,
-            run_id="vrun-cross-issue",
+            run_id=VERIFICATION_RUN_ID,
+            verification_request=_verification_request(
+                cross_issue, run_id=VERIFICATION_RUN_ID
+            ),
+        )
+
+
+def test_acceptance_requires_delivery_eligible_final_canary_outcome(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(
+        tmp_path, outcome="failed"
+    )
+    verification_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID
+    )
+    observation = record_acceptance_observation(
+        store,
+        receipt,
+        {
+            "verdict": "verified",
+            "repository": REPOSITORY,
+            "pr_number": 5328,
+            "head_sha": "a" * 40,
+            "run_id": VERIFICATION_RUN_ID,
+        },
+        repository=REPOSITORY,
+        pr_number=5328,
+        head_sha="a" * 40,
+        governing_issue=5183,
+        run_id=VERIFICATION_RUN_ID,
+        verification_request=verification_request,
+    )
+    body = json.loads(observation["receipt_body"])
+    assert body["acceptance"]["status"] == "not_accepted"
+    assert body["acceptance"]["reason"] == "canary_attempt_failed"
+
+
+def test_acceptance_rejects_cross_repository_canary_identity(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    verification_request = _verification_request(
+        receipt, run_id=VERIFICATION_RUN_ID
+    )
+    with pytest.raises(CanaryReceiptEvidenceError, match="repository"):
+        record_acceptance_observation(
+            store,
+            receipt,
+            None,
+            repository="someone/unrelated",
+            pr_number=5328,
+            head_sha="a" * 40,
+            governing_issue=5183,
+            run_id=VERIFICATION_RUN_ID,
+            verification_request=verification_request,
+        )
+
+
+def test_acceptance_rejects_noncanonical_fallback_sequence(tmp_path) -> None:
+    store, receipt, _request_value, _decision, _attempt = _durable_canary(tmp_path)
+    noncanonical = dict(receipt)
+    attempts = [dict(item) for item in receipt["attempts"]]  # type: ignore[index]
+    attempts[0]["attempt_number"] = 2
+    noncanonical["attempts"] = attempts
+    with pytest.raises(CanaryReceiptEvidenceError, match="canonical order"):
+        record_acceptance_observation(
+            store,
+            noncanonical,
+            None,
+            repository=REPOSITORY,
+            pr_number=5328,
+            head_sha="a" * 40,
+            governing_issue=5183,
+            run_id=VERIFICATION_RUN_ID,
+            verification_request=_verification_request(
+                noncanonical, run_id=VERIFICATION_RUN_ID
+            ),
         )
 
 

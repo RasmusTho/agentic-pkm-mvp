@@ -960,6 +960,14 @@ def _cmd_verification_cycle(
                     "--repo does not match the verification request"
                 )
             repository = request_repository
+            if canary_receipt is not None:
+                from app.builderops.execution_routing_receipts import (
+                    bind_canary_receipt_to_verification_request,
+                )
+
+                request = bind_canary_receipt_to_verification_request(
+                    request, canary_receipt
+                )
         if not repository:
             repository = os.getenv(
                 "BUILDEROPS_VERIFICATION_REPOSITORY", ""

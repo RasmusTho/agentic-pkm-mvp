@@ -47,6 +47,7 @@ class CanaryReceiptChain:
 
     intent_receipt_id: str
     intent_event_hash: str
+    repository: str
     issue_number: int
     route_lineage_id: str
     route_decision_id: str
@@ -62,10 +63,13 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _attempt_payload(attempt: ExecutionAttemptObservation) -> dict[str, object]:
+def _attempt_payload(
+    attempt: ExecutionAttemptObservation, *, repository: str | None
+) -> dict[str, object]:
     return {
         "attempt_id": attempt.attempt_id,
         "attempt_hash": attempt.content_hash,
+        "repository": repository,
         "attempt_number": attempt.attempt_number,
         "mode": attempt.mode,
         "requested_capability": attempt.requested_capability,
@@ -97,6 +101,7 @@ def _chain_payload(
     return {
         "schema_version": CHAIN_VERSION,
         "event": event,
+        "repository": request.repository,
         "issue_number": request.issue_number,
         "route_request": request.model_dump(mode="json"),
         "route_decision": decision.model_dump(mode="json"),
@@ -108,7 +113,7 @@ def _chain_payload(
             "authority_hash": decision.authority_hash,
             "verification_profile_hash": decision.verification_profile_hash,
         },
-        "attempt": _attempt_payload(attempt),
+        "attempt": _attempt_payload(attempt, repository=request.repository),
         "predecessor": dict(predecessor) if predecessor is not None else None,
         "acceptance": dict(acceptance) if acceptance is not None else None,
         "lifecycle_authority": "none",
@@ -211,11 +216,16 @@ def append_attempt_intent(
 
     if attempt.mode != "canary":
         raise CanaryReceiptEvidenceError("canary intent must use canary mode")
+    if request.repository is None:
+        raise CanaryReceiptEvidenceError(
+            "canary intent requires a canonical originating repository"
+        )
     payload = _chain_payload(request, decision, attempt, event="attempt_intent")
     record = _append(store, payload, action="canary_attempt_intent")
     return CanaryReceiptChain(
         intent_receipt_id=str(record["id"]),
         intent_event_hash=canonical_hash(payload),
+        repository=request.repository,
         issue_number=request.issue_number,
         route_lineage_id=decision.route_lineage_id,
         route_decision_id=decision.decision_id,
@@ -259,6 +269,7 @@ def _validate_chain(
     attempt: ExecutionAttemptObservation,
 ) -> None:
     expected = (
+        request.repository,
         request.issue_number,
         decision.route_lineage_id,
         decision.decision_id,
@@ -268,6 +279,7 @@ def _validate_chain(
         decision.verification_profile_hash,
     )
     actual = (
+        chain.repository,
         chain.issue_number,
         chain.route_lineage_id,
         chain.route_decision_id,
@@ -282,6 +294,7 @@ def _validate_chain(
         )
     if (
         attempt.attempt_id != chain.attempt_id
+        or request.repository != chain.repository
         or attempt.route_lineage_id != chain.route_lineage_id
         or attempt.route_decision_id != chain.route_decision_id
         or attempt.route_decision_hash != chain.route_decision_hash
@@ -320,7 +333,9 @@ def append_attempt_outcome(
 def _validated_public_attempt(
     value: object,
     *,
+    repository: str,
     route_lineage_id: str,
+    route_decision_id: str,
     route_decision_hash: str,
     semantic_hashes: Mapping[str, object],
 ) -> dict[str, object]:
@@ -329,6 +344,7 @@ def _validated_public_attempt(
     required = {
         "attempt_id",
         "attempt_hash",
+        "repository",
         "attempt_number",
         "mode",
         "requested_capability",
@@ -359,7 +375,9 @@ def _validated_public_attempt(
         or not isinstance(value.get("attempt_number"), int)
         or isinstance(value.get("attempt_number"), bool)
         or value["attempt_number"] <= 0
+        or value.get("repository") != repository
         or value.get("route_lineage_id") != route_lineage_id
+        or value.get("route_decision_id") != route_decision_id
         or value.get("route_decision_hash") != route_decision_hash
         or value.get("semantic_hashes") != dict(semantic_hashes)
     ):
@@ -369,19 +387,54 @@ def _validated_public_attempt(
 
 def _canary_attempts(
     canary_receipt: Mapping[str, object],
-) -> tuple[int, str, str, dict[str, str], list[dict[str, object]]]:
+) -> tuple[str, int, str, str, str, dict[str, str], list[dict[str, object]]]:
     if canary_receipt.get("schema_version") != "builder_execution_routing_canary.v1":
         raise CanaryReceiptEvidenceError("unsupported canary receipt schema")
     candidate = canary_receipt.get("candidate")
     route = canary_receipt.get("route")
     semantic_hashes = canary_receipt.get("semantic_hashes")
     raw_attempts = canary_receipt.get("attempts")
+    candidate_repository = (
+        candidate.get("repository") if isinstance(candidate, Mapping) else None
+    )
     issue_number = candidate.get("issue_number") if isinstance(candidate, Mapping) else None
+    work_class = candidate.get("work_class") if isinstance(candidate, Mapping) else None
+    route_decision_id = route.get("route_decision_id") if isinstance(route, Mapping) else None
+    repository = (
+        candidate_repository.casefold()
+        if isinstance(candidate_repository, str)
+        else None
+    )
     if (
-        not isinstance(issue_number, int)
+        not isinstance(candidate, Mapping)
+        or set(candidate) != {"repository", "issue_number", "work_class"}
+        or not isinstance(repository, str)
+        or re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository) is None
+        or not isinstance(issue_number, int)
         or isinstance(issue_number, bool)
         or issue_number <= 0
         or not isinstance(route, Mapping)
+        or set(route)
+        != {
+            "route_lineage_id",
+            "route_decision_id",
+            "route_decision_hash",
+            "requested_capability",
+            "selected_capability",
+            "allocation_state",
+        }
+        or work_class != "bounded_fast"
+        or not isinstance(route_decision_id, str)
+        or not route_decision_id
+        or route.get("requested_capability") != "spark"
+        or route.get("allocation_state")
+        not in {
+            "fresh_bonus_available",
+            "allocation_observation_missing",
+            "allocation_observation_stale",
+            "allocation_economically_unavailable",
+            "allocation_unknown",
+        }
         or not isinstance(semantic_hashes, Mapping)
         or set(semantic_hashes) != {"context_pack_hash", "authority_hash", "verification_profile_hash"}
         or any(
@@ -390,6 +443,7 @@ def _canary_attempts(
             for key in semantic_hashes
         )
         or not isinstance(route.get("route_lineage_id"), str)
+        or not route.get("route_lineage_id")
         or not isinstance(route.get("route_decision_hash"), str)
         or _HEX64.fullmatch(str(route["route_decision_hash"])) is None
         or not isinstance(raw_attempts, list)
@@ -404,15 +458,58 @@ def _canary_attempts(
     attempts = [
         _validated_public_attempt(
             value,
+            repository=repository,
             route_lineage_id=str(route["route_lineage_id"]),
+            route_decision_id=route_decision_id,
             route_decision_hash=str(route["route_decision_hash"]),
             semantic_hashes=normalized_hashes,
         )
         for value in raw_attempts
     ]
+    for expected_number, attempt in enumerate(attempts, start=1):
+        if (
+            attempt["attempt_number"] != expected_number
+            or attempt["mode"] != "canary"
+            or attempt["repository"] != repository
+            or attempt["route_decision_id"] != route_decision_id
+        ):
+            raise CanaryReceiptEvidenceError(
+                "canary receipt attempts are not in canonical order"
+            )
+    selected_capability = route.get("selected_capability")
+    if selected_capability not in {"spark", "luna"}:
+        raise CanaryReceiptEvidenceError("canary receipt route capability is malformed")
+    first = attempts[0]
+    if (
+        first["transition_kind"] != "none"
+        or first["transition_reason"] != "initial_route"
+        or first["triggering_attempt_id"] is not None
+        or first["triggering_attempt_hash"] is not None
+        or first["actual_capability"] != selected_capability
+    ):
+        raise CanaryReceiptEvidenceError("canary receipt primary attempt is not canonical")
+    if len(attempts) == 2:
+        fallback = attempts[1]
+        if (
+            selected_capability != "spark"
+            or first["actual_capability"] != "spark"
+            or first["outcome"] != "allocation_unavailable"
+            or fallback["actual_capability"] != "luna"
+            or fallback["requested_capability"] != "spark"
+            or fallback["transition_kind"] != "capacity_fallback"
+            or fallback["transition_reason"]
+            != "spark_allocation_unavailable_at_launch"
+            or fallback["triggering_attempt_id"] != first["attempt_id"]
+            or fallback["triggering_attempt_hash"] != first["attempt_hash"]
+        ):
+            raise CanaryReceiptEvidenceError(
+                "canary receipt fallback sequence is not canonical"
+            )
     return (
+        repository,
         issue_number,
         str(route["route_lineage_id"]),
+        route_decision_id,
         str(route["route_decision_hash"]),
         normalized_hashes,
         attempts,
@@ -422,8 +519,10 @@ def _canary_attempts(
 def _find_intent(
     store: ReceiptStore,
     *,
+    repository: str,
     issue_number: int,
     route_lineage_id: str,
+    route_decision_id: str,
     route_decision_hash: str,
     semantic_hashes: Mapping[str, str],
     attempt: Mapping[str, object],
@@ -443,8 +542,10 @@ def _find_intent(
         if not isinstance(body_attempt, Mapping) or body_attempt.get("attempt_id") != attempt_id:
             continue
         if (
-            body.get("issue_number") != issue_number
+            body.get("repository") != repository
+            or body.get("issue_number") != issue_number
             or body.get("route_lineage_id") != route_lineage_id
+            or body.get("route_decision_id") != route_decision_id
             or body.get("route_decision_hash") != route_decision_hash
             or hashes != dict(semantic_hashes)
         ):
@@ -457,6 +558,7 @@ def _find_intent(
         return CanaryReceiptChain(
             intent_receipt_id=str(record["id"]),
             intent_event_hash=canonical_hash(body),
+            repository=repository,
             issue_number=issue_number,
             route_lineage_id=route_lineage_id,
             route_decision_id=decision_id,
@@ -528,6 +630,7 @@ def record_acceptance_observation(
     head_sha: str,
     governing_issue: int,
     run_id: str,
+    verification_request: Mapping[str, object],
     not_accepted_reason: str | None = None,
 ) -> dict[str, Any]:
     """Consume a validated verifier result into the canary receipt chain.
@@ -537,21 +640,43 @@ def record_acceptance_observation(
     absent or non-success verification becomes typed ``not_accepted`` evidence.
     """
 
-    issue_number, lineage, decision_hash, semantic_hashes, public_attempts = _canary_attempts(
-        canary_receipt
+    (
+        originating_repository,
+        issue_number,
+        lineage,
+        decision_id,
+        decision_hash,
+        semantic_hashes,
+        public_attempts,
+    ) = _canary_attempts(canary_receipt)
+    _validate_canary_request_binding(
+        canary_receipt,
+        verification_request,
+        repository=originating_repository,
+        issue_number=issue_number,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        run_id=run_id,
     )
     if issue_number != governing_issue or pr_number <= 0 or not isinstance(head_sha, str):
         raise CanaryReceiptEvidenceError("canary and verification issue identity do not match")
-    if not isinstance(repository, str) or not repository.strip() or not run_id.strip():
-        raise CanaryReceiptEvidenceError("verification identity is malformed")
+    if (
+        not isinstance(repository, str)
+        or not repository.strip()
+        or repository.casefold() != originating_repository
+        or not run_id.strip()
+    ):
+        raise CanaryReceiptEvidenceError("verification repository identity is malformed")
 
     # The final bounded carrier is the only attempt eligible for the later
     # verification observation.  Its durable intent must predate acceptance.
     final_public_attempt = public_attempts[-1]
     chain = _find_intent(
         store,
+        repository=originating_repository,
         issue_number=issue_number,
         route_lineage_id=lineage,
+        route_decision_id=decision_id,
         route_decision_hash=decision_hash,
         semantic_hashes=semantic_hashes,
         attempt=final_public_attempt,
@@ -570,6 +695,7 @@ def record_acceptance_observation(
         attempt_data = dict(final_public_attempt)
         public_attempt_hash = attempt_data.pop("attempt_hash")
         attempt_data.pop("semantic_hashes", None)
+        attempt_data.pop("repository", None)
         attempt = ExecutionAttemptObservation.model_validate(attempt_data)
     except (KeyError, TypeError, ValueError) as exc:
         raise CanaryReceiptEvidenceError("canary route-bound attempt is malformed") from exc
@@ -588,6 +714,16 @@ def record_acceptance_observation(
         if (
             body_attempt.get("attempt_id") == attempt.attempt_id
             and body_attempt.get("attempt_hash") == attempt.content_hash
+            and body.get("repository") == originating_repository
+            and body.get("issue_number") == issue_number
+            and body.get("route_lineage_id") == lineage
+            and body.get("route_decision_id") == decision_id
+            and body.get("route_decision_hash") == decision_hash
+            and body.get("semantic_hashes") == semantic_hashes
+            and body.get("predecessor") == {
+                "receipt_id": chain.intent_receipt_id,
+                "event_hash": chain.intent_event_hash,
+            }
         ):
             outcome_found = True
             break
@@ -618,6 +754,9 @@ def record_acceptance_observation(
                 if verification_receipt.get("head_sha") != head_sha
                 else "verification_identity_mismatch"
             )
+        elif attempt.outcome not in {"started", "succeeded"}:
+            status = "not_accepted"
+            reason = f"canary_attempt_{attempt.outcome}"
         else:
             status = "passed"
     else:
@@ -650,6 +789,146 @@ def record_acceptance_observation(
     )
 
 
+_CANARY_IDENTITY_FIELDS = {
+    "schema_version",
+    "repository",
+    "issue_number",
+    "pr_number",
+    "head_sha",
+    "verification_run_id",
+    "route_lineage_id",
+    "route_decision_id",
+    "route_decision_hash",
+    "semantic_hashes",
+    "attempts",
+    "receipt_hash",
+}
+_CANARY_ATTEMPT_IDENTITY_FIELDS = {
+    "attempt_id",
+    "attempt_hash",
+    "attempt_number",
+    "repository",
+    "route_lineage_id",
+    "route_decision_id",
+    "route_decision_hash",
+    "semantic_hashes",
+}
+
+
+def _canary_identity(
+    canary_receipt: Mapping[str, object],
+    request: Mapping[str, object],
+) -> dict[str, object]:
+    (
+        repository,
+        issue_number,
+        lineage,
+        decision_id,
+        decision_hash,
+        semantic_hashes,
+        attempts,
+    ) = _canary_attempts(canary_receipt)
+    request_repository = request.get("repository")
+    linked_issue = request.get("linked_issue")
+    pr_number = request.get("pr_number")
+    head_sha = request.get("current_head_sha")
+    idempotency_key = request.get("idempotency_key")
+    stage = request.get("stage", "verification")
+    if (
+        not isinstance(request_repository, str)
+        or request_repository.casefold() != repository
+        or not isinstance(linked_issue, int)
+        or isinstance(linked_issue, bool)
+        or linked_issue != issue_number
+        or not isinstance(pr_number, int)
+        or isinstance(pr_number, bool)
+        or pr_number <= 0
+        or not isinstance(head_sha, str)
+        or not isinstance(idempotency_key, str)
+        or len(idempotency_key) < 16
+        or stage != "verification"
+    ):
+        raise CanaryReceiptEvidenceError(
+            "canary receipt does not match verification request identity"
+        )
+    identity_attempts = [
+        {
+            key: attempt[key]
+            for key in _CANARY_ATTEMPT_IDENTITY_FIELDS
+        }
+        for attempt in attempts
+    ]
+    return {
+        "schema_version": "builder_execution_routing_canary.v1",
+        "repository": repository,
+        "issue_number": issue_number,
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "verification_run_id": (
+            f"vrun-{canonical_hash([repository, pr_number, stage])[:16]}"
+        ),
+        "route_lineage_id": lineage,
+        "route_decision_id": decision_id,
+        "route_decision_hash": decision_hash,
+        "semantic_hashes": dict(semantic_hashes),
+        "attempts": identity_attempts,
+        "receipt_hash": canonical_hash(dict(canary_receipt)),
+    }
+
+
+def bind_canary_receipt_to_verification_request(
+    request: Mapping[str, object], canary_receipt: Mapping[str, object]
+) -> dict[str, object]:
+    """Attach exact canary lineage to the authenticated verification request."""
+
+    result = dict(request)
+    identity = _canary_identity(canary_receipt, result)
+    existing = result.get("canary_identity")
+    if existing is not None and existing != identity:
+        raise CanaryReceiptEvidenceError(
+            "verification request canary identity does not match receipt"
+        )
+    result["canary_identity"] = identity
+    return result
+
+
+def validate_canary_receipt_request_binding(
+    canary_receipt: Mapping[str, object],
+    verification_request: Mapping[str, object],
+) -> None:
+    """Fail closed unless the request carries the exact receipt identity."""
+
+    expected = _canary_identity(canary_receipt, verification_request)
+    if verification_request.get("canary_identity") != expected:
+        raise CanaryReceiptEvidenceError(
+            "canary receipt is not bound to the verification request lineage"
+        )
+
+
+def _validate_canary_request_binding(
+    canary_receipt: Mapping[str, object],
+    verification_request: Mapping[str, object],
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+    head_sha: str,
+    run_id: str,
+) -> None:
+    expected = _canary_identity(canary_receipt, verification_request)
+    if (
+        verification_request.get("canary_identity") != expected
+        or expected["repository"] != repository
+        or expected["issue_number"] != issue_number
+        or expected["pr_number"] != pr_number
+        or expected["head_sha"] != head_sha
+        or expected["verification_run_id"] != run_id
+    ):
+        raise CanaryReceiptEvidenceError(
+            "canary receipt is not bound to the verification request lineage"
+        )
+
+
 __all__ = [
     "CHAIN_VERSION",
     "CanaryReceiptChain",
@@ -660,4 +939,6 @@ __all__ = [
     "append_attempt_outcome",
     "attempt_intent_exists",
     "record_acceptance_observation",
+    "bind_canary_receipt_to_verification_request",
+    "validate_canary_receipt_request_binding",
 ]

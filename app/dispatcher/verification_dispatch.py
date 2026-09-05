@@ -69,6 +69,35 @@ _REQUEST_FIELDS = (
     "final_review_rounds",
     *_REQUEST_FIELDS_V2[6:],
 )
+_REQUEST_FIELDS_WITH_CANARY = (*_REQUEST_FIELDS, "canary_identity")
+_CANARY_IDENTITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "repository",
+        "issue_number",
+        "pr_number",
+        "head_sha",
+        "verification_run_id",
+        "route_lineage_id",
+        "route_decision_id",
+        "route_decision_hash",
+        "semantic_hashes",
+        "attempts",
+        "receipt_hash",
+    }
+)
+_CANARY_ATTEMPT_IDENTITY_FIELDS = frozenset(
+    {
+        "attempt_id",
+        "attempt_hash",
+        "attempt_number",
+        "repository",
+        "route_lineage_id",
+        "route_decision_id",
+        "route_decision_hash",
+        "semantic_hashes",
+    }
+)
 _NESTED_REQUEST_FIELDS = {
     "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
     "artifact_provenance": (
@@ -519,6 +548,8 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
         if version == LEGACY_CONTRACT_VERSION
         else _REQUEST_FIELDS_V2
         if version == PREVIOUS_CONTRACT_VERSION
+        else _REQUEST_FIELDS_WITH_CANARY
+        if version == CONTRACT_VERSION and "canary_identity" in request
         else _REQUEST_FIELDS
     )
     projected = _closed_projection(request, fields=fields, location="request")
@@ -536,6 +567,79 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
     if isinstance(closing_issues, list):
         projected["closing_issues"] = list(closing_issues)
     return projected
+
+
+def _validate_canary_identity(
+    request: Mapping[str, object],
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+    head_sha: str,
+    idempotency_key: str,
+) -> None:
+    value = request.get("canary_identity")
+    if value is None:
+        return
+    if not isinstance(value, Mapping) or set(value) != _CANARY_IDENTITY_FIELDS:
+        raise ValueError("verification request canary identity is malformed")
+    if (
+        value.get("schema_version") != "builder_execution_routing_canary.v1"
+        or not isinstance(value.get("repository"), str)
+        or value.get("repository", "").casefold() != repository.casefold()
+        or not _positive_int(value.get("issue_number"))
+        or not _positive_int(value.get("pr_number"))
+        or value.get("issue_number") != issue_number
+        or value.get("pr_number") != pr_number
+        or value.get("head_sha") != head_sha
+        or value.get("verification_run_id")
+        != f"vrun-{hashlib.sha256(_json([repository.casefold(), pr_number, 'verification']).encode()).hexdigest()[:16]}"
+        or not isinstance(value.get("route_lineage_id"), str)
+        or not value.get("route_lineage_id")
+        or not isinstance(value.get("route_decision_id"), str)
+        or not value.get("route_decision_id")
+        or not isinstance(value.get("route_decision_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["route_decision_hash"]) is None
+        or not isinstance(value.get("receipt_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["receipt_hash"]) is None
+    ):
+        raise ValueError("verification request canary identity is malformed")
+    semantic_hashes = value.get("semantic_hashes")
+    if (
+        not isinstance(semantic_hashes, Mapping)
+        or set(semantic_hashes)
+        != {"context_pack_hash", "authority_hash", "verification_profile_hash"}
+        or any(
+            not isinstance(semantic_hashes.get(key), str)
+            or re.fullmatch(r"[0-9a-f]{64}", semantic_hashes[key]) is None
+            for key in semantic_hashes
+        )
+    ):
+        raise ValueError("verification request canary identity is malformed")
+    attempts = value.get("attempts")
+    if not isinstance(attempts, list) or not 1 <= len(attempts) <= 2:
+        raise ValueError("verification request canary identity is malformed")
+    for expected_number, attempt in enumerate(attempts, start=1):
+        if (
+            not isinstance(attempt, Mapping)
+            or set(attempt) != _CANARY_ATTEMPT_IDENTITY_FIELDS
+        ):
+            raise ValueError("verification request canary identity is malformed")
+        attempt_hashes = attempt.get("semantic_hashes")
+        if (
+            not _positive_int(attempt.get("attempt_number"))
+            or attempt.get("attempt_number") != expected_number
+            or not isinstance(attempt.get("attempt_id"), str)
+            or not attempt.get("attempt_id")
+            or not isinstance(attempt.get("attempt_hash"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", attempt["attempt_hash"]) is None
+            or attempt.get("repository") != value.get("repository")
+            or attempt.get("route_lineage_id") != value.get("route_lineage_id")
+            or attempt.get("route_decision_id") != value.get("route_decision_id")
+            or attempt.get("route_decision_hash") != value.get("route_decision_hash")
+            or attempt_hashes != semantic_hashes
+        ):
+            raise ValueError("verification request canary identity is malformed")
 
 
 def _required_string(request: Mapping[str, object], field: str) -> str:
@@ -684,6 +788,14 @@ def _validate_request(
     expected = hashlib.sha256(_json(identity).encode()).hexdigest()
     if strings["idempotency_key"] != expected:
         raise ValueError("verification request idempotency key does not match identity")
+    _validate_canary_identity(
+        request,
+        repository=repository,
+        issue_number=linked_issue,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        idempotency_key=strings["idempotency_key"],
+    )
 
 
 def _validated_stored_request(value: str | None) -> dict[str, object]:

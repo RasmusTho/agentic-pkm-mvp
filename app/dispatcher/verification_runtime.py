@@ -13,6 +13,7 @@ from app.builderops.execution_routing_receipts import (
     CanaryReceiptEvidenceError,
     ReceiptStore,
     record_acceptance_observation,
+    validate_canary_receipt_request_binding,
 )
 from app.dispatcher.verification_consumer import VerificationConsumer
 from app.dispatcher.verification_dispatch import (
@@ -234,9 +235,18 @@ class HostFencedVerificationCycle:
         *,
         canary_receipt: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
+        if canary_receipt is not None:
+            validate_canary_receipt_request_binding(canary_receipt, request)
         run = self.consumer.consume(request)
-        self._observe_canary(run, canary_receipt)
-        return self._finish_ready_dry_cycle(run.run_id)
+        receipt = self._finish_ready_dry_cycle(run.run_id)
+        if canary_receipt is not None:
+            completed_run = self.ledger.get(run.run_id)
+            if completed_run is None:
+                raise CanaryReceiptEvidenceError(
+                    "verification run disappeared before canary acceptance"
+                )
+            self._observe_canary(completed_run, canary_receipt)
+        return receipt
 
     def recover_dry_cycle(
         self,
@@ -247,17 +257,19 @@ class HostFencedVerificationCycle:
         run = self.ledger.get(run_id)
         if run is None:
             raise ValueError("verification cycle run is unavailable")
+        if canary_receipt is not None:
+            validate_canary_receipt_request_binding(canary_receipt, run.request)
         if run.status == "completed":
-            self._observe_canary(run, canary_receipt)
             receipt = run.terminal_receipt
-            return self._validated_receipt(
+            validated = self._validated_receipt(
                 run, receipt, allowed_outcomes={"dry_run_no_merge"}
             )
-        if run.status == "backoff":
             self._observe_canary(run, canary_receipt)
-            receipt = run.terminal_receipt
+            return validated
+        if run.status == "backoff":
+            retry_receipt = run.terminal_receipt
             return self._validated_receipt(
-                run, receipt, allowed_outcomes={"retry_after_readback"}
+                run, retry_receipt, allowed_outcomes={"retry_after_readback"}
             )
         if self._lease_is_live(run):
             raise VerificationSubscriptionBusy(
@@ -266,7 +278,6 @@ class HostFencedVerificationCycle:
         pending = self.ledger.pending_effect_binding(run_id)
         merge_ready = self.ledger.merge_ready_receipt(run_id)
         if merge_ready is not None:
-            self._observe_canary(run, canary_receipt)
             if (
                 self.containment_receipt_required
                 and "containment" not in merge_ready
@@ -294,11 +305,29 @@ class HostFencedVerificationCycle:
             merge_receipt = self.merge_executor.recover(
                 run, dry_run=True
             )
-            return self._settle(run_id, merge_receipt)
+            settled_receipt = self._settle(run_id, merge_receipt)
+            if (
+                canary_receipt is not None
+                and settled_receipt.get("terminal_outcome") == "dry_run_no_merge"
+            ):
+                completed_run = self.ledger.get(run_id)
+                if completed_run is None:
+                    raise CanaryReceiptEvidenceError(
+                        "verification run disappeared before canary acceptance"
+                    )
+                self._observe_canary(completed_run, canary_receipt)
+            return settled_receipt
         if merge_ready is None:
             run = self.consumer.recover(run_id)
-            self._observe_canary(run, canary_receipt)
-        return self._finish_ready_dry_cycle(run.run_id)
+        final_receipt = self._finish_ready_dry_cycle(run.run_id)
+        if canary_receipt is not None:
+            completed_run = self.ledger.get(run.run_id)
+            if completed_run is None:
+                raise CanaryReceiptEvidenceError(
+                    "verification run disappeared before canary acceptance"
+                )
+            self._observe_canary(completed_run, canary_receipt)
+        return final_receipt
 
     def _observe_canary(
         self,
@@ -355,6 +384,7 @@ class HostFencedVerificationCycle:
             head_sha=run.current_head_sha,
             governing_issue=linked_issue,
             run_id=run.run_id,
+            verification_request=run.request,
             not_accepted_reason=reason,
         )
 
