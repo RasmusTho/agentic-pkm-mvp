@@ -177,7 +177,7 @@ _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
 _DEFAULT_API_TIMEOUT_SECONDS = 2.0
-# Long-running operator POST routes (e.g. /api/operator/ask -> /api/ask) can
+# Long-running operator POST routes (e.g. /api/operator/ask -> /api/ask/scoped) can
 # take tens of seconds on a real synthesis backend (measured ~50s on the
 # ollama route). They get their own generous budget so the proxy does not
 # return runtime_unavailable while the backend is still working (#2993).
@@ -10138,7 +10138,7 @@ def _orientation_ambient_refresh_script() -> str:
 #   GET  /api/operator/health            -> COMPANION_API_BASE_URL /api/health
 #   GET  /api/operator/settings/validate -> COMPANION_API_BASE_URL /api/settings/validate
 #   GET  /api/operator/events/tail       -> COMPANION_API_BASE_URL /api/events/tail
-#   POST /api/operator/ask               -> COMPANION_API_BASE_URL /api/ask
+#   POST /api/operator/ask               -> COMPANION_API_BASE_URL /api/ask/scoped
 #
 # The /api/operator/* prefix keeps operator routes clearly namespaced and
 # distinct from /api/companion/* (workspace) routes.
@@ -16909,7 +16909,10 @@ def make_handler(
         # Operator POST paths that rewrite to a different runtime path.
         # key = companion-UI path, value = runtime API path.
         _POST_PATH_REWRITES: dict[str, str] = {
-            "/api/operator/ask": "/api/ask",
+            # Migrated Companion Ask remains scoped even if an intermediary
+            # strips the carrier, so the runtime fails reselection-required
+            # rather than invoking legacy/global Ask behavior.
+            "/api/operator/ask": "/api/ask/scoped",
         }
 
         # Operator POST paths that are long-running (real synthesis latency is
@@ -16987,11 +16990,6 @@ def make_handler(
                 self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                 return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
-            if (
-                parsed.path == "/api/operator/ask"
-                and self.headers.get("X-Active-Context-Session")
-            ):
-                runtime_path = "/api/ask/scoped"
             timeout_override = self._post_timeout_override(parsed.path)
             try:
                 forwarded_headers = self._forwarded_client_headers(parsed.path)

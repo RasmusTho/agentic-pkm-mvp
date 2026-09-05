@@ -9,7 +9,7 @@ Endpoints proxied:
   GET  /api/operator/health            -> runtime /api/health
   GET  /api/operator/settings/validate -> runtime /api/settings/validate
   GET  /api/operator/events/tail       -> runtime /api/events/tail
-  POST /api/operator/ask               -> runtime /api/ask (path rewritten)
+  POST /api/operator/ask               -> runtime /api/ask/scoped (path rewritten)
   GET  /operator                       -> renders overlay HTML (calls all four GET routes)
 """
 
@@ -18,6 +18,8 @@ from __future__ import annotations
 import io
 import json
 from typing import Any
+
+import pytest
 
 from companion_ui.workspace.serve_dev_page import make_handler
 from companion_ui.workspace.vault_settings_panel import VAULT_SELECT_ENDPOINT
@@ -182,7 +184,7 @@ class _DeleteDriver:
 def test_operator_endpoints_proxied_same_origin() -> None:
     """The companion server proxies all five operator endpoints same-origin:
     GET /api/operator/status, /api/operator/health, /api/operator/settings/validate,
-    /api/operator/events/tail, and POST /api/operator/ask (rewritten to /api/ask).
+    /api/operator/events/tail, and POST /api/operator/ask (rewritten to /api/ask/scoped).
     """
     status_data = {"sot_version": "v5.5", "stores": []}
     health_data = {"ok": True, "checks": {}}
@@ -197,7 +199,7 @@ def test_operator_endpoints_proxied_same_origin() -> None:
             "/api/settings/validate": settings_data,
             "/api/events/tail": events_data,
         },
-        post_responses={"/api/ask": ask_data},
+        post_responses={"/api/ask/scoped": ask_data},
     )
     handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
 
@@ -229,13 +231,49 @@ def test_operator_endpoints_proxied_same_origin() -> None:
     assert d.payload == events_data
     assert client.get_calls[-1] == ("/api/events/tail", {})
 
-    # --- POST /api/operator/ask -> /api/ask (path rewrite) ---
+    # --- POST /api/operator/ask -> /api/ask/scoped (path rewrite) ---
     p = _PostDriver(handler_cls, "/api/operator/ask", {"question": "test question"})
     p.run_post()
     assert p.status_code == 200
     assert p.payload == ask_data
-    # The path was rewritten from /api/operator/ask to /api/ask on the runtime side
-    assert client.post_calls[-1] == ("/api/ask", {"question": "test question"})
+    # This remains a migrated scoped route when its carrier is stripped.
+    assert client.post_calls[-1] == ("/api/ask/scoped", {"question": "test question"})
+
+
+@pytest.mark.parametrize(
+    "headers",
+    (
+        {},
+        {"X-Active-Context-Session": "session-bearer"},
+        {"X-Active-Context-Override": "override-bearer"},
+        {
+            "X-Active-Context-Session": "session-bearer",
+            "X-Active-Context-Override": "override-bearer",
+        },
+    ),
+)
+def test_operator_ask_always_uses_scoped_runtime_route(
+    headers: dict[str, str],
+) -> None:
+    """Operator Ask stays migrated if its carrier is absent or forwarded."""
+    client = _FakeClient(post_responses={"/api/ask/scoped": {"answer": "42", "sources": []}})
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    driver = _PostDriver(
+        handler_cls,
+        "/api/operator/ask",
+        {"question": "test question"},
+        headers=headers,
+    )
+    driver.run_post()
+
+    assert driver.status_code == 200
+    assert client.post_calls == [("/api/ask/scoped", {"question": "test question"})]
+    forwarded_path, forwarded_headers = client.post_header_calls[0]
+    assert forwarded_path == "/api/ask/scoped"
+    assert forwarded_headers is not None
+    for header, bearer in headers.items():
+        assert forwarded_headers[header] == bearer
 
 
 def test_operator_events_tail_forwards_query_params() -> None:
