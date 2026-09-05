@@ -264,3 +264,5 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The plan had already created canonical DSP-05 Issue #5277, but a repeated create step filed identical Issue #5278 before the new Issue state was re-read.
 **Upstream artifact:** `.codex/skills/docs-to-issue/SKILL.md :: Live duplicate re-check — immediately before creation`
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
+
+--- retro 2026-09-05: applied 38/38 proposals ---

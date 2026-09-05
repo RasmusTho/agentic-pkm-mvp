@@ -297,14 +297,13 @@ Placement: prefer placing the `## Direct Repair` block first in the PR body (bef
 
 ## Governance Lane vs Direct Repair for Workflow Files
 
-The Governance lane checkbox (`- [x] Governance lane`) has a narrow allowed-file set in `issue-pr-governance.yml`. It covers `docs/`, `.codex/skills/`, and a small set of exact files. It does **not** cover `.github/workflows/*.yml` files broadly — only `issue-pr-governance.yml` itself is in the exact-file allowlist.
-
-Rule: any PR that changes `.github/workflows/` files other than `issue-pr-governance.yml` must use **Direct Repair** (not the Governance lane checkbox). Direct Repair bypasses the file restriction and is the correct path for bounded CI/workflow repairs.
-
-Summary:
-- `issue-pr-governance.yml` change → Governance lane or Direct Repair both work
-- Any other `.github/workflows/*.yml` change → Direct Repair required
-- `docs/**` or `.codex/skills/**` change → Governance lane or Direct Repair both work
+Select the lane from the current enforced `governanceAllowedExact` and
+`governanceAllowedPrefixes` in `.github/workflows/issue-pr-governance.yml`, mirrored by
+`DEV_WORKFLOW.md :: Governance lane`. Both `issue-pr-governance.yml` and `ci-smoke.yaml` are
+admitted governance surfaces. A bounded governance repair within that allowlist may use the
+Governance lane; it does not need a Direct Repair detour. Other workflow files still require
+an applicable lane, such as bounded Direct Repair. Judge the actual changed-file set rather than
+applying an outdated blanket prohibition to all workflow files.
 
 ## Escalation Triggers
 

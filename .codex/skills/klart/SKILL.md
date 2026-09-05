@@ -118,23 +118,14 @@ Never upgrade or invent `subagent_handoff_receipt.final_state`. Its allowed term
 `blocked | needs-human | handoff`; `done` is not a valid self-attested worker state. `klart` never
 establishes Issue/PR delivery, merge, closure, or runtime capability.
 
-Use the user's language and keep the terminal response concise. When this skill returns a terminal
-response, it must contain exactly these unindented level-three headings, once each and in this exact
-order; do not substitute English headings, bold labels, or a bullet-only summary:
+Use the user's language and keep the terminal response proportional to the task. State the outcome
+and actual verification, then any remaining action, exact blocker, or material risk at closure.
+No fixed headings are required. Omit empty categories and keep internal routing fields out of the
+human summary unless they explain a real handoff or blocker. Preserve durable evidence in its
+existing receipt rather than repeating it in the final answer.
 
-### Rekommendation
-### Trådhantering
-### Mål
-### Statusverifiering
-### Klart
-### Kvar
-### Åtgärd
-### Nästa steg
-### Värde
-### Risk vid avslut
-
-This is the skill's response contract, not a platform-level response interceptor. A skill cannot
-mechanically rewrite a response from an agent that bypasses the required closeout invocation.
+This is a Builder System workflow, not a platform-level response interceptor. Presentation does
+not replace the fresh read-only assessment or establish delivery authority.
 
 Do not claim `end` unless the final fresh assessment satisfies the contract above.
 

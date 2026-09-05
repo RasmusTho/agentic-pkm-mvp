@@ -196,7 +196,7 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `klart`
-  - mandatory Builder System closeout assessment before a builder session or agent returns a terminal response, hands off, goes idle, or otherwise stops; read-only status/recommendation with owner-skill action routing and an exact Swedish ten-heading terminal response contract
+  - mandatory Builder System closeout assessment before a builder session or agent returns a terminal response, hands off, goes idle, or otherwise stops; read-only status/recommendation with owner-skill action routing and a concise outcome, verification, and remaining-action summary
 - `resume-work`
   - dev-time recovery for interrupted Codex/ChatGPT sessions (quota, network, hung command, tool failure, context loss); historical Claude session records may be reconstructed as provenance but never resumed as an active Builder carrier; check resumable orchestration journals/runs before git reconstruction, use git reconstruction as the fallback, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
 - `issue-to-code`
@@ -337,7 +337,7 @@ or design-provenance material and do not authorize invocation.
 - Implementation path:
   `agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure -> post-merge-owner-doc`
   Every Builder System execution path passes through the terminal closeout gate before a terminal response:
-  `... -> klart -> owning workflow skill or truthful terminal handoff`; when `klart` returns a terminal response, it uses the exact Swedish heading contract defined in `klart`.
+  `... -> klart -> owning workflow skill or truthful terminal handoff`; when `klart` returns a terminal response, it uses the proportional summary defined in `klart`.
 - Drift-correction path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
 - Epic / Kanban issue-set delivery path:
