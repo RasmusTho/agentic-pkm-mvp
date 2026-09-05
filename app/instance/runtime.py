@@ -2744,11 +2744,10 @@ def _prepare_legacy_registry_for_mvr05_floor(
     if snapshot.revision != 0:
         return snapshot
 
-    try:
-        established = ledger.load()
-    except LedgerError:
-        if not ledger.path.is_file() or not ledger.key_path.is_file():
-            raise
+    bound_proof = quiescence_proof
+    owners: list[LegacyOwner] | None = None
+    legacy_settings: AppLocalSettings | None = None
+    if legacy_path.is_file():
         if quiescence_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
         bound_proof = _bind_legacy_owner_inventory_to_proof(
@@ -2763,6 +2762,46 @@ def _prepare_legacy_registry_for_mvr05_floor(
             channel=channel,
             quiescence_proof=bound_proof,
         )
+        legacy_settings = AppLocalSettingsStore(legacy_path).load()
+        # A fresh host must reject invalid owner identity before ledger.load()
+        # can create the protected key and ledger artifacts. Established
+        # ledgers may still resolve omitted legacy identities below.
+        if not ledger.path.is_file() or not ledger.key_path.is_file():
+            if any(
+                owner.channel_id != channel and not owner.vault_binding_id.strip()
+                for owner in owners
+            ):
+                raise InstanceStatePreflightError(
+                    "legacy-owner inventory contains an unbound foreign owner"
+                )
+        known_paths = {
+            Path(known.path).expanduser().resolve(strict=False)
+            for known in legacy_settings.known_vaults.values()
+        }
+        current_owner_paths = {
+            owner.root.expanduser().resolve(strict=False)
+            for owner in owners
+            if owner.channel_id == channel
+        }
+        if current_owner_paths != known_paths:
+            raise InstanceStatePreflightError(
+                "legacy registry and current-channel owner inventory do not correlate"
+            )
+
+    try:
+        established = ledger.load()
+    except LedgerError:
+        if not ledger.path.is_file() or not ledger.key_path.is_file():
+            raise
+        if bound_proof is None:
+            raise InstanceStatePreflightError("durable quiescence proof is required")
+        if owners is None:
+            owners = _load_legacy_owner_inventory(
+                inventory_path,
+                registry=snapshot,
+                channel=channel,
+                quiescence_proof=bound_proof,
+            )
         _converge_authenticated_legacy_ledger(
             channel=channel,
             registry=snapshot,
@@ -2777,25 +2816,12 @@ def _prepare_legacy_registry_for_mvr05_floor(
     if not legacy_path.is_file():
         return snapshot
 
-    if quiescence_proof is None:
-        raise InstanceStatePreflightError("durable quiescence proof is required")
-    bound_proof = _bind_legacy_owner_inventory_to_proof(
-        inventory_path=inventory_path,
-        quiescence_proof=quiescence_proof,
-        channel=channel,
-        host_global_root=ledger.root,
-    )
-    owners = _load_legacy_owner_inventory(
-        inventory_path,
-        registry=snapshot,
-        channel=channel,
-        quiescence_proof=bound_proof,
-    )
+    if bound_proof is None or owners is None or legacy_settings is None:
+        raise InstanceStatePreflightError("legacy import preflight is incomplete")
     if established.legacy_bootstrap_complete:
         owners = list(
             ledger.resolve_live_owner_bindings(owners, allow_legacy=True)
         )
-    legacy_settings = AppLocalSettingsStore(legacy_path).load()
     if any(
         owner.channel_id != channel and not owner.vault_binding_id.strip()
         for owner in owners

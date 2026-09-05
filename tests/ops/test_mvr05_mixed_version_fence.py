@@ -515,8 +515,6 @@ def test_fresh_dormant_import_rejects_unbound_foreign_before_registry_import(
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)
     ledger = OwnershipLedger(ownership_root)
-    ledger.load()
-    ledger_before = ledger.path.read_bytes()
     dev_root = tmp_path / "dev-vault"
     foreign_root = tmp_path / "foreign-vault"
     legacy_store = AppLocalSettingsStore(tmp_path / "app-local.md")
@@ -556,9 +554,9 @@ def test_fresh_dormant_import_rejects_unbound_foreign_before_registry_import(
             )
 
         assert registry.path.read_bytes() == registry_before
-        assert ledger.path.read_bytes() == ledger_before
+        assert not ledger.path.exists()
+        assert not ledger.key_path.exists()
         assert registry.load().revision == 0
-        assert ledger.require_existing().leases == {}
 
 
 def test_finalizer_routes_fresh_dormant_import_through_preflight(

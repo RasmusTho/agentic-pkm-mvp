@@ -2050,9 +2050,14 @@ class OwnershipLedger:
         """Verify v1 ancestry without trusting a remounted container root."""
 
         stored = tuple(lease.ancestor_fingerprints)
+        legacy_material = _legacy_ancestor_material(root)
+        if not allow_path_ancestors and any(
+            item.startswith("path:") for item in legacy_material
+        ):
+            return False
         legacy = tuple(
             _fingerprint(item, key.secret)
-            for item in _legacy_ancestor_material(root)
+            for item in legacy_material
         )
         candidates = [legacy]
         if allow_path_ancestors:
@@ -2072,6 +2077,10 @@ class OwnershipLedger:
         ):
             return True
         portable = _portable_legacy_ancestor_material(root)
+        if not allow_path_ancestors and any(
+            item.startswith("path:") for item in portable
+        ):
+            return False
         expected_portable = tuple(_fingerprint(item, key.secret) for item in portable)
         return bool(expected_portable) and len(stored) >= len(expected_portable) and all(
             hmac.compare_digest(left, right)
