@@ -1,14 +1,13 @@
-State: FILED specification directory (parent #3366; children #3368–#3371). The 2026-08-21
+State: delivery and acceptance record (parent #3366; children #3368–#3371). The 2026-08-21
 [owner-decision receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3371#issuecomment-5375222455)
-accepts ADR-0061's A2/B1/C1 bundle and authorizes its contract writeback. MIMER-MCP-02/#3368 and
-MIMER-MCP-03/#3369 remain blocked until that accepted docs contract lands and their live issue
-contracts are reassessed; this decision slice does not change their lifecycle state. No
-implementation or current MCP transport support is claimed.
-Doc role: Capability specification and future delivery index
-Authority: Specifies the owner-accepted Mimer MCP client-adapter capability and downstream delivery
-sequence. ADR-0061 owns the A2/B1/C1 decision; `docs/contracts/MIMER_CLIENT_CONTRACT.md` owns the
-authority envelope. Runtime availability remains unshipped until the implementation and composed
-acceptance tasks deliver evidence.
+accepts ADR-0061's A2/B1/C1 bundle. #3368 and #3369 delivered the governed five-tool semantics and
+isolated stdio transport; #3370 records the composed acceptance evidence. The accepted support level
+is one hermetic JSON-RPC stdio-client journey against an isolated governed runtime, not general
+third-party-client support or production activation.
+Doc role: Capability specification and delivery index
+Authority: Specifies the owner-accepted Mimer MCP client-adapter capability and delivery sequence.
+ADR-0061 owns the A2/B1/C1 decision; `docs/contracts/MIMER_CLIENT_CONTRACT.md` owns the authority
+envelope. The parent acceptance receipt owns the bounded supported-client evidence.
 
 # Mimer MCP Client Adapter
 
@@ -33,8 +32,7 @@ acceptance evidence. No Builder System behavior is changed.
 - No new semantic authority, hidden durable store, retrieval engine, or client-local source of
   truth.
 - No Direction A connector configuration and no Direction C external-signal consumption.
-- No claim that MCP is a running transport before downstream implementation and composed acceptance
-  evidence land.
+- No claim of support for a client or runtime deployment that lacks its own acceptance evidence.
 - No Streamable HTTP listener or per-device authentication in v1; B2 + C2 are separately gated
   follow-ons and cannot be enabled implicitly.
 
@@ -87,20 +85,20 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
 
 ## Capability-Level Acceptance Criteria
 
-- [ ] An owner-accepted decision and client-contract update admit MCP as an additional adapter
+- [x] An owner-accepted decision and client-contract update admit MCP as an additional adapter
       without replacing HTTP or direct-filesystem semantics.
   Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
   Verify: doc writeback at `docs/adr/ADR-0061-mimer-mcp-client-adapter.md :: Owner decision receipt`
-- [ ] The server exposes exactly ask, governed capture, retrieve/search, note read, and health, with
+- [x] The server exposes exactly ask, governed capture, retrieve/search, note read, and health, with
       governed capture receipts and failure semantics preserved.
   Verify: `tests/mcp/test_mimer_server.py::test_server_exposes_exact_contracted_tool_set`
-- [ ] The packaged transport exposes stdio only, opens no network listener, and reports
+- [x] The packaged transport exposes stdio only, opens no network listener, and reports
       deterministic health.
   Verify: `tests/mcp/test_mimer_server_security.py::test_stdio_production_entrypoint_opens_no_network_listener`
-- [ ] A composed smoke proves protocol negotiation, read operations, one governed capture receipt,
+- [x] A composed smoke proves protocol negotiation, read operations, one governed capture receipt,
       restart recovery, and no receipt-readback tool.
   Verify: `tests/mcp/test_mimer_server_smoke.py::test_composed_mimer_mcp_journey`
-- [ ] Acceptance evidence and owner-doc writeback are reconciled without claiming unverified client
+- [x] Acceptance evidence and owner-doc writeback are reconciled without claiming unverified client
       compatibility.
   Verify: runtime acceptance receipt: parent feature issue #3366
   Verify: doc writeback at `docs/STATUS.md :: Current Snapshot`
@@ -118,12 +116,10 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
 
 ## Validation / Acceptance Path
 
-The owner has ruled on topology, wire transport, and auth. The parent remains a blocked validation
-hub while children are open. #3368/#3369 cannot become Ready merely because the receipt exists;
-they require the accepted ADR/client-contract writeback to land and a separate live readiness
-reconciliation. Each merged child posts its PR and verification receipt to the parent. Only
-MIMER-MCP-04 may promote runtime-availability claims, and only after the composed runtime receipt
-exists.
+The owner has ruled on topology, wire transport, and auth. #3368 and #3369 are delivered; #3370
+records the composed isolated-runtime receipt on the parent validation hub. The receipt establishes
+only the named hermetic JSON-RPC stdio client path. It does not promote an untested client or a
+production deployment into supported status.
 
 ## Evidence Surface
 
@@ -136,14 +132,12 @@ exists.
 
 ## Relationship to GitHub Issues
 
-- Parent validation hub: #3366 (`agent:blocked`).
+- Parent validation hub: #3366 (open validation/acceptance record).
 - MIMER-MCP-01: #3371 — applies the accepted A2/B1/C1 owner decision to ADR-0061 and the client
   contract; no server code belongs to this slice.
-- MIMER-MCP-02: #3368 — remains blocked until #3371's accepted docs contract lands and live issue
-  maintenance confirms readiness.
-- MIMER-MCP-03: #3369 — same block; its v1 contract is stdio-only with no listener or new auth and
-  may run parallel with #3368 only after readiness is reconciled.
-- MIMER-MCP-04: #3370 — blocked on #3368 and #3369; final acceptance/closure handoff.
+- MIMER-MCP-02: #3368 — delivered governed five-tool semantic adapter.
+- MIMER-MCP-03: #3369 — delivered isolated v1 stdio sidecar with no listener or new auth.
+- MIMER-MCP-04: #3370 — records the bounded composed acceptance evidence and owner-doc reconciliation.
 
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) points to the live validation hub; GitHub owns
 pickup/lifecycle truth and this directory owns the task contracts.
