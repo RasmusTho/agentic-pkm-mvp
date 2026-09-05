@@ -87,7 +87,7 @@ def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> Re
     )
 
 
-def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
+def _retrieve_node(state: AgentState, *, k: int, ask_settings, context_settings_digest: str | None = None) -> AgentState:
     response = retrieve(
         RetrievalRequest(
             query=state.query,
@@ -97,6 +97,7 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
             # the production path instead of relying on an ambient env var nothing ever sets.
             scope=_active_scope(state),
             active_context=state.active_context,
+            context_settings_digest=context_settings_digest,
         )
     )
     enriched: list[RetrievedHit] = []
@@ -643,11 +644,11 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     return state
 
 
-def build_ask_graph(ask_settings=None):
+def build_ask_graph(ask_settings=None, context_settings_digest: str | None = None):
     ask_settings = ask_settings or get_ask_settings()
     graph = StateGraph(AgentState)
     graph.add_node(
-        "retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings)
+        "retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings, context_settings_digest=context_settings_digest)
     )
     graph.add_node("orientation", _orientation_node)
     graph.add_node("rerank", lambda s: _rerank_node(s, ask_settings=ask_settings))
@@ -669,6 +670,7 @@ def run_ask_graph(
     ask_settings=None,
     active_scope: Optional[str] = None,
     active_context=None,
+    context_settings_digest: str | None = None,
 ) -> AgentState:
     """Run one ASK turn.
 
@@ -678,7 +680,7 @@ def run_ask_graph(
     same scope.
     """
     ask_settings = ask_settings or get_ask_settings()
-    compiled = build_ask_graph(ask_settings)
+    compiled = build_ask_graph(ask_settings, context_settings_digest=context_settings_digest)
     resolved_scope = (active_scope or "").strip() or _resolve_domain_scope()
     initial = AgentState(
         trace_id=trace_id,

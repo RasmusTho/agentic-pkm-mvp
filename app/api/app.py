@@ -346,7 +346,7 @@ def _create_app() -> FastAPI:
     if ingest_router is not None:
         application.include_router(ingest_router)
     if search_router is not None:
-        application.include_router(search_router)
+        application.include_router(search_router, prefix="/api")
     if status_router is not None:
         application.include_router(status_router, prefix="/api")
     if ask_router is not None:

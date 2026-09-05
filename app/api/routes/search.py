@@ -66,7 +66,7 @@ async def search_scoped(
     try:
         # Resolve all selected bundles before opening the effect window: a
         # combined request never gets a first-binding settings winner.
-        resolve_context_settings(
+        settings = resolve_context_settings(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         )
@@ -82,6 +82,7 @@ async def search_scoped(
                         trace_id=trace_id,
                         scope=context.scope,
                         active_context=context,
+                        context_settings_digest=settings.context_settings_digest,
                     )
                 )
     except ContextBoundReadError as exc:

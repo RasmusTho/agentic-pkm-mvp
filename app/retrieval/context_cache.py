@@ -62,7 +62,9 @@ def context_cache_identity(
     return ContextCacheIdentity(key=key, components=components)
 
 
-def runtime_context_cache_identity(snapshot: ActiveContextSetV1) -> ContextCacheIdentity:
+def runtime_context_cache_identity(
+    snapshot: ActiveContextSetV1, *, settings_bundle_digest: str | None = None
+) -> ContextCacheIdentity:
     """Bind a scoped retrieval lookup to the current compiled settings bundle.
 
     The settings runtime is the canonical production bundle owner.  Its typed
@@ -73,11 +75,12 @@ def runtime_context_cache_identity(snapshot: ActiveContextSetV1) -> ContextCache
 
     from app.settings.runtime import get_settings_bundle
 
-    payload = get_settings_bundle().model_dump(mode="json")
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    return context_cache_identity(snapshot, settings_bundle_digest=digest)
+    if settings_bundle_digest is None:
+        payload = get_settings_bundle().model_dump(mode="json")
+        settings_bundle_digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    return context_cache_identity(snapshot, settings_bundle_digest=settings_bundle_digest)
 
 
 __all__ = [

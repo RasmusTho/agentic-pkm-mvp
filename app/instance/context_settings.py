@@ -24,6 +24,17 @@ class ContextSettingsResolution:
     binding_bundle_digests: dict[str, str]
     request_wide_values: dict[str, object]
 
+    @property
+    def context_settings_digest(self) -> str:
+        """Stable provenance for the complete selected-binding settings set."""
+
+        import hashlib
+        import json
+
+        return hashlib.sha256(
+            json.dumps(self.binding_bundle_digests, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
 
 def resolve_context_settings(
     context: ActiveContextSetV1,

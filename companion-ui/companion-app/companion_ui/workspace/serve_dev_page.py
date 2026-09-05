@@ -2451,9 +2451,11 @@ def _note_editor_script() -> str:
         // note path never includes a #section-anchor (#1447).
         var notePath = (ta.getAttribute('data-note-path') || '').split('#')[0];
         setStatus('', 'Saving\\u2026');
+        var scopedBearer = null;
+        try { scopedBearer = window.sessionStorage && window.sessionStorage.getItem('active-context-session'); } catch (e) { scopedBearer = null; }
         fetch('/api/companion/note/save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: scopedBearer ? { 'Content-Type': 'application/json', 'X-Active-Context-Session': scopedBearer } : { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             note_path: notePath,
             new_body: ta.value,
@@ -10473,9 +10475,11 @@ def render_operator_overlay_html(
     if (!q) {{ return; }}
     btn.disabled = true;
     ans.textContent = 'Asking…';
+    var scopedBearer = null;
+    try {{ scopedBearer = window.sessionStorage && window.sessionStorage.getItem('active-context-session'); }} catch (e) {{ scopedBearer = null; }}
     fetch('/api/operator/ask', {{
       method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
+      headers: scopedBearer ? {{'Content-Type': 'application/json', 'X-Active-Context-Session': scopedBearer}} : {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{question: q}})
     }}).then(function(r) {{
       return r.json().then(function(d) {{
@@ -16978,6 +16982,11 @@ def make_handler(
                 self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                 return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
+            if (
+                parsed.path == "/api/operator/ask"
+                and self.headers.get("X-Active-Context-Session")
+            ):
+                runtime_path = "/api/ask/scoped"
             timeout_override = self._post_timeout_override(parsed.path)
             try:
                 forwarded_headers = self._forwarded_client_headers(parsed.path)

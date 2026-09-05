@@ -353,7 +353,18 @@ class InstanceRegistryRuntime:
             current = self.registry.load()
             if current.registrations or current.default_vault_binding_id is not None:
                 raise RegistryDefaultConflict("first_vault_bootstrap_stale")
-            result = initialize()
+        # The selecting initializer can register through this runtime.  It
+        # must run outside the non-reentrant bootstrap flock, then the exact
+        # registered root is recovered under the same producer lock.
+        result = initialize()
+        with self._bootstrap_locked():
+            current = self.registry.load()
+            canonical = str(resolve_filesystem_root_identity(path).canonical_path)
+            for registration in current.registrations.values():
+                if registration.path == canonical:
+                    return result, registration
+            if current.registrations or current.default_vault_binding_id is not None:
+                raise RegistryDefaultConflict("first_vault_bootstrap_stale")
             registration = self._register_first_locked(
                 path,
                 current=current,
