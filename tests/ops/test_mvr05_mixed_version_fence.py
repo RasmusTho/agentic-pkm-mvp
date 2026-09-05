@@ -504,6 +504,63 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
     assert finish_result["restart_fence_cleared"] is True
 
 
+def test_fresh_dormant_import_rejects_unbound_foreign_before_registry_import(
+    tmp_path, monkeypatch
+) -> None:
+    registry = VaultRegistryStore(
+        tmp_path / "instance-state" / "agentic-pkm" / "vault-registry.md"
+    )
+    registry.load()
+    registry_before = registry.path.read_bytes()
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    ledger = OwnershipLedger(ownership_root)
+    ledger.load()
+    ledger_before = ledger.path.read_bytes()
+    dev_root = tmp_path / "dev-vault"
+    foreign_root = tmp_path / "foreign-vault"
+    legacy_store = AppLocalSettingsStore(tmp_path / "app-local.md")
+    legacy_store.upsert_known_vault(KnownVaultRef("path:dev", str(dev_root)))
+    owners = [
+        LegacyOwner("dev", "", dev_root),
+        LegacyOwner("prod", "", foreign_root),
+    ]
+    monkeypatch.setattr(
+        runtime_module,
+        "_bind_legacy_owner_inventory_to_proof",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_load_legacy_owner_inventory",
+        lambda *_args, **_kwargs: owners,
+    )
+
+    for _ in range(2):
+        with pytest.raises(
+            runtime_module.InstanceStatePreflightError,
+            match="unbound foreign owner",
+        ):
+            runtime_module._prepare_legacy_registry_for_mvr05_floor(
+                channel="dev",
+                layout=InstanceStateLayout(
+                    registry.path.parent,
+                    "dev",
+                    registry.path,
+                ),
+                registry=registry,
+                ledger=ledger,
+                legacy_path=legacy_store.path,
+                inventory_path=tmp_path / "legacy-owner-inventory.json",
+                quiescence_proof=object(),
+            )
+
+        assert registry.path.read_bytes() == registry_before
+        assert ledger.path.read_bytes() == ledger_before
+        assert registry.load().revision == 0
+        assert ledger.require_existing().leases == {}
+
+
 def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_path) -> None:
     ownership_root = tmp_path / "host-global"
     ownership_root.mkdir(mode=0o700)

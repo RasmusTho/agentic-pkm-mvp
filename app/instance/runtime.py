@@ -2795,8 +2795,28 @@ def _prepare_legacy_registry_for_mvr05_floor(
         owners = list(
             ledger.resolve_live_owner_bindings(owners, allow_legacy=True)
         )
-    binding_by_ref: dict[str, str] = {}
     legacy_settings = AppLocalSettingsStore(legacy_path).load()
+    if any(
+        owner.channel_id != channel and not owner.vault_binding_id.strip()
+        for owner in owners
+    ):
+        raise InstanceStatePreflightError(
+            "legacy-owner inventory contains an unbound foreign owner"
+        )
+    known_paths = {
+        Path(known.path).expanduser().resolve(strict=False)
+        for known in legacy_settings.known_vaults.values()
+    }
+    current_owner_paths = {
+        owner.root.expanduser().resolve(strict=False)
+        for owner in owners
+        if owner.channel_id == channel
+    }
+    if current_owner_paths != known_paths:
+        raise InstanceStatePreflightError(
+            "legacy registry and current-channel owner inventory do not correlate"
+        )
+    binding_by_ref: dict[str, str] = {}
     for ref, known in legacy_settings.known_vaults.items():
         matches = [
             owner.vault_binding_id
@@ -3257,6 +3277,13 @@ def _finish_instance_state_deployment_locked(
                 "host-validated legacy-owner binding or lease recovery is invalid"
             )
     else:
+        if any(
+            owner.channel_id != channel and not owner.vault_binding_id.strip()
+            for owner in owners
+        ):
+            raise InstanceStatePreflightError(
+                "legacy-owner inventory contains an unbound foreign owner"
+            )
         owners = [
             owner
             if owner.vault_binding_id
