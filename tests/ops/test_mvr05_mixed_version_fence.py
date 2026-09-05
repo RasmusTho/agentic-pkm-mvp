@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -32,7 +33,12 @@ from app.instance.ownership_ledger import (
     LedgerKeyError,
     OwnershipLedger,
 )
-from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
+from app.instance.vault_registry import (
+    AppLocalSettingsStore,
+    KnownVaultRef,
+    VaultRegistration,
+    VaultRegistryStore,
+)
 from app.services import outbox
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.helpers.mvr01c_authority import establish_authority_window, finish_authority_window
@@ -145,6 +151,10 @@ def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
             str(registry_path),
             "--host-global-root",
             str(host_global_root),
+            "--legacy-path",
+            str(tmp_path / "app-local.md"),
+            "--inventory-path",
+            str(host_global_root / "legacy-owner-inventory.json"),
             "--quiescence-proof-path",
             str(proof_path),
             "--fence-plan",
@@ -153,6 +163,52 @@ def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
         registry_path,
         host_global_root,
     )
+
+
+def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
+    identities = []
+    for owner in owners:
+        resolved_root = Path(owner["root"]).resolve(strict=False)
+        identity = resolve_filesystem_root_identity(owner["root"])
+        identities.append(
+            {
+                "channel_id": owner["channel_id"],
+                "root": owner["root"],
+                "identity": (
+                    f"inode:{identity.device}:{identity.inode}"
+                    if identity.materialized
+                    else f"path:{identity.canonical_path}"
+                ),
+                "ancestor_identities": sorted(
+                    f"path:{identity.canonical_path}"
+                    for ancestor in Path(owner["root"]).resolve().parents
+                    for identity in (resolve_filesystem_root_identity(ancestor),)
+                ),
+                "legacy_ancestor_identities": [
+                    f"inode:{identity.device}:{identity.inode}"
+                    for ancestor in resolved_root.parents
+                    for identity in (resolve_filesystem_root_identity(ancestor),)
+                ],
+            }
+        )
+    source_evidence = {
+        "docker": [],
+        "config": [],
+        "owners": owners,
+        "owner_identities": identities,
+    }
+    return {
+        "schema": "agentic-pkm.legacy-owner-inventory.v1",
+        "inventory_complete": True,
+        "writers_drained": True,
+        "source_probe_count": 2,
+        "validated_after_quiescence": True,
+        "source_digest": hashlib.sha256(
+            json.dumps(source_evidence, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "source_evidence": source_evidence,
+        "owners": owners,
+    }
 
 
 def test_floor_producer_seeds_protected_ledger_before_first_registry_write(
@@ -240,6 +296,341 @@ def test_floor_producer_preserves_established_ledger_identity(tmp_path, monkeypa
     after = OwnershipLedger(host_global_root).require_existing()
     assert (after.key_id, after.generation) == (before.key_id, before.generation)
     assert VaultRegistryStore(registry_path).load().revision == 1
+
+
+def test_established_legacy_ledger_converges_before_mvr05_floor(tmp_path) -> None:
+    """A dormant registry must not strand an authenticated v1 host ledger."""
+
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    foreign_root = tmp_path / "foreign-vault"
+    foreign_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.reserve(
+        channel_id="prod",
+        vault_binding_id="binding-foreign",
+        root=foreign_root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-foreign", _capability=STORAGE_MUTATION_CAPABILITY)
+    _rewrite_ledger_as_authenticated_v1(ledger, root, foreign_root)
+    registry = VaultRegistryStore(tmp_path / "instance" / "vault-registry.md").load()
+
+    def host_owner(channel: str, owner_root: Path) -> LegacyOwner:
+        root_identity = resolve_filesystem_root_identity(owner_root)
+        ancestor_identities = tuple(
+            f"inode:{identity.device}:{identity.inode}"
+            for ancestor in owner_root.resolve().parents
+            for identity in (resolve_filesystem_root_identity(ancestor),)
+        )
+        return LegacyOwner(
+            channel,
+            "",
+            owner_root,
+            root_identity=f"inode:{root_identity.device}:{root_identity.inode}",
+            ancestor_identities=ancestor_identities,
+        )
+
+    migrated = runtime_module._converge_authenticated_legacy_ledger(
+        channel="dev",
+        registry=registry,
+        ledger=ledger,
+        owners=(
+            host_owner("dev", root),
+            host_owner("prod", foreign_root),
+        ),
+    )
+
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert ledger.require_existing().legacy_bootstrap_complete
+    assert set(migrated.leases) == {"binding-existing", "binding-foreign"}
+
+
+def test_mvr05_floor_cli_converges_established_legacy_ledger(
+    tmp_path, monkeypatch
+) -> None:
+    """The production floor admission branch performs the full convergence path."""
+
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    dev_root = tmp_path / "existing-vault"
+    prod_root = tmp_path / "foreign-vault"
+    dev_root.mkdir()
+    prod_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    for channel, binding_id, root in (
+        ("dev", "binding-existing", dev_root),
+        ("prod", "binding-foreign", prod_root),
+    ):
+        ledger.reserve(
+            channel_id=channel,
+            vault_binding_id=binding_id,
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+    _rewrite_ledger_as_authenticated_v1(ledger, dev_root, prod_root)
+    legacy_store = AppLocalSettingsStore(tmp_path / "app-local.md")
+    legacy_store.upsert_known_vault(
+        KnownVaultRef(f"path:{dev_root}", str(dev_root)),
+    )
+
+    controller_start_token = "linux:" + "0" * 64
+    _begin = runtime_module._begin_instance_state_deployment
+    _begin(
+        channel="dev",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_store.path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    empty_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [empty_digest, empty_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    runtime_module._prove_instance_state_quiescence(
+        channel="dev",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {
+                        "channel_id": "dev",
+                        "vault_binding_id": "",
+                        "root": str(dev_root),
+                    },
+                    {
+                        "channel_id": "prod",
+                        "vault_binding_id": "binding-foreign",
+                        "root": str(prod_root),
+                    },
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    # The host producer captured both roots while mounted; the one-shot
+    # instance-state-init process then runs without either vault mount.
+    dev_root.rmdir()
+    prod_root.rmdir()
+    registry_path = state_root / "agentic-pkm" / "vault-registry.md"
+    fence_plan = tmp_path / "mvr05-fence-plan.json"
+    fence_plan.write_text(
+        json.dumps(
+            discover_db_producer_fence(REPO_ROOT / "docker-compose.yaml").as_payload()
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        runtime_module.main(
+            [
+                "mvr05-record-floor",
+                "--channel",
+                "dev",
+                "--registry-path",
+                str(registry_path),
+                "--host-global-root",
+                str(ownership_root),
+                "--legacy-path",
+                str(legacy_store.path),
+                "--inventory-path",
+                str(owner_inventory),
+                "--quiescence-proof-path",
+                str(ownership_root / "deployment-quiescence-proof.json"),
+                "--fence-plan",
+                str(fence_plan),
+            ]
+        )
+        == 0
+    )
+
+    finish_result = runtime_module._finish_instance_state_deployment(
+        channel="dev",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_store.path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=runtime_module._load_deployment_quiescence_proof(
+            ownership_root / "deployment-quiescence-proof.json"
+        ),
+    )
+
+    migrated = OwnershipLedger(ownership_root).require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.legacy_bootstrap_complete
+    assert set(migrated.leases) == {"binding-existing", "binding-foreign"}
+    assert VaultRegistryStore(registry_path).load().revision == 2
+    assert {
+        Path(item.path) for item in VaultRegistryStore(registry_path).load().registrations.values()
+    } == {dev_root.resolve()}
+    assert finish_result["restart_fence_cleared"] is True
+
+
+def test_fresh_dormant_import_rejects_unbound_foreign_before_registry_import(
+    tmp_path, monkeypatch
+) -> None:
+    registry = VaultRegistryStore(
+        tmp_path / "instance-state" / "agentic-pkm" / "vault-registry.md"
+    )
+    registry.load()
+    registry_before = registry.path.read_bytes()
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    ledger = OwnershipLedger(ownership_root)
+    dev_root = tmp_path / "dev-vault"
+    foreign_root = tmp_path / "foreign-vault"
+    legacy_store = AppLocalSettingsStore(tmp_path / "app-local.md")
+    legacy_store.upsert_known_vault(KnownVaultRef("path:dev", str(dev_root)))
+    owners = [
+        LegacyOwner("dev", "", dev_root),
+        LegacyOwner("prod", "", foreign_root),
+    ]
+    monkeypatch.setattr(
+        runtime_module,
+        "_bind_legacy_owner_inventory_to_proof",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_load_legacy_owner_inventory",
+        lambda *_args, **_kwargs: owners,
+    )
+
+    for _ in range(2):
+        with pytest.raises(
+            runtime_module.InstanceStatePreflightError,
+            match="unbound foreign owner",
+        ):
+            runtime_module._prepare_legacy_registry_for_mvr05_floor(
+                channel="dev",
+                layout=InstanceStateLayout(
+                    registry.path.parent,
+                    "dev",
+                    registry.path,
+                ),
+                registry=registry,
+                ledger=ledger,
+                legacy_path=legacy_store.path,
+                inventory_path=tmp_path / "legacy-owner-inventory.json",
+                quiescence_proof=object(),
+            )
+
+        assert registry.path.read_bytes() == registry_before
+        assert not ledger.path.exists()
+        assert not ledger.key_path.exists()
+        assert registry.load().revision == 0
+
+
+def test_finalizer_routes_fresh_dormant_import_through_preflight(
+    tmp_path, monkeypatch
+) -> None:
+    state_root = tmp_path / "instance-state"
+    host_root = tmp_path / "host-global"
+    host_root.mkdir(mode=0o700)
+    lease_path = host_root / "deployment-public-lease.json"
+    lease_path.parent.mkdir(mode=0o700, exist_ok=True)
+    lease_path.write_text("placeholder", encoding="utf-8")
+    legacy_path = tmp_path / "app-local.md"
+    legacy_path.write_text("placeholder", encoding="utf-8")
+
+    class Proof:
+        nonce = "nonce"
+
+        def require_valid(self, **_kwargs) -> None:
+            return None
+
+    proof = Proof()
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_assert_mount_root",
+        lambda path, _label: Path(path),
+    )
+    monkeypatch.setattr(runtime_module, "_deployment_lease_path", lambda _root: lease_path)
+    monkeypatch.setattr(
+        runtime_module,
+        "_read_deployment_lease",
+        lambda _root: {"channel_id": "dev", "phase": "active"},
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_require_matching_compatibility_block",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_module, "_read_deployment_fence", lambda *_args: None)
+    monkeypatch.setattr(
+        runtime_module,
+        "_bind_legacy_owner_inventory_to_proof",
+        lambda **_kwargs: proof,
+    )
+
+    def guarded_preflight(**kwargs):
+        calls.append(kwargs)
+        raise runtime_module.InstanceStatePreflightError("preflight sentinel")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "_prepare_legacy_registry_for_mvr05_floor",
+        guarded_preflight,
+    )
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="preflight sentinel",
+    ):
+        runtime_module._finish_instance_state_deployment_locked(
+            channel="dev",
+            instance_state_root=state_root,
+            host_global_root=host_root,
+            legacy_path=legacy_path,
+            inventory_path=tmp_path / "legacy-owner-inventory.json",
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+
+    assert calls and calls[0]["legacy_path"] == legacy_path
+    layout = InstanceStateLayout.for_channel(state_root, "dev")
+    assert VaultRegistryStore(layout.registry_path).load().revision == 0
 
 
 def test_recover_missing_active_uses_authenticated_key_for_collision_check(tmp_path) -> None:
@@ -343,6 +734,127 @@ def test_existing_ancestor_fingerprints_converge_before_new_representation_is_re
         migrated.leases["binding-existing"].ancestor_fingerprints == original.ancestor_fingerprints
     )
     assert ledger.path.read_bytes() != legacy_bytes
+
+
+def test_mount_blind_legacy_ancestor_tampering_fails_closed_before_migration(
+    tmp_path,
+) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    _rewrite_ledger_as_authenticated_v1(ledger, root)
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["leases"]["binding-existing"]["ancestor_fingerprints"][0] = "f" * 64
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    ledger.path.chmod(0o600)
+    before = ledger.path.read_bytes()
+    root_identity = resolve_filesystem_root_identity(root)
+    owner = LegacyOwner(
+        "dev",
+        "binding-existing",
+        root,
+        root_identity=(
+            f"inode:{root_identity.device}:{root_identity.inode}"
+        ),
+        ancestor_identities=tuple(
+            f"path:{ancestor}" for ancestor in root.resolve(strict=False).parents
+        ),
+    )
+    root.rmdir()
+
+    with pytest.raises(LedgerError, match="owner fields are not registry-authenticated"):
+        ledger.require_registry_consistency(
+            channel_id="dev",
+            registrations={"binding-existing": None},
+            tombstones={},
+            transfer_lineage=(),
+            global_live_owners=(owner,),
+            require_materialized_roots=False,
+        )
+
+    assert ledger.path.read_bytes() == before
+
+
+def test_mount_blind_v1_path_only_ancestor_evidence_fails_closed(
+    tmp_path,
+) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
+    secret = base64.b64decode(key_payload["secret"], validate=True)
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["schema"] = ownership_ledger_module.LEGACY_LEDGER_SCHEMA
+    payload["leases"]["binding-existing"]["ancestor_fingerprints"] = [
+        hmac.new(
+            secret,
+            f"path:{ancestor}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        for ancestor in root.resolve(strict=False).parents
+    ]
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    ledger.path.chmod(0o600)
+    before = ledger.path.read_bytes()
+    root_identity = resolve_filesystem_root_identity(root)
+    owner = LegacyOwner(
+        "dev",
+        "binding-existing",
+        root,
+        root_identity=f"inode:{root_identity.device}:{root_identity.inode}",
+        ancestor_identities=tuple(
+            f"path:{ancestor}" for ancestor in root.resolve(strict=False).parents
+        ),
+    )
+    root.rmdir()
+
+    with pytest.raises(LedgerError, match="owner fields are not registry-authenticated"):
+        ledger.require_registry_consistency(
+            channel_id="dev",
+            registrations={"binding-existing": None},
+            tombstones={},
+            transfer_lineage=(),
+            global_live_owners=(owner,),
+            require_materialized_roots=False,
+        )
+
+    assert ledger.path.read_bytes() == before
+
+
+def test_fresh_legacy_bootstrap_rejects_missing_binding_before_write(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    ledger = OwnershipLedger(ownership_root)
+    ledger.load()
+    before = ledger.path.read_bytes()
+
+    with pytest.raises(LedgerError, match="binding identity is required"):
+        ledger.bootstrap_legacy_owners(
+            [LegacyOwner("prod", "", tmp_path / "foreign-vault")],
+            inventory_complete=True,
+            writers_drained=True,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    assert ledger.path.read_bytes() == before
 
 
 def test_v1_schema_accepts_an_already_converged_ancestor_representation(tmp_path) -> None:

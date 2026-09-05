@@ -511,6 +511,18 @@ def test_mvr01a_schema_activation_requires_rollback_capability(tmp_path) -> None
     assert VaultRegistryStore(registry_path).load().revision == 1
 
 
+def test_deployment_finish_keeps_fence_through_mvr05_floor_and_backup() -> None:
+    """The stopped window carries authenticated convergence through finalization."""
+
+    deployment = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text()
+    floor = deployment.index("python -m app.instance.runtime mvr05-record-floor")
+    assert '--inventory-path "${inventory_path}"' in deployment[floor : floor + 700]
+    assert floor < deployment.index("settings-rebind-install-dormant", floor)
+    assert deployment.index("settings-rebind-install-dormant", floor) < deployment.index(
+        "python -m app.instance.runtime deployment-finish", floor
+    )
+
+
 def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> None:
     layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
     legacy = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")

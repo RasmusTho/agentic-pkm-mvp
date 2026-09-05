@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import os
 import subprocess
@@ -11,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import app.instance.runtime as runtime_module
 from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.instance_state import InstanceStateLayout, InstanceStatePreflightError
 from app.instance.ownership_ledger import LedgerKeyError, OwnershipLedger
@@ -63,6 +66,23 @@ def _owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
         "source_evidence": evidence,
         "owners": owners,
     }
+
+
+def _rewrite_ledger_as_authenticated_v1(ledger: OwnershipLedger, root: Path) -> bytes:
+    secret = base64.b64decode(
+        json.loads(ledger.key_path.read_text(encoding="utf-8"))["secret"], validate=True
+    )
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["schema"] = "agentic-pkm.host-ownership-ledger.v1"
+    for record in payload["leases"].values():
+        record["ancestor_fingerprints"] = [
+            hmac.new(secret, f"path:{ancestor}".encode(), hashlib.sha256).hexdigest()
+            for ancestor in root.resolve().parents
+        ]
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ledger.path.write_bytes(encoded)
+    ledger.path.chmod(0o600)
+    return encoded
 
 
 def _prove_empty_quiescence(channel: str, ownership_root: Path):
@@ -196,6 +216,39 @@ def test_established_registry_missing_ownership_fails_closed(tmp_path: Path) -> 
     assert not ledger.path.exists()
     assert not ledger.key_path.exists()
     assert (state_root / "agentic-pkm" / "vault-registry.md").read_bytes() == registry_before
+
+
+def test_legacy_ledger_mismatch_fails_closed_before_floor(tmp_path: Path) -> None:
+    """The convergence seam must preserve a forged legacy ledger verbatim."""
+
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="dev",
+        vault_binding_id="binding-a",
+        root=root,
+        _capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-a", _capability=_STORAGE_MUTATION_CAPABILITY)
+    payload = json.loads(_rewrite_ledger_as_authenticated_v1(ledger, root))
+    payload["leases"]["binding-a"]["channel_id"] = "prod"
+    before = json.dumps(payload, sort_keys=True).encode()
+    ledger.path.write_bytes(before)
+    ledger.path.chmod(0o600)
+    registry = VaultRegistryStore(tmp_path / "instance" / "vault-registry.md").load()
+
+    with pytest.raises(InstanceStatePreflightError, match="consistency"):
+        runtime_module._converge_authenticated_legacy_ledger(
+            channel="dev",
+            registry=registry,
+            ledger=ledger,
+            owners=(runtime_module.LegacyOwner("dev", "binding-a", root),),
+        )
+
+    assert ledger.path.read_bytes() == before
 
 
 def test_recovery_requires_explicit_fence(tmp_path: Path) -> None:
