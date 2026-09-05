@@ -65,7 +65,7 @@ def _execute(request: OperationRequest, config: ArchivalOperationServerConfig) -
         if request.operation_id == ARCHIVE_OPERATION_ID:
             result = run_single_record_archive_operation(proof, config_root=config.config_root, channel=config.channel, vault_root=config.vault_root, request_id=request.request_id)
         else:
-            result = run_single_record_restore_operation(proof, service_reader=config.restore_service)
+            result = run_single_record_restore_operation(proof, service_reader=config.restore_service, request_id=request.request_id)
     except OperationTargetRefused as exc:
         return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(str(exc),))
     except ArchiveDegradedError:
@@ -105,13 +105,20 @@ def _map_owner_result(request: OperationRequest, proof: Any, transition: Any) ->
     if stage is not expected_stage or receipt is None:
         return OwnerExecutionResult.ambiguous()
     try:
-        if receipt.generation.value != proof.generation or receipt.artifact.owner_native_id.token != proof.record.id:
+        if (
+            receipt.generation.value != proof.generation
+            or receipt.artifact.owner_native_id.token != proof.record.id
+            or receipt.policy_profile.value != "raw_evidence"
+            or receipt.stage is not stage
+            or receipt.liveness.state is not liveness
+            or not any(reference.opaque_id.token == proof.representation_id for reference in receipt.representation_refs)
+        ):
             return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("owner receipt binding mismatch",))
         projection = ArchivalOperationReceipt(
             artifact_ref=receipt.artifact.owner_native_id.token,
             receipt_ref=receipt.receipt_ref.token,
             generation=receipt.generation.value,
-            artifact_class=receipt.policy_profile and ArtifactClass.SOURCE,
+            artifact_class=ArtifactClass.SOURCE,
             policy=receipt.policy_profile,
             stage=receipt.stage,
             liveness=receipt.liveness.state,

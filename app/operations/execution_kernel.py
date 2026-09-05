@@ -319,6 +319,8 @@ class OperationExecutionKernel:
         return None
 
     def _owner_outcome(self, request: OperationRequest, policy_version: str, intent_digest: str, result: OwnerExecutionResult, delegation: Mapping[str, Any]) -> OperationOutcome:
+        if result.archival_receipt is not None and request.operation_id not in {"artifact.archive", "artifact.restore"}:
+            return self._outcome(request, OperationStatus.NOT_ACKNOWLEDGED, receipt=_receipt(request, policy_version, intent_digest, "not_acknowledged", delegation), warnings=("archival receipt is not admitted for this operation",))
         if result.status is OperationStatus.SUCCEEDED:
             return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "completed", delegation, result.archival_receipt), warnings=result.warnings)
         if result.status is OperationStatus.RECOVERY_REQUIRED:
