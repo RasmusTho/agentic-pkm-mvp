@@ -59,6 +59,8 @@ def _execute(request: OperationRequest, config: ArchivalOperationServerConfig) -
         return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(str(exc),))
     except Exception:
         return OwnerExecutionResult.ambiguous()
+    if proof.raw_ref != target:
+        return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("owner target proof does not match delegated target",))
     if request.expected_version != proof.generation:
         return OwnerExecutionResult(OperationStatus.CONFLICTED, warnings=("expected generation is stale",))
     try:
@@ -68,7 +70,9 @@ def _execute(request: OperationRequest, config: ArchivalOperationServerConfig) -
             result = run_single_record_restore_operation(proof, service_reader=config.restore_service, request_id=request.request_id)
     except OperationTargetRefused as exc:
         return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(str(exc),))
-    except ArchiveDegradedError:
+    except ArchiveDegradedError as exc:
+        if exc.reason in {"record_outside_archive_window", "retention_policy_unavailable"}:
+            return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(exc.reason,))
         return OwnerExecutionResult.ambiguous()
     except Exception:
         return OwnerExecutionResult.ambiguous()

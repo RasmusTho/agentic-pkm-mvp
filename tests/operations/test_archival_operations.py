@@ -7,6 +7,7 @@ from app.operations import InMemoryReceiptStore, OperationContext, OperationExec
 from app.operations.execution_kernel import ArchivalOperationReceipt, OwnerExecutionResult
 from app.operations.archival_operations import ARCHIVE_OPERATION_ID, RESTORE_OPERATION_ID, ArchivalOperationServerConfig, build_archival_operation_handlers
 from app.heimdal.raw_read_gate import OperationTargetProof
+from app.heimdal.local_archive import ArchiveDegradedError
 
 
 def _request(operation_id: str, *, request_id: str = "request-1", version: object = 7, artifact_class: ArtifactClass = ArtifactClass.SOURCE) -> OperationRequest:
@@ -28,7 +29,7 @@ def _owner_result(stage: TransitionStage) -> object:
 
 def test_operations_dispatch_to_governed_archival_providers(monkeypatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(artifact_id="raw-1", generation=7, representation_id="representation-1"))
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(raw_ref=raw_ref, artifact_id="raw-1", generation=7, representation_id="representation-1"))
     monkeypatch.setattr("app.operations.archival_operations.run_single_record_archive_operation", lambda proof, **kwargs: calls.append(kwargs["request_id"]) or _owner_result(TransitionStage.RETIRED))
     config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
     outcome = _kernel(config).execute(_request(ARCHIVE_OPERATION_ID), _delegation(ARCHIVE_OPERATION_ID))
@@ -37,7 +38,7 @@ def test_operations_dispatch_to_governed_archival_providers(monkeypatch) -> None
 
 
 def test_archival_outcomes_preserve_liveness_generation_policy_and_receipts(monkeypatch) -> None:
-    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(artifact_id="raw-1", generation=7, representation_id="representation-1"))
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(raw_ref=raw_ref, artifact_id="raw-1", generation=7, representation_id="representation-1"))
     monkeypatch.setattr("app.operations.archival_operations.run_single_record_restore_operation", lambda proof, **kwargs: _owner_result(TransitionStage.RESTORED))
     config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
     outcome = _kernel(config).execute(_request(RESTORE_OPERATION_ID), _delegation(RESTORE_OPERATION_ID))
@@ -51,7 +52,7 @@ def test_archival_failures_are_typed_and_recoverable(monkeypatch) -> None:
     kernel = _kernel(config)
     assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="human", artifact_class=ArtifactClass.HUMAN), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.NOT_SUPPORTED
     assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="derived", artifact_class=ArtifactClass.DERIVED), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.NOT_SUPPORTED
-    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(artifact_id="raw-1", generation=7, representation_id="representation-1"))
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(raw_ref=raw_ref, artifact_id="raw-1", generation=7, representation_id="representation-1"))
     assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="stale", version=6), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.CONFLICTED
     monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: (_ for _ in ()).throw(RuntimeError()))
     assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="unknown"), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.RECOVERY_REQUIRED
@@ -77,3 +78,22 @@ def test_delegation_for_another_raw_ref_rejects_before_resolution(monkeypatch) -
     delegation["target_ids"] = ["raw-ref-other"]
     assert _kernel(config).execute(_request(ARCHIVE_OPERATION_ID, request_id="other"), delegation).status is OperationStatus.REJECTED
     assert calls == []
+
+
+def test_substituted_owner_proof_never_reaches_an_owner_effect(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(raw_ref="raw-ref-other", artifact_id="raw-other", generation=7, representation_id="representation-1"))
+    monkeypatch.setattr("app.operations.archival_operations.run_single_record_archive_operation", lambda proof, **kwargs: calls.append("effect"))
+    config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
+    assert _kernel(config).execute(_request(ARCHIVE_OPERATION_ID, request_id="substitution"), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.CONFLICTED
+    assert calls == []
+
+
+def test_definite_pre_effect_retention_refusal_is_rejected(monkeypatch) -> None:
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(raw_ref=raw_ref, artifact_id="raw-1", generation=7, representation_id="representation-1"))
+    monkeypatch.setattr("app.operations.archival_operations.run_single_record_archive_operation", lambda proof, **kwargs: (_ for _ in ()).throw(ArchiveDegradedError("record_outside_archive_window")))
+    config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
+    outcome = _kernel(config).execute(_request(ARCHIVE_OPERATION_ID, request_id="retention"), _delegation(ARCHIVE_OPERATION_ID))
+    assert outcome.status is OperationStatus.REJECTED
+    assert outcome.warnings == ("record_outside_archive_window",)
+    assert outcome.receipt is not None and outcome.receipt["recovery"] is None
