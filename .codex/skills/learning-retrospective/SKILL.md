@@ -78,8 +78,9 @@ cat docs/learning-log.md
 For an incremental pass, use the last retrospective marker to select new compatibility entries.
 For a full-history pass, read all dated entries, including those before markers. Match represented
 entries to their LearningSignal by provenance and divergence, and count a duplicate event once in
-pattern totals. Preserve old entries; convert unmatched operational fallbacks through
-`capture-learning` with stable idempotency keys when the configured store is available.
+pattern totals. Preserve old entries. In autonomous maintenance mode, convert unmatched operational
+fallbacks through `capture-learning` with stable idempotency keys when the configured store is
+available. In proposal-only mode, propose the conversion without writing records.
 
 ### Step 2: Cluster by upstream artifact
 

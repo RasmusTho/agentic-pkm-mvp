@@ -455,7 +455,7 @@ If the work spans multiple sub-agents:
 - pass owner docs and Source Anchors as exact references for the worker to load, not copied full-doc
   content or the full parent narrative
 - include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
-- if the handoff touches `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
+- select the handoff's validation plan from `docs/development/DEV_WORKFLOW.md :: Validation baseline` for its actual changed paths
 - if the handoff adds or changes tests, require robust guard coverage up front: name the intended success path and the relevant negative or completeness path, and make enforcement tests exercise the production call site rather than a helper in isolation
 - require each sub-agent to report lifecycle actions, PR link, validation, doc writeback, and closure state
 - require each issue agent to report the canonical `context_cost` values when the runtime exposes
