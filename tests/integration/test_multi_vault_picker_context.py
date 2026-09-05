@@ -181,3 +181,32 @@ def test_picker_without_registry_rejects_outside_base_before_manager(tmp_path: P
         companion.select_companion_vault(
             companion.VaultSelectRequest(path="/untrusted"), SimpleNamespace(headers={})
         )
+
+
+@pytest.mark.parametrize("kind", ("traversal", "outside", "symlink"))
+def test_initialize_and_bootstrap_reject_escape_before_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Every picker write path is contained before probe/token/manager effects."""
+    from app.api.routes import companion
+
+    base = tmp_path / "allowed"; base.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir()
+    link = base / "escape"; link.symlink_to(outside, target_is_directory=True)
+    requested = {
+        "traversal": "../outside",
+        "outside": str(outside),
+        "symlink": str(link),
+    }[kind]
+    monkeypatch.setenv("VAULT_BROWSE_ROOT", str(base))
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(tmp_path / "registry.md"))
+    monkeypatch.setattr(companion, "existing_init_target_entries", lambda *_: pytest.fail("probe reached"))
+    monkeypatch.setattr(companion, "get_vault_manager", lambda: pytest.fail("manager reached"))
+    monkeypatch.setattr(companion, "get_first_vault_bootstrap_store", lambda: pytest.fail("token store reached"))
+    request = SimpleNamespace(headers={})
+    with pytest.raises(HTTPException):
+        companion.initialize_companion_vault(companion.VaultInitializeRequest(path=requested), request)
+    with pytest.raises(HTTPException):
+        companion.create_vault_initialize_bootstrap(
+            companion.VaultInitializeBootstrapRequest(path=requested), request
+        )
