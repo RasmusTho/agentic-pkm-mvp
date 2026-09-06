@@ -45,6 +45,35 @@ def test_registered_explain_and_execution_share_compiled_reasoning_route(monkeyp
     assert (execution["provider"], execution["model"]) == (route.provider, route.model)
 
 
+def test_yggdrasil_reasoning_can_select_gpt_6_astra_through_model_registry(monkeypatch) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_reasoning=LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(
+                    model_id="openai.chat.gpt_6_astra"
+                )
+            )
+        )
+    )
+    monkeypatch.setattr(runtime, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.delenv("REASONING_MODEL", raising=False)
+    monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setattr(ChatClient, "chat", lambda self, *args, **kwargs: "{}")
+
+    route = resolve_effective_reasoning_route()
+    payload = build_settings_explain_payload()["llm"]["reasoning_model"]
+    _response, execution = reasoning_provider._call_chat_with_route(
+        task_kind="reasoning", pack={"system": "s", "user": "u"}, agent=None, kind=None, trace_id=None
+    )
+
+    assert (route.provider, route.model) == ("openai", "gpt-6-astra")
+    assert payload["model"] == "gpt-6-astra"
+    assert (execution["provider"], execution["model"]) == ("openai", "gpt-6-astra")
+
+
 def test_model_override_trace_and_reload_generation_remain_consistent(monkeypatch) -> None:
     bundle = _compiled_openai_bundle()
     monkeypatch.setattr(runtime, "get_settings_bundle", lambda: bundle)

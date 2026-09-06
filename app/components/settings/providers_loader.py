@@ -88,6 +88,7 @@ class BuilderExecutionProfile(TierMapping):
 
     capability_tier: Literal["spark", "luna", "terra", "sol"]
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"]
+    selectable_models: list[str] = Field(default_factory=list)
 
 
 class ModelInquiryProfile(BaseModel):
@@ -188,6 +189,39 @@ class ProviderCensus(BaseModel):
                     f"Provider census role profile {mapping.role} uses undeclared credential "
                     f"{mapping.credential_identifier}"
                 )
+            if isinstance(mapping, BuilderExecutionProfile):
+                selectable_models = mapping.selectable_models or [mapping.model]
+                if mapping.model not in selectable_models:
+                    raise ValueError(
+                        "Builder execution profile default model must be selectable"
+                    )
+                if len(selectable_models) != len(set(selectable_models)):
+                    raise ValueError(
+                        f"Builder execution profile contains duplicate selectable models "
+                        f"for {mapping.provider}/{mapping.capability_tier}"
+                    )
+                for selectable_model_id in selectable_models:
+                    selectable_model = next(
+                        (
+                            item
+                            for item in provider.models
+                            if item.id == selectable_model_id
+                        ),
+                        None,
+                    )
+                    if selectable_model is None:
+                        raise ValueError(
+                            "Builder execution profile references an undeclared selectable model "
+                            f"{mapping.provider}/{selectable_model_id}"
+                        )
+                    for capability in mapping.requires:
+                        if not getattr(selectable_model.capabilities, capability) and not getattr(
+                            provider.capabilities, capability
+                        ):
+                            raise ValueError(
+                                "Builder execution selectable model "
+                                f"{mapping.provider}/{selectable_model_id} lacks {capability}"
+                            )
         if set(self.runtime_channels.model_inquiry) != set(
             self.runtime_channels.builder_execution
         ):

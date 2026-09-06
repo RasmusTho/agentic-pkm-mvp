@@ -399,6 +399,11 @@ scope; it never adds steps to the implementation hot path.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
 - Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Risk tiers`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery. Read `:: Delivery budgets and stop-loss` only when a repair budget is actually in play.
 - Route model family, reasoning effort, and escalation/de-escalation per `AGENTS.md :: Total Cost of Development`. The risk tier above, plus the artifact class, environment/channel risk, and stop conditions from the pre-implementation classification check, are the routing inputs — do not restate the policy here.
+- TCD model selection is provider-neutral: a declared capability profile may expose an explicit
+  model opt-in, but internal Yggdrasil reasoning and external harnesses (including the Codex
+  launcher) must pass that selection through the shared provider census/execution resolver. Skills,
+  prompts, and worker-role prose must not add model-specific workflow branches. Omitting a model
+  preserves the profile default; an undeclared or non-selectable request fails closed.
 - When this Issue came from `deliver-issue-set`, honor the pack's fresh-context and helper-budget
   decision unless current issue-local evidence justifies recomputing it. Record the canonical
   `context_cost` values when exposed by the runtime; otherwise use a named proxy or

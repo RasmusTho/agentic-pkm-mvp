@@ -31,6 +31,12 @@ ID in workflow policy. Select reasoning and proof depth from risk:
 - highest configured reasoning: architecture, broad migrations, complex state machines, or work where
   owner steering would otherwise exceed roughly 10-15 minutes.
 
+The provider-neutral execution resolver may expose an explicit model choice within a capability
+profile. For the `high-reasoning` / `sol` capability, `gpt-5.6-sol` remains the default and
+`gpt-6-astra` is an opt-in selectable candidate. Both internal TCD decisions and external Codex
+launcher invocations use the same declared census/resolver seam; workflow skills do not carry an
+Astra-specific branch, and an undeclared model choice fails closed.
+
 Escalate after two failed attempts or review rejects, unclear requirements, missing/hard-to-interpret
 tests, high blast radius, non-trivial CI failure, or hard-to-assess residual risk. De-escalate when the
 plan is mechanical, a focused test bounds the result, and no hidden correctness risk remains.

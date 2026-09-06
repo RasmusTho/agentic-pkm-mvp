@@ -630,8 +630,9 @@ reversible technical choices stay in Issue, Git, PR, review and test evidence. V
 
 Codex is the only active Builder worker carrier in the current operating path. Concrete model,
 provider, and generation identity is resolved by the declared capability census and host/session
-configuration at invocation time; it is not selected by skills, scripts, prompts, or worker-role
-prose. Claude/Anthropic references in this process map and its evidence remain historical,
+configuration at invocation time; an explicit selectable model remains behind that same
+provider-neutral resolver seam and is validated against the capability profile. It is not selected
+by skills, scripts, prompts, or worker-role prose. Claude/Anthropic references in this process map and its evidence remain historical,
 compatibility-only, or design provenance unless a separately governed current contract activates them.
 
 ### Execution-control composition

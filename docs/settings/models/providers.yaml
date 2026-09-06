@@ -133,17 +133,17 @@ runtime_channels:
       spark: {capability_tier: spark, provider: openai, model: gpt-5.3-codex-spark, reasoning_effort: low, requires: [structured_output, native_tools]}
       luna: {capability_tier: luna, provider: openai, model: gpt-5.6-luna, reasoning_effort: low, requires: [structured_output, native_tools]}
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: medium, requires: [structured_output, native_tools]}
-      sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, reasoning_effort: high, requires: [structured_output, native_tools]}
+      sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, selectable_models: [gpt-5.6-sol, gpt-6-astra], reasoning_effort: high, requires: [structured_output, native_tools]}
     test:
       spark: {capability_tier: spark, provider: openai, model: gpt-5.3-codex-spark, reasoning_effort: low, requires: [structured_output, native_tools]}
       luna: {capability_tier: luna, provider: openai, model: gpt-5.6-luna, reasoning_effort: low, requires: [structured_output, native_tools]}
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: medium, requires: [structured_output, native_tools]}
-      sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, reasoning_effort: high, requires: [structured_output, native_tools]}
+      sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, selectable_models: [gpt-5.6-sol, gpt-6-astra], reasoning_effort: high, requires: [structured_output, native_tools]}
     prod:
       spark: {capability_tier: spark, provider: openai, model: gpt-5.3-codex-spark, reasoning_effort: low, requires: [structured_output, native_tools]}
       luna: {capability_tier: luna, provider: openai, model: gpt-5.6-luna, reasoning_effort: low, requires: [structured_output, native_tools]}
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: medium, requires: [structured_output, native_tools]}
-      sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, reasoning_effort: high, requires: [structured_output, native_tools]}
+      sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, selectable_models: [gpt-5.6-sol, gpt-6-astra], reasoning_effort: high, requires: [structured_output, native_tools]}
   model_inquiry:
     dev: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription, target_intent: {capability_tier: frontier, reasoning_effort: xhigh, determinism_required: false, output_schema_ref: builderops.model-turn-response.v1, independence: none, fallback_requirement: fallback_forbidden, side_effect_class: advisory_review}}
     test: {acceptance_mode: single_target, capability_tier: sol, perspectives: [synthesis, verification], operational_transport: codex_subscription, target_intent: {capability_tier: frontier, reasoning_effort: xhigh, determinism_required: false, output_schema_ref: builderops.model-turn-response.v1, independence: none, fallback_requirement: fallback_forbidden, side_effect_class: advisory_review}}
