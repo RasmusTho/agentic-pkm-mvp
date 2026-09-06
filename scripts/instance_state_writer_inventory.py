@@ -1153,6 +1153,8 @@ def _normalize_legacy_owners(
 def _enrich_established_owner_bindings(
     owners: list[LegacyOwnerRecord],
     owner_identities: list[dict[str, object]],
+    *,
+    ownership_root: Path | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Attach authenticated binding IDs when the host ledger is established.
 
@@ -1164,14 +1166,18 @@ def _enrich_established_owner_bindings(
     an ID from a path or copy one from caller-controlled environment.
     """
 
-    ownership_root_text = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", "").strip()
     owner_rows = [
         {"channel_id": record.channel_id, "root": record.root}
         for record in owners
     ]
-    if not ownership_root_text:
-        return owner_rows, owner_identities
-    ownership_root = Path(ownership_root_text).expanduser().resolve(strict=False)
+    if ownership_root is None:
+        ownership_root_text = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", "").strip()
+        if not ownership_root_text:
+            return owner_rows, owner_identities
+        ownership_root = Path(ownership_root_text)
+    if not ownership_root.is_absolute():
+        raise InventoryError("established ownership ledger root must be absolute")
+    ownership_root = ownership_root.expanduser().resolve(strict=False)
     ledger_path = ownership_root / "ownership-ledger.json"
     key_path = ownership_root / "ownership-key.json"
     if not ledger_path.exists() and not key_path.exists():
@@ -1246,7 +1252,12 @@ def _enrich_established_owner_bindings(
     return enriched_rows, enriched_identities
 
 
-def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str, object]:
+def _legacy_owner_snapshot(
+    repo_root: Path,
+    *,
+    active_channel: str,
+    ownership_root: Path | None = None,
+) -> dict[str, object]:
     if active_channel not in {"dev", "test", "prod"}:
         raise InventoryError("legacy owner active channel is invalid")
     docker_owners, docker_fingerprints = _docker_legacy_owner_sources()
@@ -1255,7 +1266,7 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
     )
     owners, owner_identities = _normalize_legacy_owners(docker_owners + config_owners)
     owner_rows, owner_identities = _enrich_established_owner_bindings(
-        owners, owner_identities
+        owners, owner_identities, ownership_root=ownership_root
     )
     source_evidence = {
         "docker": docker_fingerprints,
@@ -1277,13 +1288,23 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
     }
 
 
-def produce_legacy_owners(*, repo_root: Path, active_channel: str, output: Path) -> None:
-    first = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+def produce_legacy_owners(
+    *,
+    repo_root: Path,
+    active_channel: str,
+    output: Path,
+    ownership_root: Path | None = None,
+) -> None:
+    first = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
     _test_sync(
         "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_READY_FD",
         "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_CONTINUE_FD",
     )
-    second = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    second = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
     if first != second:
         raise InventoryError("legacy owner sources are incomplete or racing")
     _write_inventory(
@@ -1300,7 +1321,12 @@ def produce_legacy_owners(*, repo_root: Path, active_channel: str, output: Path)
 
 
 def validate_legacy_owners(
-    *, repo_root: Path, active_channel: str, inventory: Path, output: Path
+    *,
+    repo_root: Path,
+    active_channel: str,
+    inventory: Path,
+    output: Path,
+    ownership_root: Path | None = None,
 ) -> None:
     try:
         metadata = inventory.lstat()
@@ -1325,8 +1351,12 @@ def validate_legacy_owners(
         or not isinstance(baseline.get("owners"), list)
     ):
         raise InventoryError("legacy owner baseline inventory is invalid")
-    first = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
-    second = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    first = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
+    second = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
     if (
         first != second
         or baseline.get("source_digest") != first["source_digest"]
@@ -1670,11 +1700,13 @@ def main(argv: list[str] | None = None) -> int:
     produce.add_argument("--repo-root", type=Path, required=True)
     produce.add_argument("--active-channel", required=True)
     produce.add_argument("--output", type=Path, required=True)
+    produce.add_argument("--host-global-root", type=Path)
     validate = subparsers.add_parser("validate-legacy-owners")
     validate.add_argument("--repo-root", type=Path, required=True)
     validate.add_argument("--active-channel", required=True)
     validate.add_argument("--inventory", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
+    validate.add_argument("--host-global-root", type=Path)
     fence_plan = subparsers.add_parser("compose-fence-plan")
     fence_plan.add_argument("--compose-path", type=Path, required=True)
     fence_plan.add_argument("--receipt-output", type=Path)
@@ -1698,6 +1730,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_root=args.repo_root,
                 active_channel=args.active_channel,
                 output=args.output,
+                ownership_root=args.host_global_root,
             )
             return 0
         if args.command == "validate-legacy-owners":
@@ -1706,6 +1739,7 @@ def main(argv: list[str] | None = None) -> int:
                 active_channel=args.active_channel,
                 inventory=args.inventory,
                 output=args.output,
+                ownership_root=args.host_global_root,
             )
             return 0
         if args.command == "compose-fence-plan":
