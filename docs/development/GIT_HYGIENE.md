@@ -398,3 +398,36 @@ reference and any live dispatcher lease preserves the target. Tags, ordinary
 branches, remote refs and modern archive receipts are outside this allowlist.
 A new bundle preserves exact objects before retirement; generation drift stops
 progress. This is an operator phase and does not change the automation.
+
+## Owner-authorized retirement of dated remote archives
+
+`scripts.git_archive_retirement.retire_remote_legacy_archives` accepts an explicit
+owner disposition and exact ref/SHA mapping only within
+`refs/archive/git-hygiene/<YYYYMMDDTHHMMSSZ>/...`. Modern `v1` archive receipts,
+branches, tags and other namespaces are excluded. This operator grants no new
+authority to the daily automation.
+
+A single bounded fetch copies the exact refs into a temporary bare repository;
+its independently verified rescue bundle must cover every target before effects.
+The isolated bare input contains only selected copy targets and must have no stash ref.
+Repository identity, protected GitHub targets, open PR heads, canonical dispatcher
+leases and the frozen lifecycle snapshot fence serial atomic batches of at most
+25 refs. Linked HEADs, open PR SHAs, designated protected SHAs and explicit
+resumable references are retained; any live dispatcher lease preserves the batch.
+Each deletion uses expected-old-SHA leases against the authenticated push URL and
+fresh remote readback. No canonical local refs are created by the snapshot fetch.
+
+The durable phase receipt records a pending batch before its push. On drift or
+transport uncertainty, checksum-validated recovery restores only absent refs with
+expected-absence leases. A concurrently recreated ref is preserved and leaves
+`recovery_required`. Retrying the same exact receipt compensates pending work;
+it never resumes deletion under an old snapshot. A new deletion phase requires a
+new snapshot directory. Recovery retains old commits without merging them.
+
+`retire_remote_legacy_rescue_branches` is a separate explicit-disposition wrapper
+for `refs/heads/rescue/*` copies, with its own receipt schema. It uses the same
+verified snapshot, atomic CAS and recovery protocol. Both the rescue branch name
+and its original suffix are checked against checked-out branches, open PRs, live
+lifecycle bindings and resumable references. Invalid relevant lifecycle records
+and protected original names remain retained. Ordinary remote heads and modern
+archive receipts cannot enter this path.

@@ -4221,12 +4221,15 @@ def create_rescue_snapshot(cwd: Path, destination: Path) -> dict[str, object]:
     """
     destination = destination.resolve()
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    bare = run_git(["rev-parse", "--is-bare-repository"], cwd) == "true"
 
     def inventory() -> dict[str, str]:
+        if bare and run_git(["for-each-ref", "--format=%(refname)", "refs/stash"], cwd):
+            raise RuntimeError("bare_rescue_stash_inventory_unsupported")
         return {
             "refs": run_git(["for-each-ref", "--format=%(objectname) %(refname)"], cwd),
             "worktrees": run_git(["worktree", "list", "--porcelain"], cwd),
-            "stashes": run_git(["stash", "list", "--format=%H %gd %gs"], cwd),
+            "stashes": "" if bare else run_git(["stash", "list", "--format=%H %gd %gs"], cwd),
         }
 
     before = inventory()

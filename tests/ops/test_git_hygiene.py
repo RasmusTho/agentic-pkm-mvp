@@ -5721,3 +5721,17 @@ def test_remote_retirement_rejects_malformed_closure(tmp_path, monkeypatch, fiel
             repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
         )
     assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == target["sha"]
+
+
+def test_rescue_snapshot_supports_archive_only_bare_repository(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    git_hygiene.run_git(["init", "--bare", "."], bare)
+    git_hygiene.run_git(["fetch", str(repo), f"{ref}:{ref}"], bare)
+    result = git_hygiene.create_rescue_snapshot(bare, tmp_path / "rescue")
+    assert sha in result["verified_objects"]
+    assert result["inventory"]["stashes"] == ""
+    git_hygiene.run_git(["update-ref", "refs/stash", sha], bare)
+    with pytest.raises(RuntimeError, match="bare_rescue_stash_inventory_unsupported"):
+        git_hygiene.create_rescue_snapshot(bare, tmp_path / "refused")
