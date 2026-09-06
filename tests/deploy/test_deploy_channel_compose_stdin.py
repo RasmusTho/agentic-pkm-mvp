@@ -19,6 +19,7 @@ These tests exercise the fix at both levels named in the issue:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -227,6 +228,28 @@ def test_producer_delivers_owner_inventory_with_content(tmp_path: Path) -> None:
     content = delivered.read_text(encoding="utf-8")
     assert content.strip() != ""
     assert "legacy-owner" in content
+
+
+def test_mvr05_floor_receives_digest_of_delivered_owner_inventory(
+    tmp_path: Path,
+) -> None:
+    """MVR-05 must consume exactly the owner receipt the host published."""
+
+    result, ownership_root = _fake_compose_harness(tmp_path, {})
+    assert result.returncode == 0, result.stderr
+
+    expected_digest = hashlib.sha256(
+        (ownership_root / "legacy-owner-inventory.json").read_bytes()
+    ).hexdigest()
+    events = (tmp_path / "events.log").read_text(encoding="utf-8")
+    mvr05_events = [
+        event
+        for event in events.splitlines()
+        if "mvr05-record-floor" in event
+    ]
+
+    assert len(mvr05_events) == 1
+    assert f"--inventory-sha256 {expected_digest}" in mvr05_events[0]
 
 
 def test_preinstall_validation_failure_never_creates_settings_floor_receipt(

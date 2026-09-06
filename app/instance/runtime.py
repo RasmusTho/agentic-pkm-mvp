@@ -10,6 +10,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -1477,6 +1478,8 @@ _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _LEGACY_OWNER_IDENTITY_RE = re.compile(r"^(?:inode:[0-9]+:[0-9]+|path:/.*)$")
+_MVR05_OWNER_INVENTORY_VISIBILITY_TIMEOUT_SECONDS = 1.0
+_MVR05_OWNER_INVENTORY_VISIBILITY_RETRY_SECONDS = 0.05
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
 _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
     "agentic-pkm.host-deployment-compatibility-block.v1"
@@ -2357,7 +2360,44 @@ def _legacy_owner_receipt_digest(payload: Mapping[str, object]) -> str:
     )
 
 
-def _load_legacy_owner_inventory_payload(inventory_path: Path) -> dict[str, object]:
+def _read_legacy_owner_inventory_bytes(
+    inventory: Path,
+    *,
+    expected_sha256: str | None,
+) -> bytes:
+    """Read an owner receipt, waiting only for its producer-proven bytes.
+
+    Docker/Colima may briefly project the old file after the host producer has
+    atomically published the new receipt. A syntactically valid stale receipt
+    cannot be accepted: only the exact digest calculated by that producer may
+    pass this visibility barrier. A missing/unreadable receipt and a timeout
+    remain ordinary fail-closed preflight failures.
+    """
+
+    if expected_sha256 is None:
+        return inventory.read_bytes()
+    if _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(expected_sha256) is None:
+        raise InstanceStatePreflightError(
+            "expected legacy-owner inventory digest is invalid"
+        )
+
+    deadline = time.monotonic() + _MVR05_OWNER_INVENTORY_VISIBILITY_TIMEOUT_SECONDS
+    while True:
+        payload = inventory.read_bytes()
+        if hashlib.sha256(payload).hexdigest() == expected_sha256:
+            return payload
+        if time.monotonic() >= deadline:
+            raise InstanceStatePreflightError(
+                "legacy-owner inventory did not converge to the expected deployed digest"
+            )
+        time.sleep(_MVR05_OWNER_INVENTORY_VISIBILITY_RETRY_SECONDS)
+
+
+def _load_legacy_owner_inventory_payload(
+    inventory_path: Path,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, object]:
     try:
         inventory = Path(inventory_path)
         metadata = inventory.lstat()
@@ -2367,7 +2407,12 @@ def _load_legacy_owner_inventory_payload(inventory_path: Path) -> dict[str, obje
             or metadata.st_mode & 0o777 != 0o600
         ):
             raise ValueError
-        payload = json.loads(inventory.read_text(encoding="utf-8"))
+        payload = json.loads(
+            _read_legacy_owner_inventory_bytes(
+                inventory,
+                expected_sha256=expected_sha256,
+            )
+        )
         if not isinstance(payload, dict):
             raise ValueError
         source_evidence = payload.get("source_evidence")
@@ -2472,6 +2517,7 @@ def _bind_legacy_owner_inventory_to_proof(
     quiescence_proof: DeploymentQuiescenceProof,
     channel: str,
     host_global_root: Path,
+    expected_sha256: str | None = None,
 ) -> DeploymentQuiescenceProof:
     """Bind the drained-owner receipt to the already-proved deployment lease."""
 
@@ -2532,7 +2578,10 @@ def _bind_legacy_owner_inventory_to_proof(
         raise InstanceStatePreflightError(
             "drained legacy-owner receipt does not match the active restart fence"
         )
-    payload = _load_legacy_owner_inventory_payload(inventory)
+    payload = _load_legacy_owner_inventory_payload(
+        inventory,
+        expected_sha256=expected_sha256,
+    )
     binding_fields = {
         "deployment_nonce": quiescence_proof.nonce,
         "controller": controller,
@@ -2600,8 +2649,12 @@ def _load_legacy_owner_inventory(
     registry: RegistrySnapshot,
     channel: str,
     quiescence_proof: DeploymentQuiescenceProof | None = None,
+    expected_sha256: str | None = None,
 ) -> list[LegacyOwner]:
-    payload = _load_legacy_owner_inventory_payload(inventory_path)
+    payload = _load_legacy_owner_inventory_payload(
+        inventory_path,
+        expected_sha256=expected_sha256,
+    )
     identity_evidence = _legacy_owner_identity_evidence(payload)
     if quiescence_proof is not None:
         expected_controller = {
@@ -2735,6 +2788,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
     legacy_path: Path,
     inventory_path: Path,
     quiescence_proof: DeploymentQuiescenceProof | None,
+    inventory_sha256: str | None = None,
 ) -> RegistrySnapshot:
     """Finish dormant legacy import while the MVR-05 fence is still held."""
 
@@ -2755,6 +2809,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
             quiescence_proof=quiescence_proof,
             channel=channel,
             host_global_root=ledger.root,
+            expected_sha256=inventory_sha256,
         )
         owners = _load_legacy_owner_inventory(
             inventory_path,
@@ -2801,6 +2856,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
                 registry=snapshot,
                 channel=channel,
                 quiescence_proof=bound_proof,
+                expected_sha256=inventory_sha256,
             )
         _converge_authenticated_legacy_ledger(
             channel=channel,
@@ -4328,6 +4384,7 @@ def main(argv: list[str] | None = None) -> int:
     mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
     mvr05_floor.add_argument("--legacy-path", type=Path, required=True)
     mvr05_floor.add_argument("--inventory-path", type=Path, required=True)
+    mvr05_floor.add_argument("--inventory-sha256", required=True)
     mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
     mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
     rebind_install = subparsers.add_parser("settings-rebind-install-dormant")
@@ -4471,6 +4528,7 @@ def main(argv: list[str] | None = None) -> int:
                     legacy_path=args.legacy_path,
                     inventory_path=args.inventory_path,
                     quiescence_proof=quiescence_proof,
+                    inventory_sha256=args.inventory_sha256,
                 )
                 ledger.require_existing()
                 result = record_mvr05_runtime_floor(

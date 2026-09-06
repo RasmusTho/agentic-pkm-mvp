@@ -333,7 +333,7 @@ prepare_instance_state_deployment() {
   local runtime_gid="${LOCAL_GID:-$(id -g)}"
   local runtime_user="${runtime_uid}:${runtime_gid}"
   local repo_root inventory_helper controller_pid controller_start_token
-  local inventory_host_path owner_inventory_host_path inventory_rc
+  local inventory_host_path owner_inventory_host_path inventory_rc owner_inventory_sha256
   local quiescence_inventory_host_target_path owner_inventory_host_target_path
   local principal_attempt_id principal_receipt_path principal_receipt_host_path
   local receipt_verify_rc
@@ -652,6 +652,26 @@ prepare_instance_state_deployment() {
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
+  if owner_inventory_sha256="$(
+    "${PYTHON:-python3}" - "${owner_inventory_host_target_path}" <<'PY'
+import hashlib
+import sys
+
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as source:
+    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+  )"; then
+    :
+  else
+    inventory_rc=$?
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
 
   # Explicit MVR-03 authority transition. One runtime process records the floor
   # and then bootstraps the role, keeping the attempt-local floor receipt out of
@@ -786,6 +806,7 @@ prepare_instance_state_deployment() {
       --host-global-root /app/instance-ownership \
       --legacy-path "${legacy_path}" \
       --inventory-path "${inventory_path}" \
+      --inventory-sha256 "${owner_inventory_sha256}" \
       --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
       --fence-plan "/app/instance-ownership/mvr05-fence-plan-${controller_pid}.json"
   inventory_rc=$?

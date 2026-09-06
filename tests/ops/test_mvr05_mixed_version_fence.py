@@ -155,6 +155,8 @@ def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
             str(tmp_path / "app-local.md"),
             "--inventory-path",
             str(host_global_root / "legacy-owner-inventory.json"),
+            "--inventory-sha256",
+            "0" * 64,
             "--quiescence-proof-path",
             str(proof_path),
             "--fence-plan",
@@ -209,6 +211,76 @@ def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
         "source_evidence": source_evidence,
         "owners": owners,
     }
+
+
+def test_mvr05_floor_waits_for_digest_matched_owner_inventory(
+    tmp_path, monkeypatch
+) -> None:
+    """A stale bind-mount view may not stand in for the deployed receipt."""
+
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    payload = _legacy_owner_inventory([])
+    inventory.write_text(json.dumps(payload), encoding="utf-8")
+    inventory.chmod(0o600)
+    expected_sha256 = hashlib.sha256(inventory.read_bytes()).hexdigest()
+    original_read_bytes = Path.read_bytes
+    reads = 0
+
+    def stale_read(self: Path) -> bytes:
+        nonlocal reads
+        if self == inventory:
+            reads += 1
+            if reads == 1:
+                return b'{"stale":'
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", stale_read)
+    monkeypatch.setattr(runtime_module.time, "sleep", lambda _seconds: None)
+
+    received = runtime_module._load_legacy_owner_inventory_payload(
+        inventory,
+        expected_sha256=expected_sha256,
+    )
+
+    assert received == payload
+    assert reads == 2
+
+
+def test_mvr05_floor_rejects_unmatched_or_malformed_owner_inventory(
+    tmp_path, monkeypatch
+) -> None:
+    """The digest barrier must not turn either stale or malformed data into success."""
+
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    inventory.write_text('{"stale":true}', encoding="utf-8")
+    inventory.chmod(0o600)
+    original_monotonic = runtime_module.time.monotonic
+    times = iter((0.0, 2.0))
+    monkeypatch.setattr(runtime_module.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(runtime_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="did not converge to the expected deployed digest",
+    ):
+        runtime_module._load_legacy_owner_inventory_payload(
+            inventory,
+            expected_sha256="0" * 64,
+        )
+
+    monkeypatch.setattr(runtime_module.time, "monotonic", original_monotonic)
+    malformed = b'{"incomplete":'
+    inventory.write_bytes(malformed)
+    inventory.chmod(0o600)
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="complete drained legacy-owner inventory is required",
+    ):
+        runtime_module._load_legacy_owner_inventory_payload(
+            inventory,
+            expected_sha256=hashlib.sha256(malformed).hexdigest(),
+        )
 
 
 def test_floor_producer_seeds_protected_ledger_before_first_registry_write(
@@ -471,6 +543,8 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
                 str(legacy_store.path),
                 "--inventory-path",
                 str(owner_inventory),
+                "--inventory-sha256",
+                hashlib.sha256(owner_inventory.read_bytes()).hexdigest(),
                 "--quiescence-proof-path",
                 str(ownership_root / "deployment-quiescence-proof.json"),
                 "--fence-plan",
