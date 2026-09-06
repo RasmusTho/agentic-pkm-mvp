@@ -224,7 +224,7 @@ The separate remote/archive/stash policy is:
 | Artifact | Allowed disposition | Additional authority |
 | --- | --- | --- |
 | Remote branch | Existing bounded `targeted_remote_cleanup`, only after the caller proves a fresh verified rescue bundle | Its authenticated PR/body, dispatcher, lifecycle, archive CAS, final readback and compensation contract above remains mandatory. |
-| Archive/rescue ref | Retain by default | Deletion requires an explicit object-bound owner discard decision, successor/retention disposition, verified independent rescue coverage, fresh authority, expected-old-SHA CAS and post-effect readback. No archive deletion entrypoint is currently enabled. |
+| Archive/rescue ref | Retain by default | Deletion requires an explicit object-bound owner discard decision, successor/retention disposition, verified independent rescue coverage, fresh authority, expected-old-SHA CAS and post-effect readback. The bounded legacy local archive entrypoint below is available; modern remote archive receipts remain retained. |
 | Stash | Retain by default | Deletion requires an explicit owner decision for the exact stash SHA and contents, verified independent rescue coverage, and exclusive coordination with stash writers. Age, message markers, or positional indices never authorize deletion. No governed stash deletion entrypoint is currently enabled. |
 
 The remote function does not itself create or validate the rescue bundle. This is
@@ -246,3 +246,37 @@ PR-based deletion eligibility. Planning continues with the remaining candidates.
 Preflight fails closed when base ancestry is unavailable. Focused coverage lives
 in `tests/ops/test_git_hygiene.py`, including recovery of older stashes, snapshot
 drift, stale lifecycle bindings and probe failure with closed or merged PRs.
+
+
+## Explicit retirement of inactive legacy archives
+
+An explicit owner decision may prefer retaining an independent verified bundle
+and discarding inactive Git artifacts over spending development effort integrating
+old work. That decision does not authorize deleting active work or protected refs.
+`retire_legacy_archive_refs` implements only the first bounded phase: caller-supplied
+exact `refs/archive/git-hygiene/*` names and expected object IDs. No branch, stash,
+worktree, remote ref, modern archive-receipt namespace or wildcard is accepted.
+The nonempty owner decision is recorded in the receipt; callers must possess actual
+user authority, not synthesize it from the argument's presence.
+
+The phase creates its own fresh verified rescue snapshot and requires every target
+to match the captured manifest. A missing lifecycle registry, unknown activity
+shape, source SHA drift or GitHub failure refuses progress. Each batch contains at
+most 25 named refs and uses an atomic expected-old-SHA Git ref transaction. GitHub
+open-PR heads, every linked worktree HEAD (including stale/unregistered paths), live dispatcher resource leases and
+direct artifact references in resumable dispatcher tasks protect targets. The
+canonical dispatcher writer reservation is acquired before the lifecycle registry
+lock. Fresh authority is read before every batch; open-PR state is also reread
+before releasing the fences after deletion. External drift triggers an atomic
+expected-absence restore of the just-deleted batch and stops the phase. It never
+overwrites a racing recreated ref. Failed compensation records `recovery_required`
+and the exact affected refs for additive recovery from the independent bundle.
+
+A private durable `retirement.json` records the explicit decision, exact targets,
+verified snapshot path, retained artifacts, completed batches and authority digests.
+A crash may leave a prepared receipt and absent refs: preserve that receipt and the
+bundle, reconcile exact live refs before any retry, and restore only absent refs
+with expected-absence creation if recovery is required. Never infer completion
+from absence. The receipt and independent bundle replace the redundant local
+archive ref as recovery evidence; they do not replace live lifecycle authority.
+The daily automation is unchanged and cannot infer this explicit owner decision.

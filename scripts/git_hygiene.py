@@ -3515,6 +3515,182 @@ def janitor_apply(
     }
 
 
+def _open_cleanup_pr_heads(cwd: Path, repository: str) -> dict[str, str]:
+    """Read every open PR from the fixed authenticated GitHub transport."""
+    token = _github_auth_token()
+    with tempfile.TemporaryDirectory(prefix="git-retirement-gh-") as directory:
+        config = Path(directory)
+        config.chmod(0o700)
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "--paginate", "--slurp",
+             f"repos/{repository}/pulls?state=open&per_page=100"],
+            cwd=cwd, capture_output=True, text=True, check=True, timeout=60,
+            env=_sanitized_github_environment(config, token),
+        )
+    pages = _json_without_duplicates(result.stdout)
+    if not isinstance(pages, list) or not pages:
+        raise RuntimeError("open_pr_census_invalid")
+    heads: dict[str, str] = {}
+    for page in pages:
+        if not isinstance(page, list):
+            raise RuntimeError("open_pr_census_invalid")
+        for pull in page:
+            if not isinstance(pull, dict) or pull.get("state") != "open":
+                raise RuntimeError("open_pr_census_invalid")
+            head = pull.get("head")
+            if not isinstance(head, dict) or not isinstance(head.get("ref"), str):
+                raise RuntimeError("open_pr_census_invalid")
+            sha = head.get("sha")
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+                raise RuntimeError("open_pr_census_invalid")
+            heads[f"{pull['number']}:{head['ref']}"] = sha
+    return heads
+
+
+def _retirement_local_activity(
+    cwd: Path, registry: Mapping[str, Any], dispatcher: list[dict[str, object]],
+) -> tuple[set[str], set[str]]:
+    """Positive live activity protects artifacts; age never supplies authority."""
+    protected_shas: set[str] = set()
+    resources: set[str] = set()
+    worktrees = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+    if not worktrees:
+        raise RuntimeError("worktree_census_missing")
+    # Preserve every linked HEAD, including unregistered/stale generations.
+    # Worktree retirement is a separate phase with stronger identity evidence.
+    live_paths = {str(Path(item["worktree"]).resolve()) for item in worktrees}
+    now = time.time()
+    for path, record in registry.items():
+        if not isinstance(record, dict) or not isinstance(path, str):
+            raise RuntimeError("lifecycle_activity_invalid")
+        expires = record.get("expires_at")
+        if not _is_finite_timestamp(expires):
+            raise RuntimeError("lifecycle_activity_invalid")
+        if expires > now:
+            live_paths.add(str(Path(path).resolve()))
+    for worktree in worktrees:
+        if str(Path(worktree["worktree"]).resolve()) in live_paths:
+            protected_shas.add(worktree["HEAD"])
+    for row in dispatcher:
+        record = row["record"]
+        if not isinstance(record, dict):
+            raise RuntimeError("dispatcher_activity_invalid")
+        if row["kind"] == "lease":
+            if record.get("released_at"):
+                _parse_dispatcher_time(record["released_at"])
+                continue
+            expiry = _parse_dispatcher_time(record.get("expires_at"))
+            if expiry.timestamp() > now:
+                resource = record.get("resource")
+                if not isinstance(resource, str) or not resource:
+                    raise RuntimeError("dispatcher_activity_invalid")
+                resources.add(resource)
+        elif record.get("status") not in {"completed", "_meta"}:
+            # A direct explicit reference in a resumable task is retained even
+            # if its pickup lease expired. Unrelated historical rows do not veto.
+            resources.add(json.dumps(record, sort_keys=True))
+    return protected_shas, resources
+
+
+def retire_legacy_archive_refs(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    """Retire exact local legacy archive refs under an explicit owner decision.
+
+    This entrypoint intentionally cannot delete branches, stashes, modern remote
+    archive receipts, worktrees or arbitrary refs. No age-based selection occurs.
+    """
+    from scripts import agent_worktree
+
+    if not owner_discard.strip() or not targets or not 1 <= batch_size <= 25:
+        raise ValueError("explicit_archive_disposition_required")
+    for ref, sha in targets.items():
+        if (not re.fullmatch(r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+", ref)
+                or not re.fullmatch(r"[0-9a-f]{40,64}", sha)):
+            raise ValueError("legacy_archive_exact_target_required")
+        run_git_check(["check-ref-format", ref], cwd)
+        symbolic = run_git_result(["symbolic-ref", "-q", ref], cwd)
+        if symbolic.returncode != 1:
+            raise ValueError("symbolic_or_unavailable_archive_ref")
+        if run_git(["rev-parse", "--verify", ref], cwd) != sha:
+            raise RuntimeError("archive_target_drift")
+    identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
+    pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
+    snapshot = create_rescue_snapshot(cwd, snapshot_directory)
+    captured = dict(line.split(" ", 1)[::-1] for line in snapshot["inventory"]["refs"].splitlines())
+    if any(captured.get(ref) != sha for ref, sha in targets.items()):
+        raise RuntimeError("archive_not_in_verified_snapshot")
+    registry_path = agent_worktree._default_registry_path(cwd)
+    if not registry_path.is_file() or registry_path.is_symlink():
+        raise RuntimeError("lifecycle_registry_missing")
+    receipt_path = snapshot_directory / "retirement.json"
+    receipt: dict[str, Any] = {
+        "schema": "legacy_archive_retirement.v1", "owner_discard": owner_discard,
+        "snapshot": snapshot["snapshot"], "targets": dict(targets),
+        "deleted": [], "retained": {}, "state": "prepared", "batches": [],
+    }
+    agent_worktree._write_registry(receipt_path, receipt)
+    pairs = list(targets.items())
+    for start in range(0, len(pairs), batch_size):
+        batch = dict(pairs[start:start + batch_size])
+        if _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads:
+            raise RuntimeError("archive_pr_activity_drift")
+        with _dispatcher_authority_write_fence(cwd) as connection:
+            with agent_worktree._registry_lock(registry_path):
+                registry = agent_worktree._read_registry(registry_path)["worktrees"]
+                dispatcher = _dispatcher_snapshot_from_connection(connection)
+                protected, resources = _retirement_local_activity(cwd, registry, dispatcher)
+                protected.update(pr_heads.values())
+                selected = {}
+                for ref, sha in batch.items():
+                    if sha in protected or any(ref in resource or sha in resource for resource in resources):
+                        receipt["retained"][ref] = "live_or_resumable_activity"
+                    else:
+                        selected[ref] = sha
+                if selected:
+                    commands = ["start", *(f"delete {ref} {sha}" for ref, sha in selected.items()), "prepare", "commit"]
+                    subprocess.run(
+                        ["git", "update-ref", "--no-deref", "--stdin"], cwd=cwd,
+                        input="\n".join(commands) + "\n", capture_output=True,
+                        text=True, check=True, timeout=30, env=_sanitized_git_environment(),
+                    )
+                    try:
+                        if _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads:
+                            raise RuntimeError("archive_pr_activity_drift")
+                        for ref in selected:
+                            if run_git_result(["show-ref", "--verify", "--quiet", ref], cwd).returncode != 1:
+                                raise RuntimeError("archive_delete_readback_failed")
+                    except (OSError, RuntimeError, subprocess.SubprocessError):
+                        restore = ["start", *(f"create {ref} {sha}" for ref, sha in selected.items()), "prepare", "commit"]
+                        try:
+                            subprocess.run(
+                                ["git", "update-ref", "--no-deref", "--stdin"], cwd=cwd,
+                                input="\n".join(restore) + "\n", capture_output=True,
+                                text=True, check=True, timeout=30, env=_sanitized_git_environment(),
+                            )
+                        except (OSError, subprocess.SubprocessError):
+                            receipt["state"] = "recovery_required"
+                            receipt["recovery_targets"] = selected
+                            agent_worktree._write_registry(receipt_path, receipt)
+                            raise
+                        receipt["state"] = "compensated"
+                        agent_worktree._write_registry(receipt_path, receipt)
+                        raise
+                    receipt["deleted"].extend(selected)
+                receipt["batches"].append({
+                    "deleted": selected, "readback": "verified", "checked_at": time.time(),
+                    "open_pr_heads": pr_heads,
+                    "lifecycle_sha256": hashlib.sha256(json.dumps(registry, sort_keys=True).encode()).hexdigest(),
+                    "dispatcher_sha256": hashlib.sha256(json.dumps(dispatcher, sort_keys=True).encode()).hexdigest(),
+                })
+                agent_worktree._write_registry(receipt_path, receipt)
+    receipt["state"] = "completed"
+    agent_worktree._write_registry(receipt_path, receipt)
+    return {"ok": True, "receipt": str(receipt_path), "deleted": len(receipt["deleted"]),
+            "retained": receipt["retained"], "snapshot": snapshot["snapshot"]}
+
+
 def create_rescue_snapshot(cwd: Path, destination: Path) -> dict[str, object]:
     """Preserve refs and reflog objects without writing refs in the source repo.
 
