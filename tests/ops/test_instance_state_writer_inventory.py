@@ -20,6 +20,7 @@ identifier for it -- while still never emitting the raw host path.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -319,6 +320,146 @@ def test_legacy_bootstrap_without_established_ledger_does_not_mint_binding_id(
     assert snapshot["owners"] == [
         {"channel_id": "dev", "root": str(vault.resolve())}
     ]
+
+
+def test_direct_cli_established_ledger_works_for_produce_and_validate(tmp_path):
+    """The deployment wrapper's direct helper path must load app imports."""
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    ownership = tmp_path / "ownership"
+    ownership.mkdir()
+    docker_bin = tmp_path / "bin"
+    docker_bin.mkdir()
+    container_id = "b" * 64
+    (docker_bin / "docker").write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  ps) printf '%s\\n' '" + container_id + "' ;;\n"
+        "  inspect) printf '%s\\n' '"
+        + json.dumps(
+            [
+                {
+                    "Id": container_id,
+                    "Config": {
+                        "Env": [
+                            "PKM_ENVIRONMENT=dev",
+                            "VAULT_ROOT=/app/vault",
+                        ],
+                        "Labels": {
+                            "com.docker.compose.project": "pkm-dev",
+                            "com.docker.compose.service": "api",
+                        },
+                    },
+                    "Mounts": [
+                        {
+                            "Type": "bind",
+                            "Source": str(vault),
+                            "Destination": "/app/vault",
+                            "RW": True,
+                        }
+                    ],
+                }
+            ]
+        ).replace("'", "'\\''")
+        + "' ;;\n"
+        "  cp) printf '%s\\n' 'no such file' >&2; exit 1 ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (docker_bin / "docker").chmod(0o755)
+
+    from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    ledger = OwnershipLedger(ownership)
+    ledger.bootstrap_legacy_owners(
+        [
+            LegacyOwner(
+                "dev",
+                "binding-direct-cli",
+                vault,
+                *writer_inventory._owner_identity_material(
+                    vault, domain="dev", source="docker_env"
+                ),
+            )
+        ],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment.update(
+        {
+            "PATH": f"{docker_bin}{os.pathsep}{environment['PATH']}",
+            "HOME": str(tmp_path),
+            "XDG_DATA_HOME": str(tmp_path / "xdg"),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership),
+        }
+    )
+    script = str(Path(writer_inventory.__file__).resolve())
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    inventory = tmp_path / "legacy-owners.json"
+    produced = subprocess.run(
+        [
+            sys.executable,
+            script,
+            "produce-legacy-owners",
+            "--repo-root",
+            str(repo_root),
+            "--active-channel",
+            "dev",
+            "--output",
+            str(inventory),
+            "--host-global-root",
+            str(ownership),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert produced.returncode == 0, produced.stderr
+    assert json.loads(inventory.read_text(encoding="utf-8"))["owners"] == [
+        {
+            "channel_id": "dev",
+            "root": str(vault.resolve()),
+            "vault_binding_id": "binding-direct-cli",
+        }
+    ]
+
+    validated = tmp_path / "validated-owners.json"
+    validation = subprocess.run(
+        [
+            sys.executable,
+            script,
+            "validate-legacy-owners",
+            "--repo-root",
+            str(repo_root),
+            "--active-channel",
+            "dev",
+            "--inventory",
+            str(inventory),
+            "--output",
+            str(validated),
+            "--host-global-root",
+            str(ownership),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert validation.returncode == 0, validation.stderr
+    assert json.loads(validated.read_text(encoding="utf-8"))["owners"] == json.loads(
+        inventory.read_text(encoding="utf-8")
+    )["owners"]
 
 
 # --- Issue #4434: macOS ps row parsing --------------------------------------

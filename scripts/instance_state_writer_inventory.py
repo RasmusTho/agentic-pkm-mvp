@@ -25,6 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+# The deployment wrapper executes this file directly.  In that mode Python
+# puts scripts/ on sys.path, not the repository root, while established-ledger
+# enrichment imports the app package below.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 try:
     from scripts.compose_env import compose_env_value as _compose_env_value
 except ModuleNotFoundError:
