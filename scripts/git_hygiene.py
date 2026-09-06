@@ -3603,18 +3603,20 @@ def _retire_inactive_ref_phase(
     """
     from scripts import agent_worktree
 
-    if kind not in {"legacy_archive", "local_branch"}:
+    if kind not in {"legacy_archive", "local_branch", "auxiliary_ref"}:
         raise ValueError("ref_retirement_kind_invalid")
     if not owner_discard.strip() or not targets or not 1 <= batch_size <= 25:
         raise ValueError("explicit_archive_disposition_required")
     for ref, sha in targets.items():
-        allowed = (
-            bool(re.fullmatch(r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+", ref))
-            if kind == "legacy_archive" else (
-                ref.startswith("refs/heads/")
-                and ref.removeprefix("refs/heads/") not in DEFAULT_PROTECTED_BRANCHES
-            )
-        )
+        if kind == "legacy_archive":
+            allowed = bool(re.fullmatch(r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+", ref))
+        elif kind == "auxiliary_ref":
+            allowed = bool(re.fullmatch(
+                r"refs/(?:codex/snapshots/[0-9a-f]{40}|codex/pr-[0-9]+-merge|"
+                r"(?:review|tmp|recovered-stash|closure-a|codex-tmp|merge_validation|pr)/.+|pr_862_head)", ref,
+            ))
+        else:
+            allowed = ref.startswith("refs/heads/") and ref.removeprefix("refs/heads/") not in DEFAULT_PROTECTED_BRANCHES
         if not allowed or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
             raise ValueError("legacy_archive_exact_target_required" if kind == "legacy_archive"
                              else "local_branch_exact_target_required")
@@ -3626,7 +3628,7 @@ def _retire_inactive_ref_phase(
             raise RuntimeError("archive_target_drift")
     identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
     pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
-    special_protected = _read_protected_targets(identity, cwd=cwd) if kind == "local_branch" else None
+    special_protected = _read_protected_targets(identity, cwd=cwd) if kind != "legacy_archive" else None
     snapshot = create_rescue_snapshot(cwd, snapshot_directory)
     captured = dict(line.split(" ", 1)[::-1] for line in snapshot["inventory"]["refs"].splitlines())
     if any(captured.get(ref) != sha for ref, sha in targets.items()):
@@ -3697,7 +3699,13 @@ def _retire_inactive_ref_phase(
                                for number in re.findall(r"(?:^|[-_/])(\d+)(?=$|[-_/])", branch)
                                for resource in resources)
                     )
-                    if branch_protected or sha in protected or any(ref in resource or sha in resource for resource in resources):
+                    auxiliary_protected = kind == "auxiliary_ref" and (
+                        any_live_lease
+                        or (special_protected is not None and sha == special_protected.pull_sha)
+                        or any(re.search(r"(?:^|[-_/])(?:pr)?" + number + r"(?:$|[-_/])", ref)
+                               for number in [*(key.split(":", 1)[0] for key in pr_heads), str(special_protected.issue_number)])
+                    )
+                    if branch_protected or auxiliary_protected or sha in protected or any(ref in resource or sha in resource for resource in resources):
                         receipt["retained"][ref] = "live_or_resumable_activity"
                     else:
                         selected[ref] = sha
@@ -3754,6 +3762,16 @@ def retire_legacy_archive_refs(
     )
 
 
+def retire_inactive_auxiliary_refs(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    return _retire_inactive_ref_phase(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="auxiliary_ref",
+    )
+
+
 def retire_inactive_local_branches(
     cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
     owner_discard: str, batch_size: int = 25,
@@ -3775,7 +3793,23 @@ def _closed_retirement_pr(cwd: Path, identity: RepositoryIdentity, target: Mappi
             or not isinstance(head.get("repo"), dict)
             or head["repo"].get("id") != identity.database_id):
         raise RuntimeError("remote_retirement_pr_authority_invalid")
-    return dict(payload)
+    if (not isinstance(payload.get("merged"), bool)
+            or (payload["merged"] is True) != (payload.get("merged_at") is not None)):
+        raise RuntimeError("remote_retirement_closure_invalid")
+    try:
+        _parse_dispatcher_time(payload.get("closed_at"))
+        if payload["merged"]:
+            _parse_dispatcher_time(payload.get("merged_at"))
+    except (RuntimeError, TypeError, ValueError) as error:
+        raise RuntimeError("remote_retirement_closure_invalid") from error
+    # GitHub can recompute mergeability and other projections after branch
+    # deletion. Bind only disposition authority, not that transient projection.
+    return {
+        "number": payload["number"], "state": payload["state"], "draft": payload["draft"],
+        "merged": payload.get("merged"), "merged_at": payload.get("merged_at"),
+        "closed_at": payload.get("closed_at"), "head_ref": head["ref"],
+        "head_sha": head["sha"], "head_repository_id": head["repo"]["id"],
+    }
 
 
 def _restore_remote_from_rescue(cwd: Path, identity: RepositoryIdentity, ref: str, sha: str, snapshot: Mapping[str, Any]) -> None:

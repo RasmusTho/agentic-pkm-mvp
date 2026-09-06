@@ -382,3 +382,19 @@ the exact receipt identity and compensates a pending deletion before returning;
 it never resumes deletion using an old snapshot. A new phase requires a new
 snapshot. This path adds no remote archive refs and grants no new authority to
 the daily automation.
+
+## Owner-authorized retirement of inactive local auxiliary refs
+
+`retire_inactive_auxiliary_refs` reuses the verified-snapshot and serial CAS/readback
+mechanism with a closed namespace allowlist: `refs/codex/snapshots/<40-hex>`,
+`refs/codex/pr-<number>-merge`, and children of `refs/review`, `refs/tmp`,
+`refs/recovered-stash`, `refs/closure-a`, `refs/codex-tmp`, `refs/merge_validation`
+and `refs/pr`, plus the historical exact ref `refs/pr_862_head`. Callers must
+supply every exact ref and expected SHA; no glob deletion is performed.
+
+Explicit owner disposition is mandatory. Every linked HEAD, current open-PR head,
+review ref naming an open PR, designated protected SHA/Issue, direct resumable
+reference and any live dispatcher lease preserves the target. Tags, ordinary
+branches, remote refs and modern archive receipts are outside this allowlist.
+A new bundle preserves exact objects before retirement; generation drift stops
+progress. This is an operator phase and does not change the automation.

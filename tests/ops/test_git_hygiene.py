@@ -5550,6 +5550,7 @@ def _remote_retirement_repo(tmp_path, monkeypatch):
     identity = git_hygiene.RepositoryIdentity(1, "RasmusTho/agentic-pkm-mvp", str(remote), str(remote))
     monkeypatch.setattr(git_hygiene, "_resolve_repository_identity", lambda *_: identity)
     payload = {"number": 10, "state": "closed", "draft": False, "merged": True,
+               "closed_at": "2026-09-01T00:00:00Z", "merged_at": "2026-09-01T00:00:00Z",
                "head": {"ref": "old", "sha": sha, "repo": {"id": 1}}}
     monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: payload)
     return repo, remote, {"ref": ref, "sha": sha, "pr": 10}, payload
@@ -5668,3 +5669,55 @@ def test_remote_retirement_recovers_pending_crash_on_retry(tmp_path, monkeypatch
         result = git_hygiene.retire_inactive_remote_branches(repo, **kwargs)
         assert result["state"] == "compensated"
     assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == (base if recreated else target["sha"])
+
+
+@pytest.mark.parametrize("ref", ["refs/tags/v1", "refs/heads/old", "refs/remotes/origin/old", "refs/archive/git-hygiene/v1/old"])
+def test_auxiliary_retirement_rejects_other_namespaces(tmp_path, ref):
+    with pytest.raises(ValueError):
+        git_hygiene.retire_inactive_auxiliary_refs(
+            tmp_path, targets={ref: "a" * 40}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+        )
+    assert not (tmp_path / "rescue").exists()
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_auxiliary_retirement_preserves_open_pr_review_ref(tmp_path, monkeypatch, active):
+    repo, _, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    ref = "refs/review/pr-5372-merge"
+    git_hygiene.run_git(["update-ref", ref, sha], repo)
+    if active:
+        monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"5372:other": "a" * 40})
+    result = git_hygiene.retire_inactive_auxiliary_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+    )
+    assert result["deleted"] == (0 if active else 1)
+    assert git_hygiene.run_git_result(["show-ref", "--verify", "--quiet", ref], repo).returncode == (0 if active else 1)
+
+
+def test_remote_retirement_ignores_mutable_mergeability_projection(tmp_path, monkeypatch):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    payload["mergeable"] = True
+    original = git_hygiene.run_git_result
+    def projection_change(args, cwd):
+        result = original(args, cwd)
+        if args[0] == "push" and args[-1] == ":refs/heads/old":
+            payload["mergeable"] = None
+            payload["updated_at"] = "2026-09-06T12:00:00Z"
+        return result
+    monkeypatch.setattr(git_hygiene, "run_git_result", projection_change)
+    result = git_hygiene.retire_inactive_remote_branches(
+        repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+    )
+    assert result["deleted"] == 1
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) is None
+
+
+@pytest.mark.parametrize("field,value", [("merged", "unknown"), ("closed_at", None), ("merged_at", None), ("merged_at", "bad")])
+def test_remote_retirement_rejects_malformed_closure(tmp_path, monkeypatch, field, value):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    payload[field] = value
+    with pytest.raises(RuntimeError, match="closure_invalid"):
+        git_hygiene.retire_inactive_remote_branches(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == target["sha"]
