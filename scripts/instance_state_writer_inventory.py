@@ -1150,6 +1150,102 @@ def _normalize_legacy_owners(
     )
 
 
+def _enrich_established_owner_bindings(
+    owners: list[LegacyOwnerRecord],
+    owner_identities: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Attach authenticated binding IDs when the host ledger is established.
+
+    The first legacy bootstrap intentionally runs before a host ledger exists,
+    so it must remain able to emit path/identity-only candidates.  Once the
+    protected ledger exists, however, an established registration's remount
+    receipt must carry the exact binding ID already authenticated by that
+    ledger.  Resolve only through the ledger's HMAC identity seam; never mint
+    an ID from a path or copy one from caller-controlled environment.
+    """
+
+    ownership_root_text = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", "").strip()
+    owner_rows = [
+        {"channel_id": record.channel_id, "root": record.root}
+        for record in owners
+    ]
+    if not ownership_root_text:
+        return owner_rows, owner_identities
+    ownership_root = Path(ownership_root_text).expanduser().resolve(strict=False)
+    ledger_path = ownership_root / "ownership-ledger.json"
+    key_path = ownership_root / "ownership-key.json"
+    if not ledger_path.exists() and not key_path.exists():
+        return owner_rows, owner_identities
+    if not ledger_path.is_file() or not key_path.is_file():
+        raise InventoryError("established ownership ledger artifacts are incomplete")
+
+    try:
+        from app.instance.ownership_ledger import LegacyOwner, LedgerError, OwnershipLedger
+
+        identity_by_owner = {
+            (str(item.get("channel_id") or ""), str(item.get("root") or "")): item
+            for item in owner_identities
+            if isinstance(item, dict)
+        }
+        candidates: list[LegacyOwner] = []
+        for record in owners:
+            identity = identity_by_owner.get((record.channel_id, record.root))
+            if identity is None:
+                raise InventoryError("legacy owner identity enrichment is incomplete")
+            candidates.append(
+                LegacyOwner(
+                    record.channel_id,
+                    "",
+                    Path(record.root),
+                    str(identity.get("identity") or "") or None,
+                    tuple(str(value) for value in identity.get("ancestor_identities", [])),
+                    tuple(
+                        str(value)
+                        for value in identity.get("legacy_ancestor_identities", [])
+                    ),
+                )
+            )
+        resolved = OwnershipLedger(ownership_root).resolve_live_owner_bindings(
+            candidates,
+            skip_unadopted=True,
+        )
+    except InventoryError:
+        raise
+    except LedgerError as exc:
+        raise InventoryError(
+            "established ownership ledger could not authenticate owner bindings"
+        ) from exc
+
+    binding_by_owner = {
+        (owner.channel_id, str(owner.root.expanduser().resolve(strict=False))): owner.vault_binding_id
+        for owner in resolved
+        if owner.vault_binding_id
+    }
+    enriched_rows: list[dict[str, object]] = []
+    for row in owner_rows:
+        binding_id = binding_by_owner.get(
+            (
+                str(row["channel_id"]),
+                str(Path(str(row["root"])).expanduser().resolve(strict=False)),
+            )
+        )
+        if binding_id:
+            row = row | {"vault_binding_id": binding_id}
+        enriched_rows.append(row)
+
+    enriched_identities: list[dict[str, object]] = []
+    for identity in owner_identities:
+        key = (
+            str(identity.get("channel_id") or ""),
+            str(Path(str(identity.get("root") or "")).expanduser().resolve(strict=False)),
+        )
+        binding_id = binding_by_owner.get(key)
+        enriched_identities.append(
+            identity | ({"vault_binding_id": binding_id} if binding_id else {})
+        )
+    return enriched_rows, enriched_identities
+
+
 def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str, object]:
     if active_channel not in {"dev", "test", "prod"}:
         raise InventoryError("legacy owner active channel is invalid")
@@ -1158,11 +1254,9 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
         repo_root, active_channel=active_channel
     )
     owners, owner_identities = _normalize_legacy_owners(docker_owners + config_owners)
-    # `source` is diagnostic-only context for InventoryError messages; keep the
-    # persisted receipt schema unchanged so existing consumers are unaffected.
-    owner_rows = [
-        {"channel_id": record.channel_id, "root": record.root} for record in owners
-    ]
+    owner_rows, owner_identities = _enrich_established_owner_bindings(
+        owners, owner_identities
+    )
     source_evidence = {
         "docker": docker_fingerprints,
         "config": config_fingerprints,

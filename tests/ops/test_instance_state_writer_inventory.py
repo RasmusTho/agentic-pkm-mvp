@@ -229,6 +229,98 @@ def test_produce_legacy_owners_still_detects_real_race(
     assert not output.exists()
 
 
+def test_established_ledger_enriches_owner_receipt_with_binding_ids(
+    tmp_path, monkeypatch
+):
+    """An established host ledger supplies exact IDs for remount admission."""
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    ownership = tmp_path / "ownership"
+    ownership.mkdir()
+    record = writer_inventory.LegacyOwnerRecord(
+        "dev", str(vault), source="config_env"
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_docker_legacy_owner_sources",
+        lambda: ([record], ["docker:stable"]),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_config_legacy_owner_sources",
+        lambda repo_root, *, active_channel: ([], ["config:stable"]),
+    )
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", str(ownership))
+
+    from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    ledger = OwnershipLedger(ownership)
+    ledger.bootstrap_legacy_owners(
+        [
+            LegacyOwner(
+                "dev",
+                "binding-established",
+                vault,
+                *writer_inventory._owner_identity_material(
+                    vault, domain="dev", source="config_env"
+                ),
+            )
+        ],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    snapshot = writer_inventory._legacy_owner_snapshot(
+        Path.cwd(), active_channel="dev"
+    )
+
+    assert snapshot["owners"] == [
+        {
+            "channel_id": "dev",
+            "root": str(vault.resolve()),
+            "vault_binding_id": "binding-established",
+        }
+    ]
+    assert snapshot["source_evidence"]["owners"] == snapshot["owners"]
+    assert snapshot["source_evidence"]["owner_identities"][0][
+        "vault_binding_id"
+    ] == "binding-established"
+
+
+def test_legacy_bootstrap_without_established_ledger_does_not_mint_binding_id(
+    tmp_path, monkeypatch
+):
+    """A fresh legacy host remains a binding-less bootstrap candidate."""
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    record = writer_inventory.LegacyOwnerRecord(
+        "dev", str(vault), source="config_env"
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_docker_legacy_owner_sources",
+        lambda: ([record], ["docker:stable"]),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_config_legacy_owner_sources",
+        lambda repo_root, *, active_channel: ([], ["config:stable"]),
+    )
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", str(tmp_path / "fresh"))
+
+    snapshot = writer_inventory._legacy_owner_snapshot(
+        Path.cwd(), active_channel="dev"
+    )
+
+    assert snapshot["owners"] == [
+        {"channel_id": "dev", "root": str(vault.resolve())}
+    ]
+
+
 # --- Issue #4434: macOS ps row parsing --------------------------------------
 
 LSTART = "Thu Jul 30 16:59:37 2026"
