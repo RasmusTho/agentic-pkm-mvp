@@ -178,6 +178,10 @@ def _fake_compose_harness(tmp_path: Path, extra_env: dict[str, str]) -> tuple[su
         "  if [ \"${1:-}\" = config ] && [ -n \"${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}\" ]; then\n"
         "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
         "  fi\n"
+        "  if [[ \" $* \" == *' scalar-rollback-roll-forward '* ]] && [ \"${MUTATE_OWNER_INVENTORY_AFTER_MVR01C:-0}\" = 1 ]; then\n"
+        "    printf '%s\\n' '{\"fixture\":\"bound-after-mvr01c\"}' > \"$INSTANCE_OWNERSHIP_HOST_STATE_DIR/legacy-owner-inventory.json\"\n"
+        "    chmod 600 \"$INSTANCE_OWNERSHIP_HOST_STATE_DIR/legacy-owner-inventory.json\"\n"
+        "  fi\n"
         "  if [[ \" $* \" == *' settings-rebind-install-dormant '* ]] && [ \"${FAIL_SETTINGS_REBIND_INSTALL:-0}\" = 1 ]; then return 74; fi\n"
         "  return 0\n"
         "}\n"
@@ -248,6 +252,35 @@ def test_mvr05_floor_receives_digest_of_delivered_owner_inventory(
         if "mvr05-record-floor" in event
     ]
 
+    assert len(mvr05_events) == 1
+    assert f"--inventory-sha256 {expected_digest}" in mvr05_events[0]
+
+
+def test_mvr05_floor_receives_digest_after_mvr01c_binds_owner_inventory(
+    tmp_path: Path,
+) -> None:
+    """MVR-05 must hash the receipt after every stopped-window binder."""
+
+    result, ownership_root = _fake_compose_harness(
+        tmp_path,
+        {
+            "MVR01C_ROLL_FORWARD_LEGACY_PATH": "/app/scalar-rollback/app-local.md",
+            "MUTATE_OWNER_INVENTORY_AFTER_MVR01C": "1",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+    expected_digest = hashlib.sha256(
+        (ownership_root / "legacy-owner-inventory.json").read_bytes()
+    ).hexdigest()
+    events = (tmp_path / "events.log").read_text(encoding="utf-8")
+
+    assert "scalar-rollback-roll-forward" in events
+    mvr05_events = [
+        event
+        for event in events.splitlines()
+        if "mvr05-record-floor" in event
+    ]
     assert len(mvr05_events) == 1
     assert f"--inventory-sha256 {expected_digest}" in mvr05_events[0]
 

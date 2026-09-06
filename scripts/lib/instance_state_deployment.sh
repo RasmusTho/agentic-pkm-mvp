@@ -652,27 +652,6 @@ prepare_instance_state_deployment() {
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
-  if owner_inventory_sha256="$(
-    "${PYTHON:-python3}" - "${owner_inventory_host_target_path}" <<'PY'
-import hashlib
-import sys
-
-digest = hashlib.sha256()
-with open(sys.argv[1], "rb") as source:
-    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-        digest.update(chunk)
-print(digest.hexdigest())
-PY
-  )"; then
-    :
-  else
-    inventory_rc=$?
-    _release_abandoned_instance_state_deployment_lease \
-      "${compose_function}" "${channel}" "${runtime_user}" \
-      "${controller_pid}" "${controller_start_token}"
-    return "${inventory_rc}"
-  fi
-
   # Explicit MVR-03 authority transition. One runtime process records the floor
   # and then bootstraps the role, keeping the attempt-local floor receipt out of
   # caller-controlled flags. It consumes MVR-01B's proved lease, quiescence proof,
@@ -799,6 +778,28 @@ PY
   # MVR-05A8: after every fallible stopped-window precondition above has
   # completed, seal scalar rollback immediately before finalization can permit
   # the first binding-keyed migration or restarted runtime write.
+  # MVR-01C may bind the owner receipt to the same proof, so hash only after
+  # every stopped-window consumer that can replace those receipt bytes.
+  if owner_inventory_sha256="$(
+    "${PYTHON:-python3}" - "${owner_inventory_host_target_path}" <<'PY'
+import hashlib
+import sys
+
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as source:
+    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+  )"; then
+    :
+  else
+    inventory_rc=$?
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime mvr05-record-floor \
       --channel "${channel}" \
