@@ -339,7 +339,7 @@ class OwnershipLedger:
         """
 
         self._assert_existing_artifacts()
-        with self._locked():
+        with self._locked(allow_legacy_rotation=allow_legacy):
             key = self._load_or_create_key_locked(allow_create=False)
             current = self._load_or_create_ledger_locked(
                 key,
@@ -1630,7 +1630,12 @@ class OwnershipLedger:
         return replace(current, **changes)
 
     @contextmanager
-    def _locked(self, *, recover_rotation: bool = True) -> Iterator[None]:
+    def _locked(
+        self,
+        *,
+        recover_rotation: bool = True,
+        allow_legacy_rotation: bool = False,
+    ) -> Iterator[None]:
         _ensure_private_directory(self.root)
         descriptor = os.open(
             self.lock_path,
@@ -1642,7 +1647,9 @@ class OwnershipLedger:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 if recover_rotation:
-                    self._recover_rotation_locked()
+                    self._recover_rotation_locked(
+                        allow_legacy=allow_legacy_rotation
+                    )
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -2354,7 +2361,7 @@ class OwnershipLedger:
             "legacy_bootstrap_complete": current.legacy_bootstrap_complete,
         }
 
-    def _recover_rotation_locked(self) -> None:
+    def _recover_rotation_locked(self, *, allow_legacy: bool = False) -> None:
         if not self.rotation_path.exists():
             return
         _assert_private_file(self.rotation_path)
@@ -2386,6 +2393,8 @@ class OwnershipLedger:
         ) as exc:
             raise LedgerKeyError("ownership key rotation journal is invalid") from exc
         if current.schema == LEGACY_LEDGER_SCHEMA:
+            if allow_legacy:
+                return
             raise LedgerKeyError(
                 "legacy ownership ledger requires fenced registry authority"
             )
