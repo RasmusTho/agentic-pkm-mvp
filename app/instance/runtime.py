@@ -2851,12 +2851,22 @@ def _prepare_legacy_registry_for_mvr05_floor(
         if bound_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
         if owners is None:
+            # An established v1 ledger can outlive the legacy app-local file.
+            # Bind the host-produced owner receipt before loading it with the
+            # proof, so the no-legacy-file recovery path has the same
+            # authenticated handoff as a dormant legacy import.
+            bound_proof = _bind_legacy_owner_inventory_to_proof(
+                inventory_path=inventory_path,
+                quiescence_proof=bound_proof,
+                channel=channel,
+                host_global_root=ledger.root,
+                expected_sha256=inventory_sha256,
+            )
             owners = _load_legacy_owner_inventory(
                 inventory_path,
                 registry=snapshot,
                 channel=channel,
                 quiescence_proof=bound_proof,
-                expected_sha256=inventory_sha256,
             )
         _converge_authenticated_legacy_ledger(
             channel=channel,
