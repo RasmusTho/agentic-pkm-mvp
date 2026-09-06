@@ -133,6 +133,45 @@ def test_builder_execution_profiles_cover_supported_capability_tiers() -> None:
             _assert_mapping(census, profile)
 
 
+def test_openai_census_declares_gpt_6_astra_without_default_change() -> None:
+    census = _census()
+    openai = census.provider("openai")
+    astra = next(model for model in openai.models if model.id == "gpt-6-astra")
+
+    assert astra.effective_identity == "openai/gpt-6-astra"
+    assert astra.capabilities.structured_output is True
+    assert astra.capabilities.native_tools is True
+    assert astra.capabilities.system_prompt_channel is True
+    assert all(
+        mapping.model != "gpt-6-astra"
+        for channel in census.runtime_channels.builder_execution.values()
+        for mapping in channel.values()
+    )
+
+
+def test_gpt_6_astra_does_not_change_runtime_channel_defaults() -> None:
+    census = _census()
+
+    assert {
+        (channel, tier, profile.model)
+        for channel, profiles in census.runtime_channels.builder_execution.items()
+        for tier, profile in profiles.items()
+    } == {
+        ("dev", "spark", "gpt-5.3-codex-spark"),
+        ("dev", "luna", "gpt-5.6-luna"),
+        ("dev", "terra", "gpt-5.6-terra"),
+        ("dev", "sol", "gpt-5.6-sol"),
+        ("test", "spark", "gpt-5.3-codex-spark"),
+        ("test", "luna", "gpt-5.6-luna"),
+        ("test", "terra", "gpt-5.6-terra"),
+        ("test", "sol", "gpt-5.6-sol"),
+        ("prod", "spark", "gpt-5.3-codex-spark"),
+        ("prod", "luna", "gpt-5.6-luna"),
+        ("prod", "terra", "gpt-5.6-terra"),
+        ("prod", "sol", "gpt-5.6-sol"),
+    }
+
+
 def test_model_inquiry_profiles_bind_configured_capability() -> None:
     census = _census()
 

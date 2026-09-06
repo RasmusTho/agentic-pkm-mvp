@@ -6,6 +6,9 @@ models:
   - id: openai.chat.gpt_5_4
     path: docs/settings/models/openai.chat.gpt_5_4.yaml
     status: active
+  - id: openai.chat.gpt_6_astra
+    path: docs/settings/models/openai.chat.gpt_6_astra.yaml
+    status: active
   - id: openai.chat.gpt_4_1_mini
     path: docs/settings/models/openai.chat.gpt_4_1_mini.yaml
     status: active

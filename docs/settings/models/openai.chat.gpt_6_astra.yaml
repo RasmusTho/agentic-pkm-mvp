@@ -1,0 +1,21 @@
+id: openai.chat.gpt_6_astra
+status: active
+kind: chat
+provider: openai
+model: gpt-6-astra
+notes: Optional GPT-6 Astra candidate; not a channel default or Builder capability-tier mapping.
+pricing:
+  standard_input_usd_per_million_tokens: 10.0
+  standard_output_usd_per_million_tokens: 50.0
+  fast_mode_multiplier: 2.0
+  source_urls:
+    - https://openai.com/index/gpt-6-astra/
+    - https://artificialanalysis.ai/models/releases/gpt-6-astra
+  retrieved_on: 2026-09-06
+  artificial_analysis_cost_per_intelligence_index_task_usd:
+    low: 0.63
+    medium: 1.16
+    high: 1.41
+    non_reasoning: 1.42
+    xhigh: 1.85
+    max: 2.57
