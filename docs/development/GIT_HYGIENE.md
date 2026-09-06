@@ -179,3 +179,295 @@ Update it whenever the preflight inputs, janitor preservation rules, cleanup
 authority, or command behavior changes. Focused executable coverage lives in
 `tests/ops/test_git_hygiene.py`; branch/worktree publication callers also use
 `scripts/agent_workspace_preflight.sh`.
+
+
+## Rescue-backed serial maintenance policy
+
+Each destructive phase starts with a new, private rescue snapshot. The snapshot
+is recovery evidence, never PR, lease, lifecycle, or discard authority. Run:
+
+```bash
+python3 scripts/git_hygiene.py --cwd /absolute/repository rescue-snapshot \
+  --destination /absolute/new-timestamped-rescue-directory
+```
+
+The command refuses an existing destination, captures refs, worktrees and stash
+identities, includes reflog objects in the bundle, runs `git bundle verify`, and
+unbundles into an empty repository to check all captured ref, worktree HEAD and
+stash objects. A second inventory must match before `manifest.json` is written.
+Snapshot failure leaves incomplete files for diagnosis and forbids cleanup. A
+bundle does not preserve dirty working files, untracked files, Git configuration,
+leases or lifecycle authority. Dirty or unavailable targets must remain untouched.
+Save fresh GitHub, dispatcher and lifecycle readbacks alongside the manifest;
+those observations must be refreshed again at each mutation boundary.
+
+Recovery is additive: verify the bundle checksum against the manifest, unbundle
+into a new empty repository, and recover the required object there first. Use an
+expected-absence ref creation when restoring an absent source ref. Never overwrite
+an advanced ref, recreate a worktree at a reused path, or import historical lease
+or lifecycle state as current authority. Older stashes are recoverable by the SHA
+in the manifest; positional stash selectors are not stable identities.
+
+The public CLI rejects apply without both exact selectors before reading evidence
+or invoking cleanup. Local maintenance uses only `agent_worktree.py janitor --mode apply` with both
+`--target-worktree` and `--target-generation`. Each phase targets one exact
+registered identity, including a removed-generation branch continuation. Preserve
+missing generation, dirty/unavailable state, unknown merge state, active lease,
+open/draft PR, protected branch and current/root worktree. Require a fresh matching
+PR head and live dispatcher readback; rereading an old JSON file is insufficient.
+Stop on drift, take a new readback after each phase, and do not use broad apply,
+`branch -D`, mass pruning or directory removal. The low-level compatibility API
+is not a replacement for these operational gates.
+
+The separate remote/archive/stash policy is:
+
+| Artifact | Allowed disposition | Additional authority |
+| --- | --- | --- |
+| Remote branch | Existing bounded `targeted_remote_cleanup`, only after the caller proves a fresh verified rescue bundle | Its authenticated PR/body, dispatcher, lifecycle, archive CAS, final readback and compensation contract above remains mandatory. |
+| Archive/rescue ref | Retain by default | Deletion requires an explicit object-bound owner discard decision, successor/retention disposition, verified independent rescue coverage, fresh authority, expected-old-SHA CAS and post-effect readback. The bounded legacy local archive entrypoint below is available; modern remote archive receipts remain retained. |
+| Stash | Retain by default | Deletion requires an explicit owner decision for the exact stash SHA and contents, verified independent rescue coverage, and exclusive coordination with stash writers. Age, message markers, or positional indices never authorize deletion. Only the exact complete-stack entrypoint below is enabled; mixed active/inactive stacks remain retained. |
+
+The remote function does not itself create or validate the rescue bundle. This is
+an external caller precondition: absent or stale proof means retain and do not
+invoke the function.
+
+These are separate maintenance phases. Missing discard authority means retain,
+not permission to infer low value. Remote merged-branch and archive/stash deletion
+extensions require their own bounded implementation and verification before use.
+The daily automation remains unchanged and retains its snapshot, lease,
+exact-target and stop-on-drift gates.
+
+## Bounded repository probes
+
+`status` and `merge-base` probes have a ten-second subprocess deadline. Status
+failure or timeout yields unavailable worktree state. Merge-base exit codes other
+than 0/1, launch failure or timeout yield unknown merge state, with no fallback to
+PR-based deletion eligibility. Planning continues with the remaining candidates.
+Preflight fails closed when base ancestry is unavailable. Focused coverage lives
+in `tests/ops/test_git_hygiene.py`, including recovery of older stashes, snapshot
+drift, stale lifecycle bindings and probe failure with closed or merged PRs.
+
+
+## Explicit retirement of inactive legacy archives
+
+An explicit owner decision may prefer retaining an independent verified bundle
+and discarding inactive Git artifacts over spending development effort integrating
+old work. That decision does not authorize deleting active work or protected refs.
+`retire_legacy_archive_refs` implements only the first bounded phase: caller-supplied
+exact `refs/archive/git-hygiene/*` names and expected object IDs. No branch, stash,
+worktree, remote ref, modern archive-receipt namespace or wildcard is accepted.
+The nonempty owner decision is recorded in the receipt; callers must possess actual
+user authority, not synthesize it from the argument's presence.
+
+The phase creates its own fresh verified rescue snapshot and requires every target
+to match the captured manifest. A missing lifecycle registry, unknown activity
+shape, source SHA drift or GitHub failure refuses progress. Each batch contains at
+most 25 named refs and uses an atomic expected-old-SHA Git ref transaction. GitHub
+open-PR heads, every linked worktree HEAD (including stale/unregistered paths), live dispatcher resource leases and
+direct artifact references in resumable dispatcher tasks protect targets. The
+canonical dispatcher writer reservation is acquired before the lifecycle registry
+lock. Fresh authority is read before every batch; open-PR state is also reread
+before releasing the fences after deletion. External drift triggers an atomic
+expected-absence restore of the just-deleted batch and stops the phase. It never
+overwrites a racing recreated ref. Failed compensation records `recovery_required`
+and the exact affected refs for additive recovery from the independent bundle.
+
+A private durable `retirement.json` records the explicit decision, exact targets,
+verified snapshot path, retained artifacts, completed batches and authority digests.
+A crash may leave a prepared receipt and absent refs: preserve that receipt and the
+bundle, reconcile exact live refs before any retry, and restore only absent refs
+with expected-absence creation if recovery is required. Never infer completion
+from absence. The receipt and independent bundle replace the redundant local
+archive ref as recovery evidence; they do not replace live lifecycle authority.
+The daily automation is unchanged and cannot infer this explicit owner decision.
+
+
+## Explicit retirement of a frozen inactive stash stack
+
+`retire_inactive_stash_stack` accepts the exact ordered SHA list of one complete
+stash stack plus the explicit owner discard decision. It creates and verifies a
+new independent rescue snapshot, verifies every stash object is covered, and saves
+the raw reflog with its SHA256. Current open-PR branches, live lifecycle branches,
+linked worktree HEADs and explicit live/resumable resource bindings preserve the
+whole stack. It never applies or merges old changes into the current checkout.
+
+Deletion is one native Git expected-old-OID ref transaction for `refs/stash`.
+A command-scoped private `reference-transaction` prepared hook verifies the exact
+single delete and the frozen raw reflog digest while Git holds the ref lock.
+Changed top, reordered/edited reflog or concurrent additions therefore abort before
+commit. This replaces positional `stash drop` and blanket `stash clear`; the
+operator selects an exact immutable stack and the hook verifies its identity.
+The command does not change persistent repository configuration or hook files.
+
+The dispatcher writer reservation and lifecycle lock cover the final activity
+check and Git transaction. After commit, both ref and reflog must be absent and
+GitHub activity must still agree before the durable receipt becomes completed.
+If a new writer creates a stash after commit, preserve the new stack and record
+`recovery_required`; never delete it or overwrite its reflog with historical data.
+The independent bundle and raw reflog remain retained for additive recovery.
+This owner-authorized entrypoint does not change the daily automation's policy.
+
+
+## Owner-authorized retirement of inactive local branches
+
+When the owner explicitly chooses to discard inactive work rather than integrate
+it, `retire_inactive_local_branches` accepts exact `refs/heads/*` and expected SHAs.
+This is a separate operator disposition path, not a relaxation of automatic
+janitor eligibility. It creates a fresh verified bundle and uses the same serial
+expected-old-SHA transactions and compensation as legacy archive retirement.
+No `branch -D`, merge, reset, checkout switch or worktree removal is performed.
+
+The source ref must be neither protected nor checked out anywhere. Current open
+PR branches, linked worktree HEADs, live registrations, branch/Issue/worktree-path
+leases (including historical path bindings), and the designated protected targets
+remain retained. A complete locked lifecycle snapshot is frozen and reread before
+every batch; any generation/record drift stops progress. Relevant current/prior
+bindings must pass the canonical lifecycle record validator; malformed generations
+remain retained. This operator path also retains all branches while any canonical
+dispatcher lease is live. Missing historical branch
+bindings are recorded as absent, never reconstructed or fabricated. For a branch
+with no checkout, this explicit owner discard decision plus frozen ref identity
+and live inactivity evidence supplies disposition authority; absence alone never
+authorizes automatic cleanup. Existing worktrees still require their separate
+identity, generation, cleanliness and activity checks.
+
+The durable receipt captures the owner decision and verified snapshot for every
+exact branch, including unmerged branches. Its recovery path is additive object
+recovery from the bundle, not an obligation to resolve old merge conflicts. This
+operator path does not change or grant authority to the daily automation.
+
+## Owner-authorized retirement of registered inactive worktrees
+
+`retire_inactive_worktrees` accepts up to 25 exact path, branch, HEAD and existing
+lifecycle-generation tuples and an explicit owner decision to discard inactive
+work without integration. A new verified bundle covers the entire phase. Each
+checkout is removed serially using `git worktree remove` without force, with fresh
+GitHub state, canonical dispatcher serialization, and the existing lifecycle
+pending/removal guard. A known unmerged HEAD may be retired under this decision;
+a timed-out or invalid merge probe remains a stop. The branch itself remains for
+a separate branch-retirement phase.
+
+Root/current/protected checkouts, open PRs, live leases, directly referenced
+resumable tasks, dirty or unavailable checkouts, locks and invalid, missing or
+changed generations remain protected. This path does not register old worktrees
+or fabricate historical ownership. After each removal, it verifies path and Git
+registration absence and rereads GitHub before continuing. Any post-effect drift
+stops the phase with recovery-required evidence; the branch and verified bundle
+retain the exact HEAD, and recovery must never overwrite a recreated path.
+The daily automation does not inherit this explicit owner disposition.
+
+## Owner-authorized retirement of closed-PR remote heads
+
+`retire_inactive_remote_branches` is a separate explicit-disposition entrypoint
+for up to 500 exact ref/SHA/PR tuples. It accepts closed PRs, including merged PRs,
+only when the authenticated head repository, ref and SHA match. Open/draft PRs,
+protected heads, checked-out or live lifecycle bindings, malformed relevant
+generations, resumable references and any live canonical dispatcher lease remain
+retained. Remote heads without a matching closed PR are outside this policy.
+The existing `targeted_remote_cleanup` contract remains unchanged.
+
+A new independent bundle must contain every exact target SHA before any effect.
+The phase records the repository identity, bundle checksum and exact disposition
+in its own `remote_owner_retirement.v1` receipt. Each remote deletion is a separate
+serial batch using expected-old-SHA `--force-with-lease` against the authenticated
+literal push URL. Canonical dispatcher and lifecycle locks remain held through
+fresh PR, repository, protected-target and open-head checks, deletion and readback.
+The complete lifecycle snapshot must stay unchanged throughout the phase.
+
+On post-delete drift, compensation verifies the bundle checksum, unbundles into a
+new temporary bare repository and restores only an absent remote source with
+expected-absence CAS. A concurrently recreated head is never overwritten. Failure
+persists `recovery_required`. A retry using the same snapshot directory validates
+the exact receipt identity and compensates a pending deletion before returning;
+it never resumes deletion using an old snapshot. A new phase requires a new
+snapshot. This path adds no remote archive refs and grants no new authority to
+the daily automation.
+
+## Owner-authorized retirement of inactive local auxiliary refs
+
+`retire_inactive_auxiliary_refs` reuses the verified-snapshot and serial CAS/readback
+mechanism with a closed namespace allowlist: `refs/codex/snapshots/<40-hex>`,
+`refs/codex/pr-<number>-merge`, and children of `refs/review`, `refs/tmp`,
+`refs/recovered-stash`, `refs/closure-a`, `refs/codex-tmp`, `refs/merge_validation`
+and `refs/pr`, plus the historical exact ref `refs/pr_862_head`. Callers must
+supply every exact ref and expected SHA; no glob deletion is performed.
+
+Explicit owner disposition is mandatory. Every linked HEAD, current open-PR head,
+review ref naming an open PR, designated protected SHA/Issue, direct resumable
+reference and any live dispatcher lease preserves the target. Tags, ordinary
+branches, remote refs and modern archive receipts are outside this allowlist.
+A new bundle preserves exact objects before retirement; generation drift stops
+progress. This is an operator phase and does not change the automation.
+
+## Owner-authorized retirement of dated remote archives
+
+`scripts.git_archive_retirement.retire_remote_legacy_archives` accepts an explicit
+owner disposition and exact ref/SHA mapping only within
+`refs/archive/git-hygiene/<YYYYMMDDTHHMMSSZ>/...`. Modern `v1` archive receipts,
+branches, tags and other namespaces are excluded. This operator grants no new
+authority to the daily automation.
+
+A single bounded fetch copies the exact refs into a temporary bare repository;
+its independently verified rescue bundle must cover every target before effects.
+The isolated bare input contains only selected copy targets and must have no stash ref.
+Repository identity, protected GitHub targets, open PR heads, canonical dispatcher
+leases and the frozen lifecycle snapshot fence serial atomic batches of at most
+25 refs. Linked HEADs, open PR SHAs, designated protected SHAs and explicit
+resumable references are retained; any live dispatcher lease preserves the batch.
+Each deletion uses expected-old-SHA leases against the authenticated push URL and
+fresh remote readback. No canonical local refs are created by the snapshot fetch.
+
+The durable phase receipt records a pending batch before its push. On drift or
+transport uncertainty, checksum-validated recovery restores only absent refs with
+expected-absence leases. A concurrently recreated ref is preserved and leaves
+`recovery_required`. Retrying the same exact receipt compensates pending work;
+it never resumes deletion under an old snapshot. A new deletion phase requires a
+new snapshot directory. Recovery retains old commits without merging them.
+
+`retire_remote_legacy_rescue_branches` is a separate explicit-disposition wrapper
+for `refs/heads/rescue/*` copies, with its own receipt schema. It uses the same
+verified snapshot, atomic CAS and recovery protocol. Both the rescue branch name
+and its original suffix are checked against checked-out branches, open PRs, live
+lifecycle bindings and resumable references. Invalid relevant lifecycle records
+and protected original names remain retained. Ordinary remote heads and modern
+archive receipts cannot enter this path.
+
+## Atomic batches for owner-authorized closed-PR remote heads
+
+`scripts.git_archive_retirement.retire_closed_pr_remote_batches` is the batched
+entrypoint for new exact ref/SHA/PR dispositions. It preserves the activity gates
+of the single-head operator and validates each selected PR's authenticated closed
+state, head identity and closure timestamps before and after each atomic batch.
+The selected contracts are saved with the pending batch. A changed PR contract
+stops progress and compensates the entire batch through expected-absence recovery.
+
+This uses the same independent temporary-bare snapshot, frozen lifecycle,
+canonical lease locks and batch readback as remote archive retirement. Exact PR
+metadata is bound into its separate `remote_closed_pr_batch_retirement.v1` receipt
+and must match on retry. Repeated global GitHub checks occur per batch; each PR
+still receives fresh individual authority checks on both sides of the effect.
+Heads without a closed PR cannot use this entrypoint. The older single-head API
+remains available for recovery of its existing receipts; it is not migrated or
+reinterpreted by this operator.
+
+## Exact retirement of absent origin tracking refs
+
+`retire_absent_remote_tracking_refs` accepts exact `refs/remotes/origin/*` and
+expected SHAs, excluding `HEAD` and protected branch names. It uses a new verified
+bundle, the existing serial local CAS/readback mechanism, and the same checked-out,
+open-PR, lifecycle, lease and protected-branch guards as local branch retirement.
+The canonical remote must prove every corresponding `refs/heads/*` absent before
+snapshot creation and before and after each deletion batch. A recreated source
+stops progress and restores only absent local tracking refs; advanced local refs
+are never overwritten. No broad fetch-prune command or remote effect is used.
+
+## Owner-authorized retirement of dated remote recovered-stash refs
+
+`retire_remote_dated_recovered_stashes` accepts exact ref/SHA targets only in
+`refs/recovered-stash/<YYYY-MM-DD>-<name>`, with no nested suffix. Its separate
+`remote_dated_recovered_stash_retirement.v1` receipt uses the same independent
+bundle, canonical lease and lifecycle fences, protected/open-PR SHA checks,
+resumable-reference preservation, atomic CAS and drift recovery as dated archive
+retirement. Live `refs/stash`, branches, archives and undated refs are excluded.
+Retry only compensates pending absence; it never continues deletion under an old
+snapshot. This operator does not authorize changes to the daily automation.
