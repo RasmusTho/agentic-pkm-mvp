@@ -1944,6 +1944,16 @@ mark_phase_ok "db_probe"
 wait_for_healthz
 if [ "$NO_VAULT_MODE" -eq 1 ]; then
   set_phase "settings_rebind_no_lifecycle"
+  # The no-vault acknowledgement is truthful only after an existing watcher
+  # has stopped. Restart the idle watcher after the durable acknowledgement.
+  if ! run_docker_compose stop watcher >/dev/null; then
+    EXIT_REASON="settings_rebind_watcher_stop_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup could not stop the existing watcher" >&2
+    exit 1
+  fi
   if ! settings_rebind_no_lifecycle_json=$(
     run_docker_compose exec -T api \
       python -m app.instance.runtime settings-rebind-no-lifecycle \

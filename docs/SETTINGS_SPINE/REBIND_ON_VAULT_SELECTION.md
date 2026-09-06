@@ -202,6 +202,8 @@ deliveries precisely because production initiation stays fail-closed until C.
 
 ### SETTINGS-05B validation
 
+- Fail-closed acknowledgement regressions: `tests/ops/test_start_full_runtime_health.py::test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement`, `tests/watcher/test_registry.py`, and `tests/integration/test_watcher_cross_process_rebind.py::test_drained_rebind_requires_resumed_old_root_scan_before_completion` cover failed watcher stop, incomplete traversal, and retry after a resumed old-root scan. These are local contract proofs, not deployment or owner acceptance.
+
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py -k "dormant or reconciler"`
 - Verify the production picker/API remains capability-sealed.
 

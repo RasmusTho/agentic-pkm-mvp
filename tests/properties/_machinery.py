@@ -458,11 +458,11 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 934): (
+    ("app/vault/manager.py", 940): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
-        "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 (site unchanged) when "
+        "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 -> 940 (site unchanged) when "
         "#3452 added conflict-quarantine receipt policy above the manager."
     ),
     ("app/vault/settings_service.py", 617): (
@@ -495,10 +495,10 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 714): (
+    ("app/vault/manager.py", 720): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
-        "Line drifted 496 -> 621 -> 623 -> 704 -> 714 (site unchanged) when #3164 added the "
+        "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
         "SETTINGS-05C added the activation seam above the manager."
     ),
