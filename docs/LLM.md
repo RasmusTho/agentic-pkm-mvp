@@ -79,7 +79,7 @@ Embeddings are currently dispatched from `app/llm/embeddings.py` (superseded as 
 | Mock (CLI/tests default) | `LLM_PROVIDER=mock`, `LLM_MOCK_RESPONSE='{"type":"note", ...}'` | No network calls. Health check skips Ollama reachability. |
 | Local Ollama | `LLM_PROVIDER=ollama`, `OLLAMA_HOST=http://127.0.0.1:11434`, `LLM_MODEL=llama3.1:8b-instruct`, `OLLAMA_EMBED_MODEL=nomic-embed-text:latest` | Pre-pull models (`ollama pull llama3.1:8b`). |
 | DeepSeek via Ollama tag | `LLM_PROVIDER=ollama`, `LLM_MODEL=deepseek-r1:8b` | Same health flow. Pull via `ollama pull deepseek-r1:8b`. |
-| OpenAI API | `LLM_PROVIDER=openai`, `OPENAI_API_KEY=...`, `LLM_MODEL=gpt-5.4-mini` | Current lower-latency default. Use `gpt-5.4` for heavier reasoning/coding flows. No built-in retry; consider guardrail breaker integration for unstable remote providers. |
+| OpenAI API | `LLM_PROVIDER=openai`, `OPENAI_API_KEY=...`, `LLM_MODEL=gpt-5.4-mini` | Current lower-latency default. Use `gpt-5.4` for heavier reasoning/coding flows. `gpt-6-astra` is an optional declared candidate, not a default; OpenAI Standard pricing is $10 per 1M input tokens and $50 per 1M output tokens, with Fast mode at 2x Standard (retrieved 2026-09-06). Artificial Analysis reports $0.63-$2.57 per Intelligence Index task across Astra effort variants; this is benchmark cost, not API billing. No built-in retry; consider guardrail breaker integration for unstable remote providers. |
 | DeepSeek API | `LLM_PROVIDER=deepseek`, `DEEPSEEK_API_KEY=...`, `LLM_MODEL=deepseek-chat` | Reuses the same timeout model as other chat providers. |
 
 ## Timeouts, retries, breakers
