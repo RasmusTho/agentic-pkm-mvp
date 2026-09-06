@@ -370,7 +370,11 @@ def test_direct_cli_established_ledger_works_for_produce_and_validate(tmp_path):
     )
     (docker_bin / "docker").chmod(0o755)
 
-    from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+    from app.instance.ownership_ledger import (
+        LEGACY_LEDGER_SCHEMA,
+        LegacyOwner,
+        OwnershipLedger,
+    )
     from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
     ledger = OwnershipLedger(ownership)
@@ -389,6 +393,9 @@ def test_direct_cli_established_ledger_works_for_produce_and_validate(tmp_path):
         writers_drained=True,
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
+    legacy_payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    legacy_payload["schema"] = LEGACY_LEDGER_SCHEMA
+    ledger.path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
 
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)

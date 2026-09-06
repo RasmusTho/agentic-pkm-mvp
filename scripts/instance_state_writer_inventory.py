@@ -1221,6 +1221,10 @@ def _enrich_established_owner_bindings(
         resolved = OwnershipLedger(ownership_root).resolve_live_owner_bindings(
             candidates,
             skip_unadopted=True,
+            # Fenced deployment convergence owns the v1 -> v2 transition;
+            # this producer must be able to read v1 long enough to emit the
+            # authenticated receipt that convergence consumes.
+            allow_legacy=True,
         )
     except InventoryError:
         raise
