@@ -306,3 +306,79 @@ If a new writer creates a stash after commit, preserve the new stack and record
 `recovery_required`; never delete it or overwrite its reflog with historical data.
 The independent bundle and raw reflog remain retained for additive recovery.
 This owner-authorized entrypoint does not change the daily automation's policy.
+
+
+## Owner-authorized retirement of inactive local branches
+
+When the owner explicitly chooses to discard inactive work rather than integrate
+it, `retire_inactive_local_branches` accepts exact `refs/heads/*` and expected SHAs.
+This is a separate operator disposition path, not a relaxation of automatic
+janitor eligibility. It creates a fresh verified bundle and uses the same serial
+expected-old-SHA transactions and compensation as legacy archive retirement.
+No `branch -D`, merge, reset, checkout switch or worktree removal is performed.
+
+The source ref must be neither protected nor checked out anywhere. Current open
+PR branches, linked worktree HEADs, live registrations, branch/Issue/worktree-path
+leases (including historical path bindings), and the designated protected targets
+remain retained. A complete locked lifecycle snapshot is frozen and reread before
+every batch; any generation/record drift stops progress. Relevant current/prior
+bindings must pass the canonical lifecycle record validator; malformed generations
+remain retained. This operator path also retains all branches while any canonical
+dispatcher lease is live. Missing historical branch
+bindings are recorded as absent, never reconstructed or fabricated. For a branch
+with no checkout, this explicit owner discard decision plus frozen ref identity
+and live inactivity evidence supplies disposition authority; absence alone never
+authorizes automatic cleanup. Existing worktrees still require their separate
+identity, generation, cleanliness and activity checks.
+
+The durable receipt captures the owner decision and verified snapshot for every
+exact branch, including unmerged branches. Its recovery path is additive object
+recovery from the bundle, not an obligation to resolve old merge conflicts. This
+operator path does not change or grant authority to the daily automation.
+
+## Owner-authorized retirement of registered inactive worktrees
+
+`retire_inactive_worktrees` accepts up to 25 exact path, branch, HEAD and existing
+lifecycle-generation tuples and an explicit owner decision to discard inactive
+work without integration. A new verified bundle covers the entire phase. Each
+checkout is removed serially using `git worktree remove` without force, with fresh
+GitHub state, canonical dispatcher serialization, and the existing lifecycle
+pending/removal guard. A known unmerged HEAD may be retired under this decision;
+a timed-out or invalid merge probe remains a stop. The branch itself remains for
+a separate branch-retirement phase.
+
+Root/current/protected checkouts, open PRs, live leases, directly referenced
+resumable tasks, dirty or unavailable checkouts, locks and invalid, missing or
+changed generations remain protected. This path does not register old worktrees
+or fabricate historical ownership. After each removal, it verifies path and Git
+registration absence and rereads GitHub before continuing. Any post-effect drift
+stops the phase with recovery-required evidence; the branch and verified bundle
+retain the exact HEAD, and recovery must never overwrite a recreated path.
+The daily automation does not inherit this explicit owner disposition.
+
+## Owner-authorized retirement of closed-PR remote heads
+
+`retire_inactive_remote_branches` is a separate explicit-disposition entrypoint
+for up to 500 exact ref/SHA/PR tuples. It accepts closed PRs, including merged PRs,
+only when the authenticated head repository, ref and SHA match. Open/draft PRs,
+protected heads, checked-out or live lifecycle bindings, malformed relevant
+generations, resumable references and any live canonical dispatcher lease remain
+retained. Remote heads without a matching closed PR are outside this policy.
+The existing `targeted_remote_cleanup` contract remains unchanged.
+
+A new independent bundle must contain every exact target SHA before any effect.
+The phase records the repository identity, bundle checksum and exact disposition
+in its own `remote_owner_retirement.v1` receipt. Each remote deletion is a separate
+serial batch using expected-old-SHA `--force-with-lease` against the authenticated
+literal push URL. Canonical dispatcher and lifecycle locks remain held through
+fresh PR, repository, protected-target and open-head checks, deletion and readback.
+The complete lifecycle snapshot must stay unchanged throughout the phase.
+
+On post-delete drift, compensation verifies the bundle checksum, unbundles into a
+new temporary bare repository and restores only an absent remote source with
+expected-absence CAS. A concurrently recreated head is never overwritten. Failure
+persists `recovery_required`. A retry using the same snapshot directory validates
+the exact receipt identity and compensates a pending deletion before returning;
+it never resumes deletion using an old snapshot. A new phase requires a new
+snapshot. This path adds no remote archive refs and grants no new authority to
+the daily automation.
