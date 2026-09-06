@@ -5735,3 +5735,57 @@ def test_rescue_snapshot_supports_archive_only_bare_repository(tmp_path, monkeyp
     git_hygiene.run_git(["update-ref", "refs/stash", sha], bare)
     with pytest.raises(RuntimeError, match="bare_rescue_stash_inventory_unsupported"):
         git_hygiene.create_rescue_snapshot(bare, tmp_path / "refused")
+
+
+@pytest.mark.parametrize("ref", ["refs/remotes/origin/main", "refs/remotes/origin/HEAD", "refs/remotes/other/old", "refs/heads/old"])
+def test_tracking_retirement_rejects_protected_or_other_refs(tmp_path, ref):
+    with pytest.raises(ValueError):
+        git_hygiene.retire_absent_remote_tracking_refs(
+            tmp_path, targets={ref: "a" * 40}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+        )
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_tracking_retirement_requires_continuing_remote_absence(tmp_path, monkeypatch, drift):
+    repo, _, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    ref = "refs/remotes/origin/old"
+    git_hygiene.run_git(["update-ref", ref, sha], repo)
+    reads = 0
+    def absent(*args):
+        nonlocal reads
+        reads += 1
+        return not (drift and reads >= 3)
+    monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", absent)
+    kwargs = dict(targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive")
+    if drift:
+        with pytest.raises(RuntimeError, match="drift"):
+            git_hygiene.retire_absent_remote_tracking_refs(repo, **kwargs)
+        assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+    else:
+        result = git_hygiene.retire_absent_remote_tracking_refs(repo, **kwargs)
+        assert result["deleted"] == 1
+
+
+def test_tracking_retirement_preserves_open_branch_even_when_tracking_sha_differs(tmp_path, monkeypatch):
+    repo, _, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    ref = "refs/remotes/origin/old"
+    git_hygiene.run_git(["update-ref", ref, sha], repo)
+    monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", lambda *_: True)
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"7:old": "a" * 40})
+    result = git_hygiene.retire_absent_remote_tracking_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+    )
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_tracking_absence_requires_real_remote_absence(tmp_path, monkeypatch):
+    repo, remote, target, _ = _remote_retirement_repo(tmp_path, monkeypatch)
+    identity = git_hygiene.RepositoryIdentity(1, "RasmusTho/agentic-pkm-mvp", str(remote), str(remote))
+    targets = {"refs/remotes/origin/old": target["sha"]}
+    assert git_hygiene._tracking_sources_absent(repo, identity, targets) is False
+    git_hygiene.run_git(["update-ref", "-d", target["ref"], target["sha"]], remote)
+    assert git_hygiene._tracking_sources_absent(repo, identity, targets) is True
+    missing = git_hygiene.RepositoryIdentity(1, identity.full_name, str(remote), str(tmp_path / "missing"))
+    with pytest.raises(RuntimeError, match="absence_unavailable"):
+        git_hygiene._tracking_sources_absent(repo, missing, targets)

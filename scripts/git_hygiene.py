@@ -3603,13 +3603,16 @@ def _retire_inactive_ref_phase(
     """
     from scripts import agent_worktree
 
-    if kind not in {"legacy_archive", "local_branch", "auxiliary_ref"}:
+    if kind not in {"legacy_archive", "local_branch", "auxiliary_ref", "remote_tracking"}:
         raise ValueError("ref_retirement_kind_invalid")
     if not owner_discard.strip() or not targets or not 1 <= batch_size <= 25:
         raise ValueError("explicit_archive_disposition_required")
     for ref, sha in targets.items():
         if kind == "legacy_archive":
             allowed = bool(re.fullmatch(r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+", ref))
+        elif kind == "remote_tracking":
+            allowed = (ref.startswith("refs/remotes/origin/")
+                       and ref.removeprefix("refs/remotes/origin/") not in DEFAULT_PROTECTED_BRANCHES | {"HEAD"})
         elif kind == "auxiliary_ref":
             allowed = bool(re.fullmatch(
                 r"refs/(?:codex/snapshots/[0-9a-f]{40}|codex/pr-[0-9]+-merge|"
@@ -3629,6 +3632,8 @@ def _retire_inactive_ref_phase(
     identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
     pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
     special_protected = _read_protected_targets(identity, cwd=cwd) if kind != "legacy_archive" else None
+    if kind == "remote_tracking" and not _tracking_sources_absent(cwd, identity, targets):
+        raise RuntimeError("remote_tracking_source_exists")
     snapshot = create_rescue_snapshot(cwd, snapshot_directory)
     captured = dict(line.split(" ", 1)[::-1] for line in snapshot["inventory"]["refs"].splitlines())
     if any(captured.get(ref) != sha for ref, sha in targets.items()):
@@ -3647,6 +3652,9 @@ def _retire_inactive_ref_phase(
     def external_changed() -> bool:
         return (
             _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+            or (kind == "remote_tracking" and (
+                _resolve_repository_identity(cwd, identity.full_name) != identity
+                or not _tracking_sources_absent(cwd, identity, targets)))
             or (special_protected is not None
                 and _read_protected_targets(identity, cwd=cwd) != special_protected)
         )
@@ -3676,8 +3684,8 @@ def _retire_inactive_ref_phase(
                 }
                 open_branches = {key.split(":", 1)[1] for key in pr_heads}
                 for ref, sha in batch.items():
-                    branch = ref.removeprefix("refs/heads/")
-                    if kind == "local_branch":
+                    branch = ref.removeprefix("refs/remotes/origin/" if kind == "remote_tracking" else "refs/heads/")
+                    if kind in {"local_branch", "remote_tracking"}:
                         try:
                             for path, record in registry.items():
                                 if record.get("branch") == branch or _record_previously_bound(record, branch):
@@ -3685,13 +3693,13 @@ def _retire_inactive_ref_phase(
                         except (RuntimeError, TypeError, ValueError):
                             receipt["retained"][ref] = "invalid_lifecycle_binding"
                             continue
-                    branch_protected = kind == "local_branch" and (
-                        any_live_lease or ref in checked_refs or branch in open_branches
+                    branch_protected = kind in {"local_branch", "remote_tracking"} and (
+                        any_live_lease or f"refs/heads/{branch}" in checked_refs or branch in open_branches
                         or _branch_has_worktree_path_lease(branch, resources, registry)
                         or any(record.get("branch") == branch and record.get("expires_at", 0) > time.time()
                                for record in registry.values())
                         or (special_protected is not None and (
-                            ref == special_protected.pull_ref or sha == special_protected.pull_sha
+                            f"refs/heads/{branch}" == special_protected.pull_ref or sha == special_protected.pull_sha
                             or re.search(r"(?:^|[-_/])" + str(special_protected.issue_number) + r"(?:$|[-_/])", branch)
                         ))
                         or any(f"branch:{branch}" in resource for resource in resources)
@@ -3699,7 +3707,7 @@ def _retire_inactive_ref_phase(
                                for number in re.findall(r"(?:^|[-_/])(\d+)(?=$|[-_/])", branch)
                                for resource in resources)
                     )
-                    auxiliary_protected = kind == "auxiliary_ref" and (
+                    auxiliary_protected = kind in {"auxiliary_ref", "remote_tracking"} and (
                         any_live_lease
                         or (special_protected is not None and sha == special_protected.pull_sha)
                         or any(re.search(r"(?:^|[-_/])(?:pr)?" + number + r"(?:$|[-_/])", ref)
@@ -3759,6 +3767,27 @@ def retire_legacy_archive_refs(
     return _retire_inactive_ref_phase(
         cwd, targets=targets, snapshot_directory=snapshot_directory,
         owner_discard=owner_discard, batch_size=batch_size, kind="legacy_archive",
+    )
+
+
+def _tracking_sources_absent(cwd: Path, identity: RepositoryIdentity, targets: Mapping[str, str]) -> bool:
+    refs = ["refs/heads/" + ref.removeprefix("refs/remotes/origin/") for ref in targets]
+    result = run_git_result(["ls-remote", "--exit-code", identity.push_url, *refs], cwd)
+    if result.returncode == 2 and not result.stdout.strip():
+        return True
+    if result.returncode == 0 and result.stdout.strip():
+        return False
+    raise RuntimeError("remote_tracking_absence_unavailable")
+
+
+def retire_absent_remote_tracking_refs(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    """Retire exact origin tracking refs only while every remote source is absent."""
+    return _retire_inactive_ref_phase(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="remote_tracking",
     )
 
 

@@ -9,13 +9,14 @@ import re
 import subprocess
 import tempfile
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from scripts import agent_worktree as aw
 from scripts import git_hygiene as gh
 
 SCHEMA = "remote_legacy_archive_retirement.v1"
 RESCUE_SCHEMA = "remote_legacy_rescue_branch_retirement.v1"
+CLOSED_PR_SCHEMA = "remote_closed_pr_batch_retirement.v1"
 
 
 def _git(cwd: Path, args: list[str]) -> str:
@@ -61,8 +62,7 @@ def _compensate(cwd: Path, identity: gh.RepositoryIdentity, directory: Path,
     manifest = _bundle(directory, receipt)
     pending = receipt["pending"]
     current = _remote(cwd, identity.push_url, pending)
-    if any(sha != pending[ref] for ref, sha in current.items()):
-        raise RuntimeError("archive_recovery_ref_recreated")
+    recreated = any(sha != pending[ref] for ref, sha in current.items())
     absent = {ref: sha for ref, sha in pending.items() if ref not in current}
     if absent:
         with tempfile.TemporaryDirectory(prefix="archive-recovery-") as temporary:
@@ -74,6 +74,8 @@ def _compensate(cwd: Path, identity: gh.RepositoryIdentity, directory: Path,
             _git(recovery, ["push", "--atomic", "--no-verify",
                            *[f"--force-with-lease={ref}:" for ref in absent],
                            identity.push_url, *[f"{sha}:{ref}" for ref, sha in absent.items()]])
+    if recreated:
+        raise RuntimeError("archive_recovery_ref_recreated")
     if _remote(cwd, identity.push_url, pending) != pending:
         raise RuntimeError("archive_recovery_readback_failed")
     receipt["state"] = "compensated"
@@ -83,18 +85,30 @@ def _compensate(cwd: Path, identity: gh.RepositoryIdentity, directory: Path,
 def _retire_remote_copies(
     cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
     owner_discard: str, batch_size: int = 25, kind: str,
+    pr_targets: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Retire exact dated refs, or compensate a prior pending batch on retry."""
     if not targets or len(targets) > 1000 or not owner_discard.strip() or not 1 <= batch_size <= 25:
         raise ValueError("archive_exact_disposition_required")
-    if kind not in {"archive", "rescue_branch"}:
+    if kind not in {"archive", "rescue_branch", "closed_pr"}:
         raise ValueError("archive_retirement_kind_invalid")
-    schema = SCHEMA if kind == "archive" else RESCUE_SCHEMA
-    pattern = r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+" if kind == "archive" else r"refs/heads/rescue/.+"
+    schema = {"archive": SCHEMA, "rescue_branch": RESCUE_SCHEMA, "closed_pr": CLOSED_PR_SCHEMA}[kind]
+    pattern = {"archive": r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+",
+               "rescue_branch": r"refs/heads/rescue/.+", "closed_pr": r"refs/heads/.+"}[kind]
+    metadata = [dict(target) for target in pr_targets] if pr_targets is not None else None
+    if kind == "closed_pr":
+        if (not metadata or len(metadata) != len(targets)
+                or {target.get("ref"): target.get("sha") for target in metadata} != dict(targets)
+                or any(set(target) != {"ref", "sha", "pr"} or not gh._positive_int(target["pr"]) for target in metadata)):
+            raise ValueError("closed_pr_exact_metadata_required")
+    elif metadata is not None:
+        raise ValueError("unexpected_pr_metadata")
     targets = dict(targets)
     for ref, sha in targets.items():
         if (not re.fullmatch(pattern, ref)
-                or not re.fullmatch(r"[0-9a-f]{40}", sha)):
+                or not re.fullmatch(r"[0-9a-f]{40}", sha)
+                or (kind == "closed_pr" and (ref.startswith("refs/heads/rescue/")
+                                             or ref.removeprefix("refs/heads/") in gh.DEFAULT_PROTECTED_BRANCHES))):
             raise ValueError("archive_namespace_or_sha_invalid")
         _git(cwd, ["check-ref-format", ref])
     identity = gh._resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
@@ -107,7 +121,8 @@ def _retire_remote_copies(
         if (not isinstance(receipt, dict) or receipt.get("schema") != schema
                 or receipt.get("repository") != dataclasses.asdict(identity)
                 or receipt.get("targets") != targets or receipt.get("owner_discard") != owner_discard
-                or receipt.get("snapshot") != str(directory)):
+                or receipt.get("snapshot") != str(directory)
+                or (kind == "closed_pr" and receipt.get("pr_targets") != metadata)):
             raise RuntimeError("archive_receipt_identity_mismatch")
         pending = receipt.get("pending")
         if pending is not None:
@@ -143,6 +158,8 @@ def _retire_remote_copies(
                "repository": dataclasses.asdict(identity), "owner_discard": owner_discard,
                "snapshot": str(directory), "bundle_sha256": snapshot["bundle_sha256"],
                "deleted": {}, "retained": {}, "batches": []}
+    if kind == "closed_pr":
+        receipt["pr_targets"] = metadata
     _bundle(directory, receipt)
     aw._write_registry(path, receipt)
 
@@ -167,8 +184,9 @@ def _retire_remote_copies(
                                  for row in dispatcher)
                 batch = {}
                 for ref, sha in items[offset:offset + batch_size]:
-                    branch_activity = kind == "rescue_branch" and _rescue_branch_active(
-                        cwd, ref, registry, resources, heads, special)
+                    branch_activity = kind in {"rescue_branch", "closed_pr"} and _rescue_branch_active(
+                        cwd, ref, registry, resources, heads, special,
+                        include_original=kind == "rescue_branch")
                     if (branch_activity or live_lease or sha in protected or sha in heads.values() or sha == special.pull_sha
                             or re.search(r"(?:^|[-_/])" + str(special.issue_number) + r"(?:$|[-_/])", ref)
                             or any(ref in resource or sha in resource for resource in resources)):
@@ -179,9 +197,14 @@ def _retire_remote_copies(
                     aw._write_registry(path, receipt)
                     continue
                 external_check()
+                selected_prs = [target for target in metadata or [] if target["ref"] in batch]
+                contracts = {target["ref"]: gh._closed_retirement_pr(cwd, identity, target)
+                             for target in selected_prs}
                 if _remote(cwd, identity.push_url, batch) != batch:
                     raise RuntimeError("archive_remote_source_drift")
                 receipt["pending"] = batch
+                if kind == "closed_pr":
+                    receipt["pending_pr_contracts"] = contracts
                 receipt["state"] = "delete_pending"
                 aw._write_registry(path, receipt)
                 try:
@@ -191,6 +214,9 @@ def _retire_remote_copies(
                     if _remote(cwd, identity.push_url, batch):
                         raise RuntimeError("archive_delete_readback_failed")
                     external_check()
+                    if any(gh._closed_retirement_pr(cwd, identity, target) != contracts[target["ref"]]
+                           for target in selected_prs):
+                        raise RuntimeError("closed_pr_post_delete_authority_drift")
                     if (aw._read_registry(registry_path)["worktrees"] != registry
                             or gh._dispatcher_snapshot_from_connection(connection) != dispatcher
                             or _git(cwd, ["worktree", "list", "--porcelain"]) != worktree_census):
@@ -205,6 +231,7 @@ def _retire_remote_copies(
                                           "dispatcher_sha256": hashlib.sha256(json.dumps(dispatcher, sort_keys=True).encode()).hexdigest(),
                                           "open_heads": heads})
                 receipt.pop("pending")
+                receipt.pop("pending_pr_contracts", None)
                 receipt["state"] = "batch_verified"
                 aw._write_registry(path, receipt)
     receipt["state"] = "completed"
@@ -214,8 +241,10 @@ def _retire_remote_copies(
 
 def _rescue_branch_active(cwd: Path, ref: str, registry: Mapping[str, Any],
                           resources: set[str], heads: Mapping[str, str],
-                          special: gh.ProtectedAuthority) -> bool:
-    names = {ref.removeprefix("refs/heads/"), ref.removeprefix("refs/heads/rescue/")}
+                          special: gh.ProtectedAuthority, *, include_original: bool = True) -> bool:
+    names = {ref.removeprefix("refs/heads/")}
+    if include_original:
+        names.add(ref.removeprefix("refs/heads/rescue/"))
     checked = {item.get("branch") for item in gh._parse_worktrees(
         gh.run_git(["worktree", "list", "--porcelain"], cwd))}
     for branch in names:
@@ -253,3 +282,15 @@ def retire_remote_legacy_rescue_branches(
     """Explicit retirement of refs/heads/rescue/* copies only."""
     return _retire_remote_copies(cwd, targets=targets, snapshot_directory=snapshot_directory,
                                 owner_discard=owner_discard, batch_size=batch_size, kind="rescue_branch")
+
+
+def retire_closed_pr_remote_batches(
+    cwd: Path, *, targets: Sequence[Mapping[str, Any]], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, Any]:
+    """New exact closed-PR phases; old single-head receipts keep their recovery API."""
+    metadata = [dict(target) for target in targets]
+    return _retire_remote_copies(
+        cwd, targets={target.get("ref"): target.get("sha") for target in metadata},
+        snapshot_directory=snapshot_directory, owner_discard=owner_discard,
+        batch_size=batch_size, kind="closed_pr", pr_targets=metadata)

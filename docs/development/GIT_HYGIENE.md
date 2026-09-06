@@ -431,3 +431,32 @@ and its original suffix are checked against checked-out branches, open PRs, live
 lifecycle bindings and resumable references. Invalid relevant lifecycle records
 and protected original names remain retained. Ordinary remote heads and modern
 archive receipts cannot enter this path.
+
+## Atomic batches for owner-authorized closed-PR remote heads
+
+`scripts.git_archive_retirement.retire_closed_pr_remote_batches` is the batched
+entrypoint for new exact ref/SHA/PR dispositions. It preserves the activity gates
+of the single-head operator and validates each selected PR's authenticated closed
+state, head identity and closure timestamps before and after each atomic batch.
+The selected contracts are saved with the pending batch. A changed PR contract
+stops progress and compensates the entire batch through expected-absence recovery.
+
+This uses the same independent temporary-bare snapshot, frozen lifecycle,
+canonical lease locks and batch readback as remote archive retirement. Exact PR
+metadata is bound into its separate `remote_closed_pr_batch_retirement.v1` receipt
+and must match on retry. Repeated global GitHub checks occur per batch; each PR
+still receives fresh individual authority checks on both sides of the effect.
+Heads without a closed PR cannot use this entrypoint. The older single-head API
+remains available for recovery of its existing receipts; it is not migrated or
+reinterpreted by this operator.
+
+## Exact retirement of absent origin tracking refs
+
+`retire_absent_remote_tracking_refs` accepts exact `refs/remotes/origin/*` and
+expected SHAs, excluding `HEAD` and protected branch names. It uses a new verified
+bundle, the existing serial local CAS/readback mechanism, and the same checked-out,
+open-PR, lifecycle, lease and protected-branch guards as local branch retirement.
+The canonical remote must prove every corresponding `refs/heads/*` absent before
+snapshot creation and before and after each deletion batch. A recreated source
+stops progress and restores only absent local tracking refs; advanced local refs
+are never overwritten. No broad fetch-prune command or remote effect is used.

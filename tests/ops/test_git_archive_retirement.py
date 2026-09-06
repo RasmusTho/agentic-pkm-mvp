@@ -230,3 +230,138 @@ def test_worktree_drift_after_push_compensates(phase, monkeypatch):
     with pytest.raises(RuntimeError, match="local_authority_drift"):
         ar.retire_remote_legacy_archives(root, **kwargs)
     assert ar._remote(root, str(remote), {REF: sha}) == {REF: sha}
+
+
+@pytest.fixture
+def closed_phase(phase, monkeypatch):
+    root, remote, sha, kwargs = phase
+    refs = ["refs/heads/closed-one", "refs/heads/closed-two"]
+    ar._git(root, ["push", str(remote), *[f"{sha}:{ref}" for ref in refs]])
+    targets = [{"ref": ref, "sha": sha, "pr": 100 + index} for index, ref in enumerate(refs)]
+    kwargs["targets"] = targets
+    payloads = {target["pr"]: {
+        "number": target["pr"], "state": "closed", "draft": False,
+        "merged": True, "merged_at": "2026-01-01T00:00:00Z", "closed_at": "2026-01-01T00:00:00Z",
+        "head": {"ref": target["ref"].removeprefix("refs/heads/"), "sha": sha, "repo": {"id": 123}},
+    } for target in targets}
+    monkeypatch.setattr(gh, "_github_get", lambda cwd, endpoint: payloads[int(endpoint.rsplit("/", 1)[1])])
+    return root, remote, sha, kwargs, payloads
+
+
+def test_closed_pr_atomic_two_head_success(closed_phase):
+    root, remote, _, kwargs, _ = closed_phase
+    result = ar.retire_closed_pr_remote_batches(root, **kwargs)
+    assert result["schema"] == ar.CLOSED_PR_SCHEMA
+    assert len(result["deleted"]) == 2
+    assert len(result["batches"]) == 1
+    assert result["pr_targets"] == kwargs["targets"]
+    assert not ar._remote(root, str(remote), result["targets"])
+
+
+@pytest.mark.parametrize("moment", ["before", "after"])
+def test_closed_pr_reopen_never_leaves_batch_deleted(closed_phase, monkeypatch, moment):
+    root, remote, _, kwargs, payloads = closed_phase
+    real = ar._git
+    if moment == "before":
+        payloads[101]["state"] = "open"
+    else:
+        def reopen(cwd, args):
+            result = real(cwd, args)
+            if args[:3] == ["push", "--atomic", "--no-verify"] and any(arg.startswith(":refs/heads/") for arg in args):
+                payloads[101]["state"] = "open"
+            return result
+        monkeypatch.setattr(ar, "_git", reopen)
+    with pytest.raises(RuntimeError, match="pr_authority_invalid"):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    refs = {target["ref"]: target["sha"] for target in kwargs["targets"]}
+    assert ar._remote(root, str(remote), refs) == refs
+
+
+def test_closed_pr_retry_metadata_mismatch_refuses_recovery(closed_phase, monkeypatch):
+    root, remote, _, kwargs, _ = closed_phase
+    real = ar._git
+
+    def crash(cwd, args):
+        result = real(cwd, args)
+        if args[:3] == ["push", "--atomic", "--no-verify"]:
+            raise KeyboardInterrupt("power loss")
+        return result
+
+    monkeypatch.setattr(ar, "_git", crash)
+    with pytest.raises(KeyboardInterrupt):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    monkeypatch.setattr(ar, "_git", real)
+    kwargs["targets"][0]["pr"] += 500
+    with pytest.raises(RuntimeError, match="receipt_identity_mismatch"):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    refs = {target["ref"]: target["sha"] for target in kwargs["targets"]}
+    assert not ar._remote(root, str(remote), refs)
+    kwargs["targets"][0]["pr"] -= 500
+    result = ar.retire_closed_pr_remote_batches(root, **kwargs)
+    assert result["state"] == "compensated"
+    assert ar._remote(root, str(remote), refs) == refs
+
+
+def test_closed_pr_concurrent_advanced_head_is_preserved(closed_phase, monkeypatch):
+    root, remote, _, kwargs, _ = closed_phase
+    real = ar._git
+    newer = real(root, ["rev-parse", "HEAD"])
+    ref = kwargs["targets"][0]["ref"]
+
+    def advance(cwd, args):
+        if args[:3] == ["push", "--atomic", "--no-verify"]:
+            real(remote, ["update-ref", ref, newer])
+        return real(cwd, args)
+
+    monkeypatch.setattr(ar, "_git", advance)
+    with pytest.raises(RuntimeError, match="recreated"):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    refs = {target["ref"]: target["sha"] for target in kwargs["targets"]}
+    refs[ref] = newer
+    assert ar._remote(root, str(remote), refs) == refs
+
+
+def test_closed_pr_post_push_recreation_restores_other_absent_head(closed_phase, monkeypatch):
+    root, remote, _, kwargs, _ = closed_phase
+    real = ar._git
+    newer = real(root, ["rev-parse", "HEAD"])
+    ref = kwargs["targets"][0]["ref"]
+
+    def recreate(cwd, args):
+        result = real(cwd, args)
+        if args[:3] == ["push", "--atomic", "--no-verify"] and f":{ref}" in args:
+            real(remote, ["update-ref", ref, newer])
+        return result
+
+    monkeypatch.setattr(ar, "_git", recreate)
+    with pytest.raises(RuntimeError, match="recreated"):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    refs = {target["ref"]: target["sha"] for target in kwargs["targets"]}
+    refs[ref] = newer
+    assert ar._remote(root, str(remote), refs) == refs
+    receipt = json.loads((kwargs["snapshot_directory"] / "archive-retirement.json").read_text())
+    assert receipt["state"] == "recovery_required"
+
+
+@pytest.mark.parametrize("target", [
+    {"ref": "refs/heads/main", "sha": "a" * 40, "pr": 1},
+    {"ref": "refs/heads/without-pr", "sha": "a" * 40},
+])
+def test_closed_pr_rejects_protected_or_missing_pr(phase, target):
+    root, _, _, kwargs = phase
+    kwargs["targets"] = [target]
+    with pytest.raises(ValueError):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    assert not kwargs["snapshot_directory"].exists()
+
+
+def test_closed_pr_rejects_rescue_namespace_with_active_original(phase):
+    root, remote, sha, kwargs = phase
+    ar._git(root, ["checkout", "old"])
+    ref = "refs/heads/rescue/old"
+    ar._git(root, ["push", str(remote), f"{sha}:{ref}"])
+    kwargs["targets"] = [{"ref": ref, "sha": sha, "pr": 100}]
+    with pytest.raises(ValueError, match="namespace"):
+        ar.retire_closed_pr_remote_batches(root, **kwargs)
+    assert not kwargs["snapshot_directory"].exists()
+    assert ar._remote(root, str(remote), {ref: sha}) == {ref: sha}
