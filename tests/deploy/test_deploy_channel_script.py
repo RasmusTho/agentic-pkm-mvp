@@ -774,6 +774,36 @@ def test_instance_state_preflight_failure_before_migrations_restores_prior_pin_a
     assert "migration retry blocked" not in retry.stdout + retry.stderr
 
 
+def test_instance_state_preflight_failure_preserves_ambiguous_marker_on_same_target_retry(
+    tmp_path: Path,
+) -> None:
+    """A prior migration attempt owns its retry marker, not a later MVR-05 failure."""
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    _seed_previous_pin(root, previous_sha)
+    target = _commit_migration(root, "feedc0de0005_instance_state_retry.py")
+    env = dict(env)
+    env["FAKE_SHA"] = target
+
+    first_env = dict(env)
+    first_env["FAKE_DOCKER_FAIL_MATCH"] = "--exit-code-from migrate"
+    first = _run_deploy(root, first_env, target)
+
+    marker = root / "config/deploy/dev.migration-pending.env"
+    assert first.returncode == 24
+    marker_before_retry = marker.read_text(encoding="utf-8")
+
+    retry_env = dict(env)
+    retry_env["FAKE_DOCKER_FAIL_MATCH"] = "run --rm --no-deps -T instance-state-init"
+    retry = _run_deploy(root, retry_env, target)
+
+    assert retry.returncode == 24
+    assert "instance-state deployment preparation failed" in retry.stderr
+    assert marker.read_text(encoding="utf-8") == marker_before_retry
+    assert f"APP_IMAGE_TAG={target}" in (root / "config/deploy/dev.env").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     tmp_path: Path,
 ) -> None:

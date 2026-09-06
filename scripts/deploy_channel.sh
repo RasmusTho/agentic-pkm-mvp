@@ -194,6 +194,10 @@ FORWARD_ONLY_MIGRATION_STARTED=0
 FORWARD_ONLY_MIGRATION_APPLIED=0
 MIGRATION_EXECUTION_STARTED=0
 MIGRATION_EXECUTION_APPLIED=0
+# This invocation may compensate only a marker it created. A same-target
+# retry inherits a marker from an earlier migration attempt whose commit state
+# remains ambiguous until that retry reaches a successful migration execution.
+MIGRATION_PENDING_MARKER_CREATED=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
 deploy_lock_dir=""
 trap 'rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
@@ -1050,11 +1054,12 @@ rollback_failed_startup() {
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
     fi
-    if [ "${action}" = "deploy" ]; then
+    if [ "${action}" = "deploy" ] && \
+        [ "${MIGRATION_PENDING_MARKER_CREATED}" = "1" ]; then
       # Only a deploy attempt that never started migration execution may clear
-      # its own marker (and only after the pin restore proved effective). A
-      # failing rollback must not delete the durable record of an unrelated
-      # interrupted deploy's ambiguous migration state.
+      # the marker it created (and only after the pin restore proved
+      # effective). A same-target retry must retain the prior attempt's
+      # durable record of an ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
     if ! MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
@@ -1472,8 +1477,10 @@ ensure_prod_instance_state_volume
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
-if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ]; then
+if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ] && \
+    [ ! -f "${migration_pending_file}" ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
+  MIGRATION_PENDING_MARKER_CREATED=1
 fi
 if [ "${scalar_rollback}" = "1" ]; then
   # Scalar compatibility mode is not a channel downgrade. Keep the capable
