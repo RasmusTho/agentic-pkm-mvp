@@ -1511,12 +1511,8 @@ if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
     retire_scalar_rollback_services || exit $?
 fi
 if [ "${action}" = "deploy" ]; then
-  if prepare_instance_state_deployment compose "${channel}" "${pin_file}"; then
-    :
-  else
-    instance_state_rc=$?
-    exit "${instance_state_rc}"
-  fi
+  run_postmutation_gate "instance-state deployment preparation failed" \
+    prepare_instance_state_deployment compose "${channel}" "${pin_file}" || exit $?
 fi
 run_postmutation_gate "migration execution failed" apply_changed_migrations || exit $?
 run_postmutation_gate "service recreate/liveness gate failed" \
