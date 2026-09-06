@@ -278,6 +278,46 @@ def test_delivered_inventories_are_private(tmp_path: Path) -> None:
         assert metadata.st_uid == os.geteuid(), f"{name} is not owned by the runtime user"
 
 
+def test_inventory_delivery_preserves_previous_json_on_copy_failure(tmp_path: Path) -> None:
+    """A partial host write must not expose corrupt inventory bytes to a new container."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "cat",
+        "#!/usr/bin/env bash\n"
+        "printf '%s' '{\"partial\":'\n"
+        "exit 1\n",
+    )
+    source = tmp_path / "source.json"
+    source.write_text('{"new":true}\n', encoding="utf-8")
+    target = tmp_path / "deployment-quiescence-inventory.json"
+    previous = '{"previous":true}\n'
+    target.write_text(previous, encoding="utf-8")
+    target.chmod(0o600)
+    harness = tmp_path / "harness.sh"
+    _write_executable(
+        harness,
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{INSTANCE_STATE_DEPLOYMENT_SH}'\n"
+        '_instance_state_deployment_deliver_private_inventory "$1" "$2" "$(id -u)" "$(id -g)"\n',
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness), str(source), str(target)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == previous
+    assert json.loads(target.read_text(encoding="utf-8")) == {"previous": True}
+    assert not list(tmp_path.glob(".deployment-quiescence-inventory.json.tmp.*"))
+
+
 def test_producer_fails_closed_on_empty_inventory(tmp_path: Path) -> None:
     """The producer still fails closed when an inventory is empty or missing
     at delivery time."""
