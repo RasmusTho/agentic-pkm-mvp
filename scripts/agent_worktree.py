@@ -1263,7 +1263,9 @@ def main(argv: list[str] | None = None) -> int:
                 registry_path=registry_path,
             )
         else:
-            if bool(args.target_worktree) != bool(args.target_generation):
+            if (args.mode == "apply" and not (args.target_worktree and args.target_generation)) or (
+                bool(args.target_worktree) != bool(args.target_generation)
+            ):
                 raise WorktreeLifecycleError(
                     "targeted cleanup requires both worktree path and lifecycle generation"
                 )

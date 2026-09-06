@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -5069,13 +5070,21 @@ def test_rescue_snapshot_recovers_older_stashes_and_archive_refs(tmp_path):
         (source / "note").write_text(content)
         git("stash", "push", "-m", content.strip())
     stashes = git("stash", "list", "--format=%H").splitlines()
+    detached = tmp_path / "detached"
+    git("worktree", "add", "--detach", str(detached), "HEAD")
+    (detached / "note").write_text("detached history\n")
+    git_hygiene.run_git(["commit", "-am", "detached"], detached)
+    detached_head = git_hygiene.run_git(["rev-parse", "HEAD"], detached)
     result = git_hygiene.create_rescue_snapshot(source, tmp_path / "snapshot")
-    assert set(stashes) <= set(result["verified_objects"])
+    assert set(stashes + [detached_head]) <= set(result["verified_objects"])
+    manifest = json.loads((tmp_path / "snapshot" / "manifest.json").read_text())
+    assert hashlib.sha256(Path(result["bundle"]).read_bytes()).hexdigest() == manifest["bundle_sha256"]
     recovery = tmp_path / "recovery"
     recovery.mkdir()
     git_hygiene.run_git(["init", "--bare", "."], recovery)
     git_hygiene.run_git(["bundle", "unbundle", result["bundle"]], recovery)
     assert git_hygiene.run_git(["show", f"{stashes[1]}:note"], recovery) == "older stash"
+    assert git_hygiene.run_git(["show", f"{detached_head}:note"], recovery) == "detached history"
     assert "refs/archive/history" in result["inventory"]["refs"]
     assert (tmp_path / "snapshot" / "manifest.json").is_file()
     with pytest.raises(FileExistsError):

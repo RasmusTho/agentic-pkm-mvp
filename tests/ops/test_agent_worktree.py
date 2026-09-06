@@ -2620,6 +2620,8 @@ def test_janitor_apply_cli_requires_and_loads_lease_snapshot(
                 "apply",
                 "--pr-state-file",
                 str(pr_state_path),
+                "--target-worktree", str(repo / "target"),
+                "--target-generation", GENERATION,
             ]
         )
         == 1
@@ -2637,8 +2639,25 @@ def test_janitor_apply_cli_requires_and_loads_lease_snapshot(
                 "apply",
                 "--pr-state-file",
                 str(pr_state_path),
+                "--target-worktree", str(repo / "target"),
+                "--target-generation", GENERATION,
             ]
         )
         == 0
     )
     assert captured["lease_path"] == lease_path.resolve()
+
+
+@pytest.mark.parametrize("selectors", [[], ["--target-worktree", "/unused/target"],
+                                        ["--target-generation", GENERATION]])
+def test_apply_cli_rejects_missing_exact_selectors_before_read_or_mutation(
+    tmp_path, monkeypatch, capsys, selectors,
+):
+    def forbidden(*args, **kwargs):
+        pytest.fail("apply must not be invoked without both selectors")
+    monkeypatch.setattr(agent_worktree, "janitor_apply", forbidden)
+    assert agent_worktree.main([
+        "--cwd", str(tmp_path), "janitor", "--mode", "apply",
+        "--pr-state-file", str(tmp_path / "nonexistent.json"), *selectors,
+    ]) == 1
+    assert "requires both worktree path and lifecycle generation" in capsys.readouterr().out

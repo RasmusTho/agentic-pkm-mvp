@@ -208,7 +208,8 @@ an advanced ref, recreate a worktree at a reused path, or import historical leas
 or lifecycle state as current authority. Older stashes are recoverable by the SHA
 in the manifest; positional stash selectors are not stable identities.
 
-Local maintenance uses only `agent_worktree.py janitor --mode apply` with both
+The public CLI rejects apply without both exact selectors before reading evidence
+or invoking cleanup. Local maintenance uses only `agent_worktree.py janitor --mode apply` with both
 `--target-worktree` and `--target-generation`. Each phase targets one exact
 registered identity, including a removed-generation branch continuation. Preserve
 missing generation, dirty/unavailable state, unknown merge state, active lease,
@@ -222,9 +223,13 @@ The separate remote/archive/stash policy is:
 
 | Artifact | Allowed disposition | Additional authority |
 | --- | --- | --- |
-| Remote branch | Existing bounded `targeted_remote_cleanup` with a fresh rescue bundle before the batch | Its authenticated PR/body, dispatcher, lifecycle, archive CAS, final readback and compensation contract above remains mandatory. |
+| Remote branch | Existing bounded `targeted_remote_cleanup`, only after the caller proves a fresh verified rescue bundle | Its authenticated PR/body, dispatcher, lifecycle, archive CAS, final readback and compensation contract above remains mandatory. |
 | Archive/rescue ref | Retain by default | Deletion requires an explicit object-bound owner discard decision, successor/retention disposition, verified independent rescue coverage, fresh authority, expected-old-SHA CAS and post-effect readback. No archive deletion entrypoint is currently enabled. |
 | Stash | Retain by default | Deletion requires an explicit owner decision for the exact stash SHA and contents, verified independent rescue coverage, and exclusive coordination with stash writers. Age, message markers, or positional indices never authorize deletion. No governed stash deletion entrypoint is currently enabled. |
+
+The remote function does not itself create or validate the rescue bundle. This is
+an external caller precondition: absent or stale proof means retain and do not
+invoke the function.
 
 These are separate maintenance phases. Missing discard authority means retain,
 not permission to infer low value. Remote merged-branch and archive/stash deletion
