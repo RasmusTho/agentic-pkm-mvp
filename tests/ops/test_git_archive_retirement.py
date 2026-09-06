@@ -365,3 +365,49 @@ def test_closed_pr_rejects_rescue_namespace_with_active_original(phase):
         ar.retire_closed_pr_remote_batches(root, **kwargs)
     assert not kwargs["snapshot_directory"].exists()
     assert ar._remote(root, str(remote), {ref: sha}) == {ref: sha}
+
+
+@pytest.mark.parametrize("ref", ["refs/stash", "refs/heads/old", REF,
+                                 "refs/recovered-stash/undated",
+                                 "refs/recovered-stash/2026-07-06-old/nested"])
+def test_recovered_stash_rejects_other_namespaces(phase, ref):
+    root, _, sha, kwargs = phase
+    kwargs["targets"] = {ref: sha}
+    with pytest.raises(ValueError, match="namespace"):
+        ar.retire_remote_dated_recovered_stashes(root, **kwargs)
+    assert not kwargs["snapshot_directory"].exists()
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_recovered_stash_retirement_and_crash_recovery(phase, monkeypatch, crash):
+    root, remote, sha, kwargs = phase
+    ref = "refs/recovered-stash/2026-07-06-old-work"
+    ar._git(root, ["push", str(remote), f"{sha}:{ref}"])
+    kwargs["targets"] = {ref: sha}
+    real = ar._git
+
+    def interrupt(cwd, args):
+        result = real(cwd, args)
+        if args[:3] == ["push", "--atomic", "--no-verify"]:
+            raise KeyboardInterrupt("power loss")
+        return result
+
+    if crash:
+        monkeypatch.setattr(ar, "_git", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            ar.retire_remote_dated_recovered_stashes(root, **kwargs)
+        monkeypatch.setattr(ar, "_git", real)
+    result = ar.retire_remote_dated_recovered_stashes(root, **kwargs)
+    assert result["schema"] == ar.RECOVERED_STASH_SCHEMA
+    assert result["state"] == ("compensated" if crash else "completed")
+    assert ar._remote(root, str(remote), {ref: sha}) == ({ref: sha} if crash else {})
+    ar._bundle(kwargs["snapshot_directory"], result)
+
+
+@pytest.mark.parametrize("date", ["2026-99-99", "2026-02-30", "2026-02-29"])
+def test_recovered_stash_rejects_invalid_calendar_date(phase, date):
+    root, _, sha, kwargs = phase
+    kwargs["targets"] = {f"refs/recovered-stash/{date}-old": sha}
+    with pytest.raises(ValueError, match="calendar_date_invalid"):
+        ar.retire_remote_dated_recovered_stashes(root, **kwargs)
+    assert not kwargs["snapshot_directory"].exists()

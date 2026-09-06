@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -17,6 +18,7 @@ from scripts import git_hygiene as gh
 SCHEMA = "remote_legacy_archive_retirement.v1"
 RESCUE_SCHEMA = "remote_legacy_rescue_branch_retirement.v1"
 CLOSED_PR_SCHEMA = "remote_closed_pr_batch_retirement.v1"
+RECOVERED_STASH_SCHEMA = "remote_dated_recovered_stash_retirement.v1"
 
 
 def _git(cwd: Path, args: list[str]) -> str:
@@ -90,11 +92,13 @@ def _retire_remote_copies(
     """Retire exact dated refs, or compensate a prior pending batch on retry."""
     if not targets or len(targets) > 1000 or not owner_discard.strip() or not 1 <= batch_size <= 25:
         raise ValueError("archive_exact_disposition_required")
-    if kind not in {"archive", "rescue_branch", "closed_pr"}:
+    if kind not in {"archive", "rescue_branch", "closed_pr", "recovered_stash"}:
         raise ValueError("archive_retirement_kind_invalid")
-    schema = {"archive": SCHEMA, "rescue_branch": RESCUE_SCHEMA, "closed_pr": CLOSED_PR_SCHEMA}[kind]
+    schema = {"archive": SCHEMA, "rescue_branch": RESCUE_SCHEMA, "closed_pr": CLOSED_PR_SCHEMA,
+              "recovered_stash": RECOVERED_STASH_SCHEMA}[kind]
     pattern = {"archive": r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+",
-               "rescue_branch": r"refs/heads/rescue/.+", "closed_pr": r"refs/heads/.+"}[kind]
+               "rescue_branch": r"refs/heads/rescue/.+", "closed_pr": r"refs/heads/.+",
+               "recovered_stash": r"refs/recovered-stash/[0-9]{4}-[0-9]{2}-[0-9]{2}-[^/]+"}[kind]
     metadata = [dict(target) for target in pr_targets] if pr_targets is not None else None
     if kind == "closed_pr":
         if (not metadata or len(metadata) != len(targets)
@@ -110,6 +114,11 @@ def _retire_remote_copies(
                 or (kind == "closed_pr" and (ref.startswith("refs/heads/rescue/")
                                              or ref.removeprefix("refs/heads/") in gh.DEFAULT_PROTECTED_BRANCHES))):
             raise ValueError("archive_namespace_or_sha_invalid")
+        if kind == "recovered_stash":
+            try:
+                datetime.date.fromisoformat(ref.removeprefix("refs/recovered-stash/")[:10])
+            except ValueError as error:
+                raise ValueError("recovered_stash_calendar_date_invalid") from error
         _git(cwd, ["check-ref-format", ref])
     identity = gh._resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
     directory = snapshot_directory.resolve()
@@ -294,3 +303,13 @@ def retire_closed_pr_remote_batches(
         cwd, targets={target.get("ref"): target.get("sha") for target in metadata},
         snapshot_directory=snapshot_directory, owner_discard=owner_discard,
         batch_size=batch_size, kind="closed_pr", pr_targets=metadata)
+
+
+def retire_remote_dated_recovered_stashes(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, Any]:
+    """Retire exact dated recovered-stash refs; never the live stash stack."""
+    return _retire_remote_copies(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="recovered_stash")

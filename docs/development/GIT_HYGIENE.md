@@ -460,3 +460,14 @@ The canonical remote must prove every corresponding `refs/heads/*` absent before
 snapshot creation and before and after each deletion batch. A recreated source
 stops progress and restores only absent local tracking refs; advanced local refs
 are never overwritten. No broad fetch-prune command or remote effect is used.
+
+## Owner-authorized retirement of dated remote recovered-stash refs
+
+`retire_remote_dated_recovered_stashes` accepts exact ref/SHA targets only in
+`refs/recovered-stash/<YYYY-MM-DD>-<name>`, with no nested suffix. Its separate
+`remote_dated_recovered_stash_retirement.v1` receipt uses the same independent
+bundle, canonical lease and lifecycle fences, protected/open-PR SHA checks,
+resumable-reference preservation, atomic CAS and drift recovery as dated archive
+retirement. Live `refs/stash`, branches, archives and undated refs are excluded.
+Retry only compensates pending absence; it never continues deletion under an old
+snapshot. This operator does not authorize changes to the daily automation.
