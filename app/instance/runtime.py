@@ -252,8 +252,9 @@ class InstanceRegistryRuntime:
                 self.ledger.recover_or_require_active_from_host_receipt(
                     matching_owners[0],
                     channel_id=self.layout.channel_id,
-                    persist=True,
+                    persist=False,
                     require_receipt_checkpoint=True,
+                    require_active=True,
                     _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
             except LedgerError as exc:

@@ -871,6 +871,7 @@ class OwnershipLedger:
         channel_id: str,
         persist: bool = True,
         require_receipt_checkpoint: bool = False,
+        require_active: bool = False,
         _capability: _StorageMutationCapability | None = None,
     ) -> OwnershipLease:
         """Recover a committed pending lease from opaque host receipt evidence.
@@ -908,6 +909,8 @@ class OwnershipLedger:
                 return lease
             if lease.state != "pending":
                 raise LedgerError("registered binding ownership is not recoverable")
+            if require_active:
+                raise LedgerError("registered binding ownership is still pending")
             active = OwnershipLease(**(asdict(lease) | {"state": "active"}))
             if not persist:
                 return active
@@ -1267,6 +1270,7 @@ class OwnershipLedger:
                     root=root,
                     key=new_key,
                     state=lease.state,
+                    owner_receipt_digest=lease.owner_receipt_digest,
                 )
 
             leases = {binding: rotate_lease(lease) for binding, lease in current.leases.items()}
@@ -1553,6 +1557,7 @@ class OwnershipLedger:
         root: Path,
         key: _KeyMaterial,
         state: str,
+        owner_receipt_digest: str | None = None,
     ) -> OwnershipLease:
         canonical, ancestors = _identity_material(root)
         return OwnershipLease(
@@ -1562,6 +1567,7 @@ class OwnershipLedger:
             ancestor_fingerprints=tuple(_fingerprint(item, key.secret) for item in ancestors),
             sealed_root=self._seal_root(str(Path(root).expanduser().resolve(strict=False)), key),
             state=state,
+            owner_receipt_digest=owner_receipt_digest,
         )
 
     def _lease_for_legacy_owner(

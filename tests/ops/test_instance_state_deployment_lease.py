@@ -459,16 +459,50 @@ def test_runtime_preflight_accepts_authenticated_remounted_root(
         _remounted_runtime_fixture(pending_root, monkeypatch, pending=True)
     )
     _simulate_container_remount(monkeypatch, tmp_path / "pending" / "vault")
-    assert _preflight_runtime(
-        channel="dev",
-        instance_state_root=pending_state,
-        host_global_root=pending_ownership,
-        consumer="api",
-    ) == 0
+    with pytest.raises((InstanceStatePreflightError, RegistryError)):
+        _preflight_runtime(
+            channel="dev",
+            instance_state_root=pending_state,
+            host_global_root=pending_ownership,
+            consumer="api",
+        )
     assert OwnershipLedger(pending_ownership).require_existing().leases[
         "binding-remounted"
-    ].state == "active"
-    assert OwnershipLedger(pending_ownership).path.read_bytes() != pending_ledger_before
+    ].state == "pending"
+    assert OwnershipLedger(pending_ownership).path.read_bytes() == pending_ledger_before
+
+
+def test_remounted_receipt_checkpoint_survives_key_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC: key rotation preserves the producer checkpoint used by remount admission."""
+
+    _state, ownership, receipt_path, _registry_before, _ledger_before = (
+        _remounted_runtime_fixture(tmp_path, monkeypatch)
+    )
+    receipt_digest = json.loads(receipt_path.read_bytes())["receipt_digest"]
+    ledger = OwnershipLedger(ownership)
+    assert (
+        ledger.require_existing().leases["binding-remounted"].owner_receipt_digest
+        == receipt_digest
+    )
+
+    ledger.rotate_key(
+        precondition=lambda _snapshot, _live_roots: None,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    assert (
+        ledger.require_existing().leases["binding-remounted"].owner_receipt_digest
+        == receipt_digest
+    )
+    _simulate_container_remount(monkeypatch, tmp_path / "vault")
+    assert _preflight_runtime(
+        channel="dev",
+        instance_state_root=_state,
+        host_global_root=ownership,
+        consumer="api",
+    ) == 0
 
 
 def test_runtime_preflight_rejects_invalid_remounted_root_receipt(
