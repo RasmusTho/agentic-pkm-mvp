@@ -41,3 +41,8 @@ regressions are `tests/scripts/test_docs_guard.py`.
 Run `pytest tests/scripts/test_docs_guard.py -q` for the production-path
 guard contract, and run `GITHUB_BASE_REF=origin/main python3
 scripts/docs_guard.py` before publishing changes to this enforcement surface.
+
+Git lifecycle enforcement in `scripts/git_hygiene.py`,
+`scripts/git_archive_retirement.py` and `scripts/agent_worktree.py` is paired with
+`docs/development/GIT_HYGIENE.md`. Changes to these governance scripts require that
+owner document in the same diff; they do not imply Product/Runtime temporal changes.

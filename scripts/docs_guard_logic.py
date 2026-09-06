@@ -173,6 +173,8 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
         "scripts/docs_guard.py": "docs/development/DOCUMENTATION_GUARD.md",
         "scripts/docs_guard_logic.py": "docs/development/DOCUMENTATION_GUARD.md",
         "scripts/git_hygiene.py": "docs/development/GIT_HYGIENE.md",
+        "scripts/git_archive_retirement.py": "docs/development/GIT_HYGIENE.md",
+        "scripts/agent_worktree.py": "docs/development/GIT_HYGIENE.md",
         "scripts/review_before_ci_gate.py": "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
         "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
     }
