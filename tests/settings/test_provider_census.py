@@ -133,6 +133,17 @@ def test_builder_execution_profiles_cover_supported_capability_tiers() -> None:
             _assert_mapping(census, profile)
 
 
+def test_sol_profile_declares_gpt_6_astra_selectable_without_default_change() -> None:
+    census = _census()
+    openai = census.provider("openai")
+
+    for channel, profiles in census.runtime_channels.builder_execution.items():
+        sol = profiles["sol"]
+        assert sol.model == "gpt-5.6-sol"
+        assert sol.selectable_models == ["gpt-5.6-sol", "gpt-6-astra"]
+        assert any(model.id == "gpt-6-astra" for model in openai.models)
+
+
 def test_openai_census_declares_gpt_6_astra_without_default_change() -> None:
     census = _census()
     openai = census.provider("openai")
