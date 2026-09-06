@@ -57,6 +57,7 @@ class LegacyOwner:
     # the deployment container cannot recompute those after the vault mount is
     # removed.
     legacy_ancestor_identities: tuple[str, ...] = ()
+    receipt_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class OwnershipLease:
     ancestor_fingerprints: tuple[str, ...]
     sealed_root: str
     state: str = "active"
+    owner_receipt_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -511,12 +513,48 @@ class OwnershipLedger:
                     )
                 if lease.state == "pending":
                     pending_lease_updates[binding_id] = OwnershipLease(
-                        **(asdict(lease) | {"state": "active"})
+                        **(
+                            asdict(lease)
+                            | {
+                                "state": "active",
+                                "owner_receipt_digest": owner.receipt_digest
+                                or lease.owner_receipt_digest,
+                            }
+                        )
                     )
                 elif lease.state != "active":
                     raise LedgerError(
                         "pending host receipt targets an unrecoverable lease"
                     )
+
+            receipt_lease_updates: dict[str, OwnershipLease] = {}
+            receipt_digests: dict[str, str] = {}
+            for owner in global_live_owners:
+                digest = owner.receipt_digest
+                if digest is None:
+                    continue
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)
+                ):
+                    raise LedgerError("host receipt checkpoint is invalid")
+                binding_id = owner.vault_binding_id
+                if binding_id in receipt_digests and receipt_digests[binding_id] != digest:
+                    raise LedgerError("host receipt checkpoint is ambiguous")
+                receipt_digests[binding_id] = digest
+                lease = current.leases.get(binding_id)
+                if lease is None:
+                    continue
+                if lease.owner_receipt_digest != digest:
+                    receipt_lease_updates[binding_id] = replace(
+                        lease, owner_receipt_digest=digest
+                    )
+            if receipt_lease_updates:
+                current = self._replace(
+                    current,
+                    leases={**current.leases, **receipt_lease_updates},
+                )
             if pending_lease_updates:
                 current = self._replace(
                     current,
@@ -785,7 +823,7 @@ class OwnershipLedger:
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"
                     )
-            if needs_legacy_migration or pending_lease_updates:
+            if needs_legacy_migration or pending_lease_updates or receipt_lease_updates:
                 self._write_ledger_locked(current, key)
                 if needs_legacy_migration:
                     self.rotation_path.unlink(missing_ok=True)
@@ -832,6 +870,7 @@ class OwnershipLedger:
         *,
         channel_id: str,
         persist: bool = True,
+        require_receipt_checkpoint: bool = False,
         _capability: _StorageMutationCapability | None = None,
     ) -> OwnershipLease:
         """Recover a committed pending lease from opaque host receipt evidence.
@@ -860,6 +899,11 @@ class OwnershipLedger:
                 raise LedgerError(
                     "registered binding has no authenticated ownership reservation"
                 )
+            if require_receipt_checkpoint and (
+                owner.receipt_digest is None
+                or lease.owner_receipt_digest != owner.receipt_digest
+            ):
+                raise LedgerError("host receipt checkpoint is missing or stale")
             if lease.state == "active":
                 return lease
             if lease.state != "pending":
@@ -1551,6 +1595,7 @@ class OwnershipLedger:
             ),
             sealed_root=self._seal_root(str(owner.root), key),
             state="active",
+            owner_receipt_digest=owner.receipt_digest,
         )
 
     def _seal_root(self, value: str, key: _KeyMaterial) -> str:
@@ -1767,6 +1812,7 @@ class OwnershipLedger:
         root_fingerprint = value.get("root_fingerprint")
         sealed_root = value.get("sealed_root")
         state = value.get("state")
+        owner_receipt_digest = value.get("owner_receipt_digest")
         if (
             type(channel_id) is not str
             or not channel_id.strip()
@@ -1778,6 +1824,17 @@ class OwnershipLedger:
             or not sealed_root.strip()
             or type(state) is not str
             or state not in states
+            or (
+                owner_receipt_digest is not None
+                and (
+                    type(owner_receipt_digest) is not str
+                    or len(owner_receipt_digest) != 64
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in owner_receipt_digest
+                    )
+                )
+            )
         ):
             raise ValueError
         return OwnershipLease(
@@ -1789,6 +1846,7 @@ class OwnershipLedger:
             ),
             sealed_root=sealed_root,
             state=state,
+            owner_receipt_digest=owner_receipt_digest,
         )
 
     @classmethod
