@@ -35,6 +35,7 @@ from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
 DEFAULT_REMOTE_POLICY = "merged-and-closed-with-rescue"
+GIT_PROBE_TIMEOUT_SECONDS = 10
 IN_PROGRESS_MARKERS = {
     "MERGE_HEAD": "merge",
     "CHERRY_PICK_HEAD": "cherry-pick",
@@ -139,6 +140,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         capture_output=True,
         text=True,
         env=_sanitized_git_environment(),
+        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base"} else None,
     )
     return result.stdout.strip()
 
@@ -151,6 +153,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         capture_output=True,
         text=True,
         env=_sanitized_git_environment(),
+        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base"} else None,
     )
 
 
@@ -243,6 +246,13 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
     else:
         local_ancestor = _is_ancestor(cwd, base_branch, remote_ref)
         remote_ancestor = _is_ancestor(cwd, remote_ref, base_branch)
+        if local_ancestor is None or remote_ancestor is None:
+            return {
+                "base_branch": base_branch,
+                "remote_ref": remote_ref,
+                "status": "unavailable",
+                "mismatch": True,
+            }
         if local_ancestor and not remote_ancestor:
             status = "behind"
             # A stale local base ref cannot be fast-forwarded from a dedicated
@@ -291,8 +301,13 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
     return result
 
 
-def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
-    result = run_git_result(["merge-base", "--is-ancestor", ancestor, descendant], cwd)
+def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool | None:
+    try:
+        result = run_git_result(["merge-base", "--is-ancestor", ancestor, descendant], cwd)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode not in {0, 1}:
+        return None
     return result.returncode == 0
 
 
@@ -468,7 +483,7 @@ def _checked_out_branches(worktrees: list[dict[str, str]]) -> dict[str, str]:
 def _worktree_dirty(path: str) -> bool | None:
     try:
         result = run_git_result(["status", "--porcelain"], Path(path))
-    except FileNotFoundError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
@@ -2419,7 +2434,10 @@ def _worktree_reclaim_reason(
     pr = _pr_state(branch, pr_states)
     if pr.get("state") == "OPEN" or pr.get("isDraft"):
         return "open_or_draft_pr", None
-    if _is_ancestor(cwd, branch, "origin/main"):
+    merged = _is_ancestor(cwd, branch, "origin/main")
+    if merged is None:
+        return "unknown_merge_state", None
+    if merged:
         return None, "ancestor_of_origin_main"
     if pr.get("state") == "MERGED":
         return None, "merged_pr"
@@ -2467,7 +2485,10 @@ def _local_branch_skip_reason(
         if dirty:
             return "dirty_worktree"
         return "checked_out_worktree"
-    if not _is_ancestor(cwd, branch, "origin/main"):
+    merged = _is_ancestor(cwd, branch, "origin/main")
+    if merged is None:
+        return "unknown_merge_state"
+    if not merged:
         return "not_merged_to_origin_main"
     return None
 
@@ -2505,6 +2526,8 @@ def _remote_branch_skip_reason(
     if pr.get("state") == "OPEN" or pr.get("isDraft"):
         return "open_or_draft_pr", False
     merged = _is_ancestor(cwd, f"origin/{branch}", "origin/main")
+    if merged is None:
+        return "unknown_merge_state", False
     if merged:
         return None, False
     if pr.get("state") in {"CLOSED", "MERGED"}:
@@ -3492,6 +3515,77 @@ def janitor_apply(
     }
 
 
+def create_rescue_snapshot(cwd: Path, destination: Path) -> dict[str, object]:
+    """Preserve refs and reflog objects without writing refs in the source repo.
+
+    This is recovery evidence only. Callers must still obtain fresh cleanup
+    authority after snapshot creation and before every destructive effect.
+    """
+    destination = destination.resolve()
+    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+
+    def inventory() -> dict[str, str]:
+        return {
+            "refs": run_git(["for-each-ref", "--format=%(objectname) %(refname)"], cwd),
+            "worktrees": run_git(["worktree", "list", "--porcelain"], cwd),
+            "stashes": run_git(["stash", "list", "--format=%H %gd %gs"], cwd),
+        }
+
+    before = inventory()
+    bundle = destination / "repository.bundle"
+    # --all alone only retains the newest stash. Include reflogs, then prove
+    # every inventoried stash exists in an otherwise empty recovery repository.
+    run_git(["bundle", "create", str(bundle), "--all", "--reflog"], cwd)
+    bundle.chmod(0o600)
+    run_git(["bundle", "verify", str(bundle)], cwd)
+    objects = {
+        line.split()[0]
+        for key in ("refs", "stashes")
+        for line in before[key].splitlines()
+    }
+    objects.update(
+        line.removeprefix("HEAD ")
+        for line in before["worktrees"].splitlines()
+        if line.startswith("HEAD ")
+    )
+    with tempfile.TemporaryDirectory(prefix="git-rescue-verify-") as directory:
+        recovery = Path(directory)
+        run_git(["init", "--bare", "."], recovery)
+        run_git(["bundle", "unbundle", str(bundle)], recovery)
+        for oid in sorted(objects):
+            run_git(["cat-file", "-e", oid], recovery)
+    if before != inventory():
+        raise RuntimeError("rescue_snapshot_drift; incomplete snapshot retained")
+    digest = hashlib.sha256()
+    with bundle.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    manifest: dict[str, object] = {
+        "version": 1,
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "repository_common_dir": str(_git_common_dir(cwd)),
+        "bundle": str(bundle),
+        "bundle_sha256": digest.hexdigest(),
+        "verified_objects": sorted(objects),
+        "inventory": before,
+        "authority": "recovery_only",
+    }
+    with bundle.open("rb") as handle:
+        os.fsync(handle.fileno())
+    manifest_path = destination / "manifest.json"
+    with manifest_path.open("x", encoding="utf-8") as handle:
+        manifest_path.chmod(0o600)
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(destination, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return {"ok": True, "snapshot": str(destination), **manifest}
+
+
 def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -3501,6 +3595,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=".")
     parser.add_argument("--lease-file", help="Read-only JSON list of active lease claims")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    rescue = subparsers.add_parser("rescue-snapshot")
+    rescue.add_argument("--destination", required=True)
 
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--expected-branch")
@@ -3529,6 +3626,13 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     cwd = Path(args.cwd).resolve()
+    if args.command == "rescue-snapshot":
+        try:
+            _print_json(create_rescue_snapshot(cwd, Path(args.destination)))
+            return 0
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            _print_json({"ok": False, "error": str(exc)})
+            return 1
     leases = load_active_leases(args.lease_file)
     if args.command == "preflight":
         report = preflight_report(

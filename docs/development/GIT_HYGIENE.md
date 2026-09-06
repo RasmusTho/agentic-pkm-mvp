@@ -179,3 +179,65 @@ Update it whenever the preflight inputs, janitor preservation rules, cleanup
 authority, or command behavior changes. Focused executable coverage lives in
 `tests/ops/test_git_hygiene.py`; branch/worktree publication callers also use
 `scripts/agent_workspace_preflight.sh`.
+
+
+## Rescue-backed serial maintenance policy
+
+Each destructive phase starts with a new, private rescue snapshot. The snapshot
+is recovery evidence, never PR, lease, lifecycle, or discard authority. Run:
+
+```bash
+python3 scripts/git_hygiene.py --cwd /absolute/repository rescue-snapshot \
+  --destination /absolute/new-timestamped-rescue-directory
+```
+
+The command refuses an existing destination, captures refs, worktrees and stash
+identities, includes reflog objects in the bundle, runs `git bundle verify`, and
+unbundles into an empty repository to check all captured ref, worktree HEAD and
+stash objects. A second inventory must match before `manifest.json` is written.
+Snapshot failure leaves incomplete files for diagnosis and forbids cleanup. A
+bundle does not preserve dirty working files, untracked files, Git configuration,
+leases or lifecycle authority. Dirty or unavailable targets must remain untouched.
+Save fresh GitHub, dispatcher and lifecycle readbacks alongside the manifest;
+those observations must be refreshed again at each mutation boundary.
+
+Recovery is additive: verify the bundle checksum against the manifest, unbundle
+into a new empty repository, and recover the required object there first. Use an
+expected-absence ref creation when restoring an absent source ref. Never overwrite
+an advanced ref, recreate a worktree at a reused path, or import historical lease
+or lifecycle state as current authority. Older stashes are recoverable by the SHA
+in the manifest; positional stash selectors are not stable identities.
+
+Local maintenance uses only `agent_worktree.py janitor --mode apply` with both
+`--target-worktree` and `--target-generation`. Each phase targets one exact
+registered identity, including a removed-generation branch continuation. Preserve
+missing generation, dirty/unavailable state, unknown merge state, active lease,
+open/draft PR, protected branch and current/root worktree. Require a fresh matching
+PR head and live dispatcher readback; rereading an old JSON file is insufficient.
+Stop on drift, take a new readback after each phase, and do not use broad apply,
+`branch -D`, mass pruning or directory removal. The low-level compatibility API
+is not a replacement for these operational gates.
+
+The separate remote/archive/stash policy is:
+
+| Artifact | Allowed disposition | Additional authority |
+| --- | --- | --- |
+| Remote branch | Existing bounded `targeted_remote_cleanup` with a fresh rescue bundle before the batch | Its authenticated PR/body, dispatcher, lifecycle, archive CAS, final readback and compensation contract above remains mandatory. |
+| Archive/rescue ref | Retain by default | Deletion requires an explicit object-bound owner discard decision, successor/retention disposition, verified independent rescue coverage, fresh authority, expected-old-SHA CAS and post-effect readback. No archive deletion entrypoint is currently enabled. |
+| Stash | Retain by default | Deletion requires an explicit owner decision for the exact stash SHA and contents, verified independent rescue coverage, and exclusive coordination with stash writers. Age, message markers, or positional indices never authorize deletion. No governed stash deletion entrypoint is currently enabled. |
+
+These are separate maintenance phases. Missing discard authority means retain,
+not permission to infer low value. Remote merged-branch and archive/stash deletion
+extensions require their own bounded implementation and verification before use.
+The daily automation remains unchanged and retains its snapshot, lease,
+exact-target and stop-on-drift gates.
+
+## Bounded repository probes
+
+`status` and `merge-base` probes have a ten-second subprocess deadline. Status
+failure or timeout yields unavailable worktree state. Merge-base exit codes other
+than 0/1, launch failure or timeout yield unknown merge state, with no fallback to
+PR-based deletion eligibility. Planning continues with the remaining candidates.
+Preflight fails closed when base ancestry is unavailable. Focused coverage lives
+in `tests/ops/test_git_hygiene.py`, including recovery of older stashes, snapshot
+drift, stale lifecycle bindings and probe failure with closed or merged PRs.

@@ -638,7 +638,7 @@ def test_targeted_janitor_apply_resumes_removed_generation_branch_cleanup(tmp_pa
         "worktree": str(worktree.resolve()),
         "branch": branch,
     }
-    assert git_hygiene._is_ancestor(repo, branch, "origin/main") is False
+    assert git_hygiene._is_ancestor(repo, branch, "origin/main") is None
     assert not worktree.exists()
     assert branch not in git_hygiene._local_branches(repo)
     record = agent_worktree.load_lifecycle_records(repo, registry_path=registry_path)[

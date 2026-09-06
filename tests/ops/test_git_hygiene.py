@@ -5011,3 +5011,111 @@ def test_janitor_apply_stash_drop_targets_survive_index_shift(tmp_path) -> None:
     )
     assert after == {sha_x, sha_y}
     assert report["ok"] is True, report["errors"]
+
+
+@pytest.mark.parametrize("command", ["status", "merge-base"])
+def test_git_safety_probes_have_bounded_timeout(tmp_path, monkeypatch, command):
+    def timeout(args, **kwargs):
+        assert kwargs["timeout"] == git_hygiene.GIT_PROBE_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    if command == "status":
+        assert git_hygiene._worktree_dirty(str(tmp_path)) is None
+    else:
+        assert git_hygiene._is_ancestor(tmp_path, "topic", "origin/main") is None
+
+
+@pytest.mark.parametrize("state", ["MERGED", "CLOSED"])
+def test_merge_probe_failure_cannot_fall_back_to_pr_cleanup(tmp_path, monkeypatch, state):
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda path: False)
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *args: None)
+    reason, proof = git_hygiene._worktree_reclaim_reason(
+        str(tmp_path / "target"), "topic", current_worktree=str(tmp_path),
+        active_resources=set(), protected_branches=set(),
+        pr_states={"topic": {"state": state}}, cwd=tmp_path,
+    )
+    assert (reason, proof) == ("unknown_merge_state", None)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"generation": None}, {"branch": "replacement"},
+    {"status": "removed"}, {"path": "/previous/worktree"},
+])
+def test_stale_lifecycle_binding_preserves_reused_path(tmp_path, overrides):
+    record = {
+        "path": str(tmp_path), "branch": "topic", "owner": "owner",
+        "registered_at": 1, "heartbeat_at": 2, "expires_at": 3,
+        "generation": GENERATION, "status": "active", **overrides,
+    }
+    assert git_hygiene._worktree_lifecycle_skip_reason(
+        str(tmp_path), "topic", {str(tmp_path): record}, now=100,
+    ) == "registration_mismatch"
+
+
+def test_rescue_snapshot_recovers_older_stashes_and_archive_refs(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    def git(*args):
+        return git_hygiene.run_git(list(args), source)
+    git("init")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    (source / "note").write_text("retained\n")
+    git("add", "note")
+    git("commit", "-m", "base")
+    git("update-ref", "refs/archive/history", "HEAD")
+    for content in ("older stash\n", "newer stash\n"):
+        (source / "note").write_text(content)
+        git("stash", "push", "-m", content.strip())
+    stashes = git("stash", "list", "--format=%H").splitlines()
+    result = git_hygiene.create_rescue_snapshot(source, tmp_path / "snapshot")
+    assert set(stashes) <= set(result["verified_objects"])
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    git_hygiene.run_git(["init", "--bare", "."], recovery)
+    git_hygiene.run_git(["bundle", "unbundle", result["bundle"]], recovery)
+    assert git_hygiene.run_git(["show", f"{stashes[1]}:note"], recovery) == "older stash"
+    assert "refs/archive/history" in result["inventory"]["refs"]
+    assert (tmp_path / "snapshot" / "manifest.json").is_file()
+    with pytest.raises(FileExistsError):
+        git_hygiene.create_rescue_snapshot(source, tmp_path / "snapshot")
+
+
+def test_rescue_snapshot_drift_does_not_publish_verified_manifest(tmp_path, monkeypatch):
+    calls = 0
+    def fake_git(args, cwd):
+        nonlocal calls
+        if args[0] == "for-each-ref":
+            calls += 1
+            return "" if calls == 1 else "changed"
+        if args[:2] == ["bundle", "create"]:
+            Path(args[2]).write_bytes(b"bundle")
+        return ""
+    monkeypatch.setattr(git_hygiene, "run_git", fake_git)
+    with pytest.raises(RuntimeError, match="rescue_snapshot_drift"):
+        git_hygiene.create_rescue_snapshot(tmp_path, tmp_path / "snapshot")
+    assert not (tmp_path / "snapshot" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("drift_at", [2, 4, 5])
+def test_remote_cleanup_pr_reopens_at_authority_boundary(tmp_path, monkeypatch, drift_at):
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    contract = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    reads = 0
+    def read_pr(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads >= drift_at:
+            raise RuntimeError("candidate_pr_not_closed_unmerged")
+        return contract
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate],
+    )
+    assert report["ok"] is False
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert not report["completed"]
