@@ -578,6 +578,183 @@ def test_mvr05_floor_cli_converges_established_legacy_ledger(
     assert finish_result["restart_fence_cleared"] is True
 
 
+@pytest.mark.parametrize(
+    "digest_mode",
+    ("matched", "mismatched"),
+)
+def test_dormant_mvr05_recovery_binds_owner_receipt_without_legacy_file(
+    tmp_path, digest_mode: str
+) -> None:
+    """Dormant recovery binds only the producer-digested owner receipt."""
+
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    dev_root = tmp_path / "existing-vault"
+    prod_root = tmp_path / "foreign-vault"
+    dev_root.mkdir()
+    prod_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    for channel, binding_id, root in (
+        ("dev", "binding-existing", dev_root),
+        ("prod", "binding-foreign", prod_root),
+    ):
+        ledger.reserve(
+            channel_id=channel,
+            vault_binding_id=binding_id,
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+    _rewrite_ledger_as_authenticated_v1(ledger, dev_root, prod_root)
+
+    absent_legacy_path = tmp_path / "absent-app-local.md"
+    controller_start_token = "linux:" + "0" * 64
+    runtime_module._begin_instance_state_deployment(
+        channel="dev",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=absent_legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    empty_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [empty_digest, empty_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    runtime_module._prove_instance_state_quiescence(
+        channel="dev",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {
+                        "channel_id": "dev",
+                        "vault_binding_id": "",
+                        "root": str(dev_root),
+                    },
+                    {
+                        "channel_id": "prod",
+                        "vault_binding_id": "binding-foreign",
+                        "root": str(prod_root),
+                    },
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    # The runtime consumer is mount-blind; only the authenticated host
+    # identity evidence in the receipt remains available to the recovery path.
+    dev_root.rmdir()
+    prod_root.rmdir()
+
+    registry_path = state_root / "agentic-pkm" / "vault-registry.md"
+    fence_plan = tmp_path / "mvr05-fence-plan.json"
+    fence_plan.write_text(
+        json.dumps(
+            discover_db_producer_fence(REPO_ROOT / "docker-compose.yaml").as_payload()
+        ),
+        encoding="utf-8",
+    )
+
+    inventory_digest = hashlib.sha256(owner_inventory.read_bytes()).hexdigest()
+    if digest_mode == "mismatched":
+        inventory_digest = "0" * 64
+    ledger_before = ledger.path.read_bytes()
+    proof_before = (
+        ownership_root / "deployment-quiescence-proof.json"
+    ).read_bytes()
+    inventory_before = owner_inventory.read_bytes()
+
+    command = [
+        "mvr05-record-floor",
+        "--channel",
+        "dev",
+        "--registry-path",
+        str(registry_path),
+        "--host-global-root",
+        str(ownership_root),
+        "--legacy-path",
+        str(absent_legacy_path),
+        "--inventory-path",
+        str(owner_inventory),
+        "--inventory-sha256",
+        inventory_digest,
+        "--quiescence-proof-path",
+        str(ownership_root / "deployment-quiescence-proof.json"),
+        "--fence-plan",
+        str(fence_plan),
+    ]
+    if digest_mode == "mismatched":
+        with pytest.raises(
+            runtime_module.InstanceStatePreflightError,
+            match="did not converge to the expected deployed digest",
+        ):
+            runtime_module.main(command)
+        assert ledger.path.read_bytes() == ledger_before
+        assert (
+            ownership_root / "deployment-quiescence-proof.json"
+        ).read_bytes() == proof_before
+        assert owner_inventory.read_bytes() == inventory_before
+        assert VaultRegistryStore(registry_path).load().revision == 0
+        assert not absent_legacy_path.exists()
+        return
+
+    assert runtime_module.main(command) == 0
+
+    migrated = OwnershipLedger(ownership_root).require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.legacy_bootstrap_complete
+    assert VaultRegistryStore(registry_path).load().revision == 1
+    bound_inventory = json.loads(owner_inventory.read_text(encoding="utf-8"))
+    assert bound_inventory["deployment_nonce"]
+    assert bound_inventory["controller"] == {
+        "pid": os.getpid(),
+        "start_token": controller_start_token,
+    }
+    assert bound_inventory["receipt_digest"] == runtime_module._legacy_owner_receipt_digest(
+        bound_inventory
+    )
+    bound_proof = runtime_module._load_deployment_quiescence_proof(
+        ownership_root / "deployment-quiescence-proof.json"
+    )
+    assert bound_proof.owner_receipt_digest == bound_inventory["receipt_digest"]
+    assert not absent_legacy_path.exists()
+
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="dev",
+        host_global_root=ownership_root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
 def test_fresh_dormant_import_rejects_unbound_foreign_before_registry_import(
     tmp_path, monkeypatch
 ) -> None:
