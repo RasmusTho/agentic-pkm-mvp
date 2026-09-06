@@ -70,3 +70,20 @@ def test_capture_append_preserves_empty_and_newline_terminated_inbox_behavior(
     assert "First capture\n- [" in written
     assert "] Second capture\n" in written
     assert "\n\n- [" not in written
+
+
+def test_scoped_context_carrier_is_sealed_from_legacy_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _setup_vault(tmp_path, monkeypatch)
+
+    response = TestClient(app).post(
+        "/api/companion/capture",
+        json={"text": "must not become a global write"},
+        headers={"X-Active-Context-Session": "scoped-bearer"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["error"] == "capability_not_ready"
+    assert not (vault / "Inbox" / "inbox.md").exists()

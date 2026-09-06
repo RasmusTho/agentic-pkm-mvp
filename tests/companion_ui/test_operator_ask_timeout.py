@@ -107,8 +107,8 @@ def test_slow_ask_completes_through_proxy() -> None:
 
     assert p.status_code == 200
     assert p.payload == ask_answer
-    # Path rewrite still applies: companion-UI path -> runtime /api/ask
-    assert client.post_timeout_calls[-1][0] == "/api/ask"
+    # Path rewrite remains fail-closed: companion-UI path -> runtime /api/ask/scoped.
+    assert client.post_timeout_calls[-1][0] == "/api/ask/scoped"
     # The timeout override passed to the client must comfortably exceed a
     # realistic 30s+ synthesis latency and the old 2.0s default.
     ask_timeout = client.post_timeout_calls[-1][1]

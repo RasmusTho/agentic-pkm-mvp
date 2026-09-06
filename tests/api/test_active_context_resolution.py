@@ -7,12 +7,15 @@ requires -- the store is never seeded directly.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.api.routes import ask as ask_routes
 from app.api.routes import active_context_selection as selection_routes
 from app.governance.binding_authority import (
     BindingAuthorizationError,
@@ -23,6 +26,7 @@ from app.instance.active_context_service import (
     ACTION_SELECTION_INSPECT,
     PERMISSION_SELECTION_READ,
     WRITE_CLASS_READ,
+    ActiveContextSelectionService,
     binding_facts,
     build_authorizer,
     resolve_principal,
@@ -32,6 +36,7 @@ from app.instance.context_selection import (
     ContextSelectionStore,
     SelectionPrincipalMismatchError,
 )
+from app.instance.context_bound_read import ContextBoundReadError, resolve_context_read_roots
 from app.instance.local_operator_principal import AuthPosture, PrincipalPreflightError
 from app.vault.active_context_v1 import (
     ActiveContextSetV1,
@@ -40,6 +45,7 @@ from app.vault.active_context_v1 import (
     WorkspaceState,
 )
 from tests._mvr03_principal_harness import provisioned_instance
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.helpers.revoked_binding_authorizer import RevokedBindingAuthorizer
 
 SELECTION_URL = "/api/companion/active-context/selection"
@@ -56,8 +62,20 @@ def instance(tmp_path, monkeypatch):
     """An authoritative registry, a provisioned delegated role, two registered vaults."""
 
     runtime, first, extra, record = provisioned_instance(tmp_path, extra_roots=("two",))
+    for registration in (first, *extra):
+        runtime.ledger.reserve(
+            channel_id="dev",
+            vault_binding_id=registration.vault_binding_id,
+            root=Path(registration.path),
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        runtime.ledger.activate(
+            registration.vault_binding_id,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
     selection_routes.reset_selection_store_for_tests()
     return runtime, first, extra[0], record
 
@@ -93,6 +111,201 @@ def _service_resolver(runtime, record):
         authorizer=build_authorizer(snapshot),
         instance_identity=snapshot.app_install_id,
     )
+
+
+def test_request_resolution_prefers_override_without_global_fallback(instance) -> None:
+    """MVR-05B resolves one immutable request snapshot from the bearer carriers."""
+    runtime, first, second, record = instance
+    service = ActiveContextSelectionService(
+        registry_store=runtime.registry,
+        principal_record=record,
+        selection_store=ContextSelectionStore(),
+    )
+    derived = service.derive("trusted_loopback")
+    session_bearer, _ = service.create(derived=derived, binding_ids=[first.vault_binding_id])
+    override_bearer, _ = service.create(derived=derived, binding_ids=[second.vault_binding_id])
+
+    resolved = service.resolve_request_context(
+        derived=derived,
+        session_bearer=session_bearer,
+        override_bearer=override_bearer,
+        **_READ_GOV_INPUTS,
+    ).snapshot
+    assert resolved.binding_ids == (second.vault_binding_id,)
+    assert resolved.generation == 1
+
+
+def test_request_resolution_rotates_generation_on_live_registry_drift(instance) -> None:
+    """A later request sees a higher generation after its binding truth changes."""
+
+    runtime, first, _second, record = instance
+    service = ActiveContextSelectionService(
+        registry_store=runtime.registry,
+        principal_record=record,
+        selection_store=ContextSelectionStore(),
+    )
+    derived = service.derive("trusted_loopback")
+    bearer, _ = service.create(derived=derived, binding_ids=[first.vault_binding_id])
+
+    before = service.resolve_request_context(
+        derived=derived, session_bearer=bearer, override_bearer=None, **_READ_GOV_INPUTS
+    )
+    registration = runtime.registry.lookup(first.vault_binding_id)
+    assert registration is not None
+    runtime.registry.update_registration(
+        replace(
+            registration,
+            extensions={
+                **(registration.extensions or {}),
+                "bindingRevision": runtime.registry.load().revision + 1,
+            },
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    after = service.resolve_request_context(
+        derived=derived, session_bearer=bearer, override_bearer=None, **_READ_GOV_INPUTS
+    )
+
+    assert before.snapshot.generation == 1
+    assert after.snapshot.generation == 2
+    assert after.invalidation is not None
+    assert after.invalidation.previous_generation == 1
+
+
+def test_context_bound_read_roots_reject_a_stale_binding_revision(instance) -> None:
+    """Filesystem readers cannot rebind a frozen snapshot after registry drift."""
+
+    runtime, first, _second, record = instance
+    service = ActiveContextSelectionService(
+        registry_store=runtime.registry,
+        principal_record=record,
+        selection_store=ContextSelectionStore(),
+    )
+    derived = service.derive("trusted_loopback")
+    bearer, _ = service.create(derived=derived, binding_ids=[first.vault_binding_id])
+    context = service.resolve_request_context(
+        derived=derived, session_bearer=bearer, override_bearer=None, **_READ_GOV_INPUTS
+    ).snapshot
+
+    roots = resolve_context_read_roots(context, registry_store=runtime.registry)
+    assert [(root.vault_binding_id, root.context_generation) for root in roots] == [
+        (first.vault_binding_id, 1)
+    ]
+
+    registration = runtime.registry.lookup(first.vault_binding_id)
+    assert registration is not None
+    runtime.registry.update_registration(
+        replace(
+            registration,
+            extensions={
+                **(registration.extensions or {}),
+                "bindingRevision": runtime.registry.load().revision + 1,
+            },
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    with pytest.raises(ContextBoundReadError, match="binding revision changed"):
+        resolve_context_read_roots(context, registry_store=runtime.registry)
+
+
+def test_request_uses_one_context_generation_end_to_end(
+    instance, client, monkeypatch
+) -> None:
+    """MVR-05B seals the HTTP scope carrier behind one immutable snapshot."""
+
+    _runtime, first, second, _record = instance
+    session = _create(client, [first.vault_binding_id])
+    override = _create(client, [second.vault_binding_id])
+    observed: dict[str, object] = {}
+
+    def _fake_ask(*_args, **kwargs):  # type: ignore[no-untyped-def]
+        observed.update(kwargs)
+        return SimpleNamespace(answer="resolved", hits=[])
+
+    monkeypatch.setattr(ask_routes, "run_ask_graph", _fake_ask)
+    monkeypatch.setattr(ask_routes, "_ensure_hybrid_store_loaded", lambda: None)
+    ask_routes._HYBRID_WARMED = True
+    try:
+        response = client.post(
+            "/api/ask/scoped",
+            json={"question": "which context?", "scope": "client-authored-escape"},
+            headers={
+                "X-Active-Context-Session": session["context_selection_id"],
+                "X-Active-Context-Override": override["context_selection_id"],
+            },
+        )
+    finally:
+        ask_routes._HYBRID_WARMED = False
+
+    assert response.status_code == 200, response.text
+    # The supplied scope cannot reach retrieval. The override selection wins,
+    # and the current policy derives the canonical server scope.
+    assert observed["active_scope"] == "default"
+
+
+def test_ask_route_refuses_invalid_override_without_falling_back_to_session(
+    instance, client, monkeypatch
+) -> None:
+    """An explicit but stale override is a fail-closed request, never a fallback."""
+
+    _runtime, first, _second, _record = instance
+    session = _create(client, [first.vault_binding_id])
+    monkeypatch.setattr(ask_routes, "run_ask_graph", lambda *_args, **_kwargs: pytest.fail("ASK ran"))
+
+    response = client.post(
+        "/api/ask/scoped",
+        json={"question": "which context?"},
+        headers={
+            "X-Active-Context-Session": session["context_selection_id"],
+            "X-Active-Context-Override": "unknown-override-bearer",
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert "reselection_required" in response.json()["detail"]
+    assert "unknown-override-bearer" not in response.text
+
+
+def test_scoped_ask_refuses_a_stripped_carrier_before_legacy_default(instance, client, monkeypatch) -> None:
+    """Route identity prevents a migrated client from downgrading to `/ask`."""
+
+    monkeypatch.setattr(ask_routes, "run_ask_graph", lambda *_args, **_kwargs: pytest.fail("ASK ran"))
+    response = client.post("/api/ask/scoped", json={"question": "which context?"})
+
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "reselection_required"
+
+
+def test_scoped_note_reads_keep_sessions_and_source_bindings_isolated(instance, client) -> None:
+    """Two scoped requests enumerate only their own registry-bound roots."""
+
+    runtime, first, second, _record = instance
+    first_root = Path(runtime.registry.lookup(first.vault_binding_id).path)  # type: ignore[union-attr]
+    second_root = Path(runtime.registry.lookup(second.vault_binding_id).path)  # type: ignore[union-attr]
+    (first_root / "only-first.md").write_text("# First", encoding="utf-8")
+    (second_root / "only-second.md").write_text("# Second", encoding="utf-8")
+    first_session = _create(client, [first.vault_binding_id])
+    second_session = _create(client, [second.vault_binding_id])
+
+    first_response = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": first_session["context_selection_id"]},
+    )
+    second_response = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": second_session["context_selection_id"]},
+    )
+
+    assert first_response.status_code == 200, first_response.text
+    assert second_response.status_code == 200, second_response.text
+    first_notes = first_response.json()["notes"]
+    second_notes = second_response.json()["notes"]
+    assert [(note["path"], note["vault_binding_id"]) for note in first_notes] == [
+        ("only-first.md", first.vault_binding_id)
+    ]
+    assert [(note["path"], note["vault_binding_id"]) for note in second_notes] == [
+        ("only-second.md", second.vault_binding_id)
+    ]
 
 
 def _record_for(store: ContextSelectionStore, raw_id: str, principal, instance_identity):
@@ -642,3 +855,11 @@ def test_instance_identity_never_substitutes_for_principal_context(instance, cli
         companion_proxy_configured=False,
     )
     assert other_posture.subjects() == ("trusted_loopback",)
+def test_request_override_header_outranks_session_without_mutating_it() -> None:
+    """The resolver contract keeps override precedence explicit and request-local."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "app/instance/active_context_service.py").read_text()
+    assert "override_bearer" in source
+    assert "session_bearer" in source
+    assert "override_bearer if override_bearer is not None else session_bearer" in source

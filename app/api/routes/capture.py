@@ -55,6 +55,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.routes.ingest_binding import ingest_binding_status
+from app.api.request_active_context import reject_scoped_vault_mutation
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
@@ -268,6 +269,7 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
 def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
     """Append a capture to the vault inbox note through the governed pipeline."""
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
+    reject_scoped_vault_mutation(request)
 
     # Validation — never silently drop text: whitespace-only is an explicit,
     # named rejection (schema validation already rejected missing/empty text

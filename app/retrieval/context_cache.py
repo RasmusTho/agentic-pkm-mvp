@@ -24,6 +24,7 @@ Two further invariants are structural here:
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 
 from app.vault.active_context_v1 import ActiveContextSetV1
@@ -61,8 +62,30 @@ def context_cache_identity(
     return ContextCacheIdentity(key=key, components=components)
 
 
+def runtime_context_cache_identity(
+    snapshot: ActiveContextSetV1, *, settings_bundle_digest: str | None = None
+) -> ContextCacheIdentity:
+    """Bind a scoped retrieval lookup to the current compiled settings bundle.
+
+    The settings runtime is the canonical production bundle owner.  Its typed
+    JSON projection is hashed locally and never returned, so context/cache
+    provenance can prove the exact settings generation without disclosing
+    configuration values.
+    """
+
+    from app.settings.runtime import get_settings_bundle
+
+    if settings_bundle_digest is None:
+        payload = get_settings_bundle().model_dump(mode="json")
+        settings_bundle_digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    return context_cache_identity(snapshot, settings_bundle_digest=settings_bundle_digest)
+
+
 __all__ = [
     "CONTEXT_CACHE_KEY_VERSION",
     "ContextCacheIdentity",
     "context_cache_identity",
+    "runtime_context_cache_identity",
 ]

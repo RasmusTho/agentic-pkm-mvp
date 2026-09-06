@@ -177,7 +177,7 @@ _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
 _DEFAULT_API_TIMEOUT_SECONDS = 2.0
-# Long-running operator POST routes (e.g. /api/operator/ask -> /api/ask) can
+# Long-running operator POST routes (e.g. /api/operator/ask -> /api/ask/scoped) can
 # take tens of seconds on a real synthesis backend (measured ~50s on the
 # ollama route). They get their own generous budget so the proxy does not
 # return runtime_unavailable while the backend is still working (#2993).
@@ -2451,9 +2451,11 @@ def _note_editor_script() -> str:
         // note path never includes a #section-anchor (#1447).
         var notePath = (ta.getAttribute('data-note-path') || '').split('#')[0];
         setStatus('', 'Saving\\u2026');
+        var scopedBearer = null;
+        try { scopedBearer = window.sessionStorage && window.sessionStorage.getItem('active-context-session'); } catch (e) { scopedBearer = null; }
         fetch('/api/companion/note/save', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: scopedBearer ? { 'Content-Type': 'application/json', 'X-Active-Context-Session': scopedBearer } : { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             note_path: notePath,
             new_body: ta.value,
@@ -7144,7 +7146,9 @@ def _render_vault_picker_script() -> str:
         body: JSON.stringify(body || {})
       }).then(function(response) {
         if (!response.ok) { return response.text().then(function(t) { throw new Error(t || response.status); }); }
-        return response.text();
+        return response.text().then(function(text) {
+          try { return text ? JSON.parse(text) : null; } catch (e) { return null; }
+        });
       });
     }
     function escapeHtml(value) {
@@ -7191,7 +7195,15 @@ def _render_vault_picker_script() -> str:
         button.setAttribute('data-affordance-status', 'pending');
       }
       jsonPost('/api/companion/vault/select', { path: path })
-        .then(function() { window.location.reload(); })
+        .then(function(data) {
+          // MVR-05B: the picker owns this browser-session bearer. It is not a
+          // durable preference and a stale value is handled by the scoped
+          // route's visible reselection contract.
+          if (data && data.context_selection_id) {
+            window.sessionStorage.setItem('active-context-session', data.context_selection_id);
+          }
+          window.location.reload();
+        })
         .catch(function(err) {
           var message = String(err && err.message || err);
           showSelectError(message);
@@ -7207,7 +7219,7 @@ def _render_vault_picker_script() -> str:
     // confirm state on ``data-init-confirmed``; ``errEl`` (optional) shows the
     // confirm/error copy. Reused by the uninitialized-state init button (#2564)
     // and the filesystem-mode "Initialize a vault here" affordance (#2565).
-    function initializeVault(path, button, errEl, confirmLabel) {
+    function initializeVault(path, button, errEl, confirmLabel, bootstrapToken) {
       if (!path) { return; }
       if (button.getAttribute('data-submitting') === 'true') { return; }
       var confirmed = button.getAttribute('data-init-confirmed') === 'true';
@@ -7217,7 +7229,10 @@ def _render_vault_picker_script() -> str:
       if (confirmed) { body.confirm = true; }
       fetch('/api/companion/vault/initialize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: bootstrapToken ? {
+          'Content-Type': 'application/json',
+          'X-Active-Context-Bootstrap': bootstrapToken
+        } : { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       }).then(function(response) {
         return response.text().then(function(text) {
@@ -7226,9 +7241,29 @@ def _render_vault_picker_script() -> str:
           return { ok: response.ok, status: response.status, data: data, text: text };
         });
       }).then(function(res) {
-        if (res.ok) { window.location.reload(); return; }
+        if (res.ok) {
+          var selectionId = res.data && res.data.context && res.data.context.context_selection_id;
+          if (selectionId) { window.sessionStorage.setItem('active-context-session', selectionId); }
+          window.location.reload();
+          return;
+        }
         button.removeAttribute('data-submitting');
         var detail = res.data && res.data.detail;
+        if (res.status === 409 && detail === 'first_vault_bootstrap_required' && !bootstrapToken) {
+          // Registry-bound first initialization needs a server-minted,
+          // single-use target/revision precondition. A legacy no-registry
+          // process never returns this marker and keeps its existing journey.
+          jsonPost('/api/companion/vault/initialize/bootstrap', { path: path })
+            .then(function(bootstrap) {
+              initializeVault(path, button, errEl, confirmLabel,
+                bootstrap && bootstrap.bootstrap_precondition);
+            })
+            .catch(function(err) {
+              button.setAttribute('data-affordance-status', 'blocked');
+              if (errEl) { errEl.hidden = false; errEl.textContent = String(err && err.message || err); }
+            });
+          return;
+        }
         if (res.status === 409 && detail && detail.error === 'vault_init_confirmation_required') {
           // The chosen folder already holds the human's content. Surface the
           // confirm gesture; the next click re-posts with confirm:true.
@@ -10103,7 +10138,7 @@ def _orientation_ambient_refresh_script() -> str:
 #   GET  /api/operator/health            -> COMPANION_API_BASE_URL /api/health
 #   GET  /api/operator/settings/validate -> COMPANION_API_BASE_URL /api/settings/validate
 #   GET  /api/operator/events/tail       -> COMPANION_API_BASE_URL /api/events/tail
-#   POST /api/operator/ask               -> COMPANION_API_BASE_URL /api/ask
+#   POST /api/operator/ask               -> COMPANION_API_BASE_URL /api/ask/scoped
 #
 # The /api/operator/* prefix keeps operator routes clearly namespaced and
 # distinct from /api/companion/* (workspace) routes.
@@ -10440,9 +10475,11 @@ def render_operator_overlay_html(
     if (!q) {{ return; }}
     btn.disabled = true;
     ans.textContent = 'Asking…';
+    var scopedBearer = null;
+    try {{ scopedBearer = window.sessionStorage && window.sessionStorage.getItem('active-context-session'); }} catch (e) {{ scopedBearer = null; }}
     fetch('/api/operator/ask', {{
       method: 'POST',
-      headers: {{'Content-Type': 'application/json'}},
+      headers: scopedBearer ? {{'Content-Type': 'application/json', 'X-Active-Context-Session': scopedBearer}} : {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{question: q}})
     }}).then(function(r) {{
       return r.json().then(function(d) {{
@@ -15278,13 +15315,29 @@ def render_index_html(
     function fetchNotes(q) {{
       setStatus('Loading…');
       list.innerHTML = '';
-      var url = '/api/companion/vault/notes' + (q ? '?q=' + encodeURIComponent(q) : '');
-      fetch(url)
+      // The dev-page harness and older embedded shells may not expose Web
+      // Storage. Scoped selection remains optional in that posture.
+      var scopedBearer = null;
+      try {{ scopedBearer = window.sessionStorage && window.sessionStorage.getItem('active-context-session'); }} catch (e) {{ scopedBearer = null; }}
+      var scoped = !!scopedBearer;
+      var url = '/api/companion/vault/notes';
+      if (scoped) {{ url = '/api/companion/vault/notes/scoped'; }}
+      url += q ? '?q=' + encodeURIComponent(q) : '';
+      fetch(url, scoped ? {{headers: {{'X-Active-Context-Session': scopedBearer}}}} : {{}})
         .then(function(r) {{
+          if (scoped && r.status === 401) {{
+            // A selection store is intentionally ephemeral. Never retry this
+            // request on the legacy route or silently remint; make the stale
+            // selection visible and require a new picker choice.
+            try {{ window.sessionStorage && window.sessionStorage.removeItem('active-context-session'); }} catch (e) {{}}
+            setStatus('Your vault selection expired. Choose a vault again.');
+            return null;
+          }}
           if (!r.ok) throw new Error('API error ' + r.status);
           return r.json();
         }})
         .then(function(data) {{
+          if (data === null) return;
           renderNotes(data.notes, data.vault_identity);
         }})
         .catch(function(err) {{
@@ -16413,13 +16466,17 @@ def make_handler(
                     return
                 self._send_json(200, data)
                 return
-            if parsed.path == "/api/companion/vault/notes":
+            if parsed.path in {
+                "/api/companion/vault/notes",
+                "/api/companion/vault/notes/scoped",
+            }:
                 params = parse_qs(parsed.query)
                 q = params.get("q", [""])[0]
                 try:
                     data = self._client.get(
-                        "/api/companion/vault/notes",
+                        parsed.path,
                         params={"q": q} if q else {},
+                        headers=self._forwarded_client_headers(parsed.path),
                     )
                 except WorkspaceClientError as exc:
                     self._proxy_error(exc)
@@ -16730,6 +16787,7 @@ def make_handler(
                 "/api/companion/briefing/today",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
+                "/api/companion/vault/notes/scoped",
                 "/api/companion/vault/browse",
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/companion/vault-related",
@@ -16765,6 +16823,7 @@ def make_handler(
                 "/api/companion/vault-browser/actions/queue-review",
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 VAULT_RELOAD_ENDPOINT,
                 VAULT_SETTINGS_ENDPOINT,
                 "/api/canvas/sessions",
@@ -16777,11 +16836,18 @@ def make_handler(
             {
                 VAULT_SELECT_ENDPOINT,
                 VAULT_INITIALIZE_ENDPOINT,
+                "/api/companion/vault/initialize/bootstrap",
                 # GET /vault/browse is require_loopback_or_api_key-gated and
                 # enumerates folder names; forward the client's auth context so
                 # the runtime authenticates the real client, not the loopback
                 # proxy (#2565).
                 "/api/companion/vault/browse",
+                "/api/companion/vault/notes/scoped",
+                "/api/operator/ask",
+                "/api/companion/capture",
+                "/api/companion/note/save",
+                "/api/companion/workspace/body",
+                "/api/companion/workspace/update",
             }
         )
         _WRITE_REFUSAL_PICKER_PATHS = frozenset(
@@ -16843,7 +16909,10 @@ def make_handler(
         # Operator POST paths that rewrite to a different runtime path.
         # key = companion-UI path, value = runtime API path.
         _POST_PATH_REWRITES: dict[str, str] = {
-            "/api/operator/ask": "/api/ask",
+            # Migrated Companion Ask remains scoped even if an intermediary
+            # strips the carrier, so the runtime fails reselection-required
+            # rather than invoking legacy/global Ask behavior.
+            "/api/operator/ask": "/api/ask/scoped",
         }
 
         # Operator POST paths that are long-running (real synthesis latency is
@@ -16874,6 +16943,15 @@ def make_handler(
             api_key = self.headers.get("X-API-Key")
             if api_key:
                 headers["X-API-Key"] = api_key
+            scoped_session = self.headers.get("X-Active-Context-Session")
+            if scoped_session:
+                headers["X-Active-Context-Session"] = scoped_session
+            scoped_override = self.headers.get("X-Active-Context-Override")
+            if scoped_override:
+                headers["X-Active-Context-Override"] = scoped_override
+            bootstrap = self.headers.get("X-Active-Context-Bootstrap")
+            if bootstrap:
+                headers["X-Active-Context-Bootstrap"] = bootstrap
             return headers
 
         def do_POST(self) -> None:

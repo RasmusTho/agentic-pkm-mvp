@@ -9,6 +9,8 @@ from app.retrieval.hybrid import (
     _intrinsic_evidence_role,
     scoped_hybrid_search,
 )
+from app.retrieval.context_cache import runtime_context_cache_identity
+from app.vault.active_context_v1 import ActiveContextSetV1
 
 ViewFreshnessState = Literal["fresh", "stale", "partial", "unknown"]
 
@@ -59,6 +61,11 @@ class RetrievalRequest:
     view_freshness: RetrievalViewFreshness | None = None
     include_signal_payload: bool = False
     signal_payload: RetrievalSignalPayload | None = None
+    #: The immutable server-resolved context for a scoped production read.
+    #: Legacy callers deliberately omit it while their compatibility route is
+    #: retained; it is never reconstructed from a global vault selection.
+    active_context: ActiveContextSetV1 | None = None
+    context_settings_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,7 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         # per-request active-scope binding, so the prefilter partitions in production instead of
         # waiting on an ambient `ASK_DOMAIN_SCOPE` that no production code ever set.
         scope=request.scope,
+        allowed_binding_ids=(set(request.active_context.binding_ids) if request.active_context else None),
     )
     raw_hits = scoped.results
     diagnostics: dict[str, Any] = {
@@ -267,6 +275,23 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     }
     if request.provenance_metadata:
         metadata["provenance"]["hints"] = dict(request.provenance_metadata)
+    if request.active_context is not None:
+        cache_identity = runtime_context_cache_identity(
+            request.active_context, settings_bundle_digest=request.context_settings_digest
+        )
+        metadata["provenance"]["active_context"] = {
+            "context_id": request.active_context.context_id,
+            "generation": request.active_context.generation,
+            "registry_revision": request.active_context.registry_revision,
+            "authorization_epoch": request.active_context.authorization_epoch,
+            "binding_ids": list(request.active_context.binding_ids),
+            "selection_capability_digest": request.active_context.selection_capability_digest,
+            "cache_key": cache_identity.key,
+        }
+    if request.active_context is not None:
+        for raw in raw_hits:
+            raw.setdefault("payload", {})["context_generation"] = request.active_context.generation
+        metadata["provenance"]["active_context"]["rejected_unbound_hits"] = scoped.rejected_unbound_hits
     hits = _apply_closure_decay([RetrievalHit.from_hybrid(hit) for hit in raw_hits])
     return RetrievalResponse(
         query=request.query,

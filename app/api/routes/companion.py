@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -61,7 +61,8 @@ from app.agent_memory.posture_projection import (
     AgentMemoryPostureTarget,
     agent_memory_posture_for_artifacts,
 )
-from app.auth import require_loopback_or_api_key
+from app.auth import require_loopback_or_api_key, resolve_auth_subject
+from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -78,6 +79,10 @@ from app.domain.commitments import (
     query_next_and_waiting_commitments,
 )
 from app.api.routes.ingest_binding import ingest_binding_status
+from app.api.request_active_context import (
+    reject_scoped_vault_mutation,
+    require_scoped_read_context,
+)
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -111,6 +116,14 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
+from app.vault.active_context_v1 import ActiveContextSetV1
+from app.instance.context_bound_read import ContextBoundReadError, context_bound_read_window
+from app.instance.vault_registry import VaultRegistryStore
+from app.instance.first_vault_bootstrap import (
+    BootstrapPreconditionError,
+    get_first_vault_bootstrap_store,
+)
+from app.instance.runtime import _load_active_registry_runtime
 from app.vault.layout import LAYOUT_NOTE_NAME
 from app.vault.manager import (
     SETTINGS_DIR_NAME,
@@ -131,7 +144,14 @@ from app.vault.settings_service import (
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import register_question_explicitly
 
-router = APIRouter(prefix="/companion", tags=["companion"])
+router = APIRouter(
+    prefix="/companion",
+    tags=["companion"],
+    # A scoped selection is read authority only until MVR-05C installs its
+    # explicit compatibility-write precondition.  Keep the guard at the
+    # router, ahead of every individual legacy vault resolver/writer.
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +283,10 @@ class VaultContextResponse(BaseModel):
     validation_error: str | None = None
     permissions: dict[str, bool] = Field(default_factory=dict)
     active_context: dict[str, Any] | None = None
+    #: Returned only by the picker transition in a registry-bound process. The
+    #: raw bearer is session-scoped UI transport state, never persisted in the
+    #: vault context or app-local selection.
+    context_selection_id: str | None = None
 
 
 class VaultSelectRequest(BaseModel):
@@ -280,6 +304,14 @@ class VaultInitializeRequest(BaseModel):
     # populated (#2518). Default ``False`` so a non-empty target refuses with
     # 409 until the human confirms; an empty/new target ignores it.
     confirm: bool = False
+
+
+class VaultInitializeBootstrapRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+
+
+class VaultInitializeBootstrapResponse(BaseModel):
+    bootstrap_precondition: str
 
 
 class VaultInitializeResponse(BaseModel):
@@ -927,9 +959,43 @@ def read_companion_vault_context() -> VaultContextResponse | VaultSelectionRequi
     response_model=VaultContextResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
-def select_companion_vault(req: VaultSelectRequest) -> VaultContextResponse:
-    context = get_vault_manager().select_vault(Path(req.path), remember=req.remember)
-    return _vault_context_response(context)
+def select_companion_vault(req: VaultSelectRequest, request: Request) -> VaultContextResponse:
+    registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    if not registry_path:
+        # A request path is never filesystem authority.  Legacy processes can
+        # still read their already-bound context, but cannot select a new root
+        # until registry authority is configured.
+        target = _resolve_browse_target(req.path, _resolve_browse_base())
+        context = get_vault_manager().select_vault(target, remember=req.remember)
+        return _vault_context_response(context)
+    registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
+    # Do not resolve, stat, or select a caller-provided pathname.  The request
+    # value is only a lexical lookup key; all filesystem work below uses the
+    # server-owned registered path after a unique registry match.
+    selected_token = req.path
+    matches = [
+        registration
+        for registration in registry.load().registrations.values()
+        if registration.path == selected_token
+    ]
+    if len(matches) != 1:
+        raise HTTPException(status_code=409, detail="active_context_binding_unresolved")
+    registered_path = Path(matches[0].path)
+    context = get_vault_manager().select_vault(registered_path, remember=req.remember)
+    response = _vault_context_response(context)
+    try:
+        service = build_selection_service(get_selection_store())
+        derived = service.derive(
+            resolve_auth_subject(request, request.headers.get("X-API-Key")),
+            presented_credential=request.headers.get("X-API-Key"),
+        )
+        bearer, _record = service.create(
+            derived=derived,
+            binding_ids=[matches[0].vault_binding_id],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail="active_context_selection_unavailable") from exc
+    return response.model_copy(update={"context_selection_id": bearer})
 
 
 # --- Visual folder browser (#2565) ------------------------------------------
@@ -1213,8 +1279,12 @@ def read_companion_now() -> list[dict]:
     response_model=VaultInitializeResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
-def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
-    target = Path(req.path)
+def initialize_companion_vault(
+    req: VaultInitializeRequest,
+    request: Request,
+    x_active_context_bootstrap: str | None = Header(default=None),
+) -> VaultInitializeResponse:
+    target = _resolve_browse_target(req.path, _resolve_browse_base())
     # Personal-vault-write guard (#2518): initializing writes the settings
     # scaffold INTO the chosen folder. When that folder is already populated
     # (an existing personal Obsidian vault resolves to ``uninitialized`` and is
@@ -1243,17 +1313,81 @@ def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeRe
                     "requires_confirmation": True,
                 },
             )
-    result = get_vault_manager().initialize_vault(
-        target,
-        vault_name=req.vault_name,
-        machine_role=req.machine_role,
-        remember=req.remember,
+    target = _resolve_browse_target(req.path, _resolve_browse_base())
+    registry_value = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    manager = get_vault_manager()
+    if registry_value:
+        if not x_active_context_bootstrap:
+            raise HTTPException(status_code=409, detail="first_vault_bootstrap_required")
+        registry = VaultRegistryStore(Path(registry_value).expanduser().resolve(strict=False))
+        try:
+            get_first_vault_bootstrap_store().consume(
+                token=x_active_context_bootstrap,
+                subject=resolve_auth_subject(request, request.headers.get("X-API-Key")),
+                target=target,
+                registry=registry,
+            )
+            ownership_value = (os.getenv("INSTANCE_OWNERSHIP_ROOT") or "").strip()
+            if not ownership_value:
+                raise BootstrapPreconditionError("first_vault_bootstrap_unavailable")
+            runtime = _load_active_registry_runtime(
+                registry_path=registry.path,
+                ownership_root=Path(ownership_value).expanduser().resolve(strict=False),
+                channel=os.getenv("PKM_ENVIRONMENT", "dev"),
+            )
+            result, _registration = runtime.initialize_and_register_first_vault(
+                target,
+                initialize=lambda: manager.initialize_vault(
+                    target,
+                    vault_name=req.vault_name,
+                    machine_role=req.machine_role,
+                    remember=req.remember,
+                    select=False,
+                ),
+            )
+        except BootstrapPreconditionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        result = manager.initialize_vault(
+            target,
+            vault_name=req.vault_name,
+            machine_role=req.machine_role,
+            remember=req.remember,
+        )
+    picker_context = select_companion_vault(
+        VaultSelectRequest(path=str(target), remember=req.remember), request
     )
     return VaultInitializeResponse(
-        context=_vault_context_response(result.context),
+        context=picker_context,
         created_files=list(result.created_files),
         skipped_existing_files=list(result.skipped_existing_files),
     )
+
+
+@router.post(
+    "/vault/initialize/bootstrap",
+    response_model=VaultInitializeBootstrapResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
+def create_vault_initialize_bootstrap(
+    req: VaultInitializeBootstrapRequest,
+    request: Request,
+) -> VaultInitializeBootstrapResponse:
+    """Mint the one-use first-vault init precondition for this exact target."""
+
+    target = _resolve_browse_target(req.path, _resolve_browse_base())
+    registry_value = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    if not registry_value:
+        raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
+    try:
+        token = get_first_vault_bootstrap_store().issue(
+            subject=resolve_auth_subject(request, request.headers.get("X-API-Key")),
+            target=target,
+            registry=VaultRegistryStore(Path(registry_value).expanduser().resolve(strict=False)),
+        )
+    except BootstrapPreconditionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return VaultInitializeBootstrapResponse(bootstrap_precondition=token)
 
 
 @router.post("/vault/reload", response_model=VaultContextResponse)
@@ -1324,6 +1458,19 @@ class VaultNoteEntry(BaseModel):
 class VaultNoteListResponse(BaseModel):
     notes: list[VaultNoteEntry]
     vault_identity: VaultIdentityState
+    total_count: int
+
+
+class ScopedVaultNoteEntry(VaultNoteEntry):
+    """A note result with the source binding and frozen request generation."""
+
+    vault_binding_id: str
+    context_generation: int
+
+
+class ScopedVaultNoteListResponse(BaseModel):
+    notes: list[ScopedVaultNoteEntry]
+    context_generation: int
     total_count: int
 
 
@@ -2042,6 +2189,51 @@ def list_vault_notes(
     return VaultNoteListResponse(
         notes=notes,
         vault_identity=_vault_identity_state(vault_root),
+        total_count=len(notes),
+    )
+
+
+@router.get("/vault/notes/scoped", response_model=ScopedVaultNoteListResponse)
+def list_scoped_vault_notes(
+    q: str = Query("", description="Optional search filter by title or path"),
+    context: ActiveContextSetV1 = Depends(require_scoped_read_context),
+) -> ScopedVaultNoteListResponse:
+    """Read each selected binding without consulting the global vault manager."""
+
+    registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    if not registry_path:
+        # The dependency normally prevents this; retain a bounded response if
+        # process configuration changes between resolution and the read seam.
+        raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
+    try:
+        read_window = context_bound_read_window(
+            context,
+            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+        )
+    except ContextBoundReadError as exc:
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
+
+    notes: list[ScopedVaultNoteEntry] = []
+    try:
+        with read_window as roots:
+            for source in roots:
+                for note in _list_vault_notes(source.root, q=q):
+                    notes.append(
+                        ScopedVaultNoteEntry(
+                            **note.model_dump(),
+                            vault_binding_id=source.vault_binding_id,
+                            context_generation=source.context_generation,
+                        )
+                    )
+                    if len(notes) >= _BROWSE_MAX_NOTES:
+                        break
+                if len(notes) >= _BROWSE_MAX_NOTES:
+                    break
+    except ContextBoundReadError as exc:
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
+    return ScopedVaultNoteListResponse(
+        notes=notes,
+        context_generation=context.generation,
         total_count=len(notes),
     )
 

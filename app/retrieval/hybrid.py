@@ -97,6 +97,7 @@ class ScopedRetrieval:
     denials: tuple[ScopeDenial, ...] = ()
     scope_policy_prefiltered: bool = True
     active_scope: str | None = None
+    rejected_unbound_hits: int = 0
 
 
 def _normalize_embedding(raw: Any) -> list[float] | None:
@@ -766,6 +767,7 @@ def scoped_hybrid_search(
     language: Optional[str] = None,
     query_vector: list[float] | None = None,
     scope: str | None = None,
+    allowed_binding_ids: set[str] | None = None,
 ) -> ScopedRetrieval:
     """Scope-prefiltered retrieval with content-free denials — the structured entrypoint.
 
@@ -794,6 +796,19 @@ def scoped_hybrid_search(
 
     # 1) PREFILTER before ranking — eligibility decides membership, not similarity.
     eligible_idx, excluded = _partition_by_scope(docs, scope)
+    rejected_unbound_hits = 0
+    if allowed_binding_ids is not None:
+        # A scoped active context is an eligibility boundary, not a post-top-k
+        # display filter.  Apply it before scoring and normalization so a
+        # foreign binding cannot consume the selected binding's candidate
+        # budget or influence its ranking.
+        before_binding_filter = eligible_idx
+        eligible_idx = [
+            index
+            for index in eligible_idx
+            if docs[index].payload.get("vault_binding_id") in allowed_binding_ids
+        ]
+        rejected_unbound_hits = len(before_binding_filter) - len(eligible_idx)
 
     # Content-free denials for relevant-but-excluded material (never a silent drop). The empty
     # eligible set is likewise no longer a silent early-exit.
@@ -812,6 +827,7 @@ def scoped_hybrid_search(
         denials=denials,
         scope_policy_prefiltered=True,
         active_scope=scope,
+        rejected_unbound_hits=rejected_unbound_hits,
     )
 
 

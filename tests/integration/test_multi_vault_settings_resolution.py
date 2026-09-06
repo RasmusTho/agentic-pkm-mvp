@@ -1,0 +1,5 @@
+from tests.instance.test_context_settings import test_many_binding_request_fails_before_effect_for_incompatible_runtime_settings
+
+
+def test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict(monkeypatch) -> None:
+    test_many_binding_request_fails_before_effect_for_incompatible_runtime_settings(monkeypatch)

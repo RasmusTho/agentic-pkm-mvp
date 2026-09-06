@@ -25,6 +25,12 @@
 - Keep interruption and re-entry semantics explicit at the interface boundary.
 
 ## Single-origin API proxy (#2125)
+- Scoped runtime routes (`/api/search/scoped`, `/api/ask/scoped`, and
+  `/api/companion/vault/notes/scoped`) accept an opaque `X-Active-Context-Session` bearer. An
+  optional `X-Active-Context-Override` is one-request only and has server-enforced precedence.
+  Missing, stale, or stripped carriers return `reselection_required`; a scoped request never
+  retries through a carrier-free legacy route. These bearers name no path and grant no write
+  authority. The browser forwarding change is owned by the picker migration in MVR-05B.
 - The browser only ever talks to the UI origin. The UI server proxies an
   **explicit allowlist** of consumed routes (not a `/api/companion/*` wildcard)
   through to the configured runtime API base (`COMPANION_API_BASE_URL`, default

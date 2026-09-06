@@ -2,6 +2,29 @@ from __future__ import annotations
 
 from app.retrieval.capability import RetrievalRequest, RetrievalSignalPayload, retrieve
 from app.retrieval.hybrid import get_store, hybrid_search
+from app.vault.active_context_v1 import (
+    ActiveContextBinding,
+    ActiveContextSetV1,
+    PrincipalContext,
+    WorkspaceState,
+)
+
+
+def _scoped_context() -> ActiveContextSetV1:
+    return ActiveContextSetV1(
+        context_id="ctx-test",
+        generation=3,
+        workspace=WorkspaceState.none(),
+        scope="core",
+        sphere_memberships=(),
+        situated_identity=None,
+        principal_context=PrincipalContext("operator", "human", "trusted_loopback"),
+        instance_identity="instance-test",
+        source_bindings=(ActiveContextBinding("binding-a", 1, "epoch-a"),),
+        registry_revision=1,
+        authorization_epoch="epoch-a",
+        selection_provenance="session_selection",
+    )
 
 
 def _patch_embeddings(monkeypatch) -> None:
@@ -41,6 +64,26 @@ def test_retrieval_capability_preserves_current_hybrid_results(monkeypatch) -> N
         assert response.hits[0].payload["title"] == current[0]["payload"]["title"]
     finally:
         get_store().set_documents([])
+
+
+def test_scoped_retrieval_rejects_unbound_rows_and_preserves_binding_provenance(monkeypatch) -> None:
+    _patch_embeddings(monkeypatch)
+    store = get_store()
+    store.set_documents(
+        [
+            {"doc_id": "a", "text": "bound", "payload": {"domain": "core", "vault_binding_id": "binding-a"}},
+            {"doc_id": "b", "text": "unbound", "payload": {"domain": "core", "vault_binding_id": "binding-b"}},
+            {"doc_id": "legacy", "text": "legacy", "payload": {"domain": "core"}},
+        ]
+    )
+    try:
+        response = retrieve(RetrievalRequest(query="bound", k=3, scope="core", active_context=_scoped_context()))
+        assert [hit.doc_id for hit in response.hits] == ["a"]
+        assert response.hits[0].payload["vault_binding_id"] == "binding-a"
+        assert response.hits[0].payload["context_generation"] == 3
+        assert response.metadata["provenance"]["active_context"]["rejected_unbound_hits"] == 2
+    finally:
+        store.set_documents([])
 
 
 def test_ask_compatibility_metadata_survives_capability_adapter(monkeypatch) -> None:
