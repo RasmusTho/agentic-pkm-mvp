@@ -428,7 +428,8 @@ prepare_instance_state_deployment() {
   python3 "${inventory_helper}" produce-legacy-owners \
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
-    --output "${owner_inventory_host_path}"
+    --output "${owner_inventory_host_path}" \
+    --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ] || [ ! -s "${owner_inventory_host_path}" ]; then
     rm -f -- "${owner_inventory_host_path}"
@@ -632,7 +633,8 @@ prepare_instance_state_deployment() {
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
     --inventory "${owner_inventory_host_path}" \
-    --output "${owner_inventory_host_path}"
+    --output "${owner_inventory_host_path}" \
+    --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${owner_inventory_host_path}"
