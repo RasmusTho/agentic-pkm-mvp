@@ -5274,3 +5274,82 @@ def test_legacy_archive_retirement_records_failed_compensation_without_overwrite
     receipt = json.loads((tmp_path / "rescue" / "retirement.json").read_text())
     assert receipt["state"] == "recovery_required"
     assert receipt["recovery_targets"] == {ref: sha}
+
+
+def _stash_retirement_repo(tmp_path, monkeypatch):
+    repo, _, _ = _legacy_retirement_repo(tmp_path, monkeypatch)
+    for text in ("stash one", "stash two"):
+        (repo / "note").write_text(text)
+        git_hygiene.run_git(["stash", "push", "-m", text], repo)
+    stashes = git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines()
+    return repo, stashes
+
+
+def test_stash_retirement_exact_stack_removes_ref_and_reflog(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    result = git_hygiene.retire_inactive_stash_stack(
+        repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive stack, keep verified bundle",
+    )
+    assert result["deleted_stashes"] == 2
+    assert git_hygiene.run_git(["stash", "list"], repo) == ""
+    assert not (repo / ".git" / "logs" / "refs" / "stash").exists()
+    assert (tmp_path / "rescue" / "stash.reflog").is_file()
+    receipt = json.loads(Path(result["receipt"]).read_text())
+    assert receipt["state"] == "completed"
+    assert hashlib.sha256((tmp_path / "rescue" / "stash.reflog").read_bytes()).hexdigest() == receipt["reflog_sha256"]
+
+
+def test_stash_retirement_prepared_hook_rejects_reflog_only_drift(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    original = git_hygiene._install_stash_retirement_hook
+    def install(directory, plan):
+        result = original(directory, plan)
+        log = repo / ".git" / "logs" / "refs" / "stash"
+        log.write_bytes(log.read_bytes().replace(b"stash one", b"changed one"))
+        return result
+    monkeypatch.setattr(git_hygiene, "_install_stash_retirement_hook", install)
+    with pytest.raises(subprocess.CalledProcessError):
+        git_hygiene.retire_inactive_stash_stack(
+            repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines() == stashes
+
+
+def test_stash_retirement_preserves_concurrent_new_top(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    original = git_hygiene._install_stash_retirement_hook
+    def install(directory, plan):
+        result = original(directory, plan)
+        (repo / "note").write_text("concurrent work")
+        git_hygiene.run_git(["stash", "push", "-m", "new active work"], repo)
+        return result
+    monkeypatch.setattr(git_hygiene, "_install_stash_retirement_hook", install)
+    with pytest.raises(subprocess.CalledProcessError):
+        git_hygiene.retire_inactive_stash_stack(
+            repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert len(git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines()) == 3
+
+
+def test_stash_retirement_does_not_clear_new_stack_after_commit(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    reads = 0
+    def heads(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 3:
+            (repo / "note").write_text("new work after commit")
+            git_hygiene.run_git(["stash", "push", "-m", "new active stack"], repo)
+        return {}
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", heads)
+    with pytest.raises(RuntimeError, match="stash_post_delete_drift"):
+        git_hygiene.retire_inactive_stash_stack(
+            repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    remaining = git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines()
+    assert len(remaining) == 1 and remaining[0] not in stashes
+    assert json.loads((tmp_path / "rescue" / "stash-retirement.json").read_text())["state"] == "recovery_required"

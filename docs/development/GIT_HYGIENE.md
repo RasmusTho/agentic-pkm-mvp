@@ -225,7 +225,7 @@ The separate remote/archive/stash policy is:
 | --- | --- | --- |
 | Remote branch | Existing bounded `targeted_remote_cleanup`, only after the caller proves a fresh verified rescue bundle | Its authenticated PR/body, dispatcher, lifecycle, archive CAS, final readback and compensation contract above remains mandatory. |
 | Archive/rescue ref | Retain by default | Deletion requires an explicit object-bound owner discard decision, successor/retention disposition, verified independent rescue coverage, fresh authority, expected-old-SHA CAS and post-effect readback. The bounded legacy local archive entrypoint below is available; modern remote archive receipts remain retained. |
-| Stash | Retain by default | Deletion requires an explicit owner decision for the exact stash SHA and contents, verified independent rescue coverage, and exclusive coordination with stash writers. Age, message markers, or positional indices never authorize deletion. No governed stash deletion entrypoint is currently enabled. |
+| Stash | Retain by default | Deletion requires an explicit owner decision for the exact stash SHA and contents, verified independent rescue coverage, and exclusive coordination with stash writers. Age, message markers, or positional indices never authorize deletion. Only the exact complete-stack entrypoint below is enabled; mixed active/inactive stacks remain retained. |
 
 The remote function does not itself create or validate the rescue bundle. This is
 an external caller precondition: absent or stale proof means retain and do not
@@ -280,3 +280,29 @@ with expected-absence creation if recovery is required. Never infer completion
 from absence. The receipt and independent bundle replace the redundant local
 archive ref as recovery evidence; they do not replace live lifecycle authority.
 The daily automation is unchanged and cannot infer this explicit owner decision.
+
+
+## Explicit retirement of a frozen inactive stash stack
+
+`retire_inactive_stash_stack` accepts the exact ordered SHA list of one complete
+stash stack plus the explicit owner discard decision. It creates and verifies a
+new independent rescue snapshot, verifies every stash object is covered, and saves
+the raw reflog with its SHA256. Current open-PR branches, live lifecycle branches,
+linked worktree HEADs and explicit live/resumable resource bindings preserve the
+whole stack. It never applies or merges old changes into the current checkout.
+
+Deletion is one native Git expected-old-OID ref transaction for `refs/stash`.
+A command-scoped private `reference-transaction` prepared hook verifies the exact
+single delete and the frozen raw reflog digest while Git holds the ref lock.
+Changed top, reordered/edited reflog or concurrent additions therefore abort before
+commit. This replaces positional `stash drop` and blanket `stash clear`; the
+operator selects an exact immutable stack and the hook verifies its identity.
+The command does not change persistent repository configuration or hook files.
+
+The dispatcher writer reservation and lifecycle lock cover the final activity
+check and Git transaction. After commit, both ref and reflog must be absent and
+GitHub activity must still agree before the durable receipt becomes completed.
+If a new writer creates a stash after commit, preserve the new stack and record
+`recovery_required`; never delete it or overwrite its reflog with historical data.
+The independent bundle and raw reflog remain retained for additive recovery.
+This owner-authorized entrypoint does not change the daily automation's policy.

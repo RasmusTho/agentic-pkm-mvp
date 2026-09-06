@@ -3691,6 +3691,124 @@ def retire_legacy_archive_refs(
             "retained": receipt["retained"], "snapshot": snapshot["snapshot"]}
 
 
+def _install_stash_retirement_hook(directory: Path, plan_path: Path) -> Path:
+    """Validate the frozen reflog while Git holds its native ref lock."""
+    hooks = directory / "hooks"
+    hooks.mkdir(mode=0o700)
+    hook = hooks / "reference-transaction"
+    code = f'''#!{sys.executable}
+import hashlib, json, pathlib, sys
+if len(sys.argv) != 2:
+    sys.exit(1)
+if sys.argv[1] != "prepared":
+    sys.exit(0)
+plan = json.loads(pathlib.Path({str(plan_path)!r}).read_text())
+expected = plan["top"] + " " + "0" * len(plan["top"]) + " refs/stash\\n"
+if sys.stdin.read() != expected:
+    sys.exit(1)
+log = pathlib.Path(plan["reflog_path"])
+if log.is_symlink() or not log.is_file():
+    sys.exit(1)
+if hashlib.sha256(log.read_bytes()).hexdigest() != plan["reflog_sha256"]:
+    sys.exit(1)
+'''
+    hook.write_text(code, encoding="utf-8")
+    hook.chmod(0o700)
+    return hooks
+
+
+def retire_inactive_stash_stack(
+    cwd: Path, *, expected_stashes: Sequence[str], snapshot_directory: Path,
+    owner_discard: str,
+) -> dict[str, object]:
+    """Retire one exact complete stack; no positional drop/clear or merge work."""
+    from scripts import agent_worktree
+
+    if (not owner_discard.strip() or not expected_stashes
+            or any(not re.fullmatch(r"[0-9a-f]{40,64}", sha) for sha in expected_stashes)):
+        raise ValueError("explicit_stash_disposition_required")
+    current = run_git(["stash", "list", "--format=%H"], cwd).splitlines()
+    if list(expected_stashes) != current:
+        raise RuntimeError("stash_stack_drift")
+    if run_git_result(["symbolic-ref", "-q", "refs/stash"], cwd).returncode != 1:
+        raise RuntimeError("stash_ref_invalid")
+    common = _git_common_dir(cwd)
+    reflog_path = common / "logs" / "refs" / "stash"
+    if reflog_path.is_symlink() or not reflog_path.is_file():
+        raise RuntimeError("stash_reflog_unavailable")
+    raw_reflog = reflog_path.read_bytes()
+    reflog_digest = hashlib.sha256(raw_reflog).hexdigest()
+    identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
+    pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
+    snapshot = create_rescue_snapshot(cwd, snapshot_directory)
+    if not set(expected_stashes) <= set(snapshot["verified_objects"]):
+        raise RuntimeError("stash_missing_from_verified_rescue")
+    frozen_log = snapshot_directory / "stash.reflog"
+    with frozen_log.open("xb") as handle:
+        frozen_log.chmod(0o600)
+        handle.write(raw_reflog)
+        handle.flush()
+        os.fsync(handle.fileno())
+    receipt_path = snapshot_directory / "stash-retirement.json"
+    receipt: dict[str, Any] = {
+        "schema": "stash_stack_retirement.v1", "state": "prepared",
+        "owner_discard": owner_discard, "top": expected_stashes[0],
+        "stashes": list(expected_stashes), "snapshot": snapshot["snapshot"],
+        "reflog_path": str(reflog_path), "reflog_sha256": reflog_digest,
+    }
+    agent_worktree._write_registry(receipt_path, receipt)
+    hooks = _install_stash_retirement_hook(snapshot_directory, receipt_path)
+    registry_path = agent_worktree._default_registry_path(cwd)
+    if not registry_path.is_file() or registry_path.is_symlink():
+        raise RuntimeError("lifecycle_registry_missing")
+    if _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads:
+        raise RuntimeError("stash_pr_activity_drift")
+    with _dispatcher_authority_write_fence(cwd) as connection:
+        with agent_worktree._registry_lock(registry_path):
+            registry = agent_worktree._read_registry(registry_path)["worktrees"]
+            dispatcher = _dispatcher_snapshot_from_connection(connection)
+            protected, resources = _retirement_local_activity(cwd, registry, dispatcher)
+            protected.update(pr_heads.values())
+            subjects = run_git(["stash", "list", "--format=%gs"], cwd).splitlines()
+            active_branches = {key.split(":", 1)[1] for key in pr_heads}
+            active_branches.update(
+                record["branch"] for record in registry.values()
+                if record.get("expires_at", 0) > time.time() and record.get("branch")
+            )
+            if (set(expected_stashes) & protected
+                    or any("refs/stash" in resource or any(sha in resource for sha in expected_stashes)
+                           for resource in resources)
+                    or any(subject.startswith((f"On {branch}:", f"WIP on {branch}:"))
+                           for subject in subjects for branch in active_branches)):
+                raise RuntimeError("stash_has_active_or_resumable_binding")
+            receipt["lifecycle_sha256"] = hashlib.sha256(json.dumps(registry, sort_keys=True).encode()).hexdigest()
+            receipt["dispatcher_sha256"] = hashlib.sha256(json.dumps(dispatcher, sort_keys=True).encode()).hexdigest()
+            receipt["open_pr_heads"] = pr_heads
+            agent_worktree._write_registry(receipt_path, receipt)
+            commands = f"start\ndelete refs/stash {expected_stashes[0]}\nprepare\ncommit\n"
+            subprocess.run(
+                ["git", "-c", f"core.hooksPath={hooks}", "update-ref", "--no-deref", "--stdin"],
+                cwd=cwd, input=commands, capture_output=True, text=True, check=True,
+                timeout=30, env=_sanitized_git_environment(),
+            )
+            try:
+                if (_open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+                        or run_git_result(["show-ref", "--verify", "--quiet", "refs/stash"], cwd).returncode != 1
+                        or reflog_path.exists()):
+                    raise RuntimeError("stash_post_delete_drift")
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                # A new stack belongs to its new writer. Never clear it or
+                # overwrite its reflog to reconstruct the historical stack.
+                receipt["state"] = "recovery_required"
+                agent_worktree._write_registry(receipt_path, receipt)
+                raise
+            receipt["state"] = "completed"
+            receipt["readback"] = "ref_and_reflog_absent"
+            agent_worktree._write_registry(receipt_path, receipt)
+    return {"ok": True, "deleted_stashes": len(expected_stashes),
+            "receipt": str(receipt_path), "snapshot": snapshot["snapshot"]}
+
+
 def create_rescue_snapshot(cwd: Path, destination: Path) -> dict[str, object]:
     """Preserve refs and reflog objects without writing refs in the source repo.
 
