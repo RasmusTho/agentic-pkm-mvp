@@ -46,15 +46,29 @@ _instance_state_deployment_deliver_private_inventory() {
   local host_target_path="${2:?host target path required}"
   local uid="${3:?uid required}"
   local gid="${4:?gid required}"
+  local target_dir target_name temporary_path
   if [ ! -s "${source_path}" ]; then
     echo "instance state deployment: refusing to deliver an empty or missing inventory (${source_path})" >&2
     return 1
   fi
-  ( umask 077 && cat -- "${source_path}" > "${host_target_path}" ) || return $?
-  chmod 0600 "${host_target_path}" || return $?
-  chown "${uid}:${gid}" "${host_target_path}" || return $?
-  if [ ! -s "${host_target_path}" ]; then
+  target_dir="$(dirname "${host_target_path}")"
+  target_name="$(basename "${host_target_path}")"
+  temporary_path="$(mktemp "${target_dir}/.${target_name}.tmp.XXXXXX")" || return $?
+  if ! ( umask 077 && cat -- "${source_path}" > "${temporary_path}" ); then
+    rm -f -- "${temporary_path}"
+    return 1
+  fi
+  if ! chmod 0600 "${temporary_path}" || ! chown "${uid}:${gid}" "${temporary_path}"; then
+    rm -f -- "${temporary_path}"
+    return 1
+  fi
+  if [ ! -s "${temporary_path}" ]; then
+    rm -f -- "${temporary_path}"
     echo "instance state deployment: delivered inventory is empty (${host_target_path})" >&2
+    return 1
+  fi
+  if ! mv -f -- "${temporary_path}" "${host_target_path}"; then
+    rm -f -- "${temporary_path}"
     return 1
   fi
 }
