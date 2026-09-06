@@ -517,6 +517,9 @@ def test_deployment_finish_keeps_fence_through_mvr05_floor_and_backup() -> None:
     deployment = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text()
     floor = deployment.index("python -m app.instance.runtime mvr05-record-floor")
     assert '--inventory-path "${inventory_path}"' in deployment[floor : floor + 700]
+    assert '--inventory-sha256 "${owner_inventory_sha256}"' in deployment[
+        floor : floor + 700
+    ]
     assert floor < deployment.index("settings-rebind-install-dormant", floor)
     assert deployment.index("settings-rebind-install-dormant", floor) < deployment.index(
         "python -m app.instance.runtime deployment-finish", floor
