@@ -209,6 +209,14 @@ a private receipt bound to the deployment/quiescence proof. The Docker deploymen
 that bound result and its opaque identity evidence; it does not directly resolve host-only paths or
 re-run `root.is_dir()` inside `instance-state-init`.
 
+After finalization, an API, worker, watcher, or Heimdal capture watcher whose selected canonical
+root is visible through a container remount but has a different local inode may admit the already
+registered active binding only by loading that same private receipt, validating its digest, channel,
+binding, and canonical-path correlation, and authenticating its host identity against the active
+ownership ledger. Finalization checkpoints the producer receipt digest in that private ledger
+lease, and remount admission requires that checkpoint to match. Ordinary materialized-root admission remains the default; a missing, stale,
+forged, foreign, ambiguous, unbound, or pending receipt fails closed without registry or ledger mutation.
+
 This decision keeps the one-shot's ordinary mount set intentionally bounded. Ordinary deploy-selected Compose overlays
 exclude `/Users`, `/Volumes`, and selected-vault mounts from `instance-state-init`; the selected-root
 bind in the full-host overlay is for `api`, `worker`, and `watcher` only. The rejected Option A—adding
