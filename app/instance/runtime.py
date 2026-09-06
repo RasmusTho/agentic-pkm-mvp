@@ -10,6 +10,7 @@ import re
 import stat
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -160,12 +161,14 @@ class InstanceRegistryRuntime:
         *,
         vault_root: Path,
         watcher_vault_path: Path,
+        legacy_owner_receipt_path: Path | None = None,
     ) -> VaultRegistration:
         self._require_established_ownership(self.registry.load())
         with self._bootstrap_locked():
             return self._bootstrap_env_binding_locked(
                 vault_root=vault_root,
                 watcher_vault_path=watcher_vault_path,
+                legacy_owner_receipt_path=legacy_owner_receipt_path,
             )
 
     def _bootstrap_env_binding_locked(
@@ -173,6 +176,7 @@ class InstanceRegistryRuntime:
         *,
         vault_root: Path,
         watcher_vault_path: Path,
+        legacy_owner_receipt_path: Path | None = None,
     ) -> VaultRegistration:
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
@@ -191,13 +195,73 @@ class InstanceRegistryRuntime:
             if same_filesystem_root(
                 resolve_filesystem_root_identity(registration.path), root_identity
             ):
-                self.ledger.recover_or_require_active(
-                    registration.vault_binding_id,
+                try:
+                    self.ledger.recover_or_require_active(
+                        registration.vault_binding_id,
+                        channel_id=self.layout.channel_id,
+                        root=Path(root_identity.canonical_path),
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                except LedgerError:
+                    if (
+                        Path(registration.path).expanduser().resolve(strict=False)
+                        != Path(root_identity.canonical_path)
+                        .expanduser()
+                        .resolve(strict=False)
+                    ):
+                        raise
+                else:
+                    return registration
+        # A consumer can see the canonical selected-root path through a
+        # remount while its local inode is necessarily different from the
+        # host identity that established this registration.  That namespace
+        # difference is never path-only authority: accept it only through the
+        # private, host-produced receipt and the ledger's HMAC identity seam.
+        remounted = [
+            registration
+            for registration in current.registrations.values()
+            if Path(registration.path).expanduser().resolve(strict=False)
+            == Path(root_identity.canonical_path).expanduser().resolve(strict=False)
+        ]
+        if remounted:
+            if len(remounted) != 1 or legacy_owner_receipt_path is None:
+                raise RegistryError(
+                    "registered remounted root has no authenticated ownership receipt"
+                )
+            registration = remounted[0]
+            owners = _load_legacy_owner_inventory(
+                legacy_owner_receipt_path,
+                registry=current,
+                channel=self.layout.channel_id,
+                require_receipt_integrity=True,
+                require_explicit_binding=True,
+            )
+            matching_owners = [
+                owner
+                for owner in owners
+                if owner.channel_id == self.layout.channel_id
+                and owner.vault_binding_id == registration.vault_binding_id
+                and Path(owner.root).expanduser().resolve(strict=False)
+                == Path(registration.path).expanduser().resolve(strict=False)
+            ]
+            if len(matching_owners) != 1:
+                raise RegistryError(
+                    "registered remounted root has no authenticated ownership receipt"
+                )
+            try:
+                self.ledger.recover_or_require_active_from_host_receipt(
+                    matching_owners[0],
                     channel_id=self.layout.channel_id,
-                    root=Path(root_identity.canonical_path),
+                    persist=False,
+                    require_receipt_checkpoint=True,
+                    require_active=True,
                     _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
-                return registration
+            except LedgerError as exc:
+                raise RegistryError(
+                    "registered remounted root has no authenticated ownership reservation"
+                ) from exc
+            return registration
         for tombstone in current.removal_tombstones.values():
             if same_filesystem_root(
                 resolve_filesystem_root_identity(tombstone.path), root_identity
@@ -847,6 +911,9 @@ def _preflight_runtime(
         registration = runtime.bootstrap_env_binding(
             vault_root=Path(configured_roots[0]),
             watcher_vault_path=Path(watcher_root),
+            legacy_owner_receipt_path=(
+                host_global_root / "legacy-owner-inventory.json"
+            ),
         )
         binding_id: str | None = registration.vault_binding_id
     else:
@@ -1477,6 +1544,8 @@ _DEPLOYMENT_FENCE_SCHEMA = "agentic-pkm.instance-state-deployment-fence.v1"
 _LEGACY_INVENTORY_SCHEMA = "agentic-pkm.legacy-owner-inventory.v1"
 _LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _LEGACY_OWNER_IDENTITY_RE = re.compile(r"^(?:inode:[0-9]+:[0-9]+|path:/.*)$")
+_MVR05_OWNER_INVENTORY_VISIBILITY_TIMEOUT_SECONDS = 1.0
+_MVR05_OWNER_INVENTORY_VISIBILITY_RETRY_SECONDS = 0.05
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
 _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
     "agentic-pkm.host-deployment-compatibility-block.v1"
@@ -2357,7 +2426,44 @@ def _legacy_owner_receipt_digest(payload: Mapping[str, object]) -> str:
     )
 
 
-def _load_legacy_owner_inventory_payload(inventory_path: Path) -> dict[str, object]:
+def _read_legacy_owner_inventory_bytes(
+    inventory: Path,
+    *,
+    expected_sha256: str | None,
+) -> bytes:
+    """Read an owner receipt, waiting only for its producer-proven bytes.
+
+    Docker/Colima may briefly project the old file after the host producer has
+    atomically published the new receipt. A syntactically valid stale receipt
+    cannot be accepted: only the exact digest calculated by that producer may
+    pass this visibility barrier. A missing/unreadable receipt and a timeout
+    remain ordinary fail-closed preflight failures.
+    """
+
+    if expected_sha256 is None:
+        return inventory.read_bytes()
+    if _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(expected_sha256) is None:
+        raise InstanceStatePreflightError(
+            "expected legacy-owner inventory digest is invalid"
+        )
+
+    deadline = time.monotonic() + _MVR05_OWNER_INVENTORY_VISIBILITY_TIMEOUT_SECONDS
+    while True:
+        payload = inventory.read_bytes()
+        if hashlib.sha256(payload).hexdigest() == expected_sha256:
+            return payload
+        if time.monotonic() >= deadline:
+            raise InstanceStatePreflightError(
+                "legacy-owner inventory did not converge to the expected deployed digest"
+            )
+        time.sleep(_MVR05_OWNER_INVENTORY_VISIBILITY_RETRY_SECONDS)
+
+
+def _load_legacy_owner_inventory_payload(
+    inventory_path: Path,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, object]:
     try:
         inventory = Path(inventory_path)
         metadata = inventory.lstat()
@@ -2367,7 +2473,12 @@ def _load_legacy_owner_inventory_payload(inventory_path: Path) -> dict[str, obje
             or metadata.st_mode & 0o777 != 0o600
         ):
             raise ValueError
-        payload = json.loads(inventory.read_text(encoding="utf-8"))
+        payload = json.loads(
+            _read_legacy_owner_inventory_bytes(
+                inventory,
+                expected_sha256=expected_sha256,
+            )
+        )
         if not isinstance(payload, dict):
             raise ValueError
         source_evidence = payload.get("source_evidence")
@@ -2472,6 +2583,7 @@ def _bind_legacy_owner_inventory_to_proof(
     quiescence_proof: DeploymentQuiescenceProof,
     channel: str,
     host_global_root: Path,
+    expected_sha256: str | None = None,
 ) -> DeploymentQuiescenceProof:
     """Bind the drained-owner receipt to the already-proved deployment lease."""
 
@@ -2532,7 +2644,10 @@ def _bind_legacy_owner_inventory_to_proof(
         raise InstanceStatePreflightError(
             "drained legacy-owner receipt does not match the active restart fence"
         )
-    payload = _load_legacy_owner_inventory_payload(inventory)
+    payload = _load_legacy_owner_inventory_payload(
+        inventory,
+        expected_sha256=expected_sha256,
+    )
     binding_fields = {
         "deployment_nonce": quiescence_proof.nonce,
         "controller": controller,
@@ -2600,9 +2715,24 @@ def _load_legacy_owner_inventory(
     registry: RegistrySnapshot,
     channel: str,
     quiescence_proof: DeploymentQuiescenceProof | None = None,
+    expected_sha256: str | None = None,
+    require_receipt_integrity: bool = False,
+    require_explicit_binding: bool = False,
 ) -> list[LegacyOwner]:
-    payload = _load_legacy_owner_inventory_payload(inventory_path)
+    payload = _load_legacy_owner_inventory_payload(
+        inventory_path,
+        expected_sha256=expected_sha256,
+    )
     identity_evidence = _legacy_owner_identity_evidence(payload)
+    if require_receipt_integrity:
+        receipt_digest = str(payload.get("receipt_digest") or "")
+        if (
+            _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(receipt_digest) is None
+            or receipt_digest != _legacy_owner_receipt_digest(payload)
+        ):
+            raise InstanceStatePreflightError(
+                "drained legacy-owner receipt is stale or forged"
+            )
     if quiescence_proof is not None:
         expected_controller = {
             "pid": quiescence_proof.controller_pid,
@@ -2645,14 +2775,26 @@ def _load_legacy_owner_inventory(
                 "legacy-owner inventory entries are invalid"
             ) from exc
         binding_id = str(item.get("vault_binding_id") or "").strip()
+        path_matches = [
+            registration
+            for registration in registry.registrations.values()
+            if Path(registration.path).expanduser().resolve(strict=False)
+            == Path(root_text).expanduser().resolve(strict=False)
+        ]
         if owner_channel == channel:
-            for registration in registry.registrations.values():
+            if require_explicit_binding and (
+                not binding_id
+                or len(path_matches) != 1
+                or binding_id != path_matches[0].vault_binding_id
+            ):
+                raise InstanceStatePreflightError(
+                    "legacy-owner receipt binding does not match the registered root"
+                )
+            if not binding_id and path_matches:
                 # This is a lexical correlation after the host producer has
                 # authenticated the physical identity; do not inspect either
                 # host root from the mount-blind deployment container.
-                if str(registration.path) == root_text:
-                    binding_id = registration.vault_binding_id
-                    break
+                binding_id = path_matches[0].vault_binding_id
         owners.append(
             LegacyOwner(
                 owner_channel,
@@ -2661,6 +2803,9 @@ def _load_legacy_owner_inventory(
                 root_identity,
                 ancestor_identities,
                 legacy_ancestor_identities,
+                str(payload.get("receipt_digest"))
+                if payload.get("receipt_digest") is not None
+                else None,
             )
         )
     represented = {owner.vault_binding_id for owner in owners if owner.channel_id == channel}
@@ -2735,6 +2880,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
     legacy_path: Path,
     inventory_path: Path,
     quiescence_proof: DeploymentQuiescenceProof | None,
+    inventory_sha256: str | None = None,
 ) -> RegistrySnapshot:
     """Finish dormant legacy import while the MVR-05 fence is still held."""
 
@@ -2755,6 +2901,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
             quiescence_proof=quiescence_proof,
             channel=channel,
             host_global_root=ledger.root,
+            expected_sha256=inventory_sha256,
         )
         owners = _load_legacy_owner_inventory(
             inventory_path,
@@ -2796,6 +2943,17 @@ def _prepare_legacy_registry_for_mvr05_floor(
         if bound_proof is None:
             raise InstanceStatePreflightError("durable quiescence proof is required")
         if owners is None:
+            # An established v1 ledger can outlive the legacy app-local file.
+            # Bind the host-produced owner receipt before loading it with the
+            # proof, so the no-legacy-file recovery path has the same
+            # authenticated handoff as a dormant legacy import.
+            bound_proof = _bind_legacy_owner_inventory_to_proof(
+                inventory_path=inventory_path,
+                quiescence_proof=bound_proof,
+                channel=channel,
+                host_global_root=ledger.root,
+                expected_sha256=inventory_sha256,
+            )
             owners = _load_legacy_owner_inventory(
                 inventory_path,
                 registry=snapshot,
@@ -4328,6 +4486,7 @@ def main(argv: list[str] | None = None) -> int:
     mvr05_floor.add_argument("--host-global-root", type=Path, required=True)
     mvr05_floor.add_argument("--legacy-path", type=Path, required=True)
     mvr05_floor.add_argument("--inventory-path", type=Path, required=True)
+    mvr05_floor.add_argument("--inventory-sha256", required=True)
     mvr05_floor.add_argument("--quiescence-proof-path", type=Path, required=True)
     mvr05_floor.add_argument("--fence-plan", type=Path, required=True)
     rebind_install = subparsers.add_parser("settings-rebind-install-dormant")
@@ -4471,6 +4630,7 @@ def main(argv: list[str] | None = None) -> int:
                     legacy_path=args.legacy_path,
                     inventory_path=args.inventory_path,
                     quiescence_proof=quiescence_proof,
+                    inventory_sha256=args.inventory_sha256,
                 )
                 ledger.require_existing()
                 result = record_mvr05_runtime_floor(

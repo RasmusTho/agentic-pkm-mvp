@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,13 @@ from app.instance.runtime import (
     _preflight_runtime,
     _release_instance_state_deployment_lease,
 )
+from app.instance import ownership_ledger as ownership_ledger_module
+from app.instance import runtime as runtime_module
+from app.instance.filesystem_identity import FilesystemRootIdentity, resolve_filesystem_root_identity
+from app.instance.instance_state import InstanceStateLayout
+from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+from app.instance.vault_registry import VaultRegistration, VaultRegistryStore
+from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRITER_INVENTORY_HELPER = REPO_ROOT / "scripts/instance_state_writer_inventory.py"
@@ -297,3 +305,318 @@ def test_runtime_consumer_unblocked_after_abandoned_deployment(tmp_path: Path) -
             host_global_root=ownership,
             consumer="api",
         )
+
+
+def _remounted_runtime_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, pending: bool = False
+) -> tuple[Path, Path, Path, bytes, bytes]:
+    """Build an established binding plus the private host receipt it authenticates."""
+
+    channel = "dev"
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    vault = tmp_path / "vault"
+    state.mkdir(mode=0o700)
+    ownership.mkdir(mode=0o700)
+    vault.mkdir()
+    layout = InstanceStateLayout.for_channel(state, channel)
+    layout.ensure()
+    registration = VaultRegistration("binding-remounted", f"path:{vault}", str(vault))
+    VaultRegistryStore(layout.registry_path).register(
+        registration, _capability=STORAGE_MUTATION_CAPABILITY
+    )
+
+    identity = resolve_filesystem_root_identity(vault)
+    root_identity = f"inode:{identity.device}:{identity.inode}"
+    ancestors = tuple(f"path:{ancestor}" for ancestor in vault.resolve().parents)
+    legacy_ancestors = tuple(
+        f"inode:{ancestor.stat().st_dev}:{ancestor.stat().st_ino}"
+        for ancestor in vault.resolve().parents
+    )
+    owner = LegacyOwner(
+        channel,
+        registration.vault_binding_id,
+        vault,
+        root_identity,
+        ancestors,
+        legacy_ancestors,
+    )
+    ledger = OwnershipLedger(ownership)
+    owner_row = {
+        "channel_id": channel,
+        "vault_binding_id": registration.vault_binding_id,
+        "root": str(vault),
+    }
+    source_evidence = {
+        "docker": [],
+        "config": [],
+        "owners": [owner_row],
+        "owner_identities": [
+            {
+                "channel_id": channel,
+                "root": str(vault),
+                "identity": root_identity,
+                "ancestor_identities": sorted(ancestors),
+                "legacy_ancestor_identities": list(legacy_ancestors),
+            }
+        ],
+    }
+    receipt = {
+        "schema": "agentic-pkm.legacy-owner-inventory.v1",
+        "inventory_complete": True,
+        "writers_drained": True,
+        "source_probe_count": 2,
+        "validated_after_quiescence": True,
+        "source_digest": runtime_module._canonical_json_digest(source_evidence),
+        "source_evidence": source_evidence,
+        "owners": [owner_row],
+    }
+    receipt["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(receipt)
+    owner = LegacyOwner(
+        channel,
+        registration.vault_binding_id,
+        vault,
+        root_identity,
+        ancestors,
+        legacy_ancestors,
+        receipt["receipt_digest"],
+    )
+    ledger.bootstrap_legacy_owners(
+        [] if pending else [owner],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    if pending:
+        ledger.reserve(
+            channel_id=channel,
+            vault_binding_id=registration.vault_binding_id,
+            root=vault,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        with ledger._locked():
+            key = ledger._load_or_create_key_locked(allow_create=False)
+            current = ledger._load_or_create_ledger_locked(key, allow_create=False)
+            pending_lease = current.leases[registration.vault_binding_id]
+            ledger._write_ledger_locked(
+                replace(
+                    current,
+                    leases={
+                        **current.leases,
+                        registration.vault_binding_id: replace(
+                            pending_lease,
+                            owner_receipt_digest=receipt["receipt_digest"],
+                        ),
+                    },
+                ),
+                key,
+            )
+    receipt_path = ownership / "legacy-owner-inventory.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    receipt_path.chmod(0o600)
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
+    return state, ownership, receipt_path, layout.registry_path.read_bytes(), OwnershipLedger(ownership).path.read_bytes()
+
+
+def _simulate_container_remount(monkeypatch: pytest.MonkeyPatch, vault: Path) -> None:
+    """Make direct ledger materialization see the same path with another inode."""
+
+    original = ownership_ledger_module.resolve_filesystem_root_identity
+
+    def remounted(value: str | Path) -> FilesystemRootIdentity:
+        resolved = Path(value).expanduser().resolve(strict=False)
+        identity = original(resolved)
+        if resolved == vault.resolve():
+            return FilesystemRootIdentity(identity.canonical_path, identity.device, (identity.inode or 0) + 1)
+        return identity
+
+    monkeypatch.setattr(ownership_ledger_module, "resolve_filesystem_root_identity", remounted)
+
+
+def test_runtime_preflight_accepts_authenticated_remounted_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC: the production consumer admits only the receipt-authenticated remount."""
+
+    state, ownership, _receipt, registry_before, ledger_before = _remounted_runtime_fixture(
+        tmp_path, monkeypatch
+    )
+    _simulate_container_remount(monkeypatch, tmp_path / "vault")
+
+    assert _preflight_runtime(
+        channel="dev",
+        instance_state_root=state,
+        host_global_root=ownership,
+        consumer="api",
+    ) == 0
+    assert InstanceStateLayout.for_channel(state, "dev").registry_path.read_bytes() == registry_before
+    assert OwnershipLedger(ownership).path.read_bytes() == ledger_before
+
+    pending_root = tmp_path / "pending"
+    pending_root.mkdir()
+    pending_state, pending_ownership, _receipt, _registry_before, pending_ledger_before = (
+        _remounted_runtime_fixture(pending_root, monkeypatch, pending=True)
+    )
+    _simulate_container_remount(monkeypatch, tmp_path / "pending" / "vault")
+    with pytest.raises((InstanceStatePreflightError, RegistryError)):
+        _preflight_runtime(
+            channel="dev",
+            instance_state_root=pending_state,
+            host_global_root=pending_ownership,
+            consumer="api",
+        )
+    assert OwnershipLedger(pending_ownership).require_existing().leases[
+        "binding-remounted"
+    ].state == "pending"
+    assert OwnershipLedger(pending_ownership).path.read_bytes() == pending_ledger_before
+
+
+def test_remounted_receipt_checkpoint_survives_key_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC: key rotation preserves the producer checkpoint used by remount admission."""
+
+    _state, ownership, receipt_path, _registry_before, _ledger_before = (
+        _remounted_runtime_fixture(tmp_path, monkeypatch)
+    )
+    receipt_digest = json.loads(receipt_path.read_bytes())["receipt_digest"]
+    ledger = OwnershipLedger(ownership)
+    assert (
+        ledger.require_existing().leases["binding-remounted"].owner_receipt_digest
+        == receipt_digest
+    )
+
+    ledger.rotate_key(
+        precondition=lambda _snapshot, _live_roots: None,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    assert (
+        ledger.require_existing().leases["binding-remounted"].owner_receipt_digest
+        == receipt_digest
+    )
+    _simulate_container_remount(monkeypatch, tmp_path / "vault")
+    assert _preflight_runtime(
+        channel="dev",
+        instance_state_root=_state,
+        host_global_root=ownership,
+        consumer="api",
+    ) == 0
+
+
+def test_runtime_preflight_rejects_invalid_remounted_root_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC: invalid receipt variants fail before either authoritative store mutates."""
+
+    state, ownership, receipt_path, registry_before, ledger_before = _remounted_runtime_fixture(
+        tmp_path, monkeypatch
+    )
+    _simulate_container_remount(monkeypatch, tmp_path / "vault")
+    original = receipt_path.read_bytes()
+    for invalid in (
+        "missing",
+        "forged",
+        "stale",
+        "foreign",
+        "mismatched",
+        "unbound",
+        "ambiguous",
+    ):
+        receipt_path.write_bytes(original)
+        if invalid == "missing":
+            receipt_path.unlink()
+        else:
+            payload = json.loads(original)
+            if invalid == "forged":
+                payload["receipt_digest"] = "0" * 64
+            elif invalid == "stale":
+                payload["deployment_nonce"] = "stale-deployment"
+                payload["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(
+                    payload
+                )
+            elif invalid == "foreign":
+                payload["owners"][0]["channel_id"] = "prod"
+                payload["source_evidence"]["owners"][0]["channel_id"] = "prod"
+                payload["source_evidence"]["owner_identities"][0]["channel_id"] = (
+                    "prod"
+                )
+                payload["source_digest"] = runtime_module._canonical_json_digest(
+                    payload["source_evidence"]
+                )
+                payload["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(
+                    payload
+                )
+            elif invalid == "mismatched":
+                payload["owners"][0]["vault_binding_id"] = "binding-other"
+                payload["source_evidence"]["owners"][0]["vault_binding_id"] = (
+                    "binding-other"
+                )
+                payload["source_digest"] = runtime_module._canonical_json_digest(
+                    payload["source_evidence"]
+                )
+                payload["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(
+                    payload
+                )
+            elif invalid == "unbound":
+                payload["owners"][0].pop("vault_binding_id")
+                payload["source_evidence"]["owners"][0].pop("vault_binding_id")
+                payload["source_digest"] = runtime_module._canonical_json_digest(
+                    payload["source_evidence"]
+                )
+                payload["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(
+                    payload
+                )
+            else:
+                payload["source_evidence"]["owners"].append(
+                    dict(payload["owners"][0])
+                )
+                payload["source_evidence"]["owner_identities"].append(
+                    dict(payload["source_evidence"]["owner_identities"][0])
+                )
+                payload["owners"].append(dict(payload["owners"][0]))
+                payload["source_digest"] = runtime_module._canonical_json_digest(
+                    payload["source_evidence"]
+                )
+                payload["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(
+                    payload
+                )
+            receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+            receipt_path.chmod(0o600)
+        with pytest.raises((InstanceStatePreflightError, RegistryError)):
+            _preflight_runtime(
+                channel="dev",
+                instance_state_root=state,
+                host_global_root=ownership,
+                consumer="api",
+            )
+        assert InstanceStateLayout.for_channel(state, "dev").registry_path.read_bytes() == registry_before
+        assert OwnershipLedger(ownership).path.read_bytes() == ledger_before
+
+    pending_root = tmp_path / "pending"
+    pending_root.mkdir()
+    pending_state, pending_ownership, pending_receipt, _registry, pending_ledger = (
+        _remounted_runtime_fixture(pending_root, monkeypatch, pending=True)
+    )
+    _simulate_container_remount(monkeypatch, pending_root / "vault")
+    pending_payload = json.loads(pending_receipt.read_bytes())
+    pending_payload["source_evidence"]["owner_identities"][0]["identity"] = (
+        "inode:999999:999999"
+    )
+    pending_payload["source_digest"] = runtime_module._canonical_json_digest(
+        pending_payload["source_evidence"]
+    )
+    pending_payload["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(
+        pending_payload
+    )
+    pending_receipt.write_text(json.dumps(pending_payload), encoding="utf-8")
+    pending_receipt.chmod(0o600)
+    with pytest.raises((InstanceStatePreflightError, RegistryError)):
+        _preflight_runtime(
+            channel="dev",
+            instance_state_root=pending_state,
+            host_global_root=pending_ownership,
+            consumer="api",
+        )
+    assert OwnershipLedger(pending_ownership).path.read_bytes() == pending_ledger

@@ -741,6 +741,69 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
 
+def test_instance_state_preflight_failure_before_migrations_restores_prior_pin_and_clears_pending_marker(
+    tmp_path: Path,
+) -> None:
+    """MVR-05 preparation fails before Alembic, so its retry state is recoverable."""
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = _seed_previous_pin(root, previous_sha)
+    target = _commit_migration(root, "feedc0de0004_instance_state_preflight.py")
+    env = dict(env)
+    env["FAKE_DOCKER_FAIL_MATCH"] = "run --rm --no-deps -T instance-state-init"
+
+    result = _run_deploy(root, env, target)
+
+    assert result.returncode == 24
+    assert "instance-state deployment preparation failed" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    assert not (root / "config/deploy/dev.migration-pending.env").exists()
+    events = _deploy_events(env)
+    assert any("run --rm --no-deps -T instance-state-init" in event for event in events)
+    assert not any("--exit-code-from migrate" in event for event in events)
+    recreate = "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+    assert sum(event.endswith(recreate) for event in events) == 1
+    assert not (root / "ops/deployments/dev-latest.json").exists()
+
+    retry_target = _commit_prefloor_successor(root, "recovered instance-state preflight")
+    retry_env = dict(env)
+    retry_env.pop("FAKE_DOCKER_FAIL_MATCH")
+    retry_env["FAKE_SHA"] = retry_target
+    retry = _run_deploy(root, retry_env, retry_target)
+
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert "migration retry blocked" not in retry.stdout + retry.stderr
+
+
+def test_instance_state_preflight_failure_preserves_ambiguous_marker_on_same_target_retry(
+    tmp_path: Path,
+) -> None:
+    """A prior migration attempt owns its retry marker, not a later MVR-05 failure."""
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    _seed_previous_pin(root, previous_sha)
+    target = _commit_migration(root, "feedc0de0005_instance_state_retry.py")
+    env = dict(env)
+    env["FAKE_SHA"] = target
+
+    first_env = dict(env)
+    first_env["FAKE_DOCKER_FAIL_MATCH"] = "--exit-code-from migrate"
+    first = _run_deploy(root, first_env, target)
+
+    marker = root / "config/deploy/dev.migration-pending.env"
+    assert first.returncode == 24
+    marker_before_retry = marker.read_text(encoding="utf-8")
+
+    retry_env = dict(env)
+    retry_env["FAKE_DOCKER_FAIL_MATCH"] = "run --rm --no-deps -T instance-state-init"
+    retry = _run_deploy(root, retry_env, target)
+
+    assert retry.returncode == 24
+    assert "instance-state deployment preparation failed" in retry.stderr
+    assert marker.read_text(encoding="utf-8") == marker_before_retry
+    assert f"APP_IMAGE_TAG={target}" in (root / "config/deploy/dev.env").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_failed_postmutation_gate_preserves_forward_only_rollback_limitations(
     tmp_path: Path,
 ) -> None:
