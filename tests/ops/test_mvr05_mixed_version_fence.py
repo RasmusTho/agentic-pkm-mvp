@@ -1249,6 +1249,14 @@ def test_authenticated_v1_rotation_journal_is_converged_and_consumed(tmp_path) -
     )
     ledger.rotation_path.chmod(0o600)
 
+    resolved = ledger.resolve_live_owner_bindings(
+        (LegacyOwner("dev", None, root),),
+        allow_legacy=True,
+    )
+
+    assert resolved[0].vault_binding_id == "binding-existing"
+    assert ledger.rotation_path.exists()
+
     migrated = ledger.require_registry_consistency(
         channel_id="dev",
         registrations={"binding-existing": root},
