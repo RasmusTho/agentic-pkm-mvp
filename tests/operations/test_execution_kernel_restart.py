@@ -37,7 +37,11 @@ def test_receipts_survive_restart_without_sensitive_payloads(tmp_path) -> None:
     first = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: OwnerExecutionResult.succeeded()},
+        handlers={
+            "artifact.move": lambda request: OwnerExecutionResult.succeeded(
+                effect_id="effect-1", effect_receipt={"receipt_id": "owner-receipt-1"}
+            )
+        },
         receipt_store=JsonReceiptStore(ledger),
         token_validator=lambda request, decision: True,
     ).execute(request, delegation)
