@@ -439,6 +439,61 @@ def test_apply_merge_recovers_when_later_split_reclaims_intermediate_target(tmp_
     assert pending_review_entries(vault_root) == ()
 
 
+def test_apply_merge_recovers_after_consecutive_source_reclaimed_splits(tmp_path: Path) -> None:
+    """The applicator follows every explicit source-reclaim split hop."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(
+            resolution=RESOLUTION_AMBIGUOUS,
+            confidence=0.75,
+            mention_id="consecutive-reclaim",
+        ),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id=target,
+    )
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={"pending": [entry.to_dict()], "decisions": [decision.to_dict()]},
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    second_successor = register.split(
+        first_successor, {"Recovered twice": ["Source", "S"]}
+    )[0]
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert applied[0].operation_id == operation.operation_id
+    assert register.resolve_redirects(source) == second_successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == second_successor
+    assert pending_review_entries(vault_root) == ()
+
+
 def test_apply_merge_refuses_requeued_entry_after_cleared_source_reclaim(tmp_path: Path) -> None:
     """A newer pending generation cannot masquerade as an interrupted clear."""
     vault_root = _vault_root(tmp_path)

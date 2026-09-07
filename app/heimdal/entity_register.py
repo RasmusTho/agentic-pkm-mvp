@@ -614,7 +614,6 @@ class EntityRegister:
                 raise EntityRegisterError(
                     "merge_effect_state(): merged source lacks a redirect target"
                 )
-            resolved_source_id = source.merged_into
             original_links = [
                 link for link in source.lineage
                 if link.get("predecessor_id") == from_id
@@ -623,37 +622,46 @@ class EntityRegister:
                 and isinstance(link.get("operation_id"), str)
                 and link.get("operation_id")
             ]
-            reclaimed_splits = [
-                link for link in source.lineage
-                if link.get("predecessor_id") == into_id
-                and link.get("successor_id") == resolved_source_id
-                and link.get("mutation_kind") == "split"
-                and link.get("reclaimed_from_id") == from_id
-                and isinstance(link.get("operation_id"), str)
-                and link.get("operation_id")
-            ]
-            reclaimed_successor = self._read_entry(resolved_source_id)
-            reclaimed_complement_complete = (
-                reclaimed_successor is not None
-                and from_id in reclaimed_successor.merged_from
-                and {source.label, *source.aliases}.issubset(reclaimed_successor.aliases)
-            )
-            if (
-                len(original_links) == 1
-                and len(reclaimed_splits) == 1
-                and reclaimed_complement_complete
-            ):
+            if len(original_links) == 1:
                 # The immediate split successor must retain the complete
-                # reclaimed-source complement above. Any later evolution is
-                # accepted only through the resolver, which proves each
-                # explicit hop (and rejects cycles or ambiguity) before this
-                # classification may resume the original operation.
-                self.resolve_target_evolution(
+                # reclaimed-source complement. Any later evolution, including
+                # consecutive source-reclaim splits, is accepted only through
+                # the resolver, which proves each explicit hop (and rejects
+                # cycles or ambiguity) before this classification may resume
+                # the original operation.
+                resolved_target = self.resolve_target_evolution(
                     from_id,
                     into_id,
                     operation_id=str(original_links[0]["operation_id"]),
                 )
-                return MERGE_EFFECTS_COMPLETE
+                # The source redirect may still point at the immediate
+                # reclaimed successor while that successor has since merged
+                # onward. Cross-check the resolver's proven terminal target
+                # against the complete current redirect chain without calling
+                # resolve_redirects(), whose public read emits a derived event.
+                redirect_target = source.merged_into
+                redirect_seen = {from_id}
+                while redirect_target:
+                    if redirect_target in redirect_seen:
+                        raise EntityRegisterError(
+                            "merge_effect_state(): target evolution redirect cycle; "
+                            "queue entry stays pending"
+                        )
+                    redirect_seen.add(redirect_target)
+                    redirect_entry = self._read_entry(redirect_target)
+                    if redirect_entry is None:
+                        raise EntityRegisterError(
+                            "merge_effect_state(): target evolution redirect has a "
+                            "missing successor"
+                        )
+                    if (
+                        redirect_entry.lifecycle != LIFECYCLE_MERGED
+                        or not redirect_entry.merged_into
+                    ):
+                        break
+                    redirect_target = redirect_entry.merged_into
+                if resolved_target == redirect_target:
+                    return MERGE_EFFECTS_COMPLETE
             raise EntityRegisterError(
                 f"merge_effect_state(): {from_id!r} redirects to "
                 f"{source.merged_into!r}, not {into_id!r}; the original effect cannot "
