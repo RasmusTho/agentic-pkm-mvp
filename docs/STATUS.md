@@ -148,6 +148,12 @@ promote public internet readiness.
   against the dedicated non-production PostgreSQL lane and current-head CI. This receipt does not
   claim production deployment or terminal EROJ-03 recovery acceptance; the latter belongs to the
   complete partial-failure replay on parent #4349.
+- The crash-safe entity-review operation journal is terminally verified across EROJ-01 through
+  EROJ-03. The parent #4349 terminal recovery-matrix receipt records 19 fresh dev-PostgreSQL
+  passes across every partial-failure row, including caller rollback, target evolution, repeated
+  split recovery, client-to-Hub canonicalization, and schema parity, with the exact accepted child
+  heads and merge SHAs. This confirms the delivered mechanism on the non-production lane only; it
+  does not claim production deployment or migration.
 - Governed media ingress with durable receipts is shipped (CDLM-01, #4384):
   `POST /api/heimdal/capture/media` acknowledges a capture only after the original is durably in the
   encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event is committed, so a
