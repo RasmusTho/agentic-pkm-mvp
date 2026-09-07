@@ -255,7 +255,9 @@ Admission requires one dormant registered owner, one matching active v1 lease, t
 protected key, an authenticated sealed locator and root fingerprint matching the complete current
 host inventory, and no tombstones, transfer/lineage, or interrupted rotation. TEST, PROD,
 multiple-owner state, stale evidence, and lost root/key/registry identity are refused. The recovery
-container consumes the existing host receipt without gaining broad host-root mounts.
+container consumes the existing host receipt without gaining broad host-root mounts. Missing or
+inconsistent last-good, checksum, or legacy-export artifacts are refused without implicit repair;
+the recovery lock does not heal any registry evidence before admission or backup.
 
 Under deployment → producer → ledger → registry locks, recovery saves the unchanged registry
 artifacts, ledger, and key into an owner-only backup. Its authenticated `manifest.json` binds a

@@ -1731,9 +1731,9 @@ class VaultRegistryStore:
             try:
                 if recover_transactions:
                     self._recover_transaction_locked()
+                    self._ensure_rollback_export_locked()
                 elif os.path.lexists(self.transaction_path):
                     raise RegistryError("registry transaction requires normal recovery")
-                self._ensure_rollback_export_locked()
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

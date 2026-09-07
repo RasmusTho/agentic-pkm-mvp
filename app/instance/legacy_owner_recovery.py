@@ -177,6 +177,17 @@ def reattest_legacy_owner(
                 "vault-registry.md.last-good.sha256": _read_private_bytes(store.snapshot_checksum_path),
                 "vault-registry.md.legacy-export": _read_private_bytes(store.rollback_export_path),
             }
+            # Recovery must retain the original complete registry generation.
+            # The no-recovery lock must never heal rollback evidence before this
+            # admission or replace evidence that the backup is meant to preserve.
+            if (
+                payloads["vault-registry.md.last-good"] != registry_bytes
+                or payloads["vault-registry.md.last-good.sha256"].decode("ascii").strip()
+                != _sha(registry_bytes)
+                or payloads["vault-registry.md.legacy-export"]
+                != store._rollback_export_payload(registry)
+            ):
+                raise _refuse()
             checksums = {name: _sha(data) for name, data in payloads.items()}
             evidence = {
                 "schema": _SCHEMA, "channel_id": channel,
