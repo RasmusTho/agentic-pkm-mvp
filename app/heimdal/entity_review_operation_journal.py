@@ -289,7 +289,9 @@ class EntityReviewOperationJournalPort(Protocol):
         into_id: str | None = None,
     ) -> OperationRecord | None: ...
 
-    def commit_merge_event(self, operation: OperationRecord) -> OperationRecord: ...
+    def commit_merge_event(
+        self, operation: OperationRecord, *, resolution_context: str | None = None
+    ) -> OperationRecord: ...
 
     def verify_committed_visibility(self, operation: OperationRecord) -> bool: ...
 
@@ -683,7 +685,9 @@ class EntityReviewOperationJournal:
         finally:
             conn.close()
 
-    def commit_merge_event(self, operation: OperationRecord) -> OperationRecord:
+    def commit_merge_event(
+        self, operation: OperationRecord, *, resolution_context: str | None = None
+    ) -> OperationRecord:
         """Atomically commit terminal journal state plus exactly one event.
 
         One journal-owned Postgres transaction advances
@@ -717,13 +721,16 @@ class EntityReviewOperationJournal:
                     f"state {current.state if current is not None else 'absent'!r}; "
                     "failing closed (INV-EROJ-6)"
                 )
+            payload: dict[str, str] = {
+                "from_id": operation.from_id,
+                "into_id": operation.into_id,
+                "operation_id": operation.operation_id,
+            }
+            if resolution_context is not None:
+                payload["resolved_into_id"] = resolution_context
             event = new_event(
                 event_type=HEIMDAL_REGISTER_ENTITY_MERGED,
-                payload={
-                    "from_id": operation.from_id,
-                    "into_id": operation.into_id,
-                    "operation_id": operation.operation_id,
-                },
+                payload=payload,
                 source=OPERATION_EVENT_SOURCE,
             )
             write_outbox_event(event, conn=conn, idempotency_key=operation.outbox_event_id)

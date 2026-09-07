@@ -149,6 +149,7 @@ Register entry (prose mirror):
 | `lifecycle` | `provisional` → `canonical` → `merged`. `merged` entries carry `merged_into` (redirect chain; consumers must follow it). Entries are never deleted — merged, deprecated, never removed (identity refs in the append-only stream must always resolve). |
 | `sensitivity` | The register itself is high-sensitivity substrate (§7.4): it is a map of everyone and everything in the operator's life. Reads are governed. |
 | `provenance` | Who/what minted or merged the entry, when, on what basis — register mutations are themselves receipted events (`register.entity.minted/merged/aliased`). |
+| `lineage[]` | Optional operation-bound predecessor/successor proof written with governed merge or split mutations. It permits recovery to report a current resolved target without changing the original human-decided merge pair; missing, contradictory, cyclic, or fork-ambiguous lineage refuses recovery. It is not a general lineage graph and never chooses an ambiguous split complement. |
 
 Operations Heimdal needs (the whole v0 API surface):
 

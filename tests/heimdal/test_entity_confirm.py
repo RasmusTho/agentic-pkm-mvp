@@ -60,6 +60,7 @@ from app.heimdal.entity_review_operation_journal import (
     STATE_EVENT_COMMITTED,
     EntityReviewOperationConflictError,
     OperationRecord,
+    decision_mapping_digest,
     derive_operation_event_id,
     derive_operation_id,
 )
@@ -221,7 +222,10 @@ class _InMemoryJournal:
                 return record
         return None
 
-    def commit_merge_event(self, operation: OperationRecord) -> OperationRecord:
+    def commit_merge_event(
+        self, operation: OperationRecord, *, resolution_context: str | None = None
+    ) -> OperationRecord:
+        del resolution_context
         record = self.operations[operation.operation_id]
         if record.state == STATE_CLAIMED:
             record = replace(record, state=STATE_EVENT_COMMITTED)
@@ -310,6 +314,39 @@ def _mention(
 # AC: a confirmed merge writes `merged_from:` + a redirect and is reversible
 # via `split()`.
 # ---------------------------------------------------------------------------
+
+
+def test_apply_merge_recovers_after_target_evolution_without_graph_replay(tmp_path: Path) -> None:
+    """EROJ-02 applicator recovery must be journal- and lineage-bound."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="lineage"),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [decision.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert applied[0].operation_id == operation.operation_id
+    assert pending_review_entries(vault_root) == ()
 
 
 def test_merge_writes_redirect_and_is_reversible(tmp_path: Path) -> None:

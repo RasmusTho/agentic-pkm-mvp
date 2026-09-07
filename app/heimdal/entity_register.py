@@ -170,6 +170,7 @@ class RegisterEntry:
     merged_into: str | None = None
     merged_from: tuple[str, ...] = ()
     split_from: str | None = None
+    lineage: tuple[Mapping[str, str], ...] = ()
     created: str = field(default_factory=_now_iso)
     updated: str = field(default_factory=_now_iso)
 
@@ -190,6 +191,8 @@ class RegisterEntry:
             data["merged_from"] = list(self.merged_from)
         if self.split_from is not None:
             data["split_from"] = self.split_from
+        if self.lineage:
+            data["lineage"] = [dict(link) for link in self.lineage]
         return data
 
     @classmethod
@@ -203,6 +206,9 @@ class RegisterEntry:
             merged_into=data.get("merged_into"),
             merged_from=tuple(data.get("merged_from") or ()),
             split_from=data.get("split_from"),
+            lineage=tuple(
+                dict(link) for link in (data.get("lineage") or ()) if isinstance(link, Mapping)
+            ),
             created=str(data.get("created", _now_iso())),
             updated=str(data.get("updated", _now_iso())),
         )
@@ -506,7 +512,7 @@ class EntityRegister:
         )
         return AmbiguousCandidates(candidates=ranked)
 
-    def merge(self, from_id: str, into_id: str) -> None:
+    def merge(self, from_id: str, into_id: str, *, operation_id: str | None = None) -> None:
         """`merge(from_id, into_id)` — governed, human-confirmed convergence.
 
         Marks `from_id`'s entry `lifecycle: merged` with `merged_into =
@@ -542,7 +548,7 @@ class EntityRegister:
         if from_id == into_id:
             raise EntityRegisterError("merge(): from_id and into_id must differ")
 
-        self.ensure_merge_effects(from_id, into_id)
+        self.ensure_merge_effects(from_id, into_id, operation_id=operation_id)
 
         self._emit(
             HEIMDAL_REGISTER_ENTITY_MERGED,
@@ -583,11 +589,23 @@ class EntityRegister:
             # one recovers the original decision rather than rewriting it.
             # EROJ-02's lineage proof owns that recovery; until then the
             # decision history stays unchanged and the queue entry pending.
-            raise EntityRegisterError(
-                f"merge_effect_state(): into_id {into_id!r} is merged into "
-                f"{target.merged_into!r}; the target has evolved and this slice refuses "
-                "target-evolved application/recovery (EROJ-02)"
+            original_links = [
+                link for link in source.lineage
+                if link.get("predecessor_id") == from_id
+                and link.get("successor_id") == into_id
+                and link.get("mutation_kind") == "merge"
+                and isinstance(link.get("operation_id"), str)
+                and link.get("operation_id")
+            ]
+            if len(original_links) != 1:
+                raise EntityRegisterError(
+                    f"merge_effect_state(): into_id {into_id!r} is merged into "
+                    f"{target.merged_into!r}; the target has evolved but lacks operation-bound proof"
+                )
+            self.resolve_target_evolution(
+                from_id, into_id, operation_id=str(original_links[0]["operation_id"])
             )
+            return MERGE_EFFECTS_COMPLETE
 
         target_claims_source = from_id in target.merged_from
         if source.lifecycle == LIFECYCLE_MERGED:
@@ -607,7 +625,9 @@ class EntityRegister:
             )
         return MERGE_EFFECTS_NONE
 
-    def ensure_merge_effects(self, from_id: str, into_id: str) -> str:
+    def ensure_merge_effects(
+        self, from_id: str, into_id: str, *, operation_id: str | None = None
+    ) -> str:
         """Idempotently apply the two note effects of one exact merge. No event.
 
         The mechanism half of :meth:`merge`, made resumable for the
@@ -629,6 +649,14 @@ class EntityRegister:
         assert source is not None and target is not None  # proven by merge_effect_state
 
         if state == MERGE_EFFECTS_NONE:
+            lineage = source.lineage
+            if operation_id:
+                lineage = (*lineage, {
+                    "predecessor_id": from_id,
+                    "successor_id": into_id,
+                    "operation_id": operation_id,
+                    "mutation_kind": "merge",
+                })
             merged_source = RegisterEntry(
                 entity_id=source.entity_id,
                 kind=source.kind,
@@ -638,6 +666,7 @@ class EntityRegister:
                 merged_into=into_id,
                 merged_from=source.merged_from,
                 split_from=source.split_from,
+                lineage=lineage,
                 created=source.created,
                 updated=_now_iso(),
             )
@@ -658,13 +687,65 @@ class EntityRegister:
             merged_into=target.merged_into,
             merged_from=tuple(dict.fromkeys((*target.merged_from, from_id))),
             split_from=target.split_from,
+            lineage=target.lineage,
             created=target.created,
             updated=_now_iso(),
         )
         self._write_entry(updated_target)
         return state
 
-    def split(self, entity_id: str, partition_criteria: Mapping[str, Sequence[str]]) -> tuple[str, ...]:
+    def resolve_target_evolution(
+        self, from_id: str, into_id: str, *, operation_id: str
+    ) -> str:
+        """Prove a current target from operation-bound note lineage only.
+
+        The journal's original pair is immutable.  Redirects merely cross-check
+        producer-written lineage; they never supply historical evidence.
+        """
+        source = self._read_entry(from_id)
+        original = self._read_entry(into_id)
+        if source is None or original is None:
+            raise EntityRegisterError("target evolution has an unknown original entity")
+        initial = [
+            link for link in source.lineage
+            if link.get("predecessor_id") == from_id
+            and link.get("successor_id") == into_id
+            and link.get("operation_id") == operation_id
+            and link.get("mutation_kind") == "merge"
+        ]
+        if len(initial) != 1:
+            raise EntityRegisterError("target evolution lacks the journal-bound original merge proof")
+        current = into_id
+        seen: set[str] = set()
+        while True:
+            if current in seen:
+                raise EntityRegisterError("target evolution lineage cycle; queue entry stays pending")
+            seen.add(current)
+            entry = self._read_entry(current)
+            if entry is None:
+                raise EntityRegisterError("target evolution lineage has a missing successor")
+            candidates = [
+                link for link in (*source.lineage, *entry.lineage)
+                if link.get("predecessor_id") == current
+                and link.get("mutation_kind") in {"merge", "split"}
+                and isinstance(link.get("operation_id"), str)
+                and link.get("operation_id")
+            ]
+            if not candidates:
+                if entry.lifecycle == LIFECYCLE_MERGED:
+                    raise EntityRegisterError("target evolution redirect lacks governed lineage")
+                return current
+            successors = {str(link["successor_id"]) for link in candidates if link.get("successor_id")}
+            if len(successors) != 1:
+                raise EntityRegisterError("target evolution lineage is fork-ambiguous")
+            successor = successors.pop()
+            if entry.lifecycle == LIFECYCLE_MERGED and entry.merged_into != successor:
+                raise EntityRegisterError("target evolution lineage contradicts the redirect")
+            current = successor
+
+    def split(
+        self, entity_id: str, partition_criteria: Mapping[str, Sequence[str]], *, operation_id: str | None = None
+    ) -> tuple[str, ...]:
         """`split(entity_id, partition_criteria)` — reversible un-merge (F5 gate).
 
         `partition_criteria` maps a NEW canonical entity's label to the
@@ -703,6 +784,7 @@ class EntityRegister:
 
         remaining_aliases = list(original.aliases)
         new_ids: list[str] = []
+        split_links: list[Mapping[str, str]] = []
 
         # Find any entities that were previously merged into `entity_id`, so
         # a split that re-separates them can re-point their redirect.
@@ -737,6 +819,12 @@ class EntityRegister:
                         lifecycle=LIFECYCLE_MERGED,
                         merged_into=new_entity_id,
                         split_from=child.split_from,
+                        lineage=(*child.lineage, *(({
+                            "predecessor_id": entity_id,
+                            "successor_id": new_entity_id,
+                            "operation_id": operation_id,
+                            "mutation_kind": "split",
+                        },) if operation_id else ())),
                         created=child.created,
                         updated=_now_iso(),
                     )
@@ -752,9 +840,22 @@ class EntityRegister:
                 lifecycle=LIFECYCLE_CANONICAL,
                 merged_from=tuple(reversed_children),
                 split_from=entity_id,
+                lineage=(({
+                    "predecessor_id": entity_id,
+                    "successor_id": new_entity_id,
+                    "operation_id": operation_id,
+                    "mutation_kind": "split",
+                },) if operation_id else ()),
             )
             self._write_entry(new_entry)
             new_ids.append(new_entity_id)
+            if operation_id:
+                split_links.append({
+                    "predecessor_id": entity_id,
+                    "successor_id": new_entity_id,
+                    "operation_id": operation_id,
+                    "mutation_kind": "split",
+                })
 
             self._emit(
                 HEIMDAL_REGISTER_ENTITY_SPLIT,
@@ -784,6 +885,7 @@ class EntityRegister:
             merged_into=original.merged_into,
             merged_from=remaining_merged_from,
             split_from=original.split_from,
+            lineage=(*original.lineage, *split_links),
             created=original.created,
             updated=_now_iso(),
         )

@@ -662,10 +662,24 @@ def apply_human_review_decisions(
                     # 2. Resumable note effects (skips sides a crash already
                     #    wrote).
                     register.ensure_merge_effects(
-                        effective_decision.from_id, effective_decision.into_id
+                        effective_decision.from_id,
+                        effective_decision.into_id,
+                        operation_id=operation.operation_id,
                     )
                     # 3. Terminal journal state + exactly one event, atomically.
-                    operation = journal.commit_merge_event(operation)
+                    resolved_into_id = register.resolve_target_evolution(
+                        effective_decision.from_id,
+                        effective_decision.into_id,
+                        operation_id=operation.operation_id,
+                    )
+                    operation = journal.commit_merge_event(
+                        operation,
+                        **(
+                            {"resolution_context": resolved_into_id}
+                            if resolved_into_id != effective_decision.into_id
+                            else {}
+                        ),
+                    )
                     # 4. The fence: only a fresh transaction's read of the
                     #    committed journal + outbox rows authorizes the clear.
                     if not journal.verify_committed_visibility(operation):

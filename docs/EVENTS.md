@@ -1074,6 +1074,12 @@ Emitted when a governed, human-confirmed merge folds one entity into another
 (`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 3 / §9-g). Append-only (HEIM-1): the source
 entity's note is never deleted, only marked `lifecycle: merged` with a `merged_into`
 redirect; the target note's aliases are folded to include the source's label/aliases.
+For entity-review operation recovery, `from_id`, `into_id`, and `operation_id` remain the
+immutable original human-decided pair. A later governed target evolution may add
+`resolved_into_id` as resolution context only; it never rewrites `into_id`. Missing,
+contradictory, cyclic, or fork-ambiguous operation-bound note lineage emits no event and
+leaves the review entry pending. This does not establish globally unique split-complement
+recovery, which remains a separate contract.
 Lineage/audit event, same non-dispatched posture as above. Two emitters:
 
 - **Entity-review merges** (the production human-review path, EROJ-01 #4350): emitted by the

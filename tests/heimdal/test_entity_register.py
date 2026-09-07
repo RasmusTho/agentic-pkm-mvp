@@ -229,6 +229,40 @@ def test_split_rejects_unknown_entity(tmp_path: Path) -> None:
         register.split("ent:does-not-exist", {"x": ["y"]})
 
 
+def test_lineage_round_trip_covers_every_merge_and_split_producer(tmp_path: Path) -> None:
+    """EROJ-02 preserves producer-written lineage through note round-trips."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    register.merge(source, target, operation_id="operation-original")
+    register.merge(target, evolved, operation_id="operation-target-merge")
+
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    assert source_entry.lineage == (
+        {
+            "predecessor_id": source,
+            "successor_id": target,
+            "operation_id": "operation-original",
+            "mutation_kind": "merge",
+        },
+    )
+    assert register.resolve_target_evolution(
+        source, target, operation_id="operation-original"
+    ) == evolved
+
+    successor = register.split(
+        evolved,
+        {"Evolved successor": ["Evolved"]},
+        operation_id="operation-target-split",
+    )[0]
+    assert register.resolve_target_evolution(
+        source, target, operation_id="operation-original"
+    ) == successor
+
+
 # ---------------------------------------------------------------------------
 # AC: resolve() returns exactly one of the three resolution states and never
 # a free-text name as canonical identity.
