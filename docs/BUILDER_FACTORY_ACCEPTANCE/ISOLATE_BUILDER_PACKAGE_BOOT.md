@@ -10,7 +10,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Target-state task specification; not implemented or runtime acceptance.
+State: Implemented. Delivered by PR #5421 (issue #5403, 2026-09-07).
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -34,16 +34,20 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The actual Builder API/worker/migration bootstrap succeeds or reports only its own missing Builder dependency when Product LLM policy is enforced but unconfigured, without initializing Product services.
+- [x] The actual Builder API/worker/migration bootstrap succeeds or reports only its own missing Builder dependency when Product LLM policy is enforced but unconfigured, without initializing Product services.
   - Verify: `tests/architecture/test_builderops_package_independence.py::test_builder_boot_does_not_load_product_configuration`
-- [ ] An image/package smoke exercises the real Builder entrypoints with the declared Builder dependency closure and no Product DB, vault, process or provider settings.
+- [x] An image/package smoke exercises the real Builder entrypoints with the declared Builder dependency closure and no Product DB, vault, process or provider settings.
   - Verify: `tests/ops/test_builderops_package_smoke.py::test_minimal_builder_package_boots_without_product_runtime`
-- [ ] The documented package/build seam names retained neutral dependencies and proves its boundary without weakening PostgreSQL-only selection, auth or migrations.
+- [x] The documented package/build seam names retained neutral dependencies and proves its boundary without weakening PostgreSQL-only selection, auth or migrations.
   - Verify: doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md :: Complete Dev System admission`
 
 ## How to Verify (Pre-Merge)
 
 Run the two named tests and affected standalone Compose/import/auth regression tests; execute the real image/package smoke and preserve its build identity. Full baseline for touched code; shared host resources use the existing host lease. No deployment is part of validation.
+
+## Delivery Verification
+
+PR #5421 merged exact head `affd801555737beb5c0e19b5a4a2d55a62cd1f7a` at `07607d0ee5eee3d473e04150bcad209fd1172429` after the named architecture and package-smoke tests, the full non-PG CI lane, the Docker image/import smoke, and independent review passed. The delivery remains package/build scoped; Product authority cutover, host activation, deployment, and VM102 mutation remain outside this task.
 
 ## Out of Scope
 
