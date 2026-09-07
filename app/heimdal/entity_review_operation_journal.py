@@ -905,12 +905,18 @@ def split_checkpoint_keys(plan: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def ensure_split_schema(conn: Any) -> None:
-    cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (SPLIT_TABLE,))
-    row = cur.fetchone()
-    if not _col(row, 0, "oid") and _schema_autocreate_enabled():
-        _exec(conn, _SPLIT_DDL)
-        _exec(conn, _SPLIT_INDEX_DDL)
-        conn.commit()
+    """Assert migration-owned schema; fixture DDL requires explicit opt-in."""
+    if _schema_autocreate_enabled():
+        table_groups = ((SPLIT_TABLE, (_SPLIT_DDL, _SPLIT_INDEX_DDL)),)
+        for table_name, statements in table_groups:
+            cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table_name,))
+            row = cur.fetchone()
+            table_present = bool(_col(row, 0, "oid"))
+            if table_present:
+                continue
+            for statement in statements:
+                _exec(conn, statement)
+            conn.commit()
     cur = _exec(conn, "SELECT column_name FROM information_schema.columns "
                 "WHERE table_schema = current_schema() AND table_name = %s", (SPLIT_TABLE,))
     present = {_col(r, 0, "column_name") for r in cur.fetchall()}

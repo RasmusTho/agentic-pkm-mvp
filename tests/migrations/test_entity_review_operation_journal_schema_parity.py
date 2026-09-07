@@ -270,3 +270,41 @@ def test_missing_schema_fails_with_migration_guidance(
             from_id="ent:a",
             into_id="ent:b",
         )
+
+
+@pytest.mark.parametrize("autocreate", [None, "0", "1"])
+def test_split_schema_autocreate_requires_explicit_opt_in(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch, autocreate: str | None,
+) -> None:
+    from app.heimdal import entity_review_operation_journal as journal_module
+
+    dsn = scratch_db_factory()
+    if autocreate is None:
+        monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    else:
+        monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", autocreate)
+    executed: list[str] = []
+    original_exec = journal_module._exec
+
+    def recording_exec(conn, sql, params=None):
+        executed.append(sql)
+        return original_exec(conn, sql, params)
+
+    monkeypatch.setattr(journal_module, "_exec", recording_exec)
+    with psycopg.connect(dsn) as conn:
+        if autocreate == "1":
+            journal_module.ensure_split_schema(conn)
+            assert any(sql.lstrip().startswith("CREATE TABLE") for sql in executed)
+            assert any(sql.lstrip().startswith("CREATE UNIQUE INDEX") for sql in executed)
+        else:
+            with pytest.raises(journal_module.EntityReviewOperationSchemaMissingError, match="alembic upgrade head"):
+                journal_module.ensure_split_schema(conn)
+            assert all(sql.lstrip().startswith("SELECT") for sql in executed)
+            assert conn.execute("SELECT to_regclass('entity_register_split_operations')").fetchone() == (None,)
+            return
+
+        before = _schema_snapshot(dsn, "entity_register_split_operations")
+        executed.clear()
+        journal_module.ensure_split_schema(conn)
+        assert all(sql.lstrip().startswith("SELECT") for sql in executed)
+        assert _schema_snapshot(dsn, "entity_register_split_operations") == before
