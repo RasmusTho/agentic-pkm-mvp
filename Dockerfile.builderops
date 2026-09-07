@@ -15,8 +15,8 @@ ENV VCS_REF=$VCS_REF \
 
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-builderops.txt ./
+RUN pip install --no-cache-dir -r requirements-builderops.txt
 
 COPY pyproject.toml ./
 COPY app ./app
