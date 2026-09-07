@@ -97,6 +97,8 @@ from app.heimdal.entity_review_operation_journal import (
     EntityReviewOperationJournalPort,
     EntityReviewOperationSchemaMissingError,
     decision_mapping_digest,
+    derive_operation_event_id,
+    derive_operation_id,
 )
 from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
@@ -367,6 +369,37 @@ class AppliedDecision:
     operation_id: str | None = None
 
 
+def _matches_operation_identity(
+    operation: OperationRecord,
+    *,
+    vault_identity: str,
+    queue_entry_id: str,
+    decision_position: int,
+    decision_digest: str,
+    from_id: str,
+    into_id: str,
+) -> bool:
+    """Return whether an in-flight row is this exact immutable ruling."""
+    expected_operation_id = derive_operation_id(
+        vault_identity=vault_identity,
+        queue_entry_id=queue_entry_id,
+        decision_position=decision_position,
+        decision_digest=decision_digest,
+        from_id=from_id,
+        into_id=into_id,
+    )
+    return (
+        operation.operation_id == expected_operation_id
+        and operation.vault_identity == vault_identity
+        and operation.queue_entry_id == queue_entry_id
+        and operation.decision_position == decision_position
+        and operation.decision_digest == decision_digest
+        and operation.from_id == from_id
+        and operation.into_id == into_id
+        and operation.outbox_event_id == derive_operation_event_id(expected_operation_id)
+    )
+
+
 def apply_human_review_decisions(
     vault_root: Path,
     *,
@@ -625,6 +658,15 @@ def apply_human_review_decisions(
                     and effective_decision.into_id is not None
                 )
                 assert journal is not None  # guaranteed by the upfront check
+                decision_digest = decision_mapping_digest(raw_decisions[index])
+                prospective_operation_id = derive_operation_id(
+                    vault_identity=vault_identity,
+                    queue_entry_id=queue_entry_id,
+                    decision_position=index,
+                    decision_digest=decision_digest,
+                    from_id=effective_decision.from_id,
+                    into_id=effective_decision.into_id,
+                )
                 # Review F4 / matrix row 4: a stop between mark_cleared and
                 # the note write leaves the entry visible with its operation
                 # already cleared. Finishing that interrupted clear must not
@@ -638,6 +680,15 @@ def apply_human_review_decisions(
                 )
                 if (
                     cleared_twin is not None
+                    and _matches_operation_identity(
+                        cleared_twin,
+                        vault_identity=vault_identity,
+                        queue_entry_id=queue_entry_id,
+                        decision_position=index,
+                        decision_digest=decision_digest,
+                        from_id=effective_decision.from_id,
+                        into_id=effective_decision.into_id,
+                    )
                     and register.merge_effect_state(
                         effective_decision.from_id, effective_decision.into_id
                     )
@@ -649,9 +700,25 @@ def apply_human_review_decisions(
                     if (
                         active_operation is not None
                         and active_operation.state == STATE_CLAIMED
-                        and active_operation.from_id == effective_decision.from_id
-                        and active_operation.into_id == effective_decision.into_id
                     ):
+                        if not _matches_operation_identity(
+                            active_operation,
+                            vault_identity=vault_identity,
+                            queue_entry_id=queue_entry_id,
+                            decision_position=index,
+                            decision_digest=decision_digest,
+                            from_id=effective_decision.from_id,
+                            into_id=effective_decision.into_id,
+                        ):
+                            refused.append(
+                                (
+                                    queue_entry_id,
+                                    "the claimed operation does not match the complete "
+                                    "immutable decision identity; the queue entry stays "
+                                    "pending (INV-EROJ-1)",
+                                )
+                            )
+                            continue
                         # A claimed operation already binds the exact human
                         # ruling. Let its operation id backfill legacy note
                         # effects before generic state classification; doing
@@ -660,16 +727,20 @@ def apply_human_review_decisions(
                         operation = active_operation
                     else:
                         # Pre-claim validation: prove the merge is executable
-                        # (or resumable) before binding a new operation, so a
-                        # typo'd decision never strands one.
-                        register.merge_effect_state(
-                            effective_decision.from_id, effective_decision.into_id
+                        # and that any observed effects belong to this exact
+                        # prospective operation before binding it, so a
+                        # pre-existing public/different-operation merge never
+                        # strands a new journal row.
+                        register.preflight_merge_effects_for_operation(
+                            effective_decision.from_id,
+                            effective_decision.into_id,
+                            operation_id=prospective_operation_id,
                         )
                         operation = journal.claim_operation(
                             vault_identity=vault_identity,
                             queue_entry_id=queue_entry_id,
                             decision_position=index,
-                            decision_digest=decision_mapping_digest(raw_decisions[index]),
+                            decision_digest=decision_digest,
                             from_id=effective_decision.from_id,
                             into_id=effective_decision.into_id,
                         )

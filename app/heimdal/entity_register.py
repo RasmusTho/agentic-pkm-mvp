@@ -604,6 +604,58 @@ class EntityRegister:
         if from_id == into_id:
             raise EntityRegisterError("merge_effect_state(): from_id and into_id must differ")
         target_claims_source = from_id in target.merged_from
+        # A source-reclaiming split is a durable, source-bound recovery proof.
+        # It must be considered before the old target's current redirect: the
+        # original target may later merge elsewhere after the source was
+        # reclaimed, and that unrelated residual evolution cannot invalidate
+        # the original operation's recovery path.
+        if source.lifecycle == LIFECYCLE_MERGED and source.merged_into != into_id:
+            if source.merged_into is None:
+                raise EntityRegisterError(
+                    "merge_effect_state(): merged source lacks a redirect target"
+                )
+            resolved_source_id = source.merged_into
+            original_links = [
+                link for link in source.lineage
+                if link.get("predecessor_id") == from_id
+                and link.get("successor_id") == into_id
+                and link.get("mutation_kind") == "merge"
+                and isinstance(link.get("operation_id"), str)
+                and link.get("operation_id")
+            ]
+            reclaimed_splits = [
+                link for link in source.lineage
+                if link.get("predecessor_id") == into_id
+                and link.get("successor_id") == resolved_source_id
+                and link.get("mutation_kind") == "split"
+                and link.get("reclaimed_from_id") == from_id
+                and isinstance(link.get("operation_id"), str)
+                and link.get("operation_id")
+            ]
+            reclaimed_successor = self._read_entry(resolved_source_id)
+            reclaimed_complement_complete = (
+                reclaimed_successor is not None
+                and from_id in reclaimed_successor.merged_from
+                and {source.label, *source.aliases}.issubset(reclaimed_successor.aliases)
+            )
+            if (
+                len(original_links) == 1
+                and len(reclaimed_splits) == 1
+                and reclaimed_complement_complete
+                and self.resolve_target_evolution(
+                    from_id,
+                    into_id,
+                    operation_id=str(original_links[0]["operation_id"]),
+                )
+                == resolved_source_id
+            ):
+                return MERGE_EFFECTS_COMPLETE
+            raise EntityRegisterError(
+                f"merge_effect_state(): {from_id!r} redirects to "
+                f"{source.merged_into!r}, not {into_id!r}; the original effect cannot "
+                "be proven from current notes and this slice refuses target-evolved "
+                "recovery (EROJ-02)"
+            )
         if target.lifecycle == LIFECYCLE_MERGED:
             # Target-evolution refusal (INV-EROJ-7, partial-failure matrix row
             # 5): the human-decided target has itself been merged away, so this
@@ -638,53 +690,6 @@ class EntityRegister:
             return MERGE_EFFECTS_COMPLETE
 
         if source.lifecycle == LIFECYCLE_MERGED:
-            if source.merged_into != into_id:
-                if source.merged_into is None:
-                    raise EntityRegisterError(
-                        "merge_effect_state(): merged source lacks a redirect target"
-                    )
-                resolved_source_id = source.merged_into
-                original_links = [
-                    link for link in source.lineage
-                    if link.get("predecessor_id") == from_id
-                    and link.get("successor_id") == into_id
-                    and link.get("mutation_kind") == "merge"
-                    and isinstance(link.get("operation_id"), str)
-                    and link.get("operation_id")
-                ]
-                reclaimed_splits = [
-                    link for link in source.lineage
-                    if link.get("predecessor_id") == into_id
-                    and link.get("successor_id") == resolved_source_id
-                    and link.get("mutation_kind") == "split"
-                    and link.get("reclaimed_from_id") == from_id
-                    and isinstance(link.get("operation_id"), str)
-                    and link.get("operation_id")
-                ]
-                reclaimed_successor = self._read_entry(resolved_source_id)
-                reclaimed_complement_complete = (
-                    reclaimed_successor is not None
-                    and from_id in reclaimed_successor.merged_from
-                    and {source.label, *source.aliases}.issubset(reclaimed_successor.aliases)
-                )
-                if (
-                    len(original_links) == 1
-                    and len(reclaimed_splits) == 1
-                    and reclaimed_complement_complete
-                    and self.resolve_target_evolution(
-                        from_id,
-                        into_id,
-                        operation_id=str(original_links[0]["operation_id"]),
-                    )
-                    == resolved_source_id
-                ):
-                    return MERGE_EFFECTS_COMPLETE
-                raise EntityRegisterError(
-                    f"merge_effect_state(): {from_id!r} redirects to "
-                    f"{source.merged_into!r}, not {into_id!r}; the original effect cannot "
-                    "be proven from current notes and this slice refuses target-evolved "
-                    "recovery (EROJ-02)"
-                )
             return MERGE_EFFECTS_COMPLETE if target_claims_source else MERGE_EFFECTS_SOURCE_ONLY
         if target_claims_source:
             raise EntityRegisterError(
@@ -693,6 +698,36 @@ class EntityRegister:
                 "(INV-EROJ-6)"
             )
         return MERGE_EFFECTS_NONE
+
+    def preflight_merge_effects_for_operation(
+        self, from_id: str, into_id: str, *, operation_id: str
+    ) -> str:
+        """Prove a *new* journal operation can own the observed merge effects.
+
+        This is deliberately read-only.  A fresh claim must not be persisted
+        merely because generic effect classification says a pre-existing
+        merge is complete: any existing effects need exactly one matching
+        operation-bound original-merge link.  Legacy effects without a bound
+        operation may only be backfilled by an already-claimed retry.
+        """
+        state = self.merge_effect_state(from_id, into_id)
+        source = self._read_entry(from_id)
+        assert source is not None  # proven by merge_effect_state
+        original_links = [
+            link for link in source.lineage
+            if link.get("predecessor_id") == from_id
+            and link.get("successor_id") == into_id
+            and link.get("mutation_kind") == "merge"
+        ]
+        if state != MERGE_EFFECTS_NONE and (
+            len(original_links) != 1
+            or original_links[0].get("operation_id") != operation_id
+        ):
+            raise EntityRegisterError(
+                "preflight_merge_effects_for_operation(): existing merge effects are not "
+                "bound to this prospective operation"
+            )
+        return state
 
     def ensure_merge_effects(
         self, from_id: str, into_id: str, *, operation_id: str | None = None
