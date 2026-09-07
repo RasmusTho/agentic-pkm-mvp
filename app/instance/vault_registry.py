@@ -1706,7 +1706,9 @@ class VaultRegistryStore:
         )
 
     @contextmanager
-    def _locked(self, *, allow_legacy_directory_upgrade: bool = False) -> Iterator[None]:
+    def _locked(
+        self, *, allow_legacy_directory_upgrade: bool = False, recover_transactions: bool = True,
+    ) -> Iterator[None]:
         if allow_legacy_directory_upgrade:
             _upgrade_owned_legacy_directory(self.path.parent)
         else:
@@ -1727,7 +1729,10 @@ class VaultRegistryStore:
         with os.fdopen(descriptor, "a+b", closefd=True) as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
-                self._recover_transaction_locked()
+                if recover_transactions:
+                    self._recover_transaction_locked()
+                elif os.path.lexists(self.transaction_path):
+                    raise RegistryError("registry transaction requires normal recovery")
                 self._ensure_rollback_export_locked()
                 yield
             finally:

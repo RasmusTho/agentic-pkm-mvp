@@ -181,6 +181,11 @@ operational lineage is missing, the supported target posture is a new fenced boo
 writers inactive until owner-native readback and convergence. Total-loss recovery is not claimed as
 shipped runtime capability here.
 
+For a retained DEV v1 ownership record whose old container ancestor inode chain is unavailable,
+operators can use the explicit, stopped-window [DEV legacy-owner re-attestation](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#explicit-dev-legacy-owner-re-attestation)
+command. It requires a fresh authority decision and verified private recovery evidence; normal
+startup remains fail-closed and activation remains a separate deployment step.
+
 ## Environment posture
 
 This document is primarily the `prod` operator entrypoint.

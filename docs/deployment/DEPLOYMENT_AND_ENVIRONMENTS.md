@@ -235,6 +235,47 @@ paths, duplicate declarations, traversal, aliases, symlink-like paths, and other
 deployment mutation window. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
 evidence cannot release the fence or mutate registry/ledger state.
 
+#### Explicit DEV legacy-owner re-attestation
+
+`python -m app.instance.runtime deployment-reattest-legacy-owner` is an explicit local
+operator recovery command for a retained DEV schema-v1 owner whose old container parent-inode
+chain is unavailable. Ordinary startup and legacy authentication continue to refuse that state.
+The command establishes a fresh, receipt-bound ownership epoch; it does not authenticate the lost
+chain or infer any previous effect outcome. It is not total-loss recovery.
+
+Run it only inside the canonical producer's proved stopped interval, before MVR-05 floor admission
+and `deployment-finish`. Supply `--channel dev`, the existing `--instance-state-root` and
+`--host-global-root`, `--owner-receipt-path` and `--quiescence-proof-path` from that interval,
+`--vault-binding-id`, the reviewed raw-file `--expected-ledger-sha256` and
+`--expected-registry-sha256`, a private `--backup-root`, and
+`--acknowledge-new-ownership-epoch`. The acknowledgement is a new authority decision about the
+exact retained root/binding; a path or a backup alone is not ownership authority.
+
+Admission requires one dormant registered owner, one matching active v1 lease, the existing
+protected key, an authenticated sealed locator and root fingerprint matching the complete current
+host inventory, and no tombstones, transfer/lineage, or interrupted rotation. TEST, PROD,
+multiple-owner state, stale evidence, and lost root/key/registry identity are refused. The recovery
+container consumes the existing host receipt without gaining broad host-root mounts.
+
+Under deployment → producer → ledger → registry locks, recovery saves the unchanged registry
+artifacts, ledger, and key into an owner-only backup. Its authenticated `manifest.json` binds a
+fresh epoch, the explicit decision, before/after digests, and the current stopped-window receipts.
+That verified evidence becomes durable before atomic ledger replacement. Only the single lease's
+current ancestry and owner-receipt provenance change; registry, key, sealed locator, root identity,
+and binding stay unchanged. Public output contains no key material or host paths.
+
+After interruption, retry with the same inputs, private backup, and still-valid deployment window.
+A partial backup can resume only when its existing bytes agree. A complete receipt admits exactly
+its before or after ledger bytes; changed registry, key, inventory, deployment epoch, or ledger
+fails closed. Do not delete authority artifacts to force a retry. If the old deployment window has
+ended after successful ledger replacement, use the normal canonical deployment path to revalidate
+current ownership; this command does not replay across epochs.
+
+The command leaves the restart fence and deployment lease held and never starts writers, changes
+vault files, or migrates SQL. Successful recovery is not activation: normal floor admission and
+`deployment-finish` must still validate the recovered ownership under the stopped proof, and the
+separately authorized deployment performs runtime startup and functional verification.
+
 MVR-01C cuts registry authority over only by committing one complete rollback floor into the same
 locked registry generation. That generation names one validated scalar rollback binding, refreshes
 the current legacy projection, records the roll-forward fork revision, and proves both the
