@@ -493,6 +493,54 @@ def test_merge_effect_state_classifies_all_note_shapes(tmp_path: Path) -> None:
     assert register.ensure_merge_effects(a, b) == MERGE_EFFECTS_COMPLETE
 
 
+def test_ensure_merge_effects_backfills_pre_lineage_completed_merge_before_evolution(
+    tmp_path: Path,
+) -> None:
+    """A retry binds the journal operation to an old, already-complete effect."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    # Simulate an EROJ-01-era write that pre-dates EROJ-02 lineage.
+    assert register.ensure_merge_effects(source, target) == MERGE_EFFECTS_NONE
+    assert register.get_entry(source).lineage == ()
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    assert register.ensure_merge_effects(
+        source, target, operation_id="journal-operation"
+    ) == MERGE_EFFECTS_COMPLETE
+    assert register.resolve_target_evolution(
+        source, target, operation_id="journal-operation"
+    ) == evolved
+
+
+def test_evolved_source_only_merge_backfills_lineage_but_refuses_missing_complement(
+    tmp_path: Path,
+) -> None:
+    """Lineage backfill cannot turn a half-applied original merge into complete."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    register.arm(fail_on_write=2)
+    with pytest.raises(EntityRegisterError, match="simulated crash"):
+        register.ensure_merge_effects(source, target)
+    register.disarm()
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    with pytest.raises(EntityRegisterError, match="original target complement"):
+        register.ensure_merge_effects(
+            source, target, operation_id="journal-operation"
+        )
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    assert source_entry.lineage[-1]["operation_id"] == "journal-operation"
+    assert source not in register.get_entry(target).merged_from
+    assert source not in register.get_entry(evolved).merged_from
+
+
 def test_merge_effect_helpers_fail_closed_on_unprovable_notes(tmp_path: Path) -> None:
     register = _effect_register(tmp_path)
     a = register.mint_canonical("Alpha")

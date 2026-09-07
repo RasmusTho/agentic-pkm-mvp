@@ -582,6 +582,7 @@ class EntityRegister:
             raise EntityRegisterError(f"merge_effect_state(): unknown into_id {into_id!r}")
         if from_id == into_id:
             raise EntityRegisterError("merge_effect_state(): from_id and into_id must differ")
+        target_claims_source = from_id in target.merged_from
         if target.lifecycle == LIFECYCLE_MERGED:
             # Target-evolution refusal (INV-EROJ-7, partial-failure matrix row
             # 5): the human-decided target has itself been merged away, so this
@@ -602,12 +603,19 @@ class EntityRegister:
                     f"merge_effect_state(): into_id {into_id!r} is merged into "
                     f"{target.merged_into!r}; the target has evolved but lacks operation-bound proof"
                 )
+            if source.lifecycle != LIFECYCLE_MERGED or source.merged_into != into_id:
+                raise EntityRegisterError(
+                    "merge_effect_state(): target evolution lacks the original source redirect"
+                )
+            if not target_claims_source:
+                raise EntityRegisterError(
+                    "merge_effect_state(): target evolution lacks the original target complement"
+                )
             self.resolve_target_evolution(
                 from_id, into_id, operation_id=str(original_links[0]["operation_id"])
             )
             return MERGE_EFFECTS_COMPLETE
 
-        target_claims_source = from_id in target.merged_from
         if source.lifecycle == LIFECYCLE_MERGED:
             if source.merged_into != into_id:
                 raise EntityRegisterError(
@@ -640,6 +648,52 @@ class EntityRegister:
 
         Returns the pre-application :meth:`merge_effect_state` value.
         """
+        # Pre-EROJ-02 operations may have written a source redirect before
+        # lineage was introduced.  A journal retry with its immutable operation
+        # id may bind that already-proven original redirect exactly once; it
+        # must happen before effect classification because COMPLETE returns
+        # without a write and SOURCE_ONLY only writes the target complement.
+        if operation_id:
+            source_before = self._read_entry(from_id)
+            if (
+                source_before is not None
+                and source_before.lifecycle == LIFECYCLE_MERGED
+                and source_before.merged_into == into_id
+            ):
+                matching_links = [
+                    link for link in source_before.lineage
+                    if link.get("predecessor_id") == from_id
+                    and link.get("successor_id") == into_id
+                    and link.get("mutation_kind") == "merge"
+                ]
+                if len(matching_links) > 1 or any(
+                    link.get("operation_id") != operation_id for link in matching_links
+                ):
+                    raise EntityRegisterError(
+                        "ensure_merge_effects(): original redirect has conflicting operation lineage"
+                    )
+                if not matching_links:
+                    self._write_entry(
+                        RegisterEntry(
+                            entity_id=source_before.entity_id,
+                            kind=source_before.kind,
+                            label=source_before.label,
+                            aliases=source_before.aliases,
+                            lifecycle=source_before.lifecycle,
+                            merged_into=source_before.merged_into,
+                            merged_from=source_before.merged_from,
+                            split_from=source_before.split_from,
+                            lineage=(*source_before.lineage, {
+                                "predecessor_id": from_id,
+                                "successor_id": into_id,
+                                "operation_id": operation_id,
+                                "mutation_kind": "merge",
+                            }),
+                            created=source_before.created,
+                            updated=_now_iso(),
+                        )
+                    )
+
         state = self.merge_effect_state(from_id, into_id)
         if state == MERGE_EFFECTS_COMPLETE:
             return state
