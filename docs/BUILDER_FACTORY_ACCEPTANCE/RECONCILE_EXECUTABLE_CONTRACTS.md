@@ -18,7 +18,7 @@ Authority: Accepted research-to-backlog handoff; existing owner contracts remain
 
 ## Purpose
 
-A4 supersedes mandatory Demerzel and Builder backup gates, but #5052/#3793 and BCP05 still retain them. #3603 closed after read-only topology reconciliation, not live executor activation. The DevUI plan also understates its delivered shell. The owner now prioritizes usable LLM-assisted overview/control over completing DDO.
+A4 supersedes mandatory the former operator host and Builder backup gates, but #5052/#3793 and BCP05 still retain them. #3603 closed after read-only topology reconciliation, not live executor activation. The DevUI plan also understates its delivered shell. The owner now prioritizes usable LLM-assisted overview/control over completing DDO.
 
 ## What This Task Does
 
