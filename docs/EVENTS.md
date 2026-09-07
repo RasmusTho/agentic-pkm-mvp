@@ -1112,6 +1112,10 @@ requires before any merge ships (`docs/HEIMDAL/FABLE_COMPANION.md` §10 F5). One
 resulting new entity. Splitting a merge target re-points any previously-merged child
 entity whose aliases fall in the new partition, restoring `resolve_redirects()` to the
 pre-merge identity — see `tests/heimdal/test_entity_register.py::test_split_reverses_merge`.
+When a public split re-points a child from a previously complete merge, its canonical note lineage
+derives a retry-stable direct split identity and names that reclaimed child; only that explicit,
+successor-complete source-bound proof can provide entity-review target-evolution context. The split
+event payload does not rewrite an entity-review operation's original pair.
 
 Payload fields (in addition to the envelope):
 - `split_from` (`string`): the entity_id that was partitioned.

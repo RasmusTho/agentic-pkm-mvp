@@ -48,6 +48,8 @@ resolution; attribution/mention extraction; consent, capture, ASR.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -107,6 +109,20 @@ class EntityRegisterError(RuntimeError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _direct_split_operation_id(
+    entity_id: str, partition_criteria: Mapping[str, Sequence[str]]
+) -> str:
+    """Derive a retry-stable public split identity from its exact partition."""
+    canonical_partition = {
+        str(label): sorted(str(alias) for alias in aliases)
+        for label, aliases in partition_criteria.items()
+    }
+    digest = hashlib.sha256(
+        json.dumps(canonical_partition, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    return f"direct-split:{entity_id}:{digest}"
 
 
 def _new_canonical_id() -> str:
@@ -623,6 +639,46 @@ class EntityRegister:
 
         if source.lifecycle == LIFECYCLE_MERGED:
             if source.merged_into != into_id:
+                if source.merged_into is None:
+                    raise EntityRegisterError(
+                        "merge_effect_state(): merged source lacks a redirect target"
+                    )
+                resolved_source_id = source.merged_into
+                original_links = [
+                    link for link in source.lineage
+                    if link.get("predecessor_id") == from_id
+                    and link.get("successor_id") == into_id
+                    and link.get("mutation_kind") == "merge"
+                    and isinstance(link.get("operation_id"), str)
+                    and link.get("operation_id")
+                ]
+                reclaimed_splits = [
+                    link for link in source.lineage
+                    if link.get("predecessor_id") == into_id
+                    and link.get("successor_id") == resolved_source_id
+                    and link.get("mutation_kind") == "split"
+                    and link.get("reclaimed_from_id") == from_id
+                    and isinstance(link.get("operation_id"), str)
+                    and link.get("operation_id")
+                ]
+                reclaimed_successor = self._read_entry(resolved_source_id)
+                reclaimed_complement_complete = (
+                    reclaimed_successor is not None
+                    and from_id in reclaimed_successor.merged_from
+                    and {source.label, *source.aliases}.issubset(reclaimed_successor.aliases)
+                )
+                if (
+                    len(original_links) == 1
+                    and len(reclaimed_splits) == 1
+                    and reclaimed_complement_complete
+                    and self.resolve_target_evolution(
+                        from_id,
+                        into_id,
+                        operation_id=str(original_links[0]["operation_id"]),
+                    )
+                    == resolved_source_id
+                ):
+                    return MERGE_EFFECTS_COMPLETE
                 raise EntityRegisterError(
                     f"merge_effect_state(): {from_id!r} redirects to "
                     f"{source.merged_into!r}, not {into_id!r}; the original effect cannot "
@@ -872,6 +928,9 @@ class EntityRegister:
             raise EntityRegisterError(f"split(): unknown entity_id {entity_id!r}")
         if not partition_criteria:
             raise EntityRegisterError("split(): partition_criteria must be non-empty")
+        effective_operation_id = operation_id or _direct_split_operation_id(
+            entity_id, partition_criteria
+        )
 
         remaining_aliases = list(original.aliases)
         new_ids: list[str] = []
@@ -901,13 +960,19 @@ class EntityRegister:
             # restoring its pre-merge identity under `resolve_redirects`.
             for child in merged_children:
                 child_names = {child.label, *child.aliases}
-                if child_names & set(alias_subset) or child.label == new_label:
+                child_effect_complete = (
+                    child.entity_id in original.merged_from
+                    and {child.label, *child.aliases}.issubset(original.aliases)
+                )
+                if child_effect_complete and (
+                    child_names & set(alias_subset) or child.label == new_label
+                ):
                     split_link: Mapping[str, str] | None = None
-                    if operation_id:
+                    if effective_operation_id:
                         split_link = {
                             "predecessor_id": entity_id,
                             "successor_id": new_entity_id,
-                            "operation_id": operation_id,
+                            "operation_id": effective_operation_id,
                             "mutation_kind": "split",
                             "reclaimed_from_id": child.entity_id,
                         }

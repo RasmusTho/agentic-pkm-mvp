@@ -300,7 +300,6 @@ def test_target_split_ignores_partition_that_does_not_reclaim_original_source(
     unrelated = register.split(
         target,
         {"Other restored": ["Other"]},
-        operation_id="target-split",
     )[0]
 
     assert register.resolve_redirects(source) == target
@@ -308,6 +307,27 @@ def test_target_split_ignores_partition_that_does_not_reclaim_original_source(
         source, target, operation_id="original-operation"
     ) == target
     assert unrelated != target
+
+
+def test_public_split_derives_lineage_for_reclaimed_source_recovery(tmp_path: Path) -> None:
+    """A public split preserves a provable evolved target for an awaiting review."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    split_links = [
+        link for link in source_entry.lineage if link.get("mutation_kind") == "split"
+    ]
+    assert len(split_links) == 1
+    assert split_links[0]["operation_id"].startswith(f"direct-split:{target}:")
+    assert register.merge_effect_state(source, target) == MERGE_EFFECTS_COMPLETE
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == successor
 
 
 # ---------------------------------------------------------------------------
