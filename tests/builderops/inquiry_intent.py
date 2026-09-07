@@ -110,6 +110,7 @@ def census_with_role_targets(
                 "provider": provider_id,
                 "model": model,
                 "selectable_models": [model],
+                "model_reasoning_efforts": {model: "high"},
                 "requires": [],
             }
         )
