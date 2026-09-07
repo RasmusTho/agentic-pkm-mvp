@@ -1090,8 +1090,8 @@ Lineage/audit event, same non-dispatched posture as above. Two emitters:
   `entities/review.md` `pending` entry may be cleared only after a **fresh** connection observes
   both the terminal journal row and this committed event (INV-EROJ-3) — visibility on the writer's
   or a caller's own uncommitted transaction never authorizes the clear. Source:
-  `heimdal.entity_review`. Recovery across later target evolution or splits is NOT claimed here
-  (EROJ-02/EROJ-03).
+  `heimdal.entity_review`. Globally unique split-complement recovery remains unclaimed here
+  (EROJ-03).
 - **Direct `EntityRegister.merge()` calls** (the A1 register API outside the review path): emitted
   by the register immediately after the note writes, without an `operation_id`. Source:
   `heimdal.entity_register`.

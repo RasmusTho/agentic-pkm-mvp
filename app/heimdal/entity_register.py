@@ -795,6 +795,18 @@ class EntityRegister:
             successor = successors.pop()
             if entry.lifecycle == LIFECYCLE_MERGED and entry.merged_into != successor:
                 raise EntityRegisterError("target evolution lineage contradicts the redirect")
+            if any(link.get("mutation_kind") == "merge" for link in candidates):
+                successor_entry = self._read_entry(successor)
+                if successor_entry is None:
+                    raise EntityRegisterError("target evolution lineage has a missing successor")
+                folded_source_aliases = {entry.label, *entry.aliases}
+                if (
+                    current not in successor_entry.merged_from
+                    or not folded_source_aliases.issubset(successor_entry.aliases)
+                ):
+                    raise EntityRegisterError(
+                        "target evolution merge hop lacks the complete successor complement"
+                    )
             current = successor
 
     def split(

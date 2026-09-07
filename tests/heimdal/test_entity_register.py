@@ -23,6 +23,7 @@ temp-vault fixture (`VaultContext` over `tmp_path`) — never a real vault.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -539,6 +540,33 @@ def test_evolved_source_only_merge_backfills_lineage_but_refuses_missing_complem
     assert source_entry.lineage[-1]["operation_id"] == "journal-operation"
     assert source not in register.get_entry(target).merged_from
     assert source not in register.get_entry(evolved).merged_from
+
+
+def test_target_evolution_rejects_merge_hop_without_successor_complement(
+    tmp_path: Path,
+) -> None:
+    """Every evolved merge hop proves its own target-side effect before recovery."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+    register.ensure_merge_effects(source, target, operation_id="journal-operation")
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    evolved_entry = register.get_entry(evolved)
+    assert evolved_entry is not None
+    register._write_entry(
+        replace(
+            evolved_entry,
+            merged_from=tuple(item for item in evolved_entry.merged_from if item != target),
+            aliases=tuple(item for item in evolved_entry.aliases if item != "Target"),
+        )
+    )
+
+    with pytest.raises(EntityRegisterError, match="complete successor complement"):
+        register.resolve_target_evolution(
+            source, target, operation_id="journal-operation"
+        )
 
 
 def test_merge_effect_helpers_fail_closed_on_unprovable_notes(tmp_path: Path) -> None:
