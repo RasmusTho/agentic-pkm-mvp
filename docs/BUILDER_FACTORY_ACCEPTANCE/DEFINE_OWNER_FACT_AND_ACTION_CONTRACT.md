@@ -3,7 +3,7 @@ name: Define owner facts and bounded action handoff
 description: define source-backed owner decisions trials and agent handoff
 task_id: FCA-02
 github_issue: 5401
-source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
+source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
 prerequisites: [FCA-01]
 depends_on: [RECONCILE_EXECUTABLE_CONTRACTS.md]

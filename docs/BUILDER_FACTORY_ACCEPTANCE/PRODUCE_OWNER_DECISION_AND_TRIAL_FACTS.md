@@ -3,7 +3,7 @@ name: Produce owner decision and trial facts
 description: produce and project explicit owner decision and trial receipts
 task_id: FCA-05
 github_issue: 5404
-source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
+source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
 prerequisites: [FCA-02, "#4169"]
 depends_on: [DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md]

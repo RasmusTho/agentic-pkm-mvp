@@ -3,7 +3,7 @@ name: Prepare composed owner acceptance
 description: prepare whole owner-platform acceptance over existing workflow proofs
 task_id: FCA-07
 github_issue: 5406
-source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
+source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
 prerequisites: [FCA-03, FCA-05, FCA-06, "#4749", "#4697", "#4982", "#5181"]
 depends_on: [COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md, PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md, QUALIFY_SECOND_CONSUMER_REPOSITORY.md]

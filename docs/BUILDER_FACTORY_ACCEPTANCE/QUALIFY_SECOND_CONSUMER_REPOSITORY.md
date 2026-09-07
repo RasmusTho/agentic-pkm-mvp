@@ -3,7 +3,7 @@ name: Qualify a second consumer repository
 description: qualify Builder against an explicitly addressed second repo
 task_id: FCA-06
 github_issue: 5405
-source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
+source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
 prerequisites: [FCA-04, "#3793", "#5181"]
 depends_on: [ISOLATE_BUILDER_PACKAGE_BOOT.md]

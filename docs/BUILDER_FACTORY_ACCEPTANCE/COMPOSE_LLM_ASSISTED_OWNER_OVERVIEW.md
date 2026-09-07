@@ -3,7 +3,7 @@ name: Compose LLM-assisted owner overview
 description: compose source-linked LLM overview and next-step proposals
 task_id: FCA-03
 github_issue: 5402
-source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
+source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
 prerequisites: []
 depends_on: []

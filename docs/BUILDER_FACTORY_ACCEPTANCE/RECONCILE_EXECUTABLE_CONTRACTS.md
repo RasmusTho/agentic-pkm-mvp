@@ -3,7 +3,7 @@ name: Reconcile executable Builder contracts
 description: reconcile VM102 and owner-control execution contracts
 task_id: FCA-01
 github_issue: 5400
-source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
+source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
 prerequisites: []
 depends_on: []
