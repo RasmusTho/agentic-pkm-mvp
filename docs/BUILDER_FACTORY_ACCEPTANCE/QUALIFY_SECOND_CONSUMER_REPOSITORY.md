@@ -5,7 +5,7 @@ task_id: FCA-06
 github_issue: 5405
 source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
 parent_capability: Builder Factory Acceptance
-prerequisites: [FCA-04]
+prerequisites: [FCA-04, "#3793", "#5181"]
 depends_on: [ISOLATE_BUILDER_PACKAGE_BOOT.md]
 can_parallelize_with: []
 ---
