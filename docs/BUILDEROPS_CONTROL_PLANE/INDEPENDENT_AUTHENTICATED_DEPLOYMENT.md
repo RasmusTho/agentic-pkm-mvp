@@ -6,7 +6,8 @@ Authority: Defines the independent BuilderOps Compose, image, secret, ingress, h
 
 ## Implementation Status
 
-The repository contract provides a separate BuilderOps Compose project, immutable control-plane and
+The repository contract provides a separate BuilderOps Compose project, an import-side-effect-free
+Builder package, a retained neutral runtime dependency manifest, immutable control-plane and
 PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references,
 migration-gated API and worker startup, loopback API exposure, private authenticated ingress,
 authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. The deployment target
@@ -31,6 +32,15 @@ the default Docker engine, or a healthy guest check cannot satisfy this boundary
 inventory must classify every known component as `VM-102 resident (target)`, `explicit external
 dependency`, or `intentionally non-runtime`, and must leave unresolved identity, service, ingress,
 health, lifecycle, migration, and rollback facts as explicit gaps.
+
+The BuilderOps image builds from `Dockerfile.builderops` and
+`requirements-builderops.txt`. Its API, worker, and migration entrypoints import only the
+BuilderOps control-plane package plus the neutral web, validation, PostgreSQL, and ASGI runtime
+dependencies named there. Importing `app` or any Builder entrypoint does not load Product LLM
+configuration, Product database/vault initialization, or Product process settings. Product keeps
+its own explicit LLM policy preflight at the Product API application entrypoint. This is a
+package/build boundary only; it does not prove image qualification, host identity, migration
+admission, authority cutover, ingress, or VM-102 activation.
 
 The ordered schemas and bootstrap-without-baseline refusal are owned only by the
 [VM-102 evidence and receipt contract](README.md#vm-102-evidence-and-receipt-contract). This BCP-02

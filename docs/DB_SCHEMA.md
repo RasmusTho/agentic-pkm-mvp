@@ -70,8 +70,10 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   `heimdal.register.entity.merged` outbox row, and a merge queue entry leaves
   `entities/review.md` `pending` only after a **fresh** connection observes both committed rows
   (INV-EROJ-3; see `docs/ENTITY_REVIEW_OPERATION_JOURNAL/README.md`). Operational coordination
-  evidence only — entity notes remain canonical identity truth. Target-evolution lineage recovery
-  (EROJ-02) and globally unique split complements (EROJ-03) are not delivered by this table.
+  evidence only — entity notes remain canonical identity truth. The narrow
+  `entity_register_split_operations` companion stores EROJ-03 preallocated split plans and ordered
+  note/complement checkpoints, owned by revision `b7e3c9d5a1f2`. Its completion and successor events
+  commit together; `ensure_split_schema()` is assert-only outside the same test flag.
 - **No durable DDL executes outside the Alembic revision chain** (MVR-05A1, #4560). Until this
   slice, `app/db/db.py::ensure_schema` replayed `app/db/migrations_obsidian.sql` on the first
   `conn_rw()` of **every process**. That file has been deleted, along with its second caller
@@ -895,6 +897,29 @@ Interpretation:
   committed rows authorizes clearing the `entities/review.md` `pending` entry (INV-EROJ-3),
 - it never decides identity: `_heimdal/register/*.md` notes remain canonical identity truth and
   `entities/review.md` remains the human decision history.
+
+EROJ-03's `entity_register_split_operations` companion is migration-owned by forward-only revision
+`b7e3c9d5a1f2`; removing recovery evidence through downgrade is refused. It contains:
+
+- `(vault_identity, operation_id)` — composite primary key for one retry-stable split.
+- `plan` (`jsonb`) and `plan_digest` (`text`) — immutable ordered partition, preallocated successors,
+  exact before/after note effects, original complement ids, and successor event payloads. Implicit
+  requests also record `direct_request_key` and `direct_generation`; generation zero preserves the
+  original direct identity, and later generations use distinct deterministic operation ids.
+- `checkpoints` (`jsonb`, default `[]`) — an ordered prefix of note-effect keys followed by one key
+  per moved complement. A checkpoint requires the exact note effect to be observed first.
+- `completed` (`boolean`, default `false`) — advances only after every checkpoint and exact outbox
+  event is present in the journal-owned transaction.
+- `entity_register_split_active_idx` — partial unique index on `vault_identity WHERE NOT completed`;
+  direct splits are serial within the selected vault. No background executor consumes this table.
+
+The split API reads saved evidence on restart, validates all affected notes against the plan, and
+checks global uniqueness before continuing. Completed split evidence stays available for later
+lineage validation; neither labels nor `merged_from` membership substitute for its checkpoints.
+Historical EROJ-02 split lineage predates this table. Its narrowly validated copied-note evidence
+and deterministic legacy complement identity remain a separate compatibility path; recovery does
+not manufacture a historical plan, checkpoint, or split event.
+The journal never chooses a human partition or becomes canonical relation truth.
 
 ## Heimdal Observation Log (append-only, per-consumer cursor)
 

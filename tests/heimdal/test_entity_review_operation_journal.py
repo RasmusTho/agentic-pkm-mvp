@@ -90,6 +90,78 @@ pytestmark = pytest.mark.pg
 MERGED_TOPIC = "heimdal.register.entity.merged"
 
 
+def test_eventless_merge_then_target_merge_backfills_original_event(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """EROJ-02 must prove an evolved target without changing the original pair."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    evolved = register.mint_canonical("Evolved target")
+    register.merge(target, evolved, operation_id="target-merge")
+    resolved = register.resolve_target_evolution(source, target, operation_id=operation.operation_id)
+    committed = journal.commit_merge_event(operation, resolution_context=resolved)
+    assert journal.verify_committed_visibility(committed) is True
+    events = _merged_event_rows(scratch_dsn)
+    assert len(events) == 1
+    assert events[0][1] == {"from_id": source, "into_id": target, "operation_id": operation.operation_id, "resolved_into_id": evolved}
+
+
+def test_target_split_lineage_preserves_original_operation_identity(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """EROJ-02 must use an explicit split successor, never rewrite the event pair."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    successor = register.split(
+        target,
+        {"Recovered source": ["Anna fran gymmet", "Anna G"]},
+        operation_id="target-split",
+    )[0]
+    assert register.resolve_target_evolution(source, target, operation_id=operation.operation_id) == successor
+    committed = journal.commit_merge_event(operation, resolution_context=successor)
+    assert _merged_event_rows(scratch_dsn)[0][1]["operation_id"] == committed.operation_id
+
+
+def test_contradictory_or_cyclic_target_evolution_fails_closed(tmp_path: Path) -> None:
+    """EROJ-02 must leave pending and history intact for unprovable lineage."""
+    register = _register(_vault_root(tmp_path))
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="operation")
+    entry = register.get_entry(target)
+    assert entry is not None
+    register._write_entry(replace(entry, lineage=({
+        "predecessor_id": target, "successor_id": target,
+        "operation_id": "cycle", "mutation_kind": "merge",
+    },)))
+    with pytest.raises(EntityRegisterError, match="cycle"):
+        register.resolve_target_evolution(source, target, operation_id="operation")
+
+
+def test_target_evolution_recovery_still_requires_fresh_event_visibility(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """EROJ-02 must retain the EROJ-01 fresh-connection visibility fence."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    evolved = register.mint_canonical("Evolved")
+    register.merge(target, evolved, operation_id="target-merge")
+    # No terminal journal/outbox commit: lineage alone cannot pass the fence.
+    assert journal.verify_committed_visibility(operation) is False
+
+
 # ---------------------------------------------------------------------------
 # Scratch database plumbing (per-test isolation on the configured Postgres)
 # ---------------------------------------------------------------------------
@@ -829,6 +901,166 @@ def _append_decisions(vault_root: Path, *decisions: dict[str, Any]) -> None:
     )
 
 
+@pytest.mark.parametrize("state", [STATE_CLAIMED, STATE_EVENT_COMMITTED, STATE_CLEARED])
+def test_authenticated_legacy_merge_recovery_binds_operation_on_both_sides(
+    scratch_dsn: str, tmp_path: Path, state: str
+) -> None:
+    """Every retained EROJ-01 resume window upgrades complete legacy notes."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    if state != STATE_CLAIMED:
+        operation = journal.commit_merge_event(operation)
+    if state == STATE_CLEARED:
+        operation = journal.mark_cleared(operation)
+    register._write_entry(replace(register.get_entry(source), lineage=(), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
+    decisions_before = _persisted_decisions(vault_root)
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert len(applied) == 1 and applied[0].operation_id == operation.operation_id
+    source_entry = register.get_entry(source)
+    relation = register.get_entry(target).complements[0]
+    assert source_entry.complement_id == relation["complement_id"]
+    assert source_entry.complement_id.startswith("cmp:legacy:")
+    assert relation["operation_id"] == operation.operation_id
+    assert source_entry.lineage[0]["operation_id"] == operation.operation_id
+    assert _journal_row(scratch_dsn, operation.operation_id)[0] == STATE_CLEARED
+    assert pending_review_entries(vault_root) == ()
+    assert _persisted_decisions(vault_root) == decisions_before
+    assert len(_merged_event_rows(scratch_dsn)) == 1
+
+
+@pytest.mark.parametrize("state", [STATE_EVENT_COMMITTED, STATE_CLEARED])
+def test_committed_merge_recovery_does_not_replay_missing_effects(
+    scratch_dsn: str, tmp_path: Path, state: str
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_id, source, target, raw))
+    operation = journal.commit_merge_event(operation)
+    if state == STATE_CLEARED:
+        operation = journal.mark_cleared(operation)
+    before = {p: p.read_bytes() for p in vault_root.rglob("*.md")}
+    with pytest.raises(EntityConfirmError, match="lacks complete note effects"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert {p: p.read_bytes() for p in vault_root.rglob("*.md")} == before
+    assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
+
+
+@pytest.mark.parametrize("state,split_count,corruption,journaled_later", [
+    *((state, count, None, False) for state in (STATE_CLAIMED, STATE_EVENT_COMMITTED, STATE_CLEARED)
+      for count in (1, 2)),
+    *((STATE_EVENT_COMMITTED, 2, corruption, False) for corruption in
+      ("missing_source_copy", "missing_predecessor_copy", "missing_successor_copy",
+       "duplicate_copy", "wrong_split_from", "missing_merge", "missing_aliases")),
+    (STATE_EVENT_COMMITTED, 2, None, True),
+    (STATE_EVENT_COMMITTED, 2, "journaled_as_legacy", True),
+])
+def test_pre_journal_split_lineage_recovers_original_merge(
+    scratch_dsn: str, tmp_path: Path, state: str, split_count: int,
+    corruption: str | None, journaled_later: bool,
+) -> None:
+    """Literal EROJ-02 producer shape: copied split links, no new journal or ids."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    successors = [register.mint_canonical(f"Historical successor {i}") for i in range(split_count)]
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    if state != STATE_CLAIMED:
+        operation = journal.commit_merge_event(operation)
+    if state == STATE_CLEARED:
+        operation = journal.mark_cleared(operation)
+    register._write_entry(replace(register.get_entry(source), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
+    predecessor = target
+    for i, successor in enumerate(successors):
+        child = register.get_entry(source)
+        original = register.get_entry(predecessor)
+        split_link = {
+            "predecessor_id": predecessor, "successor_id": successor,
+            "mutation_kind": "split", "operation_id": f"historical-split-{i}",
+            "reclaimed_from_id": source,
+        }
+        register._write_entry(replace(child, merged_into=successor, lineage=(*child.lineage, split_link)))
+        new_entry = register.get_entry(successor)
+        register._write_entry(replace(new_entry, aliases=(new_entry.label, child.label, *child.aliases),
+                                     merged_from=(source,), split_from=predecessor, lineage=(split_link,)))
+        register._write_entry(replace(original, merged_from=(),
+                                     aliases=tuple(a for a in original.aliases if a not in {child.label, *child.aliases}),
+                                     lineage=(*original.lineage, split_link)))
+        predecessor = successor
+    decisions_before = _persisted_decisions(vault_root)
+    if corruption and corruption != "journaled_as_legacy":
+        entry_id = {"missing_source_copy": source, "missing_predecessor_copy": target,
+                    "missing_successor_copy": successors[0], "duplicate_copy": source,
+                    "wrong_split_from": successors[0], "missing_merge": source,
+                    "missing_aliases": successors[-1]}[corruption]
+        entry = register.get_entry(entry_id)
+        first_link = next(link for link in entry.lineage if link.get("mutation_kind") == "split")
+        if corruption.startswith("missing_") and corruption.endswith("_copy"):
+            entry = replace(entry, lineage=tuple(link for link in entry.lineage if link != first_link))
+        elif corruption == "duplicate_copy":
+            entry = replace(entry, lineage=(*entry.lineage, first_link))
+        elif corruption == "wrong_split_from":
+            entry = replace(entry, split_from=source)
+        elif corruption == "missing_merge":
+            entry = replace(entry, lineage=tuple(link for link in entry.lineage if link.get("mutation_kind") != "merge"))
+        else:
+            entry = replace(entry, aliases=())
+        register._write_entry(entry)
+        before = {p: p.read_bytes() for p in vault_root.rglob("*.md")}
+        with pytest.raises(EntityConfirmError):
+            apply_human_review_decisions(vault_root, register=register, journal=journal)
+        assert {p: p.read_bytes() for p in vault_root.rglob("*.md")} == before
+        assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
+        assert _journal_row(scratch_dsn, operation.operation_id)[0] == state
+        return
+    if journaled_later:
+        register.backfill_complements()
+        child = register.get_entry(source)
+        successors.append(register.split(successors[-1], {"Modern successor": [child.label, *child.aliases]})[0])
+        if corruption == "journaled_as_legacy":
+            modern_id = register.get_entry(source).lineage[-1]["operation_id"]
+            for entry in register._all_entries():
+                lineage = tuple({k: v for k, v in link.items() if k != "complement_id"}
+                                if link.get("operation_id") == modern_id else link for link in entry.lineage)
+                if lineage != entry.lineage:
+                    register._write_entry(replace(entry, lineage=lineage))
+            before = {p: p.read_bytes() for p in vault_root.rglob("*.md")}
+            with pytest.raises(EntityConfirmError, match="journaled split"):
+                apply_human_review_decisions(vault_root, register=register, journal=journal)
+            assert {p: p.read_bytes() for p in vault_root.rglob("*.md")} == before
+            assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
+            return
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert len(applied) == 1 and applied[0].operation_id == operation.operation_id
+    relation = register.get_entry(successors[-1]).complements[0]
+    assert relation["complement_id"] == register.get_entry(source).complement_id
+    assert relation["into_id"] == target
+    assert relation["operation_id"] == operation.operation_id
+    assert register.resolve_target_evolution(source, target, operation_id=operation.operation_id) == successors[-1]
+    assert pending_review_entries(vault_root) == ()
+    assert _persisted_decisions(vault_root) == decisions_before
+    events = _merged_event_rows(scratch_dsn)
+    assert len(events) == 1
+    assert events[0][1]["from_id"] == source and events[0][1]["into_id"] == target
+    assert events[0][1]["operation_id"] == operation.operation_id
+    with psycopg.connect(scratch_dsn) as conn:
+        journal_module.ensure_split_schema(conn)
+        assert conn.execute("SELECT count(*) FROM entity_register_split_operations").fetchone()[0] == int(journaled_later)
+
+
 @pytest.mark.parametrize("late_ruling", ["reapprove", "reject"])
 def test_edited_history_after_refusal_converges_without_manual_repair(
     scratch_dsn: str, tmp_path: Path, late_ruling: str
@@ -1075,7 +1307,7 @@ def test_interrupted_clear_never_emits_second_event_on_reapproval(
     operation = journal.claim_operation(
         **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
     )
-    register.ensure_merge_effects(from_id, into_id)
+    register.ensure_merge_effects(from_id, into_id, operation_id=operation.operation_id)
     operation = journal.commit_merge_event(operation)
     assert journal.verify_committed_visibility(operation) is True
     journal.mark_cleared(operation)
@@ -1106,3 +1338,186 @@ def test_interrupted_clear_never_emits_second_event_on_reapproval(
             (queue_entry_id,),
         ).fetchone()
     assert count == (1,), "no second operation may be claimed for the finished clear"
+
+
+@pytest.mark.parametrize('stop_at', range(1, 5))
+@pytest.mark.parametrize('after_write', [False, True])
+def test_split_retry_reuses_preallocated_successors_and_checkpoints(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop_at: int, after_write: bool
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target', aliases=['T'])
+    register.merge(source, target)
+    first = register.split(target, {'First': ['Source', 'T']}, operation_id='first')[0]
+    partition = {'Second': ['Source'], 'Other': ['T']}
+    real_write = register._write_entry
+    writes = 0
+    plans = []
+
+    def crash(entry):
+        nonlocal writes
+        # This is a fresh connection, before ANY split note effect.
+        saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'second')
+        assert saved is not None
+        plans.append(saved.plan)
+        writes += 1
+        if writes == stop_at and not after_write:
+            raise RuntimeError('stop second split')
+        real_write(entry)
+        if writes == stop_at and after_write:
+            raise RuntimeError('stop second split')
+
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError, match='stop second split'):
+        register.split(first, partition, operation_id='second')
+    restarted = _register(vault_root)
+    ids = restarted.split(first, partition, operation_id='second')
+    assert list(ids) == plans[0]['successor_ids']
+    saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'second')
+    assert saved.completed
+    assert saved.plan == plans[0]
+    assert saved.checkpoints == journal_module.split_checkpoint_keys(saved.plan)
+    cid = restarted.get_entry(source).complement_id
+    assert 'complement:' + cid in saved.checkpoints
+    assert restarted.split(first, partition, operation_id='second') == ids
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM outbox WHERE topic = 'heimdal.register.entity.split'").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize("stop_at", [1, 2, 3])
+@pytest.mark.parametrize("after_write", [False, True])
+def test_implicit_split_generation_restarts_its_preallocated_plan(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    stop_at: int, after_write: bool,
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    partition = {"Recovered": ["Source"]}
+    register.merge(source, target)
+    first = register.split(target, partition)
+    later_source = register.mint_canonical("Source")
+    register.merge(later_source, target)
+    real_write = register._write_entry
+    writes = 0
+    plans = []
+
+    def crash(entry):
+        nonlocal writes
+        with psycopg.connect(scratch_dsn) as conn:
+            rows = conn.execute("SELECT plan FROM entity_register_split_operations WHERE NOT completed").fetchall()
+        assert len(rows) == 1
+        plans.append(rows[0][0])
+        writes += 1
+        if writes == stop_at and not after_write:
+            raise RuntimeError("later generation crash")
+        real_write(entry)
+        if writes == stop_at and after_write:
+            raise RuntimeError("later generation crash")
+
+    monkeypatch.setattr(register, "_write_entry", crash)
+    with pytest.raises(RuntimeError, match="later generation crash"):
+        register.split(target, partition)
+    restarted = _register(vault_root)
+    second = restarted.split(target, partition)
+    assert second != first and list(second) == plans[0]["successor_ids"]
+    assert restarted.get_entry(source).merged_into == first[0]
+    assert restarted.get_entry(later_source).merged_into == second[0]
+    assert restarted.split(target, partition) == second
+    saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, plans[0]["operation_id"])
+    assert saved.completed and saved.plan == plans[0]
+    assert saved.checkpoints == journal_module.split_checkpoint_keys(saved.plan)
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM entity_register_split_operations").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM outbox WHERE topic='heimdal.register.entity.split'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize('event_already_committed', [False, True])
+def test_pending_clear_waits_for_unique_split_recovery(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_already_committed: bool
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    if event_already_committed:
+        journal.commit_merge_event(operation)
+    first = register.split(target, {'First': ['Anna fran gymmet', 'Anna G']}, operation_id='first')[0]
+    partition = {'Second': ['Anna fran gymmet', 'Anna G']}
+    real_write = register._write_entry
+    writes = 0
+
+    def crash(entry):
+        nonlocal writes
+        real_write(entry)
+        writes += 1
+        if writes == 2:
+            raise RuntimeError('partial second split')
+
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError):
+        register.split(first, partition, operation_id='second')
+    before = read_settings_note(vault_root, ENTITY_REVIEW).values
+    with pytest.raises(EntityConfirmError, match='pending'):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert read_settings_note(vault_root, ENTITY_REVIEW).values == before
+    assert journal.load_operation(operation.operation_id).state != STATE_CLEARED
+    restarted = _register(vault_root)
+    second = restarted.split(first, partition, operation_id='second')[0]
+    # Even a fully checkpointed split cannot hide a duplicate elsewhere.
+    other = restarted.mint_canonical('Corrupt duplicate')
+    clean = restarted.get_entry(other)
+    relation = restarted.get_entry(second).complements
+    restarted._write_entry(replace(clean, complements=relation, merged_from=(source,)))
+    with pytest.raises(EntityConfirmError, match='complement'):
+        apply_human_review_decisions(vault_root, register=restarted, journal=journal)
+    assert read_settings_note(vault_root, ENTITY_REVIEW).values == before
+    restarted._write_entry(clean)
+    assert apply_human_review_decisions(vault_root, register=restarted, journal=journal)[0].operation_id == operation.operation_id
+    assert pending_review_entries(vault_root) == ()
+    assert len(_merged_event_rows(scratch_dsn)) == 1
+
+
+def test_split_checkpoint_mismatch_fails_without_mutating_notes(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register = _register(_vault_root(tmp_path))
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target')
+    register.merge(source, target)
+    def crash(entry):
+        raise RuntimeError('before notes')
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError):
+        register.split(target, {'New': ['Source']}, operation_id='split')
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute("UPDATE entity_register_split_operations SET checkpoints = '[\"forged\"]'::jsonb")
+    before = {p: p.read_bytes() for p in register.vault_root.rglob('*.md')}
+    with pytest.raises(EntityReviewOperationJournalError, match='checkpoint mismatch'):
+        _register(register.vault_root).split(target, {'New': ['Source']}, operation_id='split')
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_split_event_conflict_rolls_back_terminal_checkpoint(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register = _register(_vault_root(tmp_path))
+    target = register.mint_canonical('Target')
+    write_event = journal_module.write_outbox_event
+    def corrupt(event, **kwargs):
+        return write_event(event.model_copy(update={'payload': {'wrong': 'event'}}), **kwargs)
+    monkeypatch.setattr(journal_module, 'write_outbox_event', corrupt)
+    with pytest.raises(EntityReviewOperationJournalError, match='completion refused'):
+        register.split(target, {'New': []}, operation_id='event-conflict')
+    saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'event-conflict')
+    assert not saved.completed
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM outbox WHERE topic = 'heimdal.register.entity.split'").fetchone()[0] == 0
+    monkeypatch.setattr(journal_module, 'write_outbox_event', write_event)
+    register.split(target, {'New': []}, operation_id='event-conflict')
+    assert journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'event-conflict').completed

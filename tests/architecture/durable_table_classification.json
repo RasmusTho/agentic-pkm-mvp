@@ -198,6 +198,29 @@
       "rebuild_mechanism": "row-scoped",
       "escalation_conditions": []
     },
+    "entity_register_split_operations": {
+      "classification": "binding-scoped",
+      "reason": "The EROJ-03 entity_register_split_operations journal (#4352) keys each immutable recovery plan by (vault_identity, operation_id), scopes every read/update to that pair, and permits one unfinished plan per vault_identity through entity_register_split_active_idx. Plans, ordered checkpoints and committed successor event identities are authority/receipt-bearing execution evidence. Like entity_review_operations, this uses the canonical vault-identity namespace rather than vault_binding_id; namespace reconciliation remains MVR-05B resolver work. Canonical entity notes remain relation truth; recovery evidence must not be discarded as a rebuildable projection.",
+      "owning_revision": "b7e3c9d5a1f2",
+      "declaring_revisions": [
+        "b7e3c9d5a1f2"
+      ],
+      "binding_key": "keyed",
+      "binding_column": "vault_identity",
+      "producers": [
+        {
+          "module": "app/heimdal/entity_review_operation_journal.py",
+          "operations": [
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": [
+        "authority-or-receipt-rows"
+      ]
+    },
     "entity_review_operations": {
       "classification": "binding-scoped",
       "reason": "The entity-review operation journal is already scoped by an explicit `vault_identity` column, and its exactly-once guard `entity_review_operations_active_entry_idx` is UNIQUE (vault_identity, queue_entry_id) WHERE state <> 'cleared' (EROJ-01, #4350). Rows carry the committed `outbox_event_id` and `decision_digest`, so they are receipt-bearing. It reaches binding scope through the vault-identity namespace rather than through `vault_binding_id`; reconciling the two namespaces is MVR-05B's resolver work, not a durable-schema gap.",

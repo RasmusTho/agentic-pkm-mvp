@@ -661,6 +661,27 @@ promotion_refs:
 receipt_refs: [receipt_20260601_010]
 ```
 
+### Owner-fact carriers and bounded handoff (FCA-02)
+
+FCA-02 does not introduce a `BuilderOwnerFact` object. The four owner facts are carried by the
+existing source contracts and, where a durable transition must be recorded, by an immutable
+`BuilderOpsReceipt`:
+
+| Fact | Existing carrier | BuilderOps responsibility | Not implied |
+| --- | --- | --- | --- |
+| `owner_ask` | `TypedCommandProposal.v1` / `DeliveryRequest.v1` + `DeliveryPreview.v1` | Preserve source refs, proposal hash, expiry, action-boundary receipt, and refusal/withdrawal reason. | A model suggestion, Human Exception label, or preview authorizes execution. |
+| `ready_to_try` | Exact deployment/verification `DeliveryReceipt.v2` or equivalent runtime receipt | Preserve candidate/environment/source revision, health/read-only smoke, rollback identity, and current readback. | Merge, closure, availability, or image presence means ready. |
+| `owner_trial` | ADR-0065 owner disposition receipt when its boundary is admitted | Preserve the owner actor, candidate receipt, observation, outcome, and supersession chain. | A screenshot, model response, or agent status is a trial. |
+| `owner_acceptance` | ADR-0065 owner acceptance/rejection receipt when its boundary is admitted | Preserve exact candidate, acceptance profile, limits, owner actor, decision time, and correction/supersession refs. | A successful test, deployment, or BuilderDecision is owner acceptance. |
+
+The receipt body may use `fact_kind`, `subject_ref`, `candidate_ref`, `source_revision`,
+`authorization_ref`, `outcome`, `supersedes_receipt_id`, and `withdrawal_reason` fields inside the
+existing `BuilderOpsReceipt` envelope. These fields refine receipt meaning; they do not create a
+new table, queue, lifecycle authority, or projection store. A read projection may select the latest
+non-superseded receipt for an exact subject and revision, otherwise it must return withdrawn,
+stale, ambiguous, or unavailable. Restart rereads receipts and source readback; it never recreates
+an action from text or repeats an unknown effect.
+
 ### PromotionIntent
 
 **Purpose:** Represent an explicit intent to move BuilderOps material into another authority surface:

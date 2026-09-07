@@ -26,6 +26,7 @@ read/write path, never a mock of either.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ from app.heimdal.entity_review_operation_journal import (
     STATE_EVENT_COMMITTED,
     EntityReviewOperationConflictError,
     OperationRecord,
+    decision_mapping_digest,
     derive_operation_event_id,
     derive_operation_id,
 )
@@ -221,7 +223,10 @@ class _InMemoryJournal:
                 return record
         return None
 
-    def commit_merge_event(self, operation: OperationRecord) -> OperationRecord:
+    def commit_merge_event(
+        self, operation: OperationRecord, *, resolution_context: str | None = None
+    ) -> OperationRecord:
+        del resolution_context
         record = self.operations[operation.operation_id]
         if record.state == STATE_CLAIMED:
             record = replace(record, state=STATE_EVENT_COMMITTED)
@@ -239,7 +244,11 @@ class _InMemoryJournal:
         )
 
     def mark_cleared(self, operation: OperationRecord) -> OperationRecord:
-        record = replace(self.operations[operation.operation_id], state=STATE_CLEARED)
+        record = replace(
+            self.operations[operation.operation_id],
+            state=STATE_CLEARED,
+            updated_at=datetime.now(timezone.utc),
+        )
         self.operations[record.operation_id] = record
         self.log.append(("mark_cleared", record.operation_id))
         return record
@@ -283,10 +292,13 @@ def _allowing_guard() -> WriteGuard:
 
 
 def _register(vault_root: Path, *, conn: Any = None) -> EntityRegister:
+    from tests.heimdal.test_entity_register import FakeSplitJournal
+    conn = conn if conn is not None else FakeOutboxConn()
     return EntityRegister(
         vault_context=_vault_context(vault_root),
         write_guard=_allowing_guard(),
-        conn=conn if conn is not None else FakeOutboxConn(),
+        conn=conn,
+        split_journal=FakeSplitJournal(conn),
     )
 
 
@@ -310,6 +322,303 @@ def _mention(
 # AC: a confirmed merge writes `merged_from:` + a redirect and is reversible
 # via `split()`.
 # ---------------------------------------------------------------------------
+
+
+def test_apply_merge_recovers_after_target_evolution_without_graph_replay(tmp_path: Path) -> None:
+    """EROJ-02 applicator recovery must be journal- and lineage-bound."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="lineage"),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [decision.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    # Simulate complete EROJ-01-era effects that pre-date EROJ-02 lineage.
+    # The already-claimed journal operation is the only authority allowed to
+    # backfill that missing proof on applicator resume.
+    register.ensure_merge_effects(source, target)
+    register._write_entry(replace(register.get_entry(source), lineage=(), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert applied[0].operation_id == operation.operation_id
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == evolved
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_apply_merge_recovers_after_source_reclaiming_target_split(tmp_path: Path) -> None:
+    """EROJ-02 routes a source-reclaiming split through the journal recovery path."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="split-lineage"),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [decision.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    residual_target = register.mint_canonical("Residual target")
+    register.merge(target, residual_target)
+    terminal_successor = register.mint_canonical("Evolved recovered source")
+    register.merge(successor, terminal_successor)
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert applied[0].operation_id == operation.operation_id
+    assert register.resolve_redirects(source) == terminal_successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == terminal_successor
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_apply_merge_recovers_when_later_split_reclaims_intermediate_target(tmp_path: Path) -> None:
+    """A split-repointed T retains S's complement for the original S -> T."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="reclaim-target"),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [decision.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    intermediate = register.mint_canonical("Intermediate")
+    register.merge(target, intermediate, operation_id="target-evolution")
+    successor = register.split(intermediate, {"Recovered target": ["Target", "Source"]})[0]
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    rewritten_target = register.get_entry(target)
+    assert applied[0].operation_id == operation.operation_id
+    assert rewritten_target is not None and source in rewritten_target.merged_from
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == successor
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_apply_merge_recovers_after_consecutive_source_reclaimed_splits(tmp_path: Path) -> None:
+    """The applicator follows every explicit source-reclaim split hop."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(
+            resolution=RESOLUTION_AMBIGUOUS,
+            confidence=0.75,
+            mention_id="consecutive-reclaim",
+        ),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id=target,
+    )
+    write_settings_note(
+        vault_root,
+        SettingsNote(
+            spec=ENTITY_REVIEW,
+            values={"pending": [entry.to_dict()], "decisions": [decision.to_dict()]},
+        ),
+        settings_dir=DEFAULT_SETTINGS_DIR,
+        write_guard=_allowing_guard(),
+    )
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    second_successor = register.split(
+        first_successor, {"Recovered twice": ["Source", "S"]}
+    )[0]
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert applied[0].operation_id == operation.operation_id
+    assert register.resolve_redirects(source) == second_successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == second_successor
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_apply_merge_refuses_requeued_entry_after_cleared_source_reclaim(tmp_path: Path) -> None:
+    """A newer pending generation cannot masquerade as an interrupted clear."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="requeued"),
+        candidate_entity_ids=[source, target],
+    )
+    initial = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [initial.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1 and pending_review_entries(vault_root) == ()
+
+    register.split(target, {"Recovered source": ["Source", "S"]})
+    public_requeue = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="requeued"),
+        candidate_entity_ids=[source, target],
+    )
+    requeued = replace(public_requeue, queued_at="2099-01-01T00:00:00+00:00")
+    reapproval = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id=target,
+        decided_at="2099-01-01T00:00:01+00:00",
+    )
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [requeued.to_dict()],
+        "decisions": [initial.to_dict(), reapproval.to_dict()],
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+
+    with pytest.raises(EntityConfirmError, match="not bound to this prospective operation"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert [pending.queue_entry_id for pending in pending_review_entries(vault_root)] == [
+        entry.queue_entry_id
+    ]
+    assert len(journal.operations) == 1
+
+
+def test_apply_merge_refuses_public_effects_before_claiming_new_operation(tmp_path: Path) -> None:
+    """A fresh review cannot adopt a complete public merge under a new id."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.merge(source, target)
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="public-merge"),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [decision.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+
+    with pytest.raises(EntityConfirmError, match="not bound to this prospective operation"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert journal.operations == {}
+    assert [pending.queue_entry_id for pending in pending_review_entries(vault_root)] == [
+        entry.queue_entry_id
+    ]
+
+
+def test_apply_merge_refuses_claimed_retry_with_changed_decision_identity(tmp_path: Path) -> None:
+    """Same pair is insufficient: every immutable decision field must match."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="changed-retry"),
+        candidate_entity_ids=[source, target],
+    )
+    original = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id=target,
+        decided_at="2026-09-07T00:00:00+00:00",
+    )
+    changed = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id=target,
+        decided_at="2026-09-07T00:01:00+00:00",
+    )
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [changed.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    claimed = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(original.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+
+    with pytest.raises(EntityConfirmError, match="complete immutable decision identity"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert journal.operations[claimed.operation_id].state == STATE_CLAIMED
+    assert register.get_entry(source).lifecycle == LIFECYCLE_CANONICAL
+    assert [pending.queue_entry_id for pending in pending_review_entries(vault_root)] == [
+        entry.queue_entry_id
+    ]
 
 
 def test_merge_writes_redirect_and_is_reversible(tmp_path: Path) -> None:
@@ -675,12 +984,13 @@ def test_queue_for_review_replaces_stale_entry_for_same_mention(tmp_path: Path) 
     vault_root = _vault_root(tmp_path)
     mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.65, mention_id="mention:dup-1")
 
-    queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a"])
-    queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a", "ent:c"])
+    first = queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a"])
+    second = queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a", "ent:c"])
 
     pending = pending_review_entries(vault_root)
     assert len(pending) == 1
     assert pending[0].candidate_entity_ids == ("ent:a", "ent:c")
+    assert second.queued_at == first.queued_at == pending[0].queued_at
 
 
 def test_queue_for_review_requires_confidence(tmp_path: Path) -> None:

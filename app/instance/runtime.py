@@ -203,13 +203,14 @@ class InstanceRegistryRuntime:
                         _capability=_STORAGE_MUTATION_CAPABILITY,
                     )
                 except LedgerError:
-                    if (
-                        Path(registration.path).expanduser().resolve(strict=False)
-                        != Path(root_identity.canonical_path)
-                        .expanduser()
-                        .resolve(strict=False)
-                    ):
-                        raise
+                    # The selected root can have a different canonical path
+                    # in a container while its filesystem identity belongs to
+                    # the host namespace that established the registration.
+                    # In that remount shape, direct HMAC identity admission is
+                    # expected to fail; continue to the receipt-bound branch
+                    # below, which re-authenticates the exact registration,
+                    # path, binding checkpoint, and host-produced identity.
+                    pass
                 else:
                     return registration
         # A consumer can see the canonical selected-root path through a
@@ -220,8 +221,10 @@ class InstanceRegistryRuntime:
         remounted = [
             registration
             for registration in current.registrations.values()
-            if Path(registration.path).expanduser().resolve(strict=False)
-            == Path(root_identity.canonical_path).expanduser().resolve(strict=False)
+            if same_filesystem_root(
+                resolve_filesystem_root_identity(registration.path),
+                root_identity,
+            )
         ]
         if remounted:
             if len(remounted) != 1 or legacy_owner_receipt_path is None:
