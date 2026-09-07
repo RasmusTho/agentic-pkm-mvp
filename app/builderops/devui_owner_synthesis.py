@@ -27,6 +27,7 @@ from app.builderops.model_inquiry_adapters import (
 from app.builderops.model_inquiry_contract import (
     RESPONSE_SCHEMA_VERSION,
     ModelTurnResponse,
+    model_turn_system_prompt,
     parse_model_turn_response,
 )
 from llm_contract import ModelTurnAdapter
@@ -252,6 +253,7 @@ def synthesize_owner_overview(
         "schema": RESPONSE_SCHEMA_VERSION,
         "operation": "devui_owner_synthesis",
         "authority": "interpretation_only",
+        "system_prompt": model_turn_system_prompt("synthesis"),
         "repo": snapshot["repo"],
         "captured_at": snapshot["captured_at"],
         "source_snapshot_hash": snapshot_hash,

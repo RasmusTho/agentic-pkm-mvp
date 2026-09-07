@@ -116,6 +116,29 @@ def test_model_failure_preserves_usable_source_view() -> None:
     assert "Source facts remain available" in result["limitations"][-1]
 
 
+def test_model_unconfigured_preserves_source_view(monkeypatch: Any) -> None:
+    def unavailable(_env: Any, *, resolver: Any) -> dict[str, Adapter]:
+        raise RuntimeError("no configured model")
+
+    monkeypatch.setattr("app.builderops.devui_owner_synthesis.load_adapters", unavailable)
+
+    result = synthesize_owner_overview(SNAPSHOT, env={})
+
+    assert result["source_snapshot"] == SNAPSHOT
+    assert result["canonical_status"] == "unavailable"
+    assert result["model"]["status"] == "unavailable"
+    assert result["proposals"] == []
+
+
+def test_malformed_model_output_preserves_source_view() -> None:
+    result = synthesize_owner_overview(SNAPSHOT, adapter=Adapter("not-json"))
+
+    assert result["source_snapshot"] == SNAPSHOT
+    assert result["canonical_status"] == "unavailable"
+    assert result["model"]["reason"] == "malformed_model_output"
+    assert result["proposals"] == []
+
+
 def test_production_call_uses_builder_model_boundary(monkeypatch: Any) -> None:
     calls: list[str] = []
     adapter = Adapter(_response(), calls=[])
@@ -130,6 +153,7 @@ def test_production_call_uses_builder_model_boundary(monkeypatch: Any) -> None:
     assert calls == ["default"]
     assert result["model"]["status"] == "available"
     assert adapter.calls and adapter.calls[0]["operation"] == "devui_owner_synthesis"
+    assert adapter.calls[0]["system_prompt"]
 
 
 def test_snapshot_requires_addressed_repo_and_versioned_sources() -> None:
