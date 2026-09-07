@@ -472,6 +472,46 @@ def test_runtime_preflight_accepts_authenticated_remounted_root(
     assert OwnershipLedger(pending_ownership).path.read_bytes() == pending_ledger_before
 
 
+def test_runtime_preflight_accepts_host_receipt_when_container_path_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bind-mounted namespace path must use the authenticated host receipt."""
+
+    state, ownership, _receipt, registry_before, ledger_before = _remounted_runtime_fixture(
+        tmp_path, monkeypatch
+    )
+    vault = tmp_path / "vault"
+    container_alias = tmp_path / "container-vault"
+    container_alias.mkdir()
+    host_identity = resolve_filesystem_root_identity(vault)
+    original_resolver = runtime_module.resolve_filesystem_root_identity
+
+    def container_namespace(value: str | Path) -> FilesystemRootIdentity:
+        if Path(value).expanduser().resolve(strict=False) == container_alias:
+            return FilesystemRootIdentity(
+                str(container_alias), host_identity.device, host_identity.inode
+            )
+        return original_resolver(value)
+
+    monkeypatch.setattr(
+        runtime_module, "resolve_filesystem_root_identity", container_namespace
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(container_alias))
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(container_alias))
+
+    assert (
+        _preflight_runtime(
+            channel="dev",
+            instance_state_root=state,
+            host_global_root=ownership,
+            consumer="api",
+        )
+        == 0
+    )
+    assert InstanceStateLayout.for_channel(state, "dev").registry_path.read_bytes() == registry_before
+    assert OwnershipLedger(ownership).path.read_bytes() == ledger_before
+
+
 def test_remounted_receipt_checkpoint_survives_key_rotation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
