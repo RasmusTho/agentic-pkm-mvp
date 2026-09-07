@@ -2071,15 +2071,22 @@ def test_promotion_test_rejects_candidate_as_prod_migration_baseline(
 
 
 def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> None:
+    # The durable receipt must preserve a known forward-only classification;
+    # its expected migration set must not drift with the repository's HEAD.
+    source_repo, baseline, target = _promotion_migration_git_delta(
+        tmp_path / "classified",
+        content='reversibility = "forward-only"\n',
+    )
     private_key, public_key = _promotion_test_signing_material()
     store = tmp_path / "ops" / "test-promotions"
     _seed_promotion_registry(store, public_key)
     resettable_roots = (tmp_path / "tmp-test", tmp_path / "vault-test")
-    rendered, manifest = _promotion_test_candidate_inputs()
+    rendered, manifest = _promotion_test_candidate_inputs(source_sha=target)
+    admission_context = _promotion_admission_context(migration_baseline_sha=baseline)
     common = {
         "rendered": rendered,
         "channel_manifest": manifest,
-        "prod_admission_context": _promotion_admission_context(),
+        "prod_admission_context": admission_context,
         "issued_at": datetime(2026, 8, 16, tzinfo=timezone.utc),
         "fresh_until": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "issuer_id": "promotion-test-issuer",
@@ -2088,10 +2095,12 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         "issuer_public_key": public_key,
         "receipt_store": store,
         "resettable_roots": resettable_roots,
-        "source_repo": ROOT,
+        "source_repo": source_repo,
     }
 
-    pass_report = _promotion_check_report()
+    pass_report = _promotion_check_report(
+        source_repo=source_repo, migration_baseline_sha=baseline, source_sha=target,
+    )
     passed = write_promotion_test_terminal_receipt(
         attempt_id="pt-" + "1" * 32,
         check_report=pass_report,
@@ -2122,9 +2131,9 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
     assert prepare_prod_activation(
         passed,
         registry,
-        _promotion_admission_context(),
+        admission_context,
         check_report=pass_report,
-        source_repo=ROOT,
+        source_repo=source_repo,
         now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
     ) == {
         "activation_permitted": True,
@@ -2141,10 +2150,14 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
         **_promotion_check_results(),
     }
     assert pass_attempt["migration_classification"] == {
-        "migrations_checked": 0,
+        "migrations_checked": 1,
         "reversible": [],
-        "forward_only": [],
-        "classification_decisions": [],
+        "forward_only": ["receipt_delta.py"],
+        "classification_decisions": [{
+            "migration": "receipt_delta.py",
+            "classification": "forward-only",
+            "is_forward_only": True,
+        }],
     }
 
     migration_repo, migration_baseline, migration_target = _promotion_migration_git_delta(
@@ -2187,7 +2200,7 @@ def test_promotion_test_writes_one_durable_terminal_receipt(tmp_path: Path) -> N
     with pytest.raises(PromotionReceiptError) as exc_info:
         write_promotion_test_terminal_receipt(
             attempt_id="pt-" + "3" * 32,
-            check_report=_promotion_check_report(),
+            check_report=pass_report,
             **dict(common, receipt_store=tmp_path / "tmp-test" / "receipts"),
         )
     assert exc_info.value.code == "resettable_receipt_store"
