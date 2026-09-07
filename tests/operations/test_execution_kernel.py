@@ -48,25 +48,42 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
     kernel = OperationExecutionKernel(
         context_resolver=lambda context: context.active_context_ref == "context-1",
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: calls.append(request.request_id) or OwnerExecutionResult.succeeded()},
+        handlers={
+            "artifact.move": lambda request: calls.append(request.request_id)
+            or OwnerExecutionResult.succeeded()
+        },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
         token_validator=lambda request, decision: True,
     )
 
-    missing_context = kernel.execute(_request(context=OperationContext("", "generation-1")), _delegation())
-    wrong_delegation = kernel.execute(_request(request_id="request-2"), _delegation(operation_ids=[]))
-    stale_policy = kernel.execute(_request(request_id="request-3"), _delegation(policy_version="policy-6"))
+    missing_context = kernel.execute(
+        _request(context=OperationContext("", "generation-1")), _delegation()
+    )
+    wrong_delegation = kernel.execute(
+        _request(request_id="request-2"), _delegation(operation_ids=[])
+    )
+    stale_policy = kernel.execute(
+        _request(request_id="request-3"), _delegation(policy_version="policy-6")
+    )
     denied = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.denied("policy-7", "denied"),
-        handlers={"artifact.move": lambda request: calls.append("denied") or OwnerExecutionResult.succeeded()},
+        handlers={
+            "artifact.move": lambda request: calls.append("denied")
+            or OwnerExecutionResult.succeeded()
+        },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
         token_validator=lambda request, decision: True,
     ).execute(_request(request_id="request-4"), _delegation())
 
-    assert [missing_context.status, wrong_delegation.status, stale_policy.status, denied.status] == [
+    assert [
+        missing_context.status,
+        wrong_delegation.status,
+        stale_policy.status,
+        denied.status,
+    ] == [
         OperationStatus.INVALID,
         OperationStatus.REJECTED,
         OperationStatus.REJECTED,
@@ -81,7 +98,10 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
     version_conflict = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: calls.append("stale") or OwnerExecutionResult.succeeded()},
+        handlers={
+            "artifact.move": lambda request: calls.append("stale")
+            or OwnerExecutionResult.succeeded()
+        },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: False,
         token_validator=lambda request, decision: True,
@@ -95,7 +115,10 @@ def test_idempotency_replay_is_stable_and_intent_mismatch_conflicts() -> None:
     kernel = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: calls.append(request.request_id) or OwnerExecutionResult.succeeded()},
+        handlers={
+            "artifact.move": lambda request: calls.append(request.request_id)
+            or OwnerExecutionResult.succeeded()
+        },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
         token_validator=lambda request, decision: True,
@@ -117,7 +140,10 @@ def test_ambiguous_owner_outcome_is_fail_closed_and_recoverable() -> None:
     kernel = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: calls.append(request.request_id) or OwnerExecutionResult.ambiguous()},
+        handlers={
+            "artifact.move": lambda request: calls.append(request.request_id)
+            or OwnerExecutionResult.ambiguous()
+        },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
         token_validator=lambda request, decision: True,
@@ -129,5 +155,5 @@ def test_ambiguous_owner_outcome_is_fail_closed_and_recoverable() -> None:
     assert first.status is OperationStatus.RECOVERY_REQUIRED
     assert replay == first
     assert first.receipt is not None
-    assert first.receipt["recovery"] == "read_receipt_before_retry"
+    assert first.receipt.payload["recovery"] == "read_receipt_before_retry"
     assert calls == ["request-1"]

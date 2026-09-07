@@ -100,6 +100,27 @@ Required outputs:
 No adapter may replace stable identity with a title, absolute path, screen row, list index, URL, or
 tool-call position.
 
+### Envelope metadata records
+
+The provider-free `app.operations.contracts` representation makes the shared envelope metadata
+schema-bound while retaining domain payloads as opaque mappings. `OperationProvenance` carries the
+required `actor`, `client`, and `surface` binding (plus delegation evidence). Both the request and
+outcome serialize that same record; a legacy envelope without it continues to parse as `null` rather
+than inventing provenance.
+
+`OperationConvergence` keeps source effect separate from derived consequences: its
+`source_effect` is `committed`, `not_applied`, or `unknown`, while Store, index, and link states are
+independently `not_required`, `pending`, `converged`, `degraded`, or `rebuild_required`. Thus an
+outcome may be `succeeded` for a committed source effect and still report pending Store/index work.
+
+Per-target outcomes, conflicts, receipts, and recovery posture use `OperationItemOutcome`,
+`OperationConflict`, `OperationReceipt`, and `OperationRecovery`. Their stable envelope fields carry
+resource/version/status, receipt terminality, and recovery action/instructions; each record retains
+an opaque `payload` mapping for domain-owned data and an `extensions` mapping for forward-compatible
+envelope additions. Legacy untyped item/conflict/receipt mappings parse into the corresponding
+opaque payload, so existing callers do not lose data while new cross-surface producers use the typed
+shape.
+
 ## Typed outcomes
 
 Terminal outcomes are `succeeded`, `rejected`, `conflicted`, `not_found`, `invalid`, and
