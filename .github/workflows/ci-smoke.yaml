@@ -728,6 +728,7 @@ jobs:
               - 'pytest.ini'
               - 'alembic.ini'
               - '.github/**'
+              - 'mimer-mcp-sidecar/**'
               # GitHub governance, agent-contract, and doc surfaces have real
               # asserting coverage in tests/architecture, tests/governance,
               # and tests/ops (e.g.

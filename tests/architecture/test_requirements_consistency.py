@@ -191,6 +191,12 @@ def test_sidecar_dependencies_are_installed_by_ci_without_core_leak() -> None:
     workflow = _load_workflow(CI_SMOKE_WORKFLOW)
     unit_job = workflow["jobs"]["pr-unit-tests-not-pg"]
     steps = unit_job["steps"]
+    selection_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Detect unit-test surface"
+    )
+    assert "mimer-mcp-sidecar/**" in selection_step["with"]["filters"]
     install_index = next(
         index
         for index, step in enumerate(steps)
