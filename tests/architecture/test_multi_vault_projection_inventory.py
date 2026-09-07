@@ -1109,6 +1109,12 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         "app/builderops/control_plane/store.py": 1,
         "app/builderops/design_agent_adapters.py": 1,
         "app/builderops/design_run_governance.py": 1,
+        # Builder owner synthesis executes a model adapter request.  The
+        # architecture scanner intentionally treats unresolved ``execute``
+        # calls as potential SQL, so this non-database seam is counted
+        # explicitly to keep the exemption bounded without hiding durable
+        # mutations.
+        "app/builderops/devui_owner_synthesis.py": 1,
         "app/builderops/model_inquiry_runner.py": 1,
         "app/builderops/store.py": 1,
         # ``dispatcher show --events`` owns one explicit read transaction
