@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.operations.execution_kernel import JsonReceiptStore, OperationExecutionKernel, OwnerExecutionResult, PolicyDecision
+from app.operations.execution_kernel import (
+    JsonReceiptStore,
+    OperationExecutionKernel,
+    OwnerExecutionResult,
+    PolicyDecision,
+)
 from app.operations.contracts import OperationContext, OperationRequest, OperationStatus
 
 
@@ -32,14 +37,20 @@ def test_receipts_survive_restart_without_sensitive_payloads(tmp_path) -> None:
     first = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: OwnerExecutionResult.succeeded()},
+        handlers={
+            "artifact.move": lambda request: OwnerExecutionResult.succeeded(
+                effect_id="effect-1", effect_receipt={"receipt_id": "owner-receipt-1"}
+            )
+        },
         receipt_store=JsonReceiptStore(ledger),
         token_validator=lambda request, decision: True,
     ).execute(request, delegation)
     restarted = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
-        handlers={"artifact.move": lambda request: (_ for _ in ()).throw(AssertionError("must replay"))},
+        handlers={
+            "artifact.move": lambda request: (_ for _ in ()).throw(AssertionError("must replay"))
+        },
         receipt_store=JsonReceiptStore(ledger),
         token_validator=lambda request, decision: True,
     ).execute(request, delegation)
@@ -47,6 +58,6 @@ def test_receipts_survive_restart_without_sensitive_payloads(tmp_path) -> None:
     assert first.status is OperationStatus.SUCCEEDED
     assert restarted == first
     assert restarted.receipt is not None
-    assert restarted.receipt["request_id"] == "request-1"
+    assert restarted.receipt.payload["request_id"] == "request-1"
     assert "secret-value" not in ledger.read_text()
     assert "access_token" not in ledger.read_text()

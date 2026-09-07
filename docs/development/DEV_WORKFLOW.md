@@ -350,6 +350,7 @@ Use this lane only when:
   - `scripts/agent_workspace_cleanup.sh`
   - `scripts/agent_worktree.py`
   - `scripts/git_hygiene.py`
+  - `scripts/git_archive_retirement.py`
   - `scripts/git_hygiene_preflight.py`
   - `scripts/git_hygiene_janitor.py`
   - `scripts/issue_pickup_claim.sh`
@@ -370,6 +371,7 @@ Use this lane only when:
   - `companion-ui/prompts/claude-design/**`
   - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
   - `tests/ops/test_git_hygiene.py`
+  - `tests/ops/test_git_archive_retirement.py`
   - `tests/architecture/test_agent_skill_entrypoints.py`
   - `tests/architecture/test_pr_hot_path_governance.py`
   - `tests/governance/test_codex_agents_contract.py`

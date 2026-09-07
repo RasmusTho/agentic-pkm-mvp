@@ -80,6 +80,17 @@ class _MimerHttpOperations(Protocol):
 class _GovernedMimerHttpOperations:
     """The fixed allowlist to the existing loopback HTTP client contract."""
 
+    # Keep the adapter deadline aligned with the runtime's single LLM_TIMEOUT
+    # default (60 seconds) while retaining short connection/pool bounds.
+    _RUNTIME_TIMEOUT_SECONDS = 60.0
+    _RUNTIME_MANAGED_TIMEOUT = httpx.Timeout(
+        _RUNTIME_TIMEOUT_SECONDS,
+        connect=10.0,
+        write=10.0,
+        pool=10.0,
+    )
+    _SHORT_OPERATION_TIMEOUT = httpx.Timeout(10.0)
+
     def __init__(self, client: httpx.Client) -> None:
         self._client = client
 
@@ -88,15 +99,28 @@ class _GovernedMimerHttpOperations:
         return {"x-trace-id": trace_id} if trace_id else None
 
     def ask(self, *, question: str, trace_id: str | None) -> httpx.Response:
-        return self._client.post("/api/ask", json={"question": question}, headers=self._headers(trace_id))
+        return self._client.post(
+            "/api/ask",
+            json={"question": question},
+            headers=self._headers(trace_id),
+            timeout=self._RUNTIME_MANAGED_TIMEOUT,
+        )
 
     def capture(self, *, text: str, trace_id: str | None) -> httpx.Response:
         return self._client.post(
-            "/api/companion/capture", json={"text": text}, headers=self._headers(trace_id)
+            "/api/companion/capture",
+            json={"text": text},
+            headers=self._headers(trace_id),
+            timeout=self._RUNTIME_MANAGED_TIMEOUT,
         )
 
     def retrieve(self, *, query: str, trace_id: str | None) -> httpx.Response:
-        return self._client.get("/search", params={"q": query}, headers=self._headers(trace_id))
+        return self._client.get(
+            "/search",
+            params={"q": query},
+            headers=self._headers(trace_id),
+            timeout=self._SHORT_OPERATION_TIMEOUT,
+        )
 
     def read_note(
         self, *, note_path: str, artifact_id: str | None, trace_id: str | None
@@ -104,10 +128,19 @@ class _GovernedMimerHttpOperations:
         params: dict[str, str] = {"note_path": note_path}
         if artifact_id:
             params["artifact_id"] = artifact_id
-        return self._client.get("/api/artifacts/note", params=params, headers=self._headers(trace_id))
+        return self._client.get(
+            "/api/artifacts/note",
+            params=params,
+            headers=self._headers(trace_id),
+            timeout=self._SHORT_OPERATION_TIMEOUT,
+        )
 
     def health(self, *, trace_id: str | None) -> httpx.Response:
-        return self._client.get("/healthz", headers=self._headers(trace_id))
+        return self._client.get(
+            "/healthz",
+            headers=self._headers(trace_id),
+            timeout=self._SHORT_OPERATION_TIMEOUT,
+        )
 
 
 _STRING_SCHEMA = {"type": "string", "minLength": 1}
@@ -182,7 +215,11 @@ class MimerMcpServer:
             raise ValueError("Mimer MCP v1 requires a loopback Mimer HTTP endpoint")
         return cls(
             _GovernedMimerHttpOperations(
-                httpx.Client(base_url=base_url, timeout=10.0, trust_env=False)
+                httpx.Client(
+                    base_url=base_url,
+                    timeout=_GovernedMimerHttpOperations._SHORT_OPERATION_TIMEOUT,
+                    trust_env=False,
+                )
             )
         )
 
@@ -210,11 +247,15 @@ class MimerMcpServer:
             else:  # mimer.health is validated above and carries no trace input.
                 response = self._operations.health(trace_id=trace_id)
         except httpx.TimeoutException as exc:
+            if name == "mimer.capture":
+                return _ambiguous_capture_result(trace_id)
             return McpToolResult(
                 error={"error": "timeout", "message": str(exc), "trace_id": trace_id},
                 trace_id=trace_id,
             )
         except httpx.HTTPError as exc:
+            if name == "mimer.capture":
+                return _ambiguous_capture_result(trace_id)
             return McpToolResult(
                 error={"error": "unavailable", "message": str(exc), "trace_id": trace_id},
                 trace_id=trace_id,
@@ -245,6 +286,23 @@ class MimerMcpServer:
             },
             trace_id=response_trace_id,
         )
+
+
+def _ambiguous_capture_result(trace_id: str) -> McpToolResult:
+    """Return the no-blind-retry outcome for a lost capture response."""
+    return McpToolResult(
+        error={
+            "error": "capture_ambiguous",
+            "state": "not_acknowledged",
+            "message": (
+                "Capture response was not acknowledged; the append may have landed. "
+                "Verify before retrying."
+            ),
+            "retryable": False,
+            "trace_id": trace_id,
+        },
+        trace_id=trace_id,
+    )
 
 
 def _response_payload(response: _HttpResponse) -> dict[str, Any] | list[Any] | str | None:

@@ -24,6 +24,22 @@ def _installed_entrypoint(tmp_path: Path) -> Path:
     return venv / "bin" / "mimer-mcp"
 
 
+def test_sidecar_transport_module_collects_in_clean_environment(tmp_path: Path) -> None:
+    """The CI install boundary makes the SDK-backed transport importable."""
+    entrypoint = _installed_entrypoint(tmp_path)
+    python = entrypoint.parent / "python"
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    result = subprocess.run(
+        [str(python), "-c", "from mimer_mcp_sidecar import transport; print(transport.__name__)"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "mimer_mcp_sidecar.transport"
+
+
 def test_stdio_transport_lifecycle_negotiates_and_shuts_down_cleanly(tmp_path: Path) -> None:
     entrypoint = _installed_entrypoint(tmp_path)
     process = subprocess.Popen(

@@ -22,7 +22,10 @@ from app.builderops.delivery_orchestration_contracts import (
     UtcTimestamp,
     canonical_hash,
 )
-from app.components.settings.providers_loader import ProviderCensus
+from app.components.settings.providers_loader import (
+    BuilderReasoningEffort,
+    ProviderCensus,
+)
 
 
 ALLOCATION_OBSERVATION_VERSION: Final[
@@ -80,13 +83,9 @@ AttemptTransitionReason: TypeAlias = Literal[
     "spark_allocation_unavailable_at_launch",
     "capability_insufficient",
 ]
-ReasoningEffort: TypeAlias = Literal[
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-]
+ReasoningEffort: TypeAlias = BuilderReasoningEffort
+
+
 def _parse_utc(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
 
@@ -438,8 +437,9 @@ def resolve_execution_target(
     *,
     channel: str,
     capability: CapabilityTier,
+    model_id: str | None = None,
 ) -> ResolvedExecutionTarget:
-    """Late-bind a capability tier through the declared Builder census."""
+    """Late-bind a capability tier and optional model choice through the census."""
 
     profiles = census.runtime_channels.builder_execution.get(channel)
     if profiles is None:
@@ -448,13 +448,22 @@ def resolve_execution_target(
     if profile is None or profile.capability_tier != capability:
         raise ValueError("declared census has no matching Builder execution capability")
     provider = census.provider(profile.provider)
-    if not any(model.id == profile.model for model in provider.models):
+    selected_model = profile.model if model_id is None else model_id
+    selectable_models = profile.selectable_models or [profile.model]
+    if selected_model not in selectable_models:
+        raise ValueError(
+            "requested model is not selectable for the declared Builder execution capability"
+        )
+    if not any(model.id == selected_model for model in provider.models):
         raise ValueError("Builder execution profile references an undeclared model")
+    reasoning_effort = profile.model_reasoning_efforts.get(
+        selected_model, profile.reasoning_effort
+    )
     return ResolvedExecutionTarget(
         capability=capability,
         provider=profile.provider,
-        model=profile.model,
-        reasoning_effort=profile.reasoning_effort,
+        model=selected_model,
+        reasoning_effort=reasoning_effort,
         configuration_ref=(
             "docs/settings/models/providers.yaml"
             f"#builder_execution.{channel}.{capability}"

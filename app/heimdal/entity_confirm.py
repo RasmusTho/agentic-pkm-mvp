@@ -75,7 +75,7 @@ compare rendering (a lens); voiceprint/diarization attribution (v2).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -84,17 +84,20 @@ from typing import Any, Mapping, Sequence
 from app.heimdal.attribution_stage import RESOLUTION_UNRESOLVED, EntityMention
 from app.heimdal.entity_register import (
     LIFECYCLE_MERGED,
-    MERGE_EFFECTS_COMPLETE,
     EntityRegister,
     EntityRegisterError,
 )
 from app.heimdal.entity_review_operation_journal import (
+    OperationRecord,
+    STATE_CLAIMED,
     STATE_EVENT_COMMITTED,
     EntityReviewOperationConflictError,
     EntityReviewOperationJournalError,
     EntityReviewOperationJournalPort,
     EntityReviewOperationSchemaMissingError,
     decision_mapping_digest,
+    derive_operation_event_id,
+    derive_operation_id,
 )
 from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
@@ -268,6 +271,15 @@ def queue_for_review(
     # Idempotent: re-queuing the same mention_id replaces its stale entry
     # rather than duplicating it (a stage re-run is a revision, not a rewrite
     # -- mirrors attribution_stage's own append-only-but-idempotent posture).
+    existing = next(
+        (p for p in pending if p.get("queue_entry_id") == entry.queue_entry_id),
+        None,
+    )
+    if existing is not None and isinstance(existing.get("queued_at"), str):
+        # Replacing the still-pending projection is an idempotent refresh of
+        # the same clear-generation, not a new review generation. Only a row
+        # removed from pending and later queued receives a new timestamp.
+        entry = replace(entry, queued_at=str(existing["queued_at"]))
     pending = [p for p in pending if p.get("queue_entry_id") != entry.queue_entry_id]
     pending.append(entry.to_dict())
 
@@ -365,7 +377,69 @@ class AppliedDecision:
     operation_id: str | None = None
 
 
-def apply_human_review_decisions(
+def _matches_operation_identity(
+    operation: OperationRecord,
+    *,
+    vault_identity: str,
+    queue_entry_id: str,
+    decision_position: int,
+    decision_digest: str,
+    from_id: str,
+    into_id: str,
+) -> bool:
+    """Return whether an in-flight row is this exact immutable ruling."""
+    expected_operation_id = derive_operation_id(
+        vault_identity=vault_identity,
+        queue_entry_id=queue_entry_id,
+        decision_position=decision_position,
+        decision_digest=decision_digest,
+        from_id=from_id,
+        into_id=into_id,
+    )
+    return (
+        operation.operation_id == expected_operation_id
+        and operation.vault_identity == vault_identity
+        and operation.queue_entry_id == queue_entry_id
+        and operation.decision_position == decision_position
+        and operation.decision_digest == decision_digest
+        and operation.from_id == from_id
+        and operation.into_id == into_id
+        and operation.outbox_event_id == derive_operation_event_id(expected_operation_id)
+    )
+
+
+def _pending_generation_precedes_cleared_operation(
+    pending_entry: Mapping[str, Any] | None, operation: OperationRecord
+) -> bool:
+    """Prove this pending row predates the durable clear boundary.
+
+    A cleared row releases a queue id for re-queue.  Queue/pair equality is
+    therefore insufficient to distinguish an interrupted pending clear from
+    a later generation of the same mention.  Both timestamps are durable
+    fields already owned by their respective records; absent, malformed, or
+    simultaneous values remain ambiguous and fail closed.
+    """
+    if pending_entry is None or operation.updated_at is None:
+        return False
+    queued_at = pending_entry.get("queued_at")
+    if not isinstance(queued_at, str):
+        return False
+    try:
+        queued = datetime.fromisoformat(queued_at.replace("Z", "+00:00"))
+        cleared_raw = operation.updated_at
+        cleared = (
+            cleared_raw
+            if isinstance(cleared_raw, datetime)
+            else datetime.fromisoformat(str(cleared_raw).replace("Z", "+00:00"))
+        )
+        if queued.tzinfo is None or cleared.tzinfo is None:
+            return False
+        return queued < cleared
+    except (TypeError, ValueError):
+        return False
+
+
+def _apply_human_review_decisions_locked(
     vault_root: Path,
     *,
     register: EntityRegister,
@@ -506,7 +580,16 @@ def apply_human_review_decisions(
     for index, effective_decision in ordered_terminals:
         merged = False
         operation_id: str | None = None
+        active_operation: OperationRecord | None = None
         queue_entry_id = effective_decision.queue_entry_id
+        pending_entry = next(
+            (
+                pending
+                for pending in remaining_pending
+                if pending.get("queue_entry_id") == queue_entry_id
+            ),
+            None,
+        )
         try:
             if journal is not None:
                 # Entry-keyed resume (review F1): an edited decision history
@@ -515,6 +598,7 @@ def apply_human_review_decisions(
                 active = journal.find_active_operation(
                     vault_identity=vault_identity, queue_entry_id=queue_entry_id
                 )
+                active_operation = active
                 if active is not None and active.state == STATE_EVENT_COMMITTED:
                     # An already-authorized merge whose clear was interrupted:
                     # finish it first. The merge is materialised and its event
@@ -530,6 +614,11 @@ def apply_human_review_decisions(
                             )
                         )
                         continue
+                    register.ensure_merge_effects(
+                        active.from_id, active.into_id,
+                        operation_id=active.operation_id, require_complete=True,
+                    )
+                    register.resolve_target_evolution(active.from_id, active.into_id, operation_id=active.operation_id)
                     journal.mark_cleared(active)
                     remaining_pending = [
                         p
@@ -621,6 +710,15 @@ def apply_human_review_decisions(
                     and effective_decision.into_id is not None
                 )
                 assert journal is not None  # guaranteed by the upfront check
+                decision_digest = decision_mapping_digest(raw_decisions[index])
+                prospective_operation_id = derive_operation_id(
+                    vault_identity=vault_identity,
+                    queue_entry_id=queue_entry_id,
+                    decision_position=index,
+                    decision_digest=decision_digest,
+                    from_id=effective_decision.from_id,
+                    into_id=effective_decision.into_id,
+                )
                 # Review F4 / matrix row 4: a stop between mark_cleared and
                 # the note write leaves the entry visible with its operation
                 # already cleared. Finishing that interrupted clear must not
@@ -634,38 +732,96 @@ def apply_human_review_decisions(
                 )
                 if (
                     cleared_twin is not None
-                    and register.merge_effect_state(
-                        effective_decision.from_id, effective_decision.into_id
+                    and _pending_generation_precedes_cleared_operation(
+                        pending_entry, cleared_twin
                     )
-                    == MERGE_EFFECTS_COMPLETE
                 ):
+                    # A cleared row already has its one committed event and
+                    # its pending generation predates that clear. A later
+                    # undo/reapproval can carry a different decision digest or
+                    # position, but must finish this interrupted clear rather
+                    # than claim another operation/event. A re-queued or
+                    # timestamp-ambiguous generation cannot take this path;
+                    # claimed retries still require complete identity parity.
+                    if not journal.verify_committed_visibility(cleared_twin):
+                        raise EntityRegisterError("cleared operation event is not freshly visible; entry stays pending")
+                    register.ensure_merge_effects(
+                        cleared_twin.from_id, cleared_twin.into_id,
+                        operation_id=cleared_twin.operation_id, require_complete=True,
+                    )
+                    register.resolve_target_evolution(cleared_twin.from_id, cleared_twin.into_id,
+                                                      operation_id=cleared_twin.operation_id)
                     merged = True
                     operation_id = cleared_twin.operation_id
                 else:
-                    # Pre-claim validation: prove the merge is executable (or
-                    # resumable) from current notes BEFORE binding an
-                    # operation, so a typo'd decision never strands an active
-                    # operation row.
-                    register.merge_effect_state(
-                        effective_decision.from_id, effective_decision.into_id
-                    )
-                    # 1. Operation identity commits before the first register
-                    #    effect (INV-EROJ-2; a changed mapping fails closed).
-                    operation = journal.claim_operation(
-                        vault_identity=vault_identity,
-                        queue_entry_id=queue_entry_id,
-                        decision_position=index,
-                        decision_digest=decision_mapping_digest(raw_decisions[index]),
-                        from_id=effective_decision.from_id,
-                        into_id=effective_decision.into_id,
-                    )
-                    # 2. Resumable note effects (skips sides a crash already
-                    #    wrote).
+                    if (
+                        active_operation is not None
+                        and active_operation.state == STATE_CLAIMED
+                    ):
+                        if not _matches_operation_identity(
+                            active_operation,
+                            vault_identity=vault_identity,
+                            queue_entry_id=queue_entry_id,
+                            decision_position=index,
+                            decision_digest=decision_digest,
+                            from_id=effective_decision.from_id,
+                            into_id=effective_decision.into_id,
+                        ):
+                            refused.append(
+                                (
+                                    queue_entry_id,
+                                    "the claimed operation does not match the complete "
+                                    "immutable decision identity; the queue entry stays "
+                                    "pending (INV-EROJ-1)",
+                                )
+                            )
+                            continue
+                        # A claimed operation already binds the exact human
+                        # ruling. Let its operation id backfill legacy note
+                        # effects before generic state classification; doing
+                        # so cannot bind a different decision or replay a
+                        # graph-only target evolution.
+                        operation = active_operation
+                    else:
+                        # Pre-claim validation: prove the merge is executable
+                        # and that any observed effects belong to this exact
+                        # prospective operation before binding it, so a
+                        # pre-existing public/different-operation merge never
+                        # strands a new journal row.
+                        register.preflight_merge_effects_for_operation(
+                            effective_decision.from_id,
+                            effective_decision.into_id,
+                            operation_id=prospective_operation_id,
+                        )
+                        operation = journal.claim_operation(
+                            vault_identity=vault_identity,
+                            queue_entry_id=queue_entry_id,
+                            decision_position=index,
+                            decision_digest=decision_digest,
+                            from_id=effective_decision.from_id,
+                            into_id=effective_decision.into_id,
+                        )
+                    # Resumable note effects (skips sides a crash already
+                    # wrote, and backfills only an already-bound operation).
                     register.ensure_merge_effects(
-                        effective_decision.from_id, effective_decision.into_id
+                        effective_decision.from_id,
+                        effective_decision.into_id,
+                        operation_id=operation.operation_id,
                     )
                     # 3. Terminal journal state + exactly one event, atomically.
-                    operation = journal.commit_merge_event(operation)
+                    resolved_into_id = register.resolve_target_evolution(
+                        effective_decision.from_id,
+                        effective_decision.into_id,
+                        operation_id=operation.operation_id,
+                    )
+                    operation = journal.commit_merge_event(
+                        operation,
+                        **(
+                            {"resolution_context": resolved_into_id}
+                            if resolved_into_id != effective_decision.into_id
+                            else {}
+                        ),
+                    )
                     # 4. The fence: only a fresh transaction's read of the
                     #    committed journal + outbox rows authorizes the clear.
                     if not journal.verify_committed_visibility(operation):
@@ -759,3 +915,15 @@ __all__ = [
     "queue_for_review",
     "route_mention",
 ]
+
+
+def apply_human_review_decisions(
+    vault_root: Path, *, register: EntityRegister,
+    settings_dir: str = DEFAULT_SETTINGS_DIR,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    journal: EntityReviewOperationJournalPort | None = None,
+) -> tuple[AppliedDecision, ...]:
+    """Apply confirmed review intent under the register-wide relation fence."""
+    with register.locked():
+        return _apply_human_review_decisions_locked(vault_root, register=register,
+            settings_dir=settings_dir, write_guard=write_guard, journal=journal)

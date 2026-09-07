@@ -21,6 +21,10 @@ from app.builderops.devui_focus import (
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs
+from app.builderops.devui_owner_synthesis import (
+    OwnerSynthesisInputError,
+    synthesize_owner_overview,
+)
 
 
 _LOCAL_ONLY_DETAIL = "devUI composition is available only to a local caller"
@@ -180,6 +184,24 @@ async def focus(subject: str) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="devUI Focus subject is unavailable or unsupported",
+        ) from exc
+
+
+@router.post("/overview/synthesis")
+def overview_synthesis(source_snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Explain a caller-supplied, bounded DevUI source snapshot.
+
+    The caller owns source collection and addressing.  This route only adds a
+    proposal-only Builder interpretation; it never turns the model response
+    into a status, command, or approval.
+    """
+
+    try:
+        return synthesize_owner_overview(source_snapshot)
+    except OwnerSynthesisInputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="devUI owner synthesis source snapshot is invalid",
         ) from exc
 
 

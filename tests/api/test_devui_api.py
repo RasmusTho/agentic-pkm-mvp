@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -73,6 +74,20 @@ def test_focus_route_returns_subject_matched_projection(monkeypatch) -> None:
     payload = response.json()
     assert payload["contract_version"] == "focus-view.v1"
     assert payload["subject"]["stable_id"] == subject
+
+
+def test_owner_synthesis_route_runs_blocking_model_work_off_event_loop(monkeypatch) -> None:
+    source_snapshot = {"repo": "RasmusTho/agentic-pkm-mvp"}
+    monkeypatch.setattr(
+        devui_route,
+        "synthesize_owner_overview",
+        lambda snapshot: {"source_snapshot": snapshot},
+    )
+
+    result = devui_route.overview_synthesis(source_snapshot)
+
+    assert not inspect.iscoroutinefunction(devui_route.overview_synthesis)
+    assert result == {"source_snapshot": source_snapshot}
 
 
 def test_focus_route_fails_closed_for_unadmitted_or_unsupported_subjects(monkeypatch) -> None:

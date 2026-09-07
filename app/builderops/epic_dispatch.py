@@ -320,12 +320,18 @@ class CodexIssueSessionLauncher:
             capability = _CAPABILITY_FOR_MODEL_CLASS[model_class]
         if capability != _CAPABILITY_FOR_MODEL_CLASS[model_class]:
             raise EpicDispatchError("context pack capability conflicts with TCD model class")
+        model_id = runtime.get("model")
+        if model_id is not None and (
+            not isinstance(model_id, str) or not model_id.strip()
+        ):
+            raise EpicDispatchError("context pack model must be a non-empty string")
         capability_tier = cast(CapabilityTier, capability)
         try:
             target = resolve_execution_target(
                 self.provider_census,
                 channel=self.builder_channel,
                 capability=capability_tier,
+                model_id=model_id,
             )
         except ValueError as exc:
             raise EpicDispatchError(str(exc)) from exc
@@ -1277,16 +1283,21 @@ def _build_tcd_decision(
     elif selected_path == "script":
         skip_reason = skip_reason or "script-deterministic"
 
+    runtime_model_hint = {
+        "runtime": runtime_target,
+        "model_class": _model_class_for(risk),
+        "capability": _capability_for_risk(risk),
+        "runtime_difference": "invocation-hint-only",
+    }
+    model_override = candidate.get("model_override")
+    if model_override is not None:
+        runtime_model_hint["model"] = model_override
+
     return {
         "issue_number": issue_number,
         "selected_path": selected_path,
         "expected_value": candidate["expected_value"],
-        "runtime_model_hint": {
-            "runtime": runtime_target,
-            "model_class": _model_class_for(risk),
-            "capability": _capability_for_risk(risk),
-            "runtime_difference": "invocation-hint-only",
-        },
+        "runtime_model_hint": runtime_model_hint,
         "budget_class": _budget_class_for(risk, candidate["expected_value"]),
         "context_cost_estimate": {
             "measurement": "proxy",
@@ -1490,6 +1501,7 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     execution_routing = candidate.get("execution_routing")
     if execution_routing is not None and not isinstance(execution_routing, Mapping):
         raise EpicDispatchError("execution_routing must be an object when supplied")
+    model_override = _normalize_optional_string(candidate.get("model_override"))
     repository = _normalize_optional_string(candidate.get("repository"))
     return {
         "issue_number": issue_number,
@@ -1507,6 +1519,7 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "task_class": task_class,
         "preferred_path": _normalize_optional_string(candidate.get("preferred_path")),
         "runtime_hint": runtime_hint,
+        "model_override": model_override,
         "scriptable": bool(candidate.get("scriptable", False)),
         "issue_local_helper_budget": issue_local_helper_budget,
         "issue_local_helper_rationale": helper_rationale,

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -5011,3 +5012,780 @@ def test_janitor_apply_stash_drop_targets_survive_index_shift(tmp_path) -> None:
     )
     assert after == {sha_x, sha_y}
     assert report["ok"] is True, report["errors"]
+
+
+@pytest.mark.parametrize("command", ["status", "merge-base"])
+def test_git_safety_probes_have_bounded_timeout(tmp_path, monkeypatch, command):
+    def timeout(args, **kwargs):
+        assert kwargs["timeout"] == git_hygiene.GIT_PROBE_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    if command == "status":
+        assert git_hygiene._worktree_dirty(str(tmp_path)) is None
+    else:
+        assert git_hygiene._is_ancestor(tmp_path, "topic", "origin/main") is None
+
+
+@pytest.mark.parametrize("state", ["MERGED", "CLOSED"])
+def test_merge_probe_failure_cannot_fall_back_to_pr_cleanup(tmp_path, monkeypatch, state):
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda path: False)
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *args: None)
+    reason, proof = git_hygiene._worktree_reclaim_reason(
+        str(tmp_path / "target"), "topic", current_worktree=str(tmp_path),
+        active_resources=set(), protected_branches=set(),
+        pr_states={"topic": {"state": state}}, cwd=tmp_path,
+    )
+    assert (reason, proof) == ("unknown_merge_state", None)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"generation": None}, {"branch": "replacement"},
+    {"status": "removed"}, {"path": "/previous/worktree"},
+])
+def test_stale_lifecycle_binding_preserves_reused_path(tmp_path, overrides):
+    record = {
+        "path": str(tmp_path), "branch": "topic", "owner": "owner",
+        "registered_at": 1, "heartbeat_at": 2, "expires_at": 3,
+        "generation": GENERATION, "status": "active", **overrides,
+    }
+    assert git_hygiene._worktree_lifecycle_skip_reason(
+        str(tmp_path), "topic", {str(tmp_path): record}, now=100,
+    ) == "registration_mismatch"
+
+
+def test_rescue_snapshot_recovers_older_stashes_and_archive_refs(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    def git(*args):
+        return git_hygiene.run_git(list(args), source)
+    git("init")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    (source / "note").write_text("retained\n")
+    git("add", "note")
+    git("commit", "-m", "base")
+    git("update-ref", "refs/archive/history", "HEAD")
+    for content in ("older stash\n", "newer stash\n"):
+        (source / "note").write_text(content)
+        git("stash", "push", "-m", content.strip())
+    stashes = git("stash", "list", "--format=%H").splitlines()
+    detached = tmp_path / "detached"
+    git("worktree", "add", "--detach", str(detached), "HEAD")
+    (detached / "note").write_text("detached history\n")
+    git_hygiene.run_git(["commit", "-am", "detached"], detached)
+    detached_head = git_hygiene.run_git(["rev-parse", "HEAD"], detached)
+    result = git_hygiene.create_rescue_snapshot(source, tmp_path / "snapshot")
+    assert set(stashes + [detached_head]) <= set(result["verified_objects"])
+    manifest = json.loads((tmp_path / "snapshot" / "manifest.json").read_text())
+    assert hashlib.sha256(Path(result["bundle"]).read_bytes()).hexdigest() == manifest["bundle_sha256"]
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    git_hygiene.run_git(["init", "--bare", "."], recovery)
+    git_hygiene.run_git(["bundle", "unbundle", result["bundle"]], recovery)
+    assert git_hygiene.run_git(["show", f"{stashes[1]}:note"], recovery) == "older stash"
+    assert git_hygiene.run_git(["show", f"{detached_head}:note"], recovery) == "detached history"
+    assert "refs/archive/history" in result["inventory"]["refs"]
+    assert (tmp_path / "snapshot" / "manifest.json").is_file()
+    with pytest.raises(FileExistsError):
+        git_hygiene.create_rescue_snapshot(source, tmp_path / "snapshot")
+
+
+def test_rescue_snapshot_drift_does_not_publish_verified_manifest(tmp_path, monkeypatch):
+    calls = 0
+    def fake_git(args, cwd):
+        nonlocal calls
+        if args[0] == "for-each-ref":
+            calls += 1
+            return "" if calls == 1 else "changed"
+        if args[:2] == ["bundle", "create"]:
+            Path(args[2]).write_bytes(b"bundle")
+        return ""
+    monkeypatch.setattr(git_hygiene, "run_git", fake_git)
+    with pytest.raises(RuntimeError, match="rescue_snapshot_drift"):
+        git_hygiene.create_rescue_snapshot(tmp_path, tmp_path / "snapshot")
+    assert not (tmp_path / "snapshot" / "manifest.json").exists()
+
+
+@pytest.mark.parametrize("drift_at", [2, 4, 5])
+def test_remote_cleanup_pr_reopens_at_authority_boundary(tmp_path, monkeypatch, drift_at):
+    candidate = _targeted_candidate()
+    refs = {candidate["source_ref"]: candidate["source_sha"]}
+    commands = []
+    _install_remote_cleanup_authority(monkeypatch, tmp_path, refs, commands)
+    contract = _authenticated_contract(git_hygiene.Candidate(**candidate))
+    reads = 0
+    def read_pr(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads >= drift_at:
+            raise RuntimeError("candidate_pr_not_closed_unmerged")
+        return contract
+    monkeypatch.setattr(git_hygiene, "_read_candidate_pr", read_pr)
+    report = git_hygiene.targeted_remote_cleanup(
+        tmp_path, repository=candidate["repository"], candidates=[candidate],
+    )
+    assert report["ok"] is False
+    assert refs[candidate["source_ref"]] == candidate["source_sha"]
+    assert not report["completed"]
+
+
+def _legacy_retirement_repo(tmp_path, monkeypatch):
+    from scripts import agent_worktree
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args):
+        return git_hygiene.run_git(list(args), repo)
+    git("init", "-b", "main")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    (repo / "note").write_text("base")
+    git("add", "note")
+    git("commit", "-m", "base")
+    git("checkout", "-b", "old")
+    (repo / "note").write_text("retained history")
+    git("commit", "-am", "old")
+    sha = git("rev-parse", "HEAD")
+    ref = "refs/archive/git-hygiene/20260101T000000Z/old"
+    git("update-ref", ref, sha)
+    git("checkout", "main")
+    (repo / ".git" / "agent-worktrees.json").write_text(json.dumps({
+        "schema": agent_worktree.REGISTRY_SCHEMA, "worktrees": {},
+    }))
+    monkeypatch.setattr(git_hygiene, "_resolve_repository_identity", lambda *_: git_hygiene.RepositoryIdentity(
+        1, "RasmusTho/agentic-pkm-mvp", "unused", "unused",
+    ))
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {})
+    monkeypatch.setattr(git_hygiene, "_dispatcher_authority_write_fence", lambda *_: nullcontext(None))
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [])
+    return repo, ref, sha
+
+
+def test_legacy_archive_retirement_requires_exact_allowed_namespace(tmp_path):
+    with pytest.raises(ValueError, match="legacy_archive_exact_target_required"):
+        git_hygiene.retire_legacy_archive_refs(
+            tmp_path, targets={"refs/heads/main": "a" * 40},
+            snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+        )
+    assert not (tmp_path / "rescue").exists()
+
+
+def test_legacy_archive_retirement_preserves_backup_and_deletes_exact_ref(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    result = git_hygiene.retire_legacy_archive_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive archive; retain independent bundle",
+    )
+    assert result["deleted"] == 1
+    assert git_hygiene.run_git_result(["show-ref", "--verify", "--quiet", ref], repo).returncode == 1
+    receipt = json.loads(Path(result["receipt"]).read_text())
+    assert receipt["state"] == "completed"
+    manifest = json.loads((tmp_path / "rescue" / "manifest.json").read_text())
+    assert f"{sha} {ref}" in manifest["inventory"]["refs"]
+    assert sha in manifest["verified_objects"]
+
+
+def test_legacy_archive_retirement_preserves_open_pr_head(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"42:old": sha})
+    result = git_hygiene.retire_legacy_archive_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="owner decision",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_legacy_archive_retirement_restores_on_post_delete_github_drift(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    reads = 0
+    def heads(*args):
+        nonlocal reads
+        reads += 1
+        return {"42:old": sha} if reads >= 3 else {}
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", heads)
+    with pytest.raises(RuntimeError, match="archive_pr_activity_drift"):
+        git_hygiene.retire_legacy_archive_refs(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+    assert json.loads((tmp_path / "rescue" / "retirement.json").read_text())["state"] == "compensated"
+
+
+def test_legacy_archive_retirement_cas_preserves_advanced_ref(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    main = git_hygiene.run_git(["rev-parse", "main"], repo)
+    reads = 0
+    def heads(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            git_hygiene.run_git(["update-ref", ref, main, sha], repo)
+        return {}
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", heads)
+    with pytest.raises(subprocess.CalledProcessError):
+        git_hygiene.retire_legacy_archive_refs(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == main
+
+
+
+def test_legacy_archive_retirement_rejects_modern_receipt_namespace(tmp_path):
+    with pytest.raises(ValueError, match="legacy_archive_exact_target_required"):
+        git_hygiene.retire_legacy_archive_refs(
+            tmp_path, targets={"refs/archive/git-hygiene/v1/" + "a" * 64: "b" * 40},
+            snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+        )
+
+
+def test_legacy_archive_retirement_preserves_unregistered_worktree_head(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    git_hygiene.run_git(["worktree", "add", "--detach", str(tmp_path / "linked"), sha], repo)
+    result = git_hygiene.retire_legacy_archive_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="owner decision",
+    )
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_legacy_archive_retirement_records_failed_compensation_without_overwrite(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    main = git_hygiene.run_git(["rev-parse", "main"], repo)
+    reads = 0
+    def heads(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 3:
+            git_hygiene.run_git(["update-ref", ref, main], repo)
+            return {"42:old": sha}
+        return {}
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", heads)
+    with pytest.raises(subprocess.CalledProcessError):
+        git_hygiene.retire_legacy_archive_refs(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == main
+    receipt = json.loads((tmp_path / "rescue" / "retirement.json").read_text())
+    assert receipt["state"] == "recovery_required"
+    assert receipt["recovery_targets"] == {ref: sha}
+
+
+def _stash_retirement_repo(tmp_path, monkeypatch):
+    repo, _, _ = _legacy_retirement_repo(tmp_path, monkeypatch)
+    for text in ("stash one", "stash two"):
+        (repo / "note").write_text(text)
+        git_hygiene.run_git(["stash", "push", "-m", text], repo)
+    stashes = git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines()
+    return repo, stashes
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_stash_retirement_exact_stack_removes_ref_and_reflog(tmp_path, monkeypatch, packed):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    if packed:
+        git_hygiene.run_git(["pack-refs", "--all", "--prune"], repo)
+    result = git_hygiene.retire_inactive_stash_stack(
+        repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive stack, keep verified bundle",
+    )
+    assert result["deleted_stashes"] == 2
+    assert git_hygiene.run_git(["stash", "list"], repo) == ""
+    assert not (repo / ".git" / "logs" / "refs" / "stash").exists()
+    assert (tmp_path / "rescue" / "stash.reflog").is_file()
+    receipt = json.loads(Path(result["receipt"]).read_text())
+    assert receipt["state"] == "completed"
+    assert hashlib.sha256((tmp_path / "rescue" / "stash.reflog").read_bytes()).hexdigest() == receipt["reflog_sha256"]
+
+
+def test_stash_retirement_prepared_hook_rejects_reflog_only_drift(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    original = git_hygiene._install_stash_retirement_hook
+    def install(directory, plan):
+        result = original(directory, plan)
+        log = repo / ".git" / "logs" / "refs" / "stash"
+        log.write_bytes(log.read_bytes().replace(b"stash one", b"changed one"))
+        return result
+    monkeypatch.setattr(git_hygiene, "_install_stash_retirement_hook", install)
+    with pytest.raises(subprocess.CalledProcessError):
+        git_hygiene.retire_inactive_stash_stack(
+            repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines() == stashes
+
+
+def test_stash_retirement_preserves_concurrent_new_top(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    original = git_hygiene._install_stash_retirement_hook
+    def install(directory, plan):
+        result = original(directory, plan)
+        (repo / "note").write_text("concurrent work")
+        git_hygiene.run_git(["stash", "push", "-m", "new active work"], repo)
+        return result
+    monkeypatch.setattr(git_hygiene, "_install_stash_retirement_hook", install)
+    with pytest.raises(subprocess.CalledProcessError):
+        git_hygiene.retire_inactive_stash_stack(
+            repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    assert len(git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines()) == 3
+
+
+def test_stash_retirement_does_not_clear_new_stack_after_commit(tmp_path, monkeypatch):
+    repo, stashes = _stash_retirement_repo(tmp_path, monkeypatch)
+    reads = 0
+    def heads(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 3:
+            (repo / "note").write_text("new work after commit")
+            git_hygiene.run_git(["stash", "push", "-m", "new active stack"], repo)
+        return {}
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", heads)
+    with pytest.raises(RuntimeError, match="stash_post_delete_drift"):
+        git_hygiene.retire_inactive_stash_stack(
+            repo, expected_stashes=stashes, snapshot_directory=tmp_path / "rescue",
+            owner_discard="owner decision",
+        )
+    remaining = git_hygiene.run_git(["stash", "list", "--format=%H"], repo).splitlines()
+    assert len(remaining) == 1 and remaining[0] not in stashes
+    assert json.loads((tmp_path / "rescue" / "stash-retirement.json").read_text())["state"] == "recovery_required"
+
+
+def _local_retirement_repo(tmp_path, monkeypatch):
+    repo, _, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_read_protected_targets", lambda *args, **kwargs: git_hygiene.ProtectedAuthority(
+        4728, 4813, "refs/heads/protected", "f" * 40,
+    ))
+    return repo, "refs/heads/old", sha
+
+
+def test_local_retirement_discards_unmerged_unregistered_branch_with_rescue(tmp_path, monkeypatch):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    assert git_hygiene._is_ancestor(repo, ref, "main") is False
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="owner authorizes discarding inactive work instead of integrating it",
+    )
+    assert result["deleted"] == 1
+    assert git_hygiene.run_git_result(["show-ref", "--verify", "--quiet", ref], repo).returncode == 1
+    assert sha in json.loads((tmp_path / "rescue" / "manifest.json").read_text())["verified_objects"]
+
+
+def test_local_retirement_rejects_protected_branch_before_snapshot(tmp_path):
+    with pytest.raises(ValueError, match="local_branch_exact_target_required"):
+        git_hygiene.retire_inactive_local_branches(
+            tmp_path, targets={"refs/heads/main": "a" * 40},
+            snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+        )
+    assert not (tmp_path / "rescue").exists()
+
+
+def test_local_retirement_preserves_checked_out_branch_without_generation(tmp_path, monkeypatch):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    git_hygiene.run_git(["worktree", "add", str(tmp_path / "linked"), "old"], repo)
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+    )
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_preserves_live_branch_lease(tmp_path, monkeypatch):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {"kind": "lease", "record": {"released_at": None, "expires_at": "2099-01-01T00:00:00Z", "resource": "branch:old"}},
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+    )
+    assert result["deleted"] == 0
+
+
+def test_local_retirement_stops_on_generation_drift(tmp_path, monkeypatch):
+    from scripts import agent_worktree
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    reads = 0
+    def heads(*args):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            (repo / ".git" / "agent-worktrees.json").write_text(json.dumps({
+                "schema": agent_worktree.REGISTRY_SCHEMA,
+                "worktrees": {"changed": {"generation": "b" * 32, "expires_at": 1}},
+            }))
+        return {}
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", heads)
+    with pytest.raises(RuntimeError, match="lifecycle_generation_drift"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_preserves_malformed_expired_generation(tmp_path, monkeypatch):
+    from scripts import agent_worktree
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    path = str(tmp_path / "former")
+    (repo / ".git" / "agent-worktrees.json").write_text(json.dumps({
+        "schema": agent_worktree.REGISTRY_SCHEMA,
+        "worktrees": {path: {"path": path, "branch": "old", "status": "removed", "expires_at": 1}},
+    }))
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="owner decision",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "invalid_lifecycle_binding"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def _worktree_retirement_repo(tmp_path, monkeypatch):
+    from scripts import agent_worktree
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    worktree = tmp_path / "old-checkout"
+    git_hygiene.run_git(["update-ref", "refs/remotes/origin/main", "main"], repo)
+    git_hygiene.run_git(["worktree", "add", str(worktree), "old"], repo)
+    record = agent_worktree.register_worktree(repo, worktree=worktree, owner="old-owner", now=1, ttl_seconds=1)
+    target = {"path": str(worktree), "branch": "old", "head": sha, "generation": record["generation"]}
+    return repo, worktree, target
+
+
+def test_worktree_retirement_preserves_unmerged_head_and_retires_generation(tmp_path, monkeypatch):
+    from scripts import agent_worktree
+    repo, worktree, target = _worktree_retirement_repo(tmp_path, monkeypatch)
+    result = git_hygiene.retire_inactive_worktrees(
+        repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+    )
+    assert result["deleted"] == 1
+    assert not worktree.exists()
+    assert git_hygiene.run_git(["rev-parse", "old"], repo) == target["head"]
+    record = agent_worktree._read_registry(agent_worktree._default_registry_path(repo))["worktrees"][str(worktree)]
+    assert record["status"] == "removed"
+    assert record["generation"] == target["generation"]
+    assert target["head"] in json.loads((tmp_path / "rescue" / "manifest.json").read_text())["verified_objects"]
+
+
+@pytest.mark.parametrize("condition", ["dirty", "generation", "open_pr", "unknown_merge"])
+def test_worktree_retirement_preserves_unsafe_target(tmp_path, monkeypatch, condition):
+    from scripts import agent_worktree
+    repo, worktree, target = _worktree_retirement_repo(tmp_path, monkeypatch)
+    if condition == "dirty":
+        (worktree / "note").write_text("unsaved")
+    elif condition == "generation":
+        target["generation"] = "0" * 32
+    elif condition == "open_pr":
+        monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"1:old": target["head"]})
+    else:
+        monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_: None)
+    if condition == "dirty":
+        with pytest.raises(agent_worktree.WorktreeLifecycleError, match="dirty"):
+            git_hygiene.retire_inactive_worktrees(
+                repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+            )
+    else:
+        result = git_hygiene.retire_inactive_worktrees(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+        assert result["deleted"] == 0
+    assert worktree.exists()
+    assert git_hygiene.run_git(["rev-parse", "old"], repo) == target["head"]
+
+
+def test_worktree_retirement_rechecks_generation_under_lock(tmp_path, monkeypatch):
+    from scripts import agent_worktree
+    repo, worktree, target = _worktree_retirement_repo(tmp_path, monkeypatch)
+    original = agent_worktree._locked_lifecycle_authority
+    @contextmanager
+    def changed(*args, **kwargs):
+        with original(*args, **kwargs) as succeeded:
+            # Model another generation being authenticated by the canonical guard.
+            path = agent_worktree._default_registry_path(repo)
+            payload = agent_worktree._read_registry(path)
+            payload["worktrees"][str(worktree)]["generation"] = "a" * 32
+            agent_worktree._write_registry(path, payload)
+            yield succeeded
+    monkeypatch.setattr(agent_worktree, "_locked_lifecycle_authority", changed)
+    with pytest.raises(RuntimeError, match="generation_drift"):
+        git_hygiene.retire_inactive_worktrees(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert worktree.exists()
+
+
+@pytest.mark.parametrize("drift_at", [3, 4])
+def test_worktree_retirement_protected_authority_drift(tmp_path, monkeypatch, drift_at):
+    repo, worktree, target = _worktree_retirement_repo(tmp_path, monkeypatch)
+    reads = 0
+    def protection(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        return git_hygiene.ProtectedAuthority(
+            4728, 4813, "refs/heads/old" if reads >= drift_at else "refs/heads/protected",
+            target["head"] if reads >= drift_at else "f" * 40,
+        )
+    monkeypatch.setattr(git_hygiene, "_read_protected_targets", protection)
+    with pytest.raises(RuntimeError, match="drift"):
+        git_hygiene.retire_inactive_worktrees(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert worktree.exists() == (drift_at == 3)
+    receipt = json.loads((tmp_path / "rescue" / "worktree-retirement.json").read_text())
+    if drift_at == 4:
+        assert receipt["state"] == "recovery_required"
+    assert git_hygiene.run_git(["rev-parse", "old"], repo) == target["head"]
+
+
+def _remote_retirement_repo(tmp_path, monkeypatch):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    git_hygiene.run_git(["init", "--bare", "."], remote)
+    git_hygiene.run_git(["push", str(remote), "old:refs/heads/old"], repo)
+    identity = git_hygiene.RepositoryIdentity(1, "RasmusTho/agentic-pkm-mvp", str(remote), str(remote))
+    monkeypatch.setattr(git_hygiene, "_resolve_repository_identity", lambda *_: identity)
+    payload = {"number": 10, "state": "closed", "draft": False, "merged": True,
+               "closed_at": "2026-09-01T00:00:00Z", "merged_at": "2026-09-01T00:00:00Z",
+               "head": {"ref": "old", "sha": sha, "repo": {"id": 1}}}
+    monkeypatch.setattr(git_hygiene, "_github_get", lambda *_: payload)
+    return repo, remote, {"ref": ref, "sha": sha, "pr": 10}, payload
+
+
+def test_remote_retirement_accepts_exact_merged_pr(tmp_path, monkeypatch):
+    repo, remote, target, _ = _remote_retirement_repo(tmp_path, monkeypatch)
+    result = git_hygiene.retire_inactive_remote_branches(
+        repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+    )
+    assert result["deleted"] == 1
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) is None
+    receipt = json.loads(Path(result["receipt"]).read_text())
+    assert receipt["state"] == "completed"
+    assert receipt["schema"] == "remote_owner_retirement.v1"
+
+
+@pytest.mark.parametrize("change", ["open", "draft", "ref", "sha", "repo"])
+def test_remote_retirement_rejects_inexact_pr(tmp_path, monkeypatch, change):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    if change == "open":
+        payload["state"] = "open"
+    elif change == "draft":
+        payload["draft"] = True
+    elif change == "repo":
+        payload["head"]["repo"]["id"] = 2
+    else:
+        payload["head"][change] = "different"
+    with pytest.raises(RuntimeError, match="pr_authority_invalid"):
+        git_hygiene.retire_inactive_remote_branches(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == target["sha"]
+
+
+def test_remote_retirement_compensates_from_bundle_after_source_object_loss(tmp_path, monkeypatch):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    original = git_hygiene.run_git_result
+    def delete_then_drift(args, cwd):
+        result = original(args, cwd)
+        if args[0] == "push" and args[-1] == ":refs/heads/old":
+            payload["state"] = "open"
+            sha = target["sha"]
+            (repo / ".git" / "objects" / sha[:2] / sha[2:]).unlink()
+        return result
+    monkeypatch.setattr(git_hygiene, "run_git_result", delete_then_drift)
+    with pytest.raises(RuntimeError, match="pr_authority_invalid"):
+        git_hygiene.retire_inactive_remote_branches(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == target["sha"]
+    assert json.loads((tmp_path / "rescue" / "remote-retirement.json").read_text())["state"] == "compensated"
+
+
+@pytest.mark.parametrize("fault", ["recreated", "bundle_corrupt"])
+def test_remote_retirement_failed_recovery_never_overwrites_concurrent_source(tmp_path, monkeypatch, fault):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    base = git_hygiene.run_git(["rev-parse", "main"], repo)
+    git_hygiene.run_git(["push", str(remote), "main:refs/heads/main"], repo)
+    original = git_hygiene.run_git_result
+    def after_delete(args, cwd):
+        result = original(args, cwd)
+        if args[0] == "push" and args[-1] == ":refs/heads/old":
+            payload["state"] = "open"
+            if fault == "recreated":
+                git_hygiene.run_git(["update-ref", "refs/heads/old", base], remote)
+            else:
+                (tmp_path / "rescue" / "repository.bundle").write_bytes(b"corrupt")
+        return result
+    monkeypatch.setattr(git_hygiene, "run_git_result", after_delete)
+    with pytest.raises(RuntimeError):
+        git_hygiene.retire_inactive_remote_branches(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == (base if fault == "recreated" else None)
+    assert json.loads((tmp_path / "rescue" / "remote-retirement.json").read_text())["state"] == "recovery_required"
+
+
+def test_remote_retirement_requires_exact_object_in_snapshot(tmp_path, monkeypatch):
+    repo, remote, target, _ = _remote_retirement_repo(tmp_path, monkeypatch)
+    original = git_hygiene.create_rescue_snapshot
+    def incomplete(*args):
+        snapshot = original(*args)
+        snapshot["verified_objects"] = []
+        return snapshot
+    monkeypatch.setattr(git_hygiene, "create_rescue_snapshot", incomplete)
+    with pytest.raises(RuntimeError, match="not_in_verified_rescue"):
+        git_hygiene.retire_inactive_remote_branches(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == target["sha"]
+
+
+@pytest.mark.parametrize("recreated", [False, True])
+def test_remote_retirement_recovers_pending_crash_on_retry(tmp_path, monkeypatch, recreated):
+    repo, remote, target, _ = _remote_retirement_repo(tmp_path, monkeypatch)
+    base = git_hygiene.run_git(["rev-parse", "main"], repo)
+    git_hygiene.run_git(["push", str(remote), "main:refs/heads/main"], repo)
+    original = git_hygiene.run_git_result
+    def crash(args, cwd):
+        result = original(args, cwd)
+        if args[0] == "push" and args[-1] == ":refs/heads/old":
+            raise KeyboardInterrupt("simulated process death")
+        return result
+    monkeypatch.setattr(git_hygiene, "run_git_result", crash)
+    kwargs = dict(targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work")
+    with pytest.raises(KeyboardInterrupt):
+        git_hygiene.retire_inactive_remote_branches(repo, **kwargs)
+    monkeypatch.setattr(git_hygiene, "run_git_result", original)
+    assert json.loads((tmp_path / "rescue" / "remote-retirement.json").read_text())["state"] == "delete_pending"
+    if recreated:
+        git_hygiene.run_git(["update-ref", "refs/heads/old", base], remote)
+        with pytest.raises(RuntimeError, match="source_recreated"):
+            git_hygiene.retire_inactive_remote_branches(repo, **kwargs)
+    else:
+        result = git_hygiene.retire_inactive_remote_branches(repo, **kwargs)
+        assert result["state"] == "compensated"
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == (base if recreated else target["sha"])
+
+
+@pytest.mark.parametrize("ref", ["refs/tags/v1", "refs/heads/old", "refs/remotes/origin/old", "refs/archive/git-hygiene/v1/old"])
+def test_auxiliary_retirement_rejects_other_namespaces(tmp_path, ref):
+    with pytest.raises(ValueError):
+        git_hygiene.retire_inactive_auxiliary_refs(
+            tmp_path, targets={ref: "a" * 40}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+        )
+    assert not (tmp_path / "rescue").exists()
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_auxiliary_retirement_preserves_open_pr_review_ref(tmp_path, monkeypatch, active):
+    repo, _, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    ref = "refs/review/pr-5372-merge"
+    git_hygiene.run_git(["update-ref", ref, sha], repo)
+    if active:
+        monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"5372:other": "a" * 40})
+    result = git_hygiene.retire_inactive_auxiliary_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+    )
+    assert result["deleted"] == (0 if active else 1)
+    assert git_hygiene.run_git_result(["show-ref", "--verify", "--quiet", ref], repo).returncode == (0 if active else 1)
+
+
+def test_remote_retirement_ignores_mutable_mergeability_projection(tmp_path, monkeypatch):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    payload["mergeable"] = True
+    original = git_hygiene.run_git_result
+    def projection_change(args, cwd):
+        result = original(args, cwd)
+        if args[0] == "push" and args[-1] == ":refs/heads/old":
+            payload["mergeable"] = None
+            payload["updated_at"] = "2026-09-06T12:00:00Z"
+        return result
+    monkeypatch.setattr(git_hygiene, "run_git_result", projection_change)
+    result = git_hygiene.retire_inactive_remote_branches(
+        repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+    )
+    assert result["deleted"] == 1
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) is None
+
+
+@pytest.mark.parametrize("field,value", [("merged", "unknown"), ("closed_at", None), ("merged_at", None), ("merged_at", "bad")])
+def test_remote_retirement_rejects_malformed_closure(tmp_path, monkeypatch, field, value):
+    repo, remote, target, payload = _remote_retirement_repo(tmp_path, monkeypatch)
+    payload[field] = value
+    with pytest.raises(RuntimeError, match="closure_invalid"):
+        git_hygiene.retire_inactive_remote_branches(
+            repo, targets=[target], snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive work",
+        )
+    assert git_hygiene._remote_ref_sha(repo, str(remote), target["ref"]) == target["sha"]
+
+
+def test_rescue_snapshot_supports_archive_only_bare_repository(tmp_path, monkeypatch):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    git_hygiene.run_git(["init", "--bare", "."], bare)
+    git_hygiene.run_git(["fetch", str(repo), f"{ref}:{ref}"], bare)
+    result = git_hygiene.create_rescue_snapshot(bare, tmp_path / "rescue")
+    assert sha in result["verified_objects"]
+    assert result["inventory"]["stashes"] == ""
+    git_hygiene.run_git(["update-ref", "refs/stash", sha], bare)
+    with pytest.raises(RuntimeError, match="bare_rescue_stash_inventory_unsupported"):
+        git_hygiene.create_rescue_snapshot(bare, tmp_path / "refused")
+
+
+@pytest.mark.parametrize("ref", ["refs/remotes/origin/main", "refs/remotes/origin/HEAD", "refs/remotes/other/old", "refs/heads/old"])
+def test_tracking_retirement_rejects_protected_or_other_refs(tmp_path, ref):
+    with pytest.raises(ValueError):
+        git_hygiene.retire_absent_remote_tracking_refs(
+            tmp_path, targets={ref: "a" * 40}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+        )
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_tracking_retirement_requires_continuing_remote_absence(tmp_path, monkeypatch, drift):
+    repo, _, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    ref = "refs/remotes/origin/old"
+    git_hygiene.run_git(["update-ref", ref, sha], repo)
+    reads = 0
+    def absent(*args):
+        nonlocal reads
+        reads += 1
+        return not (drift and reads >= 3)
+    monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", absent)
+    kwargs = dict(targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive")
+    if drift:
+        with pytest.raises(RuntimeError, match="drift"):
+            git_hygiene.retire_absent_remote_tracking_refs(repo, **kwargs)
+        assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+    else:
+        result = git_hygiene.retire_absent_remote_tracking_refs(repo, **kwargs)
+        assert result["deleted"] == 1
+
+
+def test_tracking_retirement_preserves_open_branch_even_when_tracking_sha_differs(tmp_path, monkeypatch):
+    repo, _, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    ref = "refs/remotes/origin/old"
+    git_hygiene.run_git(["update-ref", ref, sha], repo)
+    monkeypatch.setattr(git_hygiene, "_tracking_sources_absent", lambda *_: True)
+    monkeypatch.setattr(git_hygiene, "_open_cleanup_pr_heads", lambda *_: {"7:old": "a" * 40})
+    result = git_hygiene.retire_absent_remote_tracking_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue", owner_discard="discard inactive",
+    )
+    assert result["deleted"] == 0
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_tracking_absence_requires_real_remote_absence(tmp_path, monkeypatch):
+    repo, remote, target, _ = _remote_retirement_repo(tmp_path, monkeypatch)
+    identity = git_hygiene.RepositoryIdentity(1, "RasmusTho/agentic-pkm-mvp", str(remote), str(remote))
+    targets = {"refs/remotes/origin/old": target["sha"]}
+    assert git_hygiene._tracking_sources_absent(repo, identity, targets) is False
+    git_hygiene.run_git(["update-ref", "-d", target["ref"], target["sha"]], remote)
+    assert git_hygiene._tracking_sources_absent(repo, identity, targets) is True
+    missing = git_hygiene.RepositoryIdentity(1, identity.full_name, str(remote), str(tmp_path / "missing"))
+    with pytest.raises(RuntimeError, match="absence_unavailable"):
+        git_hygiene._tracking_sources_absent(repo, missing, targets)

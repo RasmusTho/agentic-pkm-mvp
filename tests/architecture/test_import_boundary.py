@@ -290,11 +290,13 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     assert section.getboolean("as_packages") is False
     assert _module_list(section["protected_modules"]) == {
         "app.instance.instance_state",
+        "app.instance.legacy_owner_recovery",
         "app.instance.ownership_ledger",
     }
     assert _module_list(section["allowed_importers"]) == {
         "app.instance.binding_effect_lease",
         "app.instance.instance_state",
+        "app.instance.legacy_owner_recovery",
         "app.instance.runtime",
         "app.instance.scalar_binding_runtime",
     }

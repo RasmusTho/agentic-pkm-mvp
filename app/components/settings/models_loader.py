@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,19 @@ class ModelRegistry(BaseModel):
     models: List[ModelRegistryEntry] = Field(default_factory=list)
 
 
+class ModelPricing(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    standard_input_usd_per_million_tokens: float = Field(..., gt=0)
+    standard_output_usd_per_million_tokens: float = Field(..., gt=0)
+    fast_mode_multiplier: float = Field(..., gt=0)
+    source_urls: List[str] = Field(..., min_length=1)
+    retrieved_on: date
+    artificial_analysis_cost_per_intelligence_index_task_usd: Dict[str, float] = Field(
+        default_factory=dict
+    )
+
+
 class ModelDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(..., min_length=1)
@@ -33,6 +47,7 @@ class ModelDescriptor(BaseModel):
     model: str = Field(..., min_length=1)
     dims: Optional[int] = None
     notes: Optional[str] = None
+    pricing: Optional[ModelPricing] = None
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:

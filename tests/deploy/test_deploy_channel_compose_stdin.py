@@ -19,6 +19,7 @@ These tests exercise the fix at both levels named in the issue:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -177,6 +178,10 @@ def _fake_compose_harness(tmp_path: Path, extra_env: dict[str, str]) -> tuple[su
         "  if [ \"${1:-}\" = config ] && [ -n \"${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT:-}\" ]; then\n"
         "    printf '%s\\n' 'services: {api: {depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: client}}, db: {labels: {com.agentic-pkm.mvr05.db-role: server}}, instance-state-init: {labels: {com.agentic-pkm.mvr05.db-role: fence-controller}}, migrate: {command: [/app/scripts/run_migrations.sh], depends_on: [db], labels: {com.agentic-pkm.mvr05.db-role: migration-runner}}}' > \"$DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT\"\n"
         "  fi\n"
+        "  if [[ \" $* \" == *' scalar-rollback-roll-forward '* ]] && [ \"${MUTATE_OWNER_INVENTORY_AFTER_MVR01C:-0}\" = 1 ]; then\n"
+        "    printf '%s\\n' '{\"fixture\":\"bound-after-mvr01c\"}' > \"$INSTANCE_OWNERSHIP_HOST_STATE_DIR/legacy-owner-inventory.json\"\n"
+        "    chmod 600 \"$INSTANCE_OWNERSHIP_HOST_STATE_DIR/legacy-owner-inventory.json\"\n"
+        "  fi\n"
         "  if [[ \" $* \" == *' settings-rebind-install-dormant '* ]] && [ \"${FAIL_SETTINGS_REBIND_INSTALL:-0}\" = 1 ]; then return 74; fi\n"
         "  return 0\n"
         "}\n"
@@ -229,6 +234,57 @@ def test_producer_delivers_owner_inventory_with_content(tmp_path: Path) -> None:
     assert "legacy-owner" in content
 
 
+def test_mvr05_floor_receives_digest_of_delivered_owner_inventory(
+    tmp_path: Path,
+) -> None:
+    """MVR-05 must consume exactly the owner receipt the host published."""
+
+    result, ownership_root = _fake_compose_harness(tmp_path, {})
+    assert result.returncode == 0, result.stderr
+
+    expected_digest = hashlib.sha256(
+        (ownership_root / "legacy-owner-inventory.json").read_bytes()
+    ).hexdigest()
+    events = (tmp_path / "events.log").read_text(encoding="utf-8")
+    mvr05_events = [
+        event
+        for event in events.splitlines()
+        if "mvr05-record-floor" in event
+    ]
+
+    assert len(mvr05_events) == 1
+    assert f"--inventory-sha256 {expected_digest}" in mvr05_events[0]
+
+
+def test_mvr05_floor_receives_digest_after_mvr01c_binds_owner_inventory(
+    tmp_path: Path,
+) -> None:
+    """MVR-05 must hash the receipt after every stopped-window binder."""
+
+    result, ownership_root = _fake_compose_harness(
+        tmp_path,
+        {
+            "MVR01C_ROLL_FORWARD_LEGACY_PATH": "/app/scalar-rollback/app-local.md",
+            "MUTATE_OWNER_INVENTORY_AFTER_MVR01C": "1",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+    expected_digest = hashlib.sha256(
+        (ownership_root / "legacy-owner-inventory.json").read_bytes()
+    ).hexdigest()
+    events = (tmp_path / "events.log").read_text(encoding="utf-8")
+
+    assert "scalar-rollback-roll-forward" in events
+    mvr05_events = [
+        event
+        for event in events.splitlines()
+        if "mvr05-record-floor" in event
+    ]
+    assert len(mvr05_events) == 1
+    assert f"--inventory-sha256 {expected_digest}" in mvr05_events[0]
+
+
 def test_preinstall_validation_failure_never_creates_settings_floor_receipt(
     tmp_path: Path,
 ) -> None:
@@ -276,6 +332,46 @@ def test_delivered_inventories_are_private(tmp_path: Path) -> None:
         assert stat.S_ISREG(metadata.st_mode), f"{name} is not a regular file"
         assert stat.S_IMODE(metadata.st_mode) == 0o600, f"{name} is not mode 0600"
         assert metadata.st_uid == os.geteuid(), f"{name} is not owned by the runtime user"
+
+
+def test_inventory_delivery_preserves_previous_json_on_copy_failure(tmp_path: Path) -> None:
+    """A partial host write must not expose corrupt inventory bytes to a new container."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "cat",
+        "#!/usr/bin/env bash\n"
+        "printf '%s' '{\"partial\":'\n"
+        "exit 1\n",
+    )
+    source = tmp_path / "source.json"
+    source.write_text('{"new":true}\n', encoding="utf-8")
+    target = tmp_path / "deployment-quiescence-inventory.json"
+    previous = '{"previous":true}\n'
+    target.write_text(previous, encoding="utf-8")
+    target.chmod(0o600)
+    harness = tmp_path / "harness.sh"
+    _write_executable(
+        harness,
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{INSTANCE_STATE_DEPLOYMENT_SH}'\n"
+        '_instance_state_deployment_deliver_private_inventory "$1" "$2" "$(id -u)" "$(id -g)"\n',
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness), str(source), str(target)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == previous
+    assert json.loads(target.read_text(encoding="utf-8")) == {"previous": True}
+    assert not list(tmp_path.glob(".deployment-quiescence-inventory.json.tmp.*"))
 
 
 def test_producer_fails_closed_on_empty_inventory(tmp_path: Path) -> None:

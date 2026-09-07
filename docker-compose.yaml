@@ -254,7 +254,6 @@ services:
       INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
       INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
-      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       # Trust the companion-ui container's own server-side proxy call to the
       # loopback/API-key-gated vault-selection routes (#3102). The browser never
@@ -353,7 +352,6 @@ services:
       INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
       INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
-      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
       # Opt-in worker /metrics endpoint (builder-ops-stability Issue 6):
       # empty/unset keeps it off; see ops/observability/prometheus.yml.
@@ -435,9 +433,8 @@ services:
       - INSTANCE_VAULT_REGISTRY_PATH=/app/instance-state/agentic-pkm/vault-registry.md
       - INSTANCE_OWNERSHIP_ROOT=/app/instance-ownership
       - DESIGN_HANDOFF_APP_LOCAL_SETTINGS=${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp/agentic-pkm/app-local.md}
-      - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
-      # Bare base-stack startup gets this non-secret selector from .env/the
-      # shell. deploy_channel_compose pins it from governed channel/runtime env.
+      # The generated runtime env file carries this non-secret selector. Keep
+      # it out of `environment:` so its governed env_file value survives.
       - LLM_PROVIDER=${LLM_PROVIDER}
       - WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC-1}
     extra_hosts:

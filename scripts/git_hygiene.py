@@ -35,6 +35,7 @@ from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 DEFAULT_PROTECTED_BRANCHES = {"main", "master", "develop", "dev", "stable"}
 DEFAULT_REMOTE_POLICY = "merged-and-closed-with-rescue"
+GIT_PROBE_TIMEOUT_SECONDS = 10
 IN_PROGRESS_MARKERS = {
     "MERGE_HEAD": "merge",
     "CHERRY_PICK_HEAD": "cherry-pick",
@@ -139,6 +140,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         capture_output=True,
         text=True,
         env=_sanitized_git_environment(),
+        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base"} else None,
     )
     return result.stdout.strip()
 
@@ -151,6 +153,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         capture_output=True,
         text=True,
         env=_sanitized_git_environment(),
+        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base"} else None,
     )
 
 
@@ -243,6 +246,13 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
     else:
         local_ancestor = _is_ancestor(cwd, base_branch, remote_ref)
         remote_ancestor = _is_ancestor(cwd, remote_ref, base_branch)
+        if local_ancestor is None or remote_ancestor is None:
+            return {
+                "base_branch": base_branch,
+                "remote_ref": remote_ref,
+                "status": "unavailable",
+                "mismatch": True,
+            }
         if local_ancestor and not remote_ancestor:
             status = "behind"
             # A stale local base ref cannot be fast-forwarded from a dedicated
@@ -291,8 +301,13 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
     return result
 
 
-def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
-    result = run_git_result(["merge-base", "--is-ancestor", ancestor, descendant], cwd)
+def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool | None:
+    try:
+        result = run_git_result(["merge-base", "--is-ancestor", ancestor, descendant], cwd)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode not in {0, 1}:
+        return None
     return result.returncode == 0
 
 
@@ -468,7 +483,7 @@ def _checked_out_branches(worktrees: list[dict[str, str]]) -> dict[str, str]:
 def _worktree_dirty(path: str) -> bool | None:
     try:
         result = run_git_result(["status", "--porcelain"], Path(path))
-    except FileNotFoundError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
@@ -2419,7 +2434,10 @@ def _worktree_reclaim_reason(
     pr = _pr_state(branch, pr_states)
     if pr.get("state") == "OPEN" or pr.get("isDraft"):
         return "open_or_draft_pr", None
-    if _is_ancestor(cwd, branch, "origin/main"):
+    merged = _is_ancestor(cwd, branch, "origin/main")
+    if merged is None:
+        return "unknown_merge_state", None
+    if merged:
         return None, "ancestor_of_origin_main"
     if pr.get("state") == "MERGED":
         return None, "merged_pr"
@@ -2467,7 +2485,10 @@ def _local_branch_skip_reason(
         if dirty:
             return "dirty_worktree"
         return "checked_out_worktree"
-    if not _is_ancestor(cwd, branch, "origin/main"):
+    merged = _is_ancestor(cwd, branch, "origin/main")
+    if merged is None:
+        return "unknown_merge_state"
+    if not merged:
         return "not_merged_to_origin_main"
     return None
 
@@ -2505,6 +2526,8 @@ def _remote_branch_skip_reason(
     if pr.get("state") == "OPEN" or pr.get("isDraft"):
         return "open_or_draft_pr", False
     merged = _is_ancestor(cwd, f"origin/{branch}", "origin/main")
+    if merged is None:
+        return "unknown_merge_state", False
     if merged:
         return None, False
     if pr.get("state") in {"CLOSED", "MERGED"}:
@@ -3492,6 +3515,807 @@ def janitor_apply(
     }
 
 
+def _open_cleanup_pr_heads(cwd: Path, repository: str) -> dict[str, str]:
+    """Read every open PR from the fixed authenticated GitHub transport."""
+    token = _github_auth_token()
+    with tempfile.TemporaryDirectory(prefix="git-retirement-gh-") as directory:
+        config = Path(directory)
+        config.chmod(0o700)
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "--paginate", "--slurp",
+             f"repos/{repository}/pulls?state=open&per_page=100"],
+            cwd=cwd, capture_output=True, text=True, check=True, timeout=60,
+            env=_sanitized_github_environment(config, token),
+        )
+    pages = _json_without_duplicates(result.stdout)
+    if not isinstance(pages, list) or not pages:
+        raise RuntimeError("open_pr_census_invalid")
+    heads: dict[str, str] = {}
+    for page in pages:
+        if not isinstance(page, list):
+            raise RuntimeError("open_pr_census_invalid")
+        for pull in page:
+            if not isinstance(pull, dict) or pull.get("state") != "open":
+                raise RuntimeError("open_pr_census_invalid")
+            head = pull.get("head")
+            if not isinstance(head, dict) or not isinstance(head.get("ref"), str):
+                raise RuntimeError("open_pr_census_invalid")
+            sha = head.get("sha")
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+                raise RuntimeError("open_pr_census_invalid")
+            heads[f"{pull['number']}:{head['ref']}"] = sha
+    return heads
+
+
+def _retirement_local_activity(
+    cwd: Path, registry: Mapping[str, Any], dispatcher: list[dict[str, object]],
+) -> tuple[set[str], set[str]]:
+    """Positive live activity protects artifacts; age never supplies authority."""
+    protected_shas: set[str] = set()
+    resources: set[str] = set()
+    worktrees = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+    if not worktrees:
+        raise RuntimeError("worktree_census_missing")
+    # Preserve every linked HEAD, including unregistered/stale generations.
+    # Worktree retirement is a separate phase with stronger identity evidence.
+    live_paths = {str(Path(item["worktree"]).resolve()) for item in worktrees}
+    now = time.time()
+    for path, record in registry.items():
+        if not isinstance(record, dict) or not isinstance(path, str):
+            raise RuntimeError("lifecycle_activity_invalid")
+        expires = record.get("expires_at")
+        if not _is_finite_timestamp(expires):
+            raise RuntimeError("lifecycle_activity_invalid")
+        if expires > now:
+            live_paths.add(str(Path(path).resolve()))
+    for worktree in worktrees:
+        if str(Path(worktree["worktree"]).resolve()) in live_paths:
+            protected_shas.add(worktree["HEAD"])
+    for row in dispatcher:
+        record = row["record"]
+        if not isinstance(record, dict):
+            raise RuntimeError("dispatcher_activity_invalid")
+        if row["kind"] == "lease":
+            if record.get("released_at"):
+                _parse_dispatcher_time(record["released_at"])
+                continue
+            expiry = _parse_dispatcher_time(record.get("expires_at"))
+            if expiry.timestamp() > now:
+                resource = record.get("resource")
+                if not isinstance(resource, str) or not resource:
+                    raise RuntimeError("dispatcher_activity_invalid")
+                resources.add(resource)
+        elif record.get("status") not in {"completed", "_meta"}:
+            # A direct explicit reference in a resumable task is retained even
+            # if its pickup lease expired. Unrelated historical rows do not veto.
+            resources.add(json.dumps(record, sort_keys=True))
+    return protected_shas, resources
+
+
+def _retire_inactive_ref_phase(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25, kind: str,
+) -> dict[str, object]:
+    """Retire exact local refs under an explicit owner decision.
+
+    Closed namespace selection separates legacy archives from unchecked local
+    branches. No stash, worktree or remote mutation is supported here.
+    """
+    from scripts import agent_worktree
+
+    if kind not in {"legacy_archive", "local_branch", "auxiliary_ref", "remote_tracking"}:
+        raise ValueError("ref_retirement_kind_invalid")
+    if not owner_discard.strip() or not targets or not 1 <= batch_size <= 25:
+        raise ValueError("explicit_archive_disposition_required")
+    for ref, sha in targets.items():
+        if kind == "legacy_archive":
+            allowed = bool(re.fullmatch(r"refs/archive/git-hygiene/[0-9]{8}T[0-9]{6}Z/.+", ref))
+        elif kind == "remote_tracking":
+            allowed = (ref.startswith("refs/remotes/origin/")
+                       and ref.removeprefix("refs/remotes/origin/") not in DEFAULT_PROTECTED_BRANCHES | {"HEAD"})
+        elif kind == "auxiliary_ref":
+            allowed = bool(re.fullmatch(
+                r"refs/(?:codex/snapshots/[0-9a-f]{40}|codex/pr-[0-9]+-merge|"
+                r"(?:review|tmp|recovered-stash|closure-a|codex-tmp|merge_validation|pr)/.+|pr_862_head)", ref,
+            ))
+        else:
+            allowed = ref.startswith("refs/heads/") and ref.removeprefix("refs/heads/") not in DEFAULT_PROTECTED_BRANCHES
+        if not allowed or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+            raise ValueError("legacy_archive_exact_target_required" if kind == "legacy_archive"
+                             else "local_branch_exact_target_required")
+        run_git_check(["check-ref-format", ref], cwd)
+        symbolic = run_git_result(["symbolic-ref", "-q", ref], cwd)
+        if symbolic.returncode != 1:
+            raise ValueError("symbolic_or_unavailable_archive_ref")
+        if run_git(["rev-parse", "--verify", ref], cwd) != sha:
+            raise RuntimeError("archive_target_drift")
+    identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
+    pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
+    special_protected = _read_protected_targets(identity, cwd=cwd) if kind != "legacy_archive" else None
+    if kind == "remote_tracking" and not _tracking_sources_absent(cwd, identity, targets):
+        raise RuntimeError("remote_tracking_source_exists")
+    snapshot = create_rescue_snapshot(cwd, snapshot_directory)
+    captured = dict(line.split(" ", 1)[::-1] for line in snapshot["inventory"]["refs"].splitlines())
+    if any(captured.get(ref) != sha for ref, sha in targets.items()):
+        raise RuntimeError("archive_not_in_verified_snapshot")
+    registry_path = agent_worktree._default_registry_path(cwd)
+    if not registry_path.is_file() or registry_path.is_symlink():
+        raise RuntimeError("lifecycle_registry_missing")
+    initial_registry = agent_worktree._locked_lifecycle_snapshot(registry_path)
+    receipt_path = snapshot_directory / "retirement.json"
+    receipt: dict[str, Any] = {
+        "schema": f"{kind}_retirement.v1", "owner_discard": owner_discard,
+        "snapshot": snapshot["snapshot"], "targets": dict(targets),
+        "deleted": [], "retained": {}, "state": "prepared", "batches": [],
+    }
+    agent_worktree._write_registry(receipt_path, receipt)
+    def external_changed() -> bool:
+        return (
+            _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+            or (kind == "remote_tracking" and (
+                _resolve_repository_identity(cwd, identity.full_name) != identity
+                or not _tracking_sources_absent(cwd, identity, targets)))
+            or (special_protected is not None
+                and _read_protected_targets(identity, cwd=cwd) != special_protected)
+        )
+
+    pairs = list(targets.items())
+    for start in range(0, len(pairs), batch_size):
+        batch = dict(pairs[start:start + batch_size])
+        if external_changed():
+            raise RuntimeError("archive_pr_activity_drift")
+        with _dispatcher_authority_write_fence(cwd) as connection:
+            with agent_worktree._registry_lock(registry_path):
+                registry = agent_worktree._read_registry(registry_path)["worktrees"]
+                if registry != initial_registry:
+                    raise RuntimeError("lifecycle_generation_drift")
+                dispatcher = _dispatcher_snapshot_from_connection(connection)
+                protected, resources = _retirement_local_activity(cwd, registry, dispatcher)
+                protected.update(pr_heads.values())
+                any_live_lease = any(
+                    row["kind"] == "lease" and not row["record"].get("released_at")
+                    and _parse_dispatcher_time(row["record"].get("expires_at")).timestamp() > time.time()
+                    for row in dispatcher
+                )
+                selected = {}
+                checked_refs = {
+                    item.get("branch") for item in
+                    _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+                }
+                open_branches = {key.split(":", 1)[1] for key in pr_heads}
+                for ref, sha in batch.items():
+                    branch = ref.removeprefix("refs/remotes/origin/" if kind == "remote_tracking" else "refs/heads/")
+                    if kind in {"local_branch", "remote_tracking"}:
+                        try:
+                            for path, record in registry.items():
+                                if record.get("branch") == branch or _record_previously_bound(record, branch):
+                                    agent_worktree._validate_authority_record(path, record)
+                        except (RuntimeError, TypeError, ValueError):
+                            receipt["retained"][ref] = "invalid_lifecycle_binding"
+                            continue
+                    branch_protected = kind in {"local_branch", "remote_tracking"} and (
+                        any_live_lease or f"refs/heads/{branch}" in checked_refs or branch in open_branches
+                        or _branch_has_worktree_path_lease(branch, resources, registry)
+                        or any(record.get("branch") == branch and record.get("expires_at", 0) > time.time()
+                               for record in registry.values())
+                        or (special_protected is not None and (
+                            f"refs/heads/{branch}" == special_protected.pull_ref or sha == special_protected.pull_sha
+                            or re.search(r"(?:^|[-_/])" + str(special_protected.issue_number) + r"(?:$|[-_/])", branch)
+                        ))
+                        or any(f"branch:{branch}" in resource for resource in resources)
+                        or any(resource == f"issue:{number}"
+                               for number in re.findall(r"(?:^|[-_/])(\d+)(?=$|[-_/])", branch)
+                               for resource in resources)
+                    )
+                    auxiliary_protected = kind in {"auxiliary_ref", "remote_tracking"} and (
+                        any_live_lease
+                        or (special_protected is not None and sha == special_protected.pull_sha)
+                        or any(re.search(r"(?:^|[-_/])(?:pr)?" + number + r"(?:$|[-_/])", ref)
+                               for number in [*(key.split(":", 1)[0] for key in pr_heads), str(special_protected.issue_number)])
+                    )
+                    if branch_protected or auxiliary_protected or sha in protected or any(ref in resource or sha in resource for resource in resources):
+                        receipt["retained"][ref] = "live_or_resumable_activity"
+                    else:
+                        selected[ref] = sha
+                if selected:
+                    commands = ["start", *(f"delete {ref} {sha}" for ref, sha in selected.items()), "prepare", "commit"]
+                    subprocess.run(
+                        ["git", "update-ref", "--no-deref", "--stdin"], cwd=cwd,
+                        input="\n".join(commands) + "\n", capture_output=True,
+                        text=True, check=True, timeout=30, env=_sanitized_git_environment(),
+                    )
+                    try:
+                        if external_changed():
+                            raise RuntimeError("archive_pr_activity_drift")
+                        for ref in selected:
+                            if run_git_result(["show-ref", "--verify", "--quiet", ref], cwd).returncode != 1:
+                                raise RuntimeError("archive_delete_readback_failed")
+                    except (OSError, RuntimeError, subprocess.SubprocessError):
+                        restore = ["start", *(f"create {ref} {sha}" for ref, sha in selected.items()), "prepare", "commit"]
+                        try:
+                            subprocess.run(
+                                ["git", "update-ref", "--no-deref", "--stdin"], cwd=cwd,
+                                input="\n".join(restore) + "\n", capture_output=True,
+                                text=True, check=True, timeout=30, env=_sanitized_git_environment(),
+                            )
+                        except (OSError, subprocess.SubprocessError):
+                            receipt["state"] = "recovery_required"
+                            receipt["recovery_targets"] = selected
+                            agent_worktree._write_registry(receipt_path, receipt)
+                            raise
+                        receipt["state"] = "compensated"
+                        agent_worktree._write_registry(receipt_path, receipt)
+                        raise
+                    receipt["deleted"].extend(selected)
+                receipt["batches"].append({
+                    "deleted": selected, "readback": "verified", "checked_at": time.time(),
+                    "open_pr_heads": pr_heads,
+                    "lifecycle_sha256": hashlib.sha256(json.dumps(registry, sort_keys=True).encode()).hexdigest(),
+                    "dispatcher_sha256": hashlib.sha256(json.dumps(dispatcher, sort_keys=True).encode()).hexdigest(),
+                })
+                agent_worktree._write_registry(receipt_path, receipt)
+    receipt["state"] = "completed"
+    agent_worktree._write_registry(receipt_path, receipt)
+    return {"ok": True, "receipt": str(receipt_path), "deleted": len(receipt["deleted"]),
+            "retained": receipt["retained"], "snapshot": snapshot["snapshot"]}
+
+
+def retire_legacy_archive_refs(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    return _retire_inactive_ref_phase(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="legacy_archive",
+    )
+
+
+def _tracking_sources_absent(cwd: Path, identity: RepositoryIdentity, targets: Mapping[str, str]) -> bool:
+    refs = ["refs/heads/" + ref.removeprefix("refs/remotes/origin/") for ref in targets]
+    result = run_git_result(["ls-remote", "--exit-code", identity.push_url, *refs], cwd)
+    if result.returncode == 2 and not result.stdout.strip():
+        return True
+    if result.returncode == 0 and result.stdout.strip():
+        return False
+    raise RuntimeError("remote_tracking_absence_unavailable")
+
+
+def retire_absent_remote_tracking_refs(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    """Retire exact origin tracking refs only while every remote source is absent."""
+    return _retire_inactive_ref_phase(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="remote_tracking",
+    )
+
+
+def retire_inactive_auxiliary_refs(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    return _retire_inactive_ref_phase(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="auxiliary_ref",
+    )
+
+
+def retire_inactive_local_branches(
+    cwd: Path, *, targets: Mapping[str, str], snapshot_directory: Path,
+    owner_discard: str, batch_size: int = 25,
+) -> dict[str, object]:
+    """Owner-authorized discard of exact inactive branches, independent of merge."""
+    return _retire_inactive_ref_phase(
+        cwd, targets=targets, snapshot_directory=snapshot_directory,
+        owner_discard=owner_discard, batch_size=batch_size, kind="local_branch",
+    )
+
+
+def _closed_retirement_pr(cwd: Path, identity: RepositoryIdentity, target: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _github_get(cwd, f"repos/{identity.full_name}/pulls/{target['pr']}")
+    head = payload.get("head")
+    if (payload.get("number") != target["pr"] or payload.get("state") != "closed"
+            or payload.get("draft") is not False or not isinstance(head, dict)
+            or head.get("ref") != target["ref"].removeprefix("refs/heads/")
+            or head.get("sha") != target["sha"]
+            or not isinstance(head.get("repo"), dict)
+            or head["repo"].get("id") != identity.database_id):
+        raise RuntimeError("remote_retirement_pr_authority_invalid")
+    if (not isinstance(payload.get("merged"), bool)
+            or (payload["merged"] is True) != (payload.get("merged_at") is not None)):
+        raise RuntimeError("remote_retirement_closure_invalid")
+    try:
+        _parse_dispatcher_time(payload.get("closed_at"))
+        if payload["merged"]:
+            _parse_dispatcher_time(payload.get("merged_at"))
+    except (RuntimeError, TypeError, ValueError) as error:
+        raise RuntimeError("remote_retirement_closure_invalid") from error
+    # GitHub can recompute mergeability and other projections after branch
+    # deletion. Bind only disposition authority, not that transient projection.
+    return {
+        "number": payload["number"], "state": payload["state"], "draft": payload["draft"],
+        "merged": payload.get("merged"), "merged_at": payload.get("merged_at"),
+        "closed_at": payload.get("closed_at"), "head_ref": head["ref"],
+        "head_sha": head["sha"], "head_repository_id": head["repo"]["id"],
+    }
+
+
+def _restore_remote_from_rescue(cwd: Path, identity: RepositoryIdentity, ref: str, sha: str, snapshot: Mapping[str, Any]) -> None:
+    digest = hashlib.sha256()
+    with Path(snapshot["bundle"]).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != snapshot["bundle_sha256"]:
+        raise RuntimeError("recovery_bundle_checksum_mismatch")
+    with tempfile.TemporaryDirectory(prefix="remote-retirement-recovery-") as directory:
+        recovery = Path(directory)
+        run_git(["init", "--bare", "."], recovery)
+        run_git(["bundle", "unbundle", snapshot["bundle"]], recovery)
+        run_git(["cat-file", "-e", sha], recovery)
+        if _remote_ref_sha(cwd, identity.push_url, ref) is not None:
+            raise RuntimeError("remote_recovery_source_recreated")
+        result = run_git_result([
+            "push", "--no-verify", f"--force-with-lease={ref}:",
+            identity.push_url, f"{sha}:{ref}",
+        ], recovery)
+        if result.returncode != 0 or _remote_ref_sha(cwd, identity.push_url, ref) != sha:
+            raise RuntimeError("remote_recovery_cas_failed")
+
+
+def _resume_remote_retirement(cwd: Path, identity: RepositoryIdentity, directory: Path, targets: Sequence[Mapping[str, Any]], owner: str) -> dict[str, object]:
+    from scripts import agent_worktree
+
+    receipt_path = directory / "remote-retirement.json"
+    manifest_path = directory / "manifest.json"
+    if receipt_path.is_symlink() or manifest_path.is_symlink():
+        raise RuntimeError("remote_recovery_receipt_invalid")
+    receipt = _json_without_duplicates(receipt_path.read_text())
+    manifest = _json_without_duplicates(manifest_path.read_text())
+    if (not isinstance(receipt, dict) or not isinstance(manifest, dict)
+            or receipt.get("schema") != "remote_owner_retirement.v1"
+            or receipt.get("targets") != list(targets) or receipt.get("owner_discard") != owner
+            or receipt.get("repository") != {"database_id": identity.database_id, "full_name": identity.full_name, "fetch_url": identity.fetch_url, "push_url": identity.push_url}
+            or receipt.get("recovery_bundle") != str(directory / "repository.bundle")
+            or manifest.get("bundle") != receipt.get("recovery_bundle")
+            or manifest.get("bundle_sha256") != receipt.get("bundle_sha256")):
+        raise RuntimeError("remote_recovery_receipt_identity_mismatch")
+    pending = receipt.get("pending")
+    if pending is not None:
+        if pending not in list(targets):
+            raise RuntimeError("remote_recovery_pending_invalid")
+        receipt["state"] = "recovery_required"
+        agent_worktree._write_registry(receipt_path, receipt)
+        source = _remote_ref_sha(cwd, identity.push_url, pending["ref"])
+        if source is None:
+            _restore_remote_from_rescue(cwd, identity, pending["ref"], pending["sha"], manifest)
+        elif source != pending["sha"]:
+            raise RuntimeError("remote_recovery_source_recreated")
+        receipt["state"] = "compensated"
+        agent_worktree._write_registry(receipt_path, receipt)
+    # Recovery never resumes destructive work under a historical snapshot.
+    return {"ok": receipt["state"] == "completed", "state": receipt["state"],
+            "deleted": len(receipt["deleted"]), "receipt": str(receipt_path)}
+
+
+def retire_inactive_remote_branches(
+    cwd: Path, *, targets: Sequence[Mapping[str, Any]], snapshot_directory: Path,
+    owner_discard: str,
+) -> dict[str, object]:
+    """Separate owner disposition for exact closed-PR remote heads, including merges."""
+    from scripts import agent_worktree
+
+    if not owner_discard.strip() or not targets or len(targets) > 500:
+        raise ValueError("remote_disposition_required")
+    for target in targets:
+        ref = target.get("ref", "")
+        if (not isinstance(ref, str) or not ref.startswith("refs/heads/")
+                or ref.removeprefix("refs/heads/") in DEFAULT_PROTECTED_BRANCHES
+                or not re.fullmatch(r"[0-9a-f]{40}", target.get("sha", ""))
+                or not _positive_int(target.get("pr"))
+                or run_git_result(["check-ref-format", ref], cwd).returncode != 0):
+            raise ValueError("exact_closed_pr_remote_target_required")
+    if len({t["ref"] for t in targets}) != len(targets):
+        raise ValueError("duplicate_remote_target")
+    identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
+    snapshot_directory = snapshot_directory.resolve()
+    if snapshot_directory.exists():
+        return _resume_remote_retirement(cwd, identity, snapshot_directory, targets, owner_discard)
+    special = _read_protected_targets(identity, cwd=cwd)
+    open_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
+    # Rescue creation proves all target objects independently recoverable. Missing
+    # objects do not authorize a fetch/rebind or an effect in this phase.
+    snapshot = create_rescue_snapshot(cwd, snapshot_directory)
+    if not {t["sha"] for t in targets} <= set(snapshot["verified_objects"]):
+        raise RuntimeError("remote_target_not_in_verified_rescue")
+    registry_path = agent_worktree._default_registry_path(cwd)
+    if not registry_path.is_file() or registry_path.is_symlink():
+        raise RuntimeError("lifecycle_registry_missing")
+    initial_registry = agent_worktree._locked_lifecycle_snapshot(registry_path)
+    receipt_path = snapshot_directory / "remote-retirement.json"
+    receipt: dict[str, Any] = {
+        "schema": "remote_owner_retirement.v1", "state": "prepared",
+        "recovery_bundle": snapshot["bundle"], "bundle_sha256": snapshot["bundle_sha256"],
+        "repository": {"database_id": identity.database_id, "full_name": identity.full_name, "fetch_url": identity.fetch_url, "push_url": identity.push_url},
+        "owner_discard": owner_discard, "snapshot": snapshot["snapshot"],
+        "targets": list(targets), "deleted": [], "retained": {},
+    }
+    agent_worktree._write_registry(receipt_path, receipt)
+    def external_check() -> None:
+        if (_resolve_repository_identity(cwd, identity.full_name) != identity
+                or _read_protected_targets(identity, cwd=cwd) != special
+                or _open_cleanup_pr_heads(cwd, identity.full_name) != open_heads):
+            raise RuntimeError("remote_external_authority_drift")
+    for target in targets:
+        ref, sha = target["ref"], target["sha"]
+        branch = ref.removeprefix("refs/heads/")
+        external_check()
+        with _dispatcher_authority_write_fence(cwd) as connection:
+            with agent_worktree._registry_lock(registry_path):
+                registry = agent_worktree._read_registry(registry_path)["worktrees"]
+                if registry != initial_registry:
+                    raise RuntimeError("remote_lifecycle_drift")
+                dispatcher = _dispatcher_snapshot_from_connection(connection)
+                protected, resources = _retirement_local_activity(cwd, registry, dispatcher)
+                checked = {e.get("branch") for e in _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))}
+                invalid = False
+                try:
+                    for path, record in registry.items():
+                        if record.get("branch") == branch or _record_previously_bound(record, branch):
+                            agent_worktree._validate_authority_record(path, record)
+                except (RuntimeError, TypeError, ValueError):
+                    invalid = True
+                preserve = (
+                    invalid or ref in checked or sha in protected or sha in open_heads.values()
+                    or branch in {key.split(":", 1)[1] for key in open_heads}
+                    or ref == special.pull_ref or sha == special.pull_sha
+                    or re.search(r"(?:^|[-_/])" + str(special.issue_number) + r"(?:$|[-_/])", branch)
+                    or any(record.get("branch") == branch and record["expires_at"] > time.time() for record in registry.values())
+                    or any(row["kind"] == "lease" and not row["record"].get("released_at")
+                           and _parse_dispatcher_time(row["record"].get("expires_at")).timestamp() > time.time() for row in dispatcher)
+                    or any(branch in resource or sha in resource for resource in resources)
+                    or _branch_has_worktree_path_lease(branch, resources, registry)
+                )
+                if preserve:
+                    receipt["retained"][ref] = "protected_or_resumable_activity"
+                    agent_worktree._write_registry(receipt_path, receipt)
+                    continue
+                contract = _closed_retirement_pr(cwd, identity, target)
+                if _remote_ref_sha(cwd, identity.push_url, ref) != sha:
+                    raise RuntimeError("remote_source_drift")
+                external_check()
+                if _closed_retirement_pr(cwd, identity, target) != contract:
+                    raise RuntimeError("remote_pr_contract_drift")
+                receipt["pending"] = dict(target)
+                receipt["state"] = "delete_pending"
+                agent_worktree._write_registry(receipt_path, receipt)
+                try:
+                    result = run_git_result([
+                        "push", "--no-verify", f"--force-with-lease={ref}:{sha}",
+                        identity.push_url, f":{ref}",
+                    ], cwd)
+                    if result.returncode != 0:
+                        raise RuntimeError("remote_delete_cas_failed")
+                    if _remote_ref_sha(cwd, identity.push_url, ref) is not None:
+                        raise RuntimeError("remote_delete_readback_failed")
+                    external_check()
+                    if _closed_retirement_pr(cwd, identity, target) != contract:
+                        raise RuntimeError("remote_post_delete_pr_drift")
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    receipt["state"] = "recovery_required"
+                    agent_worktree._write_registry(receipt_path, receipt)
+                    # Restore only absence. An advanced/recreated remote is never
+                    # overwritten, including after ambiguous transport failures.
+                    if _remote_ref_sha(cwd, identity.push_url, ref) is None:
+                        _restore_remote_from_rescue(cwd, identity, ref, sha, snapshot)
+                        receipt["state"] = "compensated"
+                        agent_worktree._write_registry(receipt_path, receipt)
+                    raise
+                receipt["deleted"].append(dict(target))
+                receipt.pop("pending", None)
+                receipt["state"] = "batch_verified"
+                agent_worktree._write_registry(receipt_path, receipt)
+    receipt["state"] = "completed"
+    agent_worktree._write_registry(receipt_path, receipt)
+    return {"ok": True, "deleted": len(receipt["deleted"]),
+            "retained": receipt["retained"], "receipt": str(receipt_path)}
+
+
+def retire_inactive_worktrees(
+    cwd: Path, *, targets: Sequence[Mapping[str, str]], snapshot_directory: Path,
+    owner_discard: str,
+) -> dict[str, object]:
+    """Exact clean checkout retirement under an explicit non-integration decision."""
+    from scripts import agent_worktree
+
+    if not owner_discard.strip() or not targets or len(targets) > 25:
+        raise ValueError("worktree_disposition_required")
+    for target in targets:
+        if (not target.get("path") or not target.get("branch")
+                or not re.fullmatch(r"[0-9a-f]{32}", target.get("generation", ""))
+                or not re.fullmatch(r"[0-9a-f]{40,64}", target.get("head", ""))):
+            raise ValueError("exact_worktree_generation_required")
+    if len({str(Path(t["path"]).resolve()) for t in targets}) != len(targets):
+        raise ValueError("duplicate_worktree_target")
+    identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
+    pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
+    special = _read_protected_targets(identity, cwd=cwd)
+    snapshot = create_rescue_snapshot(cwd, snapshot_directory)
+    if not {t["head"] for t in targets} <= set(snapshot["verified_objects"]):
+        raise RuntimeError("worktree_not_in_rescue")
+    registry_path = agent_worktree._default_registry_path(cwd)
+    if not registry_path.is_file() or registry_path.is_symlink():
+        raise RuntimeError("lifecycle_registry_missing")
+    receipt_path = snapshot_directory / "worktree-retirement.json"
+    receipt: dict[str, Any] = {
+        "schema": "worktree_retirement.v1", "state": "prepared",
+        "owner_discard": owner_discard, "snapshot": snapshot["snapshot"],
+        "targets": list(targets), "deleted": [], "retained": {},
+    }
+    agent_worktree._write_registry(receipt_path, receipt)
+    for target in targets:
+        path = str(Path(target["path"]).resolve())
+        branch = target["branch"]
+        if (_open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+                or _read_protected_targets(identity, cwd=cwd) != special):
+            raise RuntimeError("worktree_external_authority_drift")
+        with _dispatcher_authority_write_fence(cwd) as connection:
+            registry = agent_worktree._locked_lifecycle_snapshot(registry_path)
+            dispatcher = _dispatcher_snapshot_from_connection(connection)
+            _, resources = _retirement_local_activity(cwd, registry, dispatcher)
+            entries = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+            current = run_git(["rev-parse", "--show-toplevel"], cwd)
+            protected = (
+                path in {str(Path(current).resolve()), str(Path(entries[0]["worktree"]).resolve())}
+                or branch in DEFAULT_PROTECTED_BRANCHES
+                or f"refs/heads/{branch}" == special.pull_ref or target["head"] == special.pull_sha
+                or re.search(r"(?:^|[-_/])" + str(special.issue_number) + r"(?:$|[-_/])", branch)
+                or branch in {key.split(":", 1)[1] for key in pr_heads}
+                or target["head"] in pr_heads.values()
+                or any(row["kind"] == "lease" and not row["record"].get("released_at")
+                       and _parse_dispatcher_time(row["record"].get("expires_at")).timestamp() > time.time()
+                       for row in dispatcher)
+                or any(path in resource or branch in resource or target["head"] in resource
+                       for resource in resources)
+            )
+            record = registry.get(path)
+            try:
+                agent_worktree._validate_authority_record(path, record)
+                if record["generation"] != target["generation"]:
+                    raise RuntimeError("worktree_generation_drift")
+            except (RuntimeError, TypeError, ValueError):
+                protected = True
+            if protected:
+                receipt["retained"][path] = "protected_or_invalid_authority"
+            elif _is_ancestor(cwd, target["head"], "origin/main") is None:
+                receipt["retained"][path] = "unknown_merge_state"
+            else:
+                # The existing guard checks clean state, exact path/branch/HEAD,
+                # expiry and generation marker, and owns pending/removed records.
+                with agent_worktree._locked_lifecycle_authority(cwd, registry_path, [dict(target)]) as succeeded:
+                    pending = agent_worktree._read_registry(registry_path)["worktrees"][path]
+                    if pending["generation"] != target["generation"]:
+                        raise RuntimeError("worktree_generation_drift")
+                    if (_open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+                            or _read_protected_targets(identity, cwd=cwd) != special):
+                        raise RuntimeError("worktree_external_authority_drift")
+                    run_git(["worktree", "remove", path], cwd)
+                    succeeded()
+                receipt["deleted"].append(dict(target))
+                receipt["state"] = "readback_pending"
+                agent_worktree._write_registry(receipt_path, receipt)
+                remaining = _parse_worktrees(run_git(["worktree", "list", "--porcelain"], cwd))
+                if (Path(path).exists() or any(e["worktree"] == path for e in remaining)
+                        or _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+                        or _read_protected_targets(identity, cwd=cwd) != special):
+                    receipt["state"] = "recovery_required"
+                    agent_worktree._write_registry(receipt_path, receipt)
+                    raise RuntimeError("worktree_post_remove_drift")
+                receipt["state"] = "batch_verified"
+            agent_worktree._write_registry(receipt_path, receipt)
+    receipt["state"] = "completed"
+    agent_worktree._write_registry(receipt_path, receipt)
+    return {"ok": True, "deleted": len(receipt["deleted"]),
+            "retained": receipt["retained"], "receipt": str(receipt_path)}
+
+
+def _install_stash_retirement_hook(directory: Path, plan_path: Path) -> Path:
+    """Validate the frozen reflog while Git holds its native ref lock."""
+    hooks = directory / "hooks"
+    hooks.mkdir(mode=0o700)
+    hook = hooks / "reference-transaction"
+    code = f'''#!{sys.executable}
+import hashlib, json, pathlib, subprocess, sys
+if len(sys.argv) != 2:
+    sys.exit(1)
+if sys.argv[1] != "prepared":
+    sys.exit(0)
+plan = json.loads(pathlib.Path({str(plan_path)!r}).read_text())
+expected = plan["top"] + " " + "0" * len(plan["top"]) + " refs/stash\\n"
+packed = "0" * len(plan["top"]) + " " + "0" * len(plan["top"]) + " refs/stash\\n"
+if sys.stdin.read() not in (expected, packed):
+    sys.exit(1)
+current = subprocess.run(["git", "--git-dir=" + plan["git_common_dir"], "rev-parse", "--verify", "refs/stash"], capture_output=True, text=True, timeout=10)
+if current.returncode != 0 or current.stdout.strip() != plan["top"]:
+    sys.exit(1)
+log = pathlib.Path(plan["reflog_path"])
+if log.is_symlink() or not log.is_file():
+    sys.exit(1)
+if hashlib.sha256(log.read_bytes()).hexdigest() != plan["reflog_sha256"]:
+    sys.exit(1)
+'''
+    hook.write_text(code, encoding="utf-8")
+    hook.chmod(0o700)
+    return hooks
+
+
+def retire_inactive_stash_stack(
+    cwd: Path, *, expected_stashes: Sequence[str], snapshot_directory: Path,
+    owner_discard: str,
+) -> dict[str, object]:
+    """Retire one exact complete stack; no positional drop/clear or merge work."""
+    from scripts import agent_worktree
+
+    if (not owner_discard.strip() or not expected_stashes
+            or any(not re.fullmatch(r"[0-9a-f]{40,64}", sha) for sha in expected_stashes)):
+        raise ValueError("explicit_stash_disposition_required")
+    current = run_git(["stash", "list", "--format=%H"], cwd).splitlines()
+    if list(expected_stashes) != current:
+        raise RuntimeError("stash_stack_drift")
+    if run_git_result(["symbolic-ref", "-q", "refs/stash"], cwd).returncode != 1:
+        raise RuntimeError("stash_ref_invalid")
+    common = _git_common_dir(cwd)
+    reflog_path = common / "logs" / "refs" / "stash"
+    if reflog_path.is_symlink() or not reflog_path.is_file():
+        raise RuntimeError("stash_reflog_unavailable")
+    raw_reflog = reflog_path.read_bytes()
+    reflog_digest = hashlib.sha256(raw_reflog).hexdigest()
+    identity = _resolve_repository_identity(cwd, "RasmusTho/agentic-pkm-mvp")
+    pr_heads = _open_cleanup_pr_heads(cwd, identity.full_name)
+    snapshot = create_rescue_snapshot(cwd, snapshot_directory)
+    if not set(expected_stashes) <= set(snapshot["verified_objects"]):
+        raise RuntimeError("stash_missing_from_verified_rescue")
+    frozen_log = snapshot_directory / "stash.reflog"
+    with frozen_log.open("xb") as handle:
+        frozen_log.chmod(0o600)
+        handle.write(raw_reflog)
+        handle.flush()
+        os.fsync(handle.fileno())
+    receipt_path = snapshot_directory / "stash-retirement.json"
+    receipt: dict[str, Any] = {
+        "schema": "stash_stack_retirement.v1", "state": "prepared",
+        "owner_discard": owner_discard, "top": expected_stashes[0],
+        "stashes": list(expected_stashes), "snapshot": snapshot["snapshot"],
+        "reflog_path": str(reflog_path), "reflog_sha256": reflog_digest,
+        "git_common_dir": str(common),
+    }
+    agent_worktree._write_registry(receipt_path, receipt)
+    hooks = _install_stash_retirement_hook(snapshot_directory, receipt_path)
+    registry_path = agent_worktree._default_registry_path(cwd)
+    if not registry_path.is_file() or registry_path.is_symlink():
+        raise RuntimeError("lifecycle_registry_missing")
+    if _open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads:
+        raise RuntimeError("stash_pr_activity_drift")
+    with _dispatcher_authority_write_fence(cwd) as connection:
+        with agent_worktree._registry_lock(registry_path):
+            registry = agent_worktree._read_registry(registry_path)["worktrees"]
+            dispatcher = _dispatcher_snapshot_from_connection(connection)
+            protected, resources = _retirement_local_activity(cwd, registry, dispatcher)
+            protected.update(pr_heads.values())
+            subjects = run_git(["stash", "list", "--format=%gs"], cwd).splitlines()
+            active_branches = {key.split(":", 1)[1] for key in pr_heads}
+            active_branches.update(
+                record["branch"] for record in registry.values()
+                if record.get("expires_at", 0) > time.time() and record.get("branch")
+            )
+            if (set(expected_stashes) & protected
+                    or any("refs/stash" in resource or any(sha in resource for sha in expected_stashes)
+                           for resource in resources)
+                    or any(subject.startswith((f"On {branch}:", f"WIP on {branch}:"))
+                           for subject in subjects for branch in active_branches)):
+                raise RuntimeError("stash_has_active_or_resumable_binding")
+            receipt["lifecycle_sha256"] = hashlib.sha256(json.dumps(registry, sort_keys=True).encode()).hexdigest()
+            receipt["dispatcher_sha256"] = hashlib.sha256(json.dumps(dispatcher, sort_keys=True).encode()).hexdigest()
+            receipt["open_pr_heads"] = pr_heads
+            agent_worktree._write_registry(receipt_path, receipt)
+            commands = f"start\ndelete refs/stash {expected_stashes[0]}\nprepare\ncommit\n"
+            subprocess.run(
+                ["git", "-c", f"core.hooksPath={hooks}", "update-ref", "--no-deref", "--stdin"],
+                cwd=cwd, input=commands, capture_output=True, text=True, check=True,
+                timeout=30, env=_sanitized_git_environment(),
+            )
+            try:
+                if (_open_cleanup_pr_heads(cwd, identity.full_name) != pr_heads
+                        or run_git_result(["show-ref", "--verify", "--quiet", "refs/stash"], cwd).returncode != 1
+                        or reflog_path.exists()):
+                    raise RuntimeError("stash_post_delete_drift")
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                # A new stack belongs to its new writer. Never clear it or
+                # overwrite its reflog to reconstruct the historical stack.
+                receipt["state"] = "recovery_required"
+                agent_worktree._write_registry(receipt_path, receipt)
+                raise
+            receipt["state"] = "completed"
+            receipt["readback"] = "ref_and_reflog_absent"
+            agent_worktree._write_registry(receipt_path, receipt)
+    return {"ok": True, "deleted_stashes": len(expected_stashes),
+            "receipt": str(receipt_path), "snapshot": snapshot["snapshot"]}
+
+
+def create_rescue_snapshot(cwd: Path, destination: Path) -> dict[str, object]:
+    """Preserve refs and reflog objects without writing refs in the source repo.
+
+    This is recovery evidence only. Callers must still obtain fresh cleanup
+    authority after snapshot creation and before every destructive effect.
+    """
+    destination = destination.resolve()
+    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    bare = run_git(["rev-parse", "--is-bare-repository"], cwd) == "true"
+
+    def inventory() -> dict[str, str]:
+        if bare and run_git(["for-each-ref", "--format=%(refname)", "refs/stash"], cwd):
+            raise RuntimeError("bare_rescue_stash_inventory_unsupported")
+        return {
+            "refs": run_git(["for-each-ref", "--format=%(objectname) %(refname)"], cwd),
+            "worktrees": run_git(["worktree", "list", "--porcelain"], cwd),
+            "stashes": "" if bare else run_git(["stash", "list", "--format=%H %gd %gs"], cwd),
+        }
+
+    before = inventory()
+    bundle = destination / "repository.bundle"
+    # --all alone only retains the newest stash. Include reflogs, then prove
+    # every inventoried stash exists in an otherwise empty recovery repository.
+    run_git(["bundle", "create", str(bundle), "--all", "--reflog"], cwd)
+    bundle.chmod(0o600)
+    run_git(["bundle", "verify", str(bundle)], cwd)
+    objects = {
+        line.split()[0]
+        for key in ("refs", "stashes")
+        for line in before[key].splitlines()
+    }
+    objects.update(
+        line.removeprefix("HEAD ")
+        for line in before["worktrees"].splitlines()
+        if line.startswith("HEAD ")
+    )
+    with tempfile.TemporaryDirectory(prefix="git-rescue-verify-") as directory:
+        recovery = Path(directory)
+        run_git(["init", "--bare", "."], recovery)
+        run_git(["bundle", "unbundle", str(bundle)], recovery)
+        for oid in sorted(objects):
+            run_git(["cat-file", "-e", oid], recovery)
+    if before != inventory():
+        raise RuntimeError("rescue_snapshot_drift; incomplete snapshot retained")
+    digest = hashlib.sha256()
+    with bundle.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    manifest: dict[str, object] = {
+        "version": 1,
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "repository_common_dir": str(_git_common_dir(cwd)),
+        "bundle": str(bundle),
+        "bundle_sha256": digest.hexdigest(),
+        "verified_objects": sorted(objects),
+        "inventory": before,
+        "authority": "recovery_only",
+    }
+    with bundle.open("rb") as handle:
+        os.fsync(handle.fileno())
+    manifest_path = destination / "manifest.json"
+    with manifest_path.open("x", encoding="utf-8") as handle:
+        manifest_path.chmod(0o600)
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(destination, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return {"ok": True, "snapshot": str(destination), **manifest}
+
+
 def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -3501,6 +4325,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=".")
     parser.add_argument("--lease-file", help="Read-only JSON list of active lease claims")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    rescue = subparsers.add_parser("rescue-snapshot")
+    rescue.add_argument("--destination", required=True)
 
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--expected-branch")
@@ -3529,6 +4356,13 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     cwd = Path(args.cwd).resolve()
+    if args.command == "rescue-snapshot":
+        try:
+            _print_json(create_rescue_snapshot(cwd, Path(args.destination)))
+            return 0
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            _print_json({"ok": False, "error": str(exc)})
+            return 1
     leases = load_active_leases(args.lease_file)
     if args.command == "preflight":
         report = preflight_report(

@@ -81,5 +81,11 @@ def test_standalone_sidecar_is_single_implementation_with_v1_parity() -> None:
 
     timeout = _Operations(httpx.ReadTimeout("lost acknowledgement"))
     error = CompatibilityServer(timeout).call_tool("mimer.capture", {"text": "x", "trace_id": trace_id})
-    assert error.error and error.error["error"] == "timeout" and error.trace_id == trace_id
+    assert (
+        error.error
+        and error.error["error"] == "capture_ambiguous"
+        and error.error["state"] == "not_acknowledged"
+        and error.error["retryable"] is False
+        and error.trace_id == trace_id
+    )
     assert timeout.calls == ["capture"]

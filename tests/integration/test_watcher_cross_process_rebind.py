@@ -3,14 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import sys
 import threading
 import time
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from app.briefing.compose import briefing_note_path
+from app.briefing.config import BRIEFING_TIMEZONE
 from app.settings.ingestion import SettingsIngestionState
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.instance._storage_boundary import RegistryError
@@ -23,6 +27,7 @@ from app.instance.settings_rebind import (
 from app.instance.vault_registry import VaultRegistration
 from app.instance.vault_registry import KnownVaultRef
 from app.api.routes.ingest_binding import ingest_binding_status
+from app.vault.manager import VaultContext
 from app.watcher import registry
 from app.watcher.settings_rebind import (
     DormantSettingsRebindReconciler,
@@ -164,6 +169,17 @@ def _configure_watcher(
     return config_path
 
 
+def _seed_daily_briefing_sentinel(vault_root: Path) -> None:
+    """Keep the unrelated scheduled briefing hook out of this watcher fixture."""
+    context = VaultContext(status="selected", active_vault_path=str(vault_root))
+    briefing = briefing_note_path(
+        vault_context=context,
+        for_date=datetime.now(ZoneInfo(BRIEFING_TIMEZONE)).date(),
+    )
+    briefing.parent.mkdir(parents=True, exist_ok=True)
+    briefing.write_text("test fixture sentinel\n", encoding="utf-8")
+
+
 def _fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,6 +191,8 @@ def _fixture(
     vault_b = tmp_path / "vault-b"
     initialize_test_vault(vault_a)
     initialize_test_vault(vault_b)
+    _seed_daily_briefing_sentinel(vault_a)
+    _seed_daily_briefing_sentinel(vault_b)
     runtime = _runtime(tmp_path)
     _register(runtime, binding_id="binding-a", vault_root=vault_a)
     _register(runtime, binding_id="binding-b", vault_root=vault_b)

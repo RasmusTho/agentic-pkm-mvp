@@ -519,6 +519,43 @@ was admitted, ARO-02 was superseded: there are no authorized facts for the produ
 enrich. Until a separately governed source contract exists, producers and the composer must
 preserve the explicit withdrawal state.
 
+#### FCA-02 source-backed owner facts and bounded handoff (2026-09-07)
+
+FCA-02 defines the smallest source contract that may restore **Needs you** or **Ready to try**.
+It adds no devUI store or lifecycle. The view may project a fact only when the named producer has
+written it and the read envelope carries the same subject, candidate revision, freshness, and source
+reference. A model explanation or a technical label can explain a fact; it cannot create one.
+
+| Fact kind | Canonical producer and authority | Identity and revision | Authorization and readback | Invalidation and projection |
+| --- | --- | --- | --- | --- |
+| `owner_ask` | The existing authenticated action boundary, from `TypedCommandProposal.v1` / `DeliveryRequest.v1` and its `DeliveryPreview.v1`; a Human Exception is the owner-decision category, not the fact store. | `subject_ref`, proposal/request id, preview hash, source snapshot refs, and expiry. | The owner principal is checked by the action boundary. Read back the initiation receipt or typed refusal; `Start/Hold` is the first bounded confirmation pair. | Changed subject, scope, source, or expiry withdraws the ask. devUI may project the pending ask and its consequence of waiting only from the returned source. |
+| `ready_to_try` | The deployment/verification owner, using an exact `DeliveryReceipt.v2` or equivalent BuilderOps deployment/readiness receipt. | Candidate source/image/config identity, target environment, verification revision, and receipt id. | The deployment owner proves health/read-only smoke, rollback identity, and absence of blocking evidence. Read back the receipt and current candidate identity. | A new candidate, environment, failed health/readback, or stale receipt withdraws readiness. Merge, Issue closure, availability, or a model claim never substitutes for it. |
+| `owner_trial` | The explicit owner disposition boundary described by ADR-0065; until that boundary is admitted, this fact remains withdrawn. | Ready-to-try receipt id plus candidate/environment identity, owner identity, observation time, and trial revision. | The owner records tried, rejected, or unable-to-try with the exact candidate and observed limitation. Readback is the immutable disposition receipt. | Candidate or permission change supersedes the trial for current projection; the historical receipt remains visible as history. |
+| `owner_acceptance` | The same explicit owner disposition boundary, with acceptance or rejection recorded against the exact candidate. | Candidate/environment identity, acceptance profile, owner identity, decision time, and superseded receipt refs. | Only the owner can record accept/reject. Readback is the immutable acceptance or rejection receipt; no fixture, merge, model, or agent status can stand in for it. | Any changed candidate, acceptance profile, source authority, or material limit supersedes the current decision and withdraws acceptance until a new disposition exists. |
+
+All four facts use existing source records and receipt carriers. A receipt is append-only, carries
+`source_refs`, an actor, the exact subject/candidate revision, and a supersession or withdrawal
+reference where applicable. Retention follows the owning source and receipt policy; devUI keeps no
+second copy. On restart, the view rereads the latest source receipt and returns the prior fact,
+withdrawal, or honest unknown. It never redispatches an action from regenerated text. An ambiguous
+launch remains `ambiguous` with its governed recovery/readback path and creates neither a trial nor
+acceptance fact.
+
+The first admitted non-DDO handoff is the existing Start Model Inquiry path. The proposal names the
+exact question artifact, source refs, destination workflow, expected receipt, expiry, and explicit
+non-effects. The authenticated action boundary performs the one launch; the artifact-first workflow
+returns `inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report`. A provider
+turn, transcript, model id, or LLM summary is provenance and explanation only.
+
+The owner-facing examples therefore remain distinct:
+
+- a genuine decision is a fresh `owner_ask` with an exact proposal and owner consequence;
+- a technical wait is a missing, stale, contradictory, or unavailable source and stays **Blocked by evidence or system**, not **Your decision is needed**;
+- deployed-but-untried is a current `ready_to_try` receipt with no `owner_trial`;
+- owner rejection is an explicit `owner_acceptance` disposition with outcome `rejected`;
+- a changed candidate supersedes prior try/acceptance receipts and withdraws current readiness; and
+- an ambiguous action start remains ambiguous and is never retried by the projection.
+
 #### ARO dependency/status truth
 
 ARO-02 / [#4743](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4743) is superseded by the
