@@ -188,7 +188,7 @@ async def focus(subject: str) -> dict[str, Any]:
 
 
 @router.post("/overview/synthesis")
-async def overview_synthesis(source_snapshot: dict[str, Any]) -> dict[str, Any]:
+def overview_synthesis(source_snapshot: dict[str, Any]) -> dict[str, Any]:
     """Explain a caller-supplied, bounded DevUI source snapshot.
 
     The caller owns source collection and addressing.  This route only adds a

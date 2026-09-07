@@ -9,6 +9,7 @@ from app.builderops.devui_owner_synthesis import (
     OwnerSynthesisInputError,
     synthesize_owner_overview,
 )
+from app.builderops.model_access_resolver import ModelAccessResolutionError
 
 
 SNAPSHOT = {
@@ -128,6 +129,50 @@ def test_model_unconfigured_preserves_source_view(monkeypatch: Any) -> None:
     assert result["canonical_status"] == "unavailable"
     assert result["model"]["status"] == "unavailable"
     assert result["proposals"] == []
+
+
+def test_model_configuration_failure_preserves_source_view(monkeypatch: Any) -> None:
+    def invalid(_env: Any, *, resolver: Any) -> dict[str, Adapter]:
+        raise ModelAccessResolutionError("invalid Builder model configuration")
+
+    monkeypatch.setattr("app.builderops.devui_owner_synthesis.load_adapters", invalid)
+
+    result = synthesize_owner_overview(SNAPSHOT, env={})
+
+    assert result["source_snapshot"] == SNAPSHOT
+    assert result["model"]["status"] == "unavailable"
+    assert result["proposals"] == []
+
+
+def test_snapshot_rejects_unbounded_evidence_and_text() -> None:
+    too_many = [
+        {
+            **SNAPSHOT["evidence"][0],
+            "evidence_id": f"evidence-{index}",
+            "source_ref": {
+                **SNAPSHOT["evidence"][0]["source_ref"],
+                "source_id": f"receipt:{index}",
+            },
+        }
+        for index in range(129)
+    ]
+    try:
+        synthesize_owner_overview(dict(SNAPSHOT, evidence=too_many), adapter=Adapter(_response()))
+    except OwnerSynthesisInputError as exc:
+        assert "evidence exceeds" in str(exc)
+    else:
+        raise AssertionError("unbounded evidence list was accepted")
+
+    oversized = dict(
+        SNAPSHOT,
+        evidence=[{**SNAPSHOT["evidence"][0], "summary": "x" * 4001}],
+    )
+    try:
+        synthesize_owner_overview(oversized, adapter=Adapter(_response()))
+    except OwnerSynthesisInputError as exc:
+        assert "bounded text" in str(exc)
+    else:
+        raise AssertionError("oversized evidence summary was accepted")
 
 
 def test_malformed_model_output_preserves_source_view() -> None:

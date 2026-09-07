@@ -24,6 +24,7 @@ from app.builderops.model_inquiry_adapters import (
     sanitized_adapter_failure,
     sanitized_adapter_identity,
 )
+from app.builderops.models import BuilderOpsValidationError
 from app.builderops.model_inquiry_contract import (
     RESPONSE_SCHEMA_VERSION,
     ModelTurnResponse,
@@ -37,6 +38,13 @@ CONTRACT_VERSION = "builderops.devui-owner-synthesis.v1"
 _REPO = re.compile(r"^[^/\s]+/[^/\s]+$")
 _SOURCE_REF_FIELDS = {"source_type", "source_id", "version", "snapshot", "content_hash", "locator"}
 _EVIDENCE_FIELDS = {"evidence_id", "source_ref", "kind", "summary", "state"}
+MAX_EVIDENCE_ITEMS = 128
+MAX_LIMITATION_ITEMS = 64
+MAX_ID_CHARS = 256
+MAX_KIND_CHARS = 128
+MAX_TEXT_CHARS = 4_000
+MAX_SOURCE_REF_VALUE_CHARS = 2_048
+MAX_SNAPSHOT_BYTES = 256_000
 _MODEL_FAILURES = (
     AdapterExecutionError,
     AdapterUnavailableError,
@@ -78,6 +86,10 @@ def _source_ref(value: Any, *, label: str) -> dict[str, str]:
         if item is not None:
             if not isinstance(item, str) or not item.strip():
                 raise OwnerSynthesisInputError(f"{label}.{field} must be a non-empty string")
+            if len(item) > MAX_SOURCE_REF_VALUE_CHARS:
+                raise OwnerSynthesisInputError(
+                    f"{label}.{field} exceeds the bounded source-reference limit"
+                )
             result[field] = item
     if not any(field in result for field in ("version", "snapshot", "content_hash")):
         raise OwnerSynthesisInputError(f"{label} requires a version, snapshot, or content hash")
@@ -98,6 +110,10 @@ def _snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
     evidence_value = value.get("evidence", [])
     if not isinstance(evidence_value, list):
         raise OwnerSynthesisInputError("source_snapshot.evidence must be a list")
+    if len(evidence_value) > MAX_EVIDENCE_ITEMS:
+        raise OwnerSynthesisInputError(
+            f"source_snapshot.evidence exceeds the limit of {MAX_EVIDENCE_ITEMS} items"
+        )
     evidence: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, item in enumerate(evidence_value):
@@ -110,12 +126,24 @@ def _snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
         if set(item) != _EVIDENCE_FIELDS:
             raise OwnerSynthesisInputError(f"{label} must contain exactly {_EVIDENCE_FIELDS}")
         evidence_id = item["evidence_id"]
-        if not isinstance(evidence_id, str) or not evidence_id.strip() or evidence_id in seen:
+        if (
+            not isinstance(evidence_id, str)
+            or not evidence_id.strip()
+            or len(evidence_id) > MAX_ID_CHARS
+            or evidence_id in seen
+        ):
             raise OwnerSynthesisInputError(f"{label}.evidence_id must be unique and non-empty")
         seen.add(evidence_id)
         summary = item["summary"]
-        if not isinstance(summary, str) or not summary.strip():
-            raise OwnerSynthesisInputError(f"{label}.summary must be non-empty")
+        if not isinstance(summary, str) or not summary.strip() or len(summary) > MAX_TEXT_CHARS:
+            raise OwnerSynthesisInputError(
+                f"{label}.summary must be non-empty and within the bounded text limit"
+            )
+        kind = item["kind"]
+        if not isinstance(kind, str) or not kind.strip() or len(kind) > MAX_KIND_CHARS:
+            raise OwnerSynthesisInputError(
+                f"{label}.kind must be non-empty and within the bounded text limit"
+            )
         state = item["state"]
         if state not in {"observed", "unknown", "contradictory", "unavailable"}:
             raise OwnerSynthesisInputError(f"{label}.state is unsupported")
@@ -123,22 +151,30 @@ def _snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
             {
                 "evidence_id": evidence_id,
                 "source_ref": _source_ref(item["source_ref"], label=f"{label}.source_ref"),
-                "kind": str(item["kind"]),
+                "kind": kind,
                 "summary": summary,
                 "state": state,
             }
         )
     limitations = value.get("limitations", [])
-    if not isinstance(limitations, list) or not all(
-        isinstance(item, str) and item.strip() for item in limitations
+    if not isinstance(limitations, list) or len(limitations) > MAX_LIMITATION_ITEMS or not all(
+        isinstance(item, str) and item.strip() and len(item) <= MAX_TEXT_CHARS
+        for item in limitations
     ):
-        raise OwnerSynthesisInputError("source_snapshot.limitations must be a list of strings")
-    return {
+        raise OwnerSynthesisInputError(
+            "source_snapshot.limitations must be a bounded list of strings"
+        )
+    normalized = {
         "repo": repo,
         "captured_at": captured_at,
         "evidence": evidence,
         "limitations": list(limitations),
     }
+    if len(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode()) > MAX_SNAPSHOT_BYTES:
+        raise OwnerSynthesisInputError(
+            f"source_snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte payload limit"
+        )
+    return normalized
 
 
 def _canonical_hash(value: Any) -> str:
@@ -199,6 +235,8 @@ def _adapter_from_builder(
 ) -> tuple[ModelTurnAdapter | None, dict[str, Any] | None]:
     try:
         adapters = load_adapters(env, resolver=resolver)
+    except BuilderOpsValidationError as exc:
+        return None, _failure(exc, adapter=None)
     except _MODEL_FAILURES as exc:
         return None, _failure(exc, adapter=None)
     adapter = adapters.get("synthesis")
