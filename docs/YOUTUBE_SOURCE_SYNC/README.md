@@ -4,7 +4,7 @@ Authority: Owns the YouTube source-sync capability design — account binding, s
 Owner: Architecture / knowledge acquisition
 Temporal class: strategic
 Review cadence: event-driven (task merge, YouTube API surface change)
-Last reviewed: 2026-08-22
+Last reviewed: 2026-09-07
 
 # YouTube Source Sync
 
@@ -51,6 +51,12 @@ no reshape; plugin authority limits are unchanged.
 
 The 2026-07-21 directive supersedes the broad delivery plan with the pragmatic V1 boundary above.
 The wider data shapes remain future-facing compatibility vocabulary, not shipped product claims.
+
+The owner decision recorded by #5324 on 2026-09-07 retains YSS-06 through YSS-11 as deferred
+portfolio scope. Reconsideration requires a concrete product need, user demand, or explicit owner
+reprioritization; a future continuation must name the bounded slice, dependency order, and Verify
+targets before lifecycle state changes. This decision authorizes no YouTube egress, credential use,
+scraping, media retention, automatic promotion, or implementation.
 
 ## Capability boundary
 
