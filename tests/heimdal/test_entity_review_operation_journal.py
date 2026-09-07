@@ -120,7 +120,11 @@ def test_target_split_lineage_preserves_original_operation_identity(
     journal = _journal(scratch_dsn)
     operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
     register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
-    successor = register.split(target, {"Recovered target": ["Target"]}, operation_id="target-split")[0]
+    successor = register.split(
+        target,
+        {"Recovered source": ["Anna fran gymmet", "Anna G"]},
+        operation_id="target-split",
+    )[0]
     assert register.resolve_target_evolution(source, target, operation_id=operation.operation_id) == successor
     committed = journal.commit_merge_event(operation, resolution_context=successor)
     assert _merged_event_rows(scratch_dsn)[0][1]["operation_id"] == committed.operation_id
