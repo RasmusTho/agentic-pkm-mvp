@@ -237,6 +237,7 @@ class OperationExecutionKernel:
             return self._outcome(
                 request, OperationStatus.REJECTED, warnings=("bounded delegation is required",)
             )
+        request = _with_delegated_batch_policy(request, delegation)
         intent_digest = _intent_digest(request, delegation)
         try:
             prior = self.receipt_store.lookup(request.request_id)
@@ -257,13 +258,6 @@ class OperationExecutionKernel:
         refusal = self._precondition_refusal(request, delegation)
         if refusal is not None:
             return refusal
-        dispatch_request = request
-        if (
-            len(request.targets) > 1
-            and not _valid_batch_policy(request.batch_policy)
-            and _valid_batch_policy(delegation.get("batch_policy"))
-        ):
-            dispatch_request = replace(request, batch_policy=delegation["batch_policy"])
         try:
             decision = self.policy_evaluator(request, delegation)
         except Exception:
@@ -339,7 +333,7 @@ class OperationExecutionKernel:
             )
         else:
             try:
-                owner_result = handler(dispatch_request)
+                owner_result = handler(request)
             except Exception:
                 owner_result = OwnerExecutionResult.ambiguous()
             outcome = self._owner_outcome(
@@ -581,6 +575,18 @@ def _stable_nonempty_identity(value: object) -> bool:
 
 def _valid_batch_policy(value: object) -> bool:
     return isinstance(value, Mapping) and bool(value)
+
+
+def _with_delegated_batch_policy(
+    request: OperationRequest, delegation: Mapping[str, Any]
+) -> OperationRequest:
+    if (
+        len(request.targets) > 1
+        and not _valid_batch_policy(request.batch_policy)
+        and _valid_batch_policy(delegation.get("batch_policy"))
+    ):
+        return replace(request, batch_policy=delegation["batch_policy"])
+    return request
 
 
 def _effect_receipt_ref(value: Mapping[str, Any] | None) -> str | None:

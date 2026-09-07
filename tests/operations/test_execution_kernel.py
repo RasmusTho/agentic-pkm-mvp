@@ -204,11 +204,13 @@ def test_success_requires_owner_receipt_before_acknowledgement() -> None:
 
 def test_multi_target_request_requires_bound_batch_policy() -> None:
     policy_calls: list[str] = []
+    policy_batch_policies: list[object] = []
     owner_calls: list[str] = []
     owner_batch_policies: list[object] = []
     kernel = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: policy_calls.append(request.request_id)
+        or policy_batch_policies.append(request.batch_policy)
         or PolicyDecision.allowed("policy-7"),
         handlers={
             "artifact.move": lambda request: owner_calls.append(request.request_id)
@@ -241,6 +243,7 @@ def test_multi_target_request_requires_bound_batch_policy() -> None:
 
     assert admitted.status is OperationStatus.SUCCEEDED
     assert policy_calls == ["request-1"]
+    assert policy_batch_policies == [{"mode": "atomic"}]
     assert owner_calls == ["request-1"]
     assert owner_batch_policies == [{"mode": "atomic"}]
 
