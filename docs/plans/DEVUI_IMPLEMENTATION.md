@@ -207,6 +207,32 @@ submitted bytes; changed/expired evidence withdraws Start; Hold invokes nothing;
 existing route once; valid/ambiguous receipts preserve its contract; and Builder System Control
 cannot appear as a tab or evidence join inside the subject Focus.
 
+### FCA-02 — source-backed owner facts and first bounded handoff
+
+The missing **Needs you** and **Ready to try** facts are restored only through existing authority
+boundaries. FCA-02 is a contract-enrichment step, not a new task, intent, queue, or owner-state
+store. `owner_ask`, `ready_to_try`, `owner_trial`, and `owner_acceptance` carry the exact subject,
+candidate/source revision, actor, freshness, and receipt references needed for a read-time projection.
+A changed candidate or acceptance profile supersedes the affected fact; it never inherits an older
+trial or acceptance.
+
+The delivery order is:
+
+1. the authenticated action boundary emits an exact `TypedCommandProposal.v1` /
+   `DeliveryRequest.v1` + `DeliveryPreview.v1` owner ask, with `Start/Hold` for the first bounded
+   Start Model Inquiry path;
+2. the deployment/verification owner emits an exact candidate-bound ready-to-try receipt, including
+   environment, health/read-only smoke, rollback identity, and source freshness;
+3. the existing owner-disposition boundary records an explicit trial or rejection, and later an
+   acceptance or rejection, against that same candidate; and
+4. devUI projects those source facts, withdrawal reasons, and readback receipts without copying them
+   into a second store.
+
+A technical wait, missing receipt, contradictory source, stale candidate, unavailable model, or
+ambiguous launch remains a visible system condition. It does not become an owner decision, a ready
+state, or an automatic retry. The first path uses the admitted non-DDO Model Inquiry workflow;
+full DDO controls remain behind #4169 and its existing authenticated owners.
+
 ### Stage B — decide and act: contextual command surface
 
 Full DDO remains a later mechanism chain. It must not block the LLM-assisted overview or the bounded
