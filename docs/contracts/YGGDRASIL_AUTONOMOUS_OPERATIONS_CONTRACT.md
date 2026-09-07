@@ -314,6 +314,10 @@ direct-filesystem fallback, hidden queue, network listener, or internal ToolProv
 
 ### MCP v2 parity profile
 
+MCP v2 remains target-state only. Any broader external MCP operation set requires a superseding
+accepted ADR and a matching owner-contract update before the broader external MCP operation set may
+be treated as authorized or executable.
+
 Only contract-ready operations may be mapped. MCP discovery exposes operation version, schemas,
 authority/side-effect class, preview support, and maturity. Tool/resource implementations delegate
 to the same operation seam as GUI/API and add no policy, filesystem, retry, receipt, identity, or
