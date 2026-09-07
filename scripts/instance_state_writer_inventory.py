@@ -685,7 +685,12 @@ def _docker_copy_file(container_id: str, path: str) -> bytes | None:
             return None
         raise InventoryError("docker legacy owner source enumeration failed")
     try:
-        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|*") as archive:
+        # ``docker cp ... -`` returns a complete tar stream in stdout.  The
+        # payload is already bounded by the subprocess capture, so use the
+        # seekable BytesIO reader after validating the archive members.  The
+        # streaming reader cannot extract a member after the member scan has
+        # advanced past it (notably on Docker Desktop/Colima tar output).
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:*") as archive:
             members = [member for member in archive if member.isfile()]
             if len(members) != 1 or members[0].size > 4 * 1024 * 1024:
                 raise InventoryError("docker legacy owner source is invalid")
