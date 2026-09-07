@@ -4479,6 +4479,17 @@ def main(argv: list[str] | None = None) -> int:
     recover.add_argument("--quiescence-proof-path", type=Path, required=True)
     recover.add_argument("--owner-receipt-path", type=Path, required=True)
     recover.add_argument("--vault-binding-id", required=True)
+    reattest = subparsers.add_parser("deployment-reattest-legacy-owner")
+    reattest.add_argument("--channel", required=True)
+    reattest.add_argument("--instance-state-root", type=Path, required=True)
+    reattest.add_argument("--host-global-root", type=Path, required=True)
+    reattest.add_argument("--backup-root", type=Path, required=True)
+    reattest.add_argument("--quiescence-proof-path", type=Path, required=True)
+    reattest.add_argument("--owner-receipt-path", type=Path, required=True)
+    reattest.add_argument("--vault-binding-id", required=True)
+    reattest.add_argument("--expected-ledger-sha256", required=True)
+    reattest.add_argument("--expected-registry-sha256", required=True)
+    reattest.add_argument("--acknowledge-new-ownership-epoch", action="store_true")
     prove = subparsers.add_parser("deployment-prove")
     prove.add_argument("--channel", required=True)
     prove.add_argument("--host-global-root", type=Path, required=True)
@@ -4819,6 +4830,18 @@ def main(argv: list[str] | None = None) -> int:
             owner_receipt_path=args.owner_receipt_path,
             vault_binding_id=args.vault_binding_id,
         ), sort_keys=True))
+        return 0
+    if args.command == "deployment-reattest-legacy-owner":
+        from app.instance.legacy_owner_recovery import reattest_legacy_owner
+
+        try:
+            receipt = reattest_legacy_owner(**{
+                name: value for name, value in vars(args).items() if name != "command"
+            })
+        except (OSError, ValueError, KeyError, TypeError, LedgerError, RegistryError, InstanceStatePreflightError):
+            print(json.dumps({"ok": False, "error": "DEV owner re-attestation refused"}))
+            return 1
+        print(json.dumps(receipt, sort_keys=True))
         return 0
     if args.command == "deployment-prove":
         proof = _prove_instance_state_quiescence(
