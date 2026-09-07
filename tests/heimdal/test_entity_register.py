@@ -256,12 +256,58 @@ def test_lineage_round_trip_covers_every_merge_and_split_producer(tmp_path: Path
 
     successor = register.split(
         evolved,
-        {"Evolved successor": ["Evolved"]},
+        {"Target successor": ["Target"]},
         operation_id="operation-target-split",
     )[0]
     assert register.resolve_target_evolution(
         source, target, operation_id="operation-original"
     ) == successor
+    assert register.resolve_redirects(source) == successor
+
+
+def test_direct_merge_derives_stable_lineage_identity_for_target_evolution(
+    tmp_path: Path,
+) -> None:
+    """The public merge producer must not strand a later target evolution."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    register.merge(source, target)
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    direct_operation_id = source_entry.lineage[-1]["operation_id"]
+    assert direct_operation_id == f"direct-merge:{source}:{target}"
+
+    register.merge(target, evolved)
+    assert register.resolve_target_evolution(
+        source, target, operation_id=direct_operation_id
+    ) == evolved
+
+
+def test_target_split_ignores_partition_that_does_not_reclaim_original_source(
+    tmp_path: Path,
+) -> None:
+    """EROJ-02 cannot choose an unrelated split partition for the original source."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    other = register.mint_canonical("Other")
+    target = register.mint_canonical("Target")
+    register.merge(source, target, operation_id="original-operation")
+    register.merge(other, target, operation_id="other-operation")
+
+    unrelated = register.split(
+        target,
+        {"Other restored": ["Other"]},
+        operation_id="target-split",
+    )[0]
+
+    assert register.resolve_redirects(source) == target
+    assert register.resolve_target_evolution(
+        source, target, operation_id="original-operation"
+    ) == target
+    assert unrelated != target
 
 
 # ---------------------------------------------------------------------------

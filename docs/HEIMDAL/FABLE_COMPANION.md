@@ -149,13 +149,13 @@ Register entry (prose mirror):
 | `lifecycle` | `provisional` → `canonical` → `merged`. `merged` entries carry `merged_into` (redirect chain; consumers must follow it). Entries are never deleted — merged, deprecated, never removed (identity refs in the append-only stream must always resolve). |
 | `sensitivity` | The register itself is high-sensitivity substrate (§7.4): it is a map of everyone and everything in the operator's life. Reads are governed. |
 | `provenance` | Who/what minted or merged the entry, when, on what basis — register mutations are themselves receipted events (`register.entity.minted/merged/aliased`). |
-| `lineage[]` | Optional operation-bound predecessor/successor proof written with governed merge or split mutations. It permits recovery to report a current resolved target without changing the original human-decided merge pair; missing, contradictory, cyclic, or fork-ambiguous lineage refuses recovery. It is not a general lineage graph and never chooses an ambiguous split complement. |
+| `lineage[]` | Durable operation-bound predecessor/successor proof written with every merge and with a split only for a partition that reclaims the relevant merged source. Entity-review merges preserve their immutable journal operation id; direct public merges derive a retry-stable direct identity. It permits recovery to report a current resolved target without changing the original human-decided merge pair; missing, contradictory, cyclic, or fork-ambiguous lineage refuses recovery. It is not a general lineage graph and never chooses an unrelated or ambiguous split complement. |
 
 Operations Heimdal needs (the whole v0 API surface):
 
 1. `resolve(surface_form, kind_hint, context) → resolved(entity_id, confidence) | ambiguous(candidates[]) | unresolved` — resolution against labels/aliases + context. v1 resolver: LLM-based mention extraction and matching with the register as the candidate universe `[conform — LLM-classification-over-heuristics]`, deterministic acceptance rule on top (the gate stays deterministic).
 2. `mint_provisional(surface_form, kind_hint) → ent:prov:<uuid>` — unknowns become durable provisional entities immediately, so recurrence is linkable from the first sighting.
-3. `merge(from_id, into_id)` / `assert_alias(entity_id, alias)` — the convergence operations. **Merge is a governed mutation**: agent-proposed, human-confirmed by default (a wrong merge corrodes identity everywhere — `propose_when_uncertain` applies). Merge authority is part of R-IDENTITY-OWNER (§9-g).
+3. `merge(from_id, into_id)` / `assert_alias(entity_id, alias)` — the convergence operations. **Merge is a governed mutation**: agent-proposed, human-confirmed by default (a wrong merge corrodes identity everywhere — `propose_when_uncertain` applies). Every direct merge derives a retry-stable lineage operation identity; entity-review passes its immutable journal operation identity instead. Merge authority is part of R-IDENTITY-OWNER (§9-g).
 4. `resolve_redirects(entity_id) → entity_id` — follow merge chains; every consumer of historical events uses this.
 
 ### 3.3 Representing unknown and ambiguous

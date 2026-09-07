@@ -1093,7 +1093,9 @@ Lineage/audit event, same non-dispatched posture as above. Two emitters:
   `heimdal.entity_review`. Globally unique split-complement recovery remains unclaimed here
   (EROJ-03).
 - **Direct `EntityRegister.merge()` calls** (the A1 register API outside the review path): emitted
-  by the register immediately after the note writes, without an `operation_id`. Source:
+  by the register immediately after the note writes. The event keeps its existing payload shape, while
+  the canonical note lineage derives a retry-stable direct merge operation identity; it is not an
+  entity-review journal identity and cannot rewrite a review event's original pair. Source:
   `heimdal.entity_register`.
 
 Payload fields (in addition to the envelope):

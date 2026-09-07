@@ -548,7 +548,12 @@ class EntityRegister:
         if from_id == into_id:
             raise EntityRegisterError("merge(): from_id and into_id must differ")
 
-        self.ensure_merge_effects(from_id, into_id, operation_id=operation_id)
+        # Public direct merges do not have an entity-review journal operation,
+        # but they still need a durable, retry-stable lineage identity so a
+        # later governed target evolution can be proven.  Review callers pass
+        # their immutable journal operation id unchanged.
+        effective_operation_id = operation_id or f"direct-merge:{from_id}:{into_id}"
+        self.ensure_merge_effects(from_id, into_id, operation_id=effective_operation_id)
 
         self._emit(
             HEIMDAL_REGISTER_ENTITY_MERGED,
@@ -778,12 +783,26 @@ class EntityRegister:
             entry = self._read_entry(current)
             if entry is None:
                 raise EntityRegisterError("target evolution lineage has a missing successor")
-            candidates = [
+            # A split can explicitly re-point an intermediate merged child.
+            # That current redirect supersedes the child's older merge hop,
+            # but only when the source-reclaim link names this exact child.
+            re_pointed_splits = [
+                link for link in entry.lineage
+                if link.get("mutation_kind") == "split"
+                and link.get("reclaimed_from_id") == current
+                and entry.lifecycle == LIFECYCLE_MERGED
+                and entry.merged_into == link.get("successor_id")
+            ]
+            candidates = re_pointed_splits or [
                 link for link in (*source.lineage, *entry.lineage)
                 if link.get("predecessor_id") == current
                 and link.get("mutation_kind") in {"merge", "split"}
                 and isinstance(link.get("operation_id"), str)
                 and link.get("operation_id")
+                and (
+                    link.get("mutation_kind") != "split"
+                    or link.get("reclaimed_from_id") in {*seen, from_id}
+                )
             ]
             if not candidates:
                 if entry.lifecycle == LIFECYCLE_MERGED:
@@ -883,6 +902,15 @@ class EntityRegister:
             for child in merged_children:
                 child_names = {child.label, *child.aliases}
                 if child_names & set(alias_subset) or child.label == new_label:
+                    split_link: Mapping[str, str] | None = None
+                    if operation_id:
+                        split_link = {
+                            "predecessor_id": entity_id,
+                            "successor_id": new_entity_id,
+                            "operation_id": operation_id,
+                            "mutation_kind": "split",
+                            "reclaimed_from_id": child.entity_id,
+                        }
                     re_pointed = RegisterEntry(
                         entity_id=child.entity_id,
                         kind=child.kind,
@@ -891,18 +919,15 @@ class EntityRegister:
                         lifecycle=LIFECYCLE_MERGED,
                         merged_into=new_entity_id,
                         split_from=child.split_from,
-                        lineage=(*child.lineage, *(({
-                            "predecessor_id": entity_id,
-                            "successor_id": new_entity_id,
-                            "operation_id": operation_id,
-                            "mutation_kind": "split",
-                        },) if operation_id else ())),
+                        lineage=(*child.lineage, *((split_link,) if split_link else ())),
                         created=child.created,
                         updated=_now_iso(),
                     )
                     self._write_entry(re_pointed)
                     reversed_children.append(child.entity_id)
                     reclaimed_merged_from.append(child.entity_id)
+                    if split_link:
+                        split_links.append(split_link)
 
             new_entry = RegisterEntry(
                 entity_id=new_entity_id,
@@ -912,23 +937,12 @@ class EntityRegister:
                 lifecycle=LIFECYCLE_CANONICAL,
                 merged_from=tuple(reversed_children),
                 split_from=entity_id,
-                lineage=(({
-                    "predecessor_id": entity_id,
-                    "successor_id": new_entity_id,
-                    "operation_id": operation_id,
-                    "mutation_kind": "split",
-                },) if operation_id else ()),
+                lineage=tuple(
+                    link for link in split_links if link["successor_id"] == new_entity_id
+                ),
             )
             self._write_entry(new_entry)
             new_ids.append(new_entity_id)
-            if operation_id:
-                split_links.append({
-                    "predecessor_id": entity_id,
-                    "successor_id": new_entity_id,
-                    "operation_id": operation_id,
-                    "mutation_kind": "split",
-                })
-
             self._emit(
                 HEIMDAL_REGISTER_ENTITY_SPLIT,
                 entity_id=new_entity_id,
