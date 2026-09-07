@@ -903,7 +903,9 @@ EROJ-03's `entity_register_split_operations` companion is migration-owned by for
 
 - `(vault_identity, operation_id)` — composite primary key for one retry-stable split.
 - `plan` (`jsonb`) and `plan_digest` (`text`) — immutable ordered partition, preallocated successors,
-  exact before/after note effects, original complement ids, and successor event payloads.
+  exact before/after note effects, original complement ids, and successor event payloads. Implicit
+  requests also record `direct_request_key` and `direct_generation`; generation zero preserves the
+  original direct identity, and later generations use distinct deterministic operation ids.
 - `checkpoints` (`jsonb`, default `[]`) — an ordered prefix of note-effect keys followed by one key
   per moved complement. A checkpoint requires the exact note effect to be observed first.
 - `completed` (`boolean`, default `false`) — advances only after every checkpoint and exact outbox
@@ -914,6 +916,9 @@ EROJ-03's `entity_register_split_operations` companion is migration-owned by for
 The split API reads saved evidence on restart, validates all affected notes against the plan, and
 checks global uniqueness before continuing. Completed split evidence stays available for later
 lineage validation; neither labels nor `merged_from` membership substitute for its checkpoints.
+Historical EROJ-02 split lineage predates this table. Its narrowly validated copied-note evidence
+and deterministic legacy complement identity remain a separate compatibility path; recovery does
+not manufacture a historical plan, checkpoint, or split event.
 The journal never chooses a human partition or becomes canonical relation truth.
 
 ## Heimdal Observation Log (append-only, per-consumer cursor)

@@ -1079,7 +1079,10 @@ immutable original human-decided pair. A later governed target evolution may add
 `resolved_into_id` as resolution context only; it never rewrites `into_id`. Missing,
 contradictory, cyclic, or fork-ambiguous operation-bound note lineage emits no event and
 leaves the review entry pending. Recovery also requires globally unique paired complement identity
-and the completed, event-visible checkpoints for every source-reclaiming split hop.
+and completed, event-visible checkpoints for journaled source-reclaiming split hops. Retained
+pre-journal EROJ-02 hops instead require the exact copied producer lineage on source, predecessor,
+and successor plus the deterministic two-sided legacy identity anchored to the original merge.
+Compatibility validation emits no replacement split event or synthetic checkpoint.
 Lineage/audit event, same non-dispatched posture as above. Two emitters:
 
 - **Entity-review merges** (the production human-review path, EROJ-01 #4350): emitted by the
@@ -1124,6 +1127,9 @@ successor, so a crash/retry cannot duplicate an event. A fresh transaction must 
 plan and exact event payloads before split success or review queue clear. A collision with a
 contradictory event refuses completion. The original merge relation's complement id and `into_id`
 survive first and repeated splits unchanged.
+Implicit requests use successive generations when new matching inputs reach the same target and
+partition; each generation has its own event identities. A retry resumes an unfinished generation
+or returns the latest completed generation, while explicit operation ids replay their exact plan.
 
 Payload fields (in addition to the envelope):
 - `split_from` (`string`): the entity_id that was partitioned.

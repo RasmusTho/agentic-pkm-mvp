@@ -954,6 +954,113 @@ def test_committed_merge_recovery_does_not_replay_missing_effects(
     assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
 
 
+@pytest.mark.parametrize("state,split_count,corruption,journaled_later", [
+    *((state, count, None, False) for state in (STATE_CLAIMED, STATE_EVENT_COMMITTED, STATE_CLEARED)
+      for count in (1, 2)),
+    *((STATE_EVENT_COMMITTED, 2, corruption, False) for corruption in
+      ("missing_source_copy", "missing_predecessor_copy", "missing_successor_copy",
+       "duplicate_copy", "wrong_split_from", "missing_merge", "missing_aliases")),
+    (STATE_EVENT_COMMITTED, 2, None, True),
+    (STATE_EVENT_COMMITTED, 2, "journaled_as_legacy", True),
+])
+def test_pre_journal_split_lineage_recovers_original_merge(
+    scratch_dsn: str, tmp_path: Path, state: str, split_count: int,
+    corruption: str | None, journaled_later: bool,
+) -> None:
+    """Literal EROJ-02 producer shape: copied split links, no new journal or ids."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    successors = [register.mint_canonical(f"Historical successor {i}") for i in range(split_count)]
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    if state != STATE_CLAIMED:
+        operation = journal.commit_merge_event(operation)
+    if state == STATE_CLEARED:
+        operation = journal.mark_cleared(operation)
+    register._write_entry(replace(register.get_entry(source), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
+    predecessor = target
+    for i, successor in enumerate(successors):
+        child = register.get_entry(source)
+        original = register.get_entry(predecessor)
+        split_link = {
+            "predecessor_id": predecessor, "successor_id": successor,
+            "mutation_kind": "split", "operation_id": f"historical-split-{i}",
+            "reclaimed_from_id": source,
+        }
+        register._write_entry(replace(child, merged_into=successor, lineage=(*child.lineage, split_link)))
+        new_entry = register.get_entry(successor)
+        register._write_entry(replace(new_entry, aliases=(new_entry.label, child.label, *child.aliases),
+                                     merged_from=(source,), split_from=predecessor, lineage=(split_link,)))
+        register._write_entry(replace(original, merged_from=(),
+                                     aliases=tuple(a for a in original.aliases if a not in {child.label, *child.aliases}),
+                                     lineage=(*original.lineage, split_link)))
+        predecessor = successor
+    decisions_before = _persisted_decisions(vault_root)
+    if corruption and corruption != "journaled_as_legacy":
+        entry_id = {"missing_source_copy": source, "missing_predecessor_copy": target,
+                    "missing_successor_copy": successors[0], "duplicate_copy": source,
+                    "wrong_split_from": successors[0], "missing_merge": source,
+                    "missing_aliases": successors[-1]}[corruption]
+        entry = register.get_entry(entry_id)
+        first_link = next(link for link in entry.lineage if link.get("mutation_kind") == "split")
+        if corruption.startswith("missing_") and corruption.endswith("_copy"):
+            entry = replace(entry, lineage=tuple(link for link in entry.lineage if link != first_link))
+        elif corruption == "duplicate_copy":
+            entry = replace(entry, lineage=(*entry.lineage, first_link))
+        elif corruption == "wrong_split_from":
+            entry = replace(entry, split_from=source)
+        elif corruption == "missing_merge":
+            entry = replace(entry, lineage=tuple(link for link in entry.lineage if link.get("mutation_kind") != "merge"))
+        else:
+            entry = replace(entry, aliases=())
+        register._write_entry(entry)
+        before = {p: p.read_bytes() for p in vault_root.rglob("*.md")}
+        with pytest.raises(EntityConfirmError):
+            apply_human_review_decisions(vault_root, register=register, journal=journal)
+        assert {p: p.read_bytes() for p in vault_root.rglob("*.md")} == before
+        assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
+        assert _journal_row(scratch_dsn, operation.operation_id)[0] == state
+        return
+    if journaled_later:
+        register.backfill_complements()
+        child = register.get_entry(source)
+        successors.append(register.split(successors[-1], {"Modern successor": [child.label, *child.aliases]})[0])
+        if corruption == "journaled_as_legacy":
+            modern_id = register.get_entry(source).lineage[-1]["operation_id"]
+            for entry in register._all_entries():
+                lineage = tuple({k: v for k, v in link.items() if k != "complement_id"}
+                                if link.get("operation_id") == modern_id else link for link in entry.lineage)
+                if lineage != entry.lineage:
+                    register._write_entry(replace(entry, lineage=lineage))
+            before = {p: p.read_bytes() for p in vault_root.rglob("*.md")}
+            with pytest.raises(EntityConfirmError, match="journaled split"):
+                apply_human_review_decisions(vault_root, register=register, journal=journal)
+            assert {p: p.read_bytes() for p in vault_root.rglob("*.md")} == before
+            assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
+            return
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert len(applied) == 1 and applied[0].operation_id == operation.operation_id
+    relation = register.get_entry(successors[-1]).complements[0]
+    assert relation["complement_id"] == register.get_entry(source).complement_id
+    assert relation["into_id"] == target
+    assert relation["operation_id"] == operation.operation_id
+    assert register.resolve_target_evolution(source, target, operation_id=operation.operation_id) == successors[-1]
+    assert pending_review_entries(vault_root) == ()
+    assert _persisted_decisions(vault_root) == decisions_before
+    events = _merged_event_rows(scratch_dsn)
+    assert len(events) == 1
+    assert events[0][1]["from_id"] == source and events[0][1]["into_id"] == target
+    assert events[0][1]["operation_id"] == operation.operation_id
+    with psycopg.connect(scratch_dsn) as conn:
+        journal_module.ensure_split_schema(conn)
+        assert conn.execute("SELECT count(*) FROM entity_register_split_operations").fetchone()[0] == int(journaled_later)
+
+
 @pytest.mark.parametrize("late_ruling", ["reapprove", "reject"])
 def test_edited_history_after_refusal_converges_without_manual_repair(
     scratch_dsn: str, tmp_path: Path, late_ruling: str
@@ -1277,6 +1384,55 @@ def test_split_retry_reuses_preallocated_successors_and_checkpoints(
     assert restarted.split(first, partition, operation_id='second') == ids
     with psycopg.connect(scratch_dsn) as conn:
         assert conn.execute("SELECT count(*) FROM outbox WHERE topic = 'heimdal.register.entity.split'").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize("stop_at", [1, 2, 3])
+@pytest.mark.parametrize("after_write", [False, True])
+def test_implicit_split_generation_restarts_its_preallocated_plan(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    stop_at: int, after_write: bool,
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    partition = {"Recovered": ["Source"]}
+    register.merge(source, target)
+    first = register.split(target, partition)
+    later_source = register.mint_canonical("Source")
+    register.merge(later_source, target)
+    real_write = register._write_entry
+    writes = 0
+    plans = []
+
+    def crash(entry):
+        nonlocal writes
+        with psycopg.connect(scratch_dsn) as conn:
+            rows = conn.execute("SELECT plan FROM entity_register_split_operations WHERE NOT completed").fetchall()
+        assert len(rows) == 1
+        plans.append(rows[0][0])
+        writes += 1
+        if writes == stop_at and not after_write:
+            raise RuntimeError("later generation crash")
+        real_write(entry)
+        if writes == stop_at and after_write:
+            raise RuntimeError("later generation crash")
+
+    monkeypatch.setattr(register, "_write_entry", crash)
+    with pytest.raises(RuntimeError, match="later generation crash"):
+        register.split(target, partition)
+    restarted = _register(vault_root)
+    second = restarted.split(target, partition)
+    assert second != first and list(second) == plans[0]["successor_ids"]
+    assert restarted.get_entry(source).merged_into == first[0]
+    assert restarted.get_entry(later_source).merged_into == second[0]
+    assert restarted.split(target, partition) == second
+    saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, plans[0]["operation_id"])
+    assert saved.completed and saved.plan == plans[0]
+    assert saved.checkpoints == journal_module.split_checkpoint_keys(saved.plan)
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM entity_register_split_operations").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM outbox WHERE topic='heimdal.register.entity.split'").fetchone()[0] == 2
 
 
 @pytest.mark.parametrize('event_already_committed', [False, True])

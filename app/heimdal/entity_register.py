@@ -453,6 +453,74 @@ class EntityRegister:
                 fcntl.flock(fd, fcntl.LOCK_UN)
                 os.close(fd)
 
+    @staticmethod
+    def _validate_legacy_split_copy(
+        link: Mapping[str, str], entries: Mapping[str, RegisterEntry],
+    ) -> None:
+        """Authenticate the exact three-note shape written by the EROJ-02 producer."""
+        required = {"predecessor_id", "successor_id", "operation_id", "mutation_kind", "reclaimed_from_id"}
+        if set(link) != required or link.get("mutation_kind") != "split" or any(not link[k] for k in required):
+            raise EntityRegisterError("legacy split has malformed producer lineage")
+        predecessor, successor, reclaimed = (entries.get(link[k]) for k in
+                                             ("predecessor_id", "successor_id", "reclaimed_from_id"))
+        if predecessor is None or successor is None or reclaimed is None or successor.split_from != predecessor.entity_id:
+            raise EntityRegisterError("legacy split lacks its producer-owned successor")
+        for entry in (predecessor, successor, reclaimed):
+            copies = [item for item in entry.lineage if item.get("mutation_kind") == "split"
+                      and item.get("predecessor_id") == predecessor.entity_id
+                      and item.get("reclaimed_from_id") == reclaimed.entity_id]
+            if copies != [link]:
+                raise EntityRegisterError("legacy split lacks one unambiguous copied producer link")
+
+    @staticmethod
+    def _validate_split_checkpoint(link: Mapping[str, str], record: SplitRecord | None) -> None:
+        cid = link.get("complement_id")
+        if (not cid or record is None or not record.completed
+            or record.plan["entity_id"] != link.get("predecessor_id")
+            or "complement:" + cid not in record.checkpoints
+            or not any(e["after"]["entity_id"] == link.get("successor_id")
+                       and any(c["complement_id"] == cid and c["from_id"] == link.get("reclaimed_from_id")
+                               for c in e["after"].get("complements", []))
+                       for e in record.plan["effects"])):
+            raise EntityRegisterError("target evolution split complement checkpoint mismatch")
+
+    def _legacy_relation_origin(
+        self, source: RegisterEntry, entries: Mapping[str, RegisterEntry],
+    ) -> tuple[str, str | None]:
+        merges = [link for link in source.lineage if link.get("mutation_kind") == "merge"
+                  and link.get("predecessor_id") == source.entity_id]
+        splits = [link for link in source.lineage if link.get("mutation_kind") == "split"
+                  and link.get("reclaimed_from_id") == source.entity_id]
+        if len(merges) > 1 or (splits and not merges):
+            raise EntityRegisterError("ambiguous legacy original merge lineage")
+        original_id = merges[0].get("successor_id") if merges else source.merged_into
+        operation_id = merges[0].get("operation_id") if merges else None
+        if original_id not in entries or (merges and not operation_id):
+            raise EntityRegisterError("legacy relation lacks its original merge identity")
+        assert original_id is not None
+        current = original_id
+        seen: set[str] = set()
+        while current != source.merged_into:
+            if current in seen:
+                raise EntityRegisterError("legacy split lineage cycle")
+            seen.add(current)
+            hops = [link for link in splits if link.get("predecessor_id") == current]
+            if len(hops) != 1:
+                raise EntityRegisterError("legacy split lacks an unambiguous original-to-current path")
+            record = self._split_journal.load_split(self.vault_identity, hops[0]["operation_id"])
+            if "complement_id" in hops[0]:
+                if source.complement_id != hops[0]["complement_id"]:
+                    raise EntityRegisterError("legacy split chain has mismatched complement identity")
+                self._validate_split_checkpoint(hops[0], record)
+            else:
+                self._validate_legacy_split_copy(hops[0], entries)
+                if record is not None:
+                    raise EntityRegisterError("journaled split cannot use legacy compatibility proof")
+            current = hops[0]["successor_id"]
+        if splits and not {source.label, *source.aliases}.issubset(entries[current].aliases):
+            raise EntityRegisterError("legacy split lacks complete successor aliases")
+        return original_id, operation_id
+
     def _validated_entries(
         self, entries: Sequence[RegisterEntry] | None = None, *,
         allow_source_only: tuple[str, str] | None = None,
@@ -511,16 +579,13 @@ class EntityRegister:
             target = original_by_id[target_id]
             matches = [c for c in target.complements if c["from_id"] == source.entity_id]
             if not matches and legacy and not target.complements:
-                cid = _complement_id(self.vault_identity, source.entity_id, target_id, None)
+                original_id, original_operation = self._legacy_relation_origin(source, original_by_id)
+                cid = _complement_id(self.vault_identity, source.entity_id, original_id, None)
                 if source.complement_id not in (None, cid):
                     raise EntityRegisterError("missing structured complement for current identity")
-                links = [l for l in source.lineage if l.get("mutation_kind") == "merge"
-                         and l.get("predecessor_id") == source.entity_id and l.get("successor_id") == target_id]
-                if len(links) > 1:
-                    raise EntityRegisterError("ambiguous legacy operation lineage")
-                relation = {"complement_id": cid, "from_id": source.entity_id, "into_id": target_id}
-                if links and links[0].get("operation_id"):
-                    relation["operation_id"] = links[0]["operation_id"]
+                relation = {"complement_id": cid, "from_id": source.entity_id, "into_id": original_id}
+                if original_operation:
+                    relation["operation_id"] = original_operation
                 matches = [relation]
             if len(matches) != 1:
                 raise EntityRegisterError("missing or duplicate structured complement")
@@ -530,7 +595,7 @@ class EntityRegister:
                 relation.get("operation_id") if cid.startswith("cmp:operation:") else None)
             if cid != expected_id:
                 raise EntityRegisterError("complement identity contradicts its original relation")
-            expected_legacy = _complement_id(self.vault_identity, source.entity_id, target_id, None)
+            expected_legacy = _complement_id(self.vault_identity, source.entity_id, relation["into_id"], None)
             if source.complement_id != cid and not (legacy and source.complement_id is None and cid == expected_legacy):
                 raise EntityRegisterError("source/target complement identity mismatch")
             if cid in source_ids:
@@ -1094,14 +1159,17 @@ class EntityRegister:
             cid = split_link.get("complement_id")
             split_operation = split_link.get("operation_id")
             record = self._split_journal.load_split(self.vault_identity, str(split_operation))
-            if (not cid or record is None or not record.completed
-                or record.plan["entity_id"] != predecessor_id
-                or "complement:" + cid not in record.checkpoints
-                or not any(e["after"]["entity_id"] == successor_id
-                           and any(c["complement_id"] == cid and c["from_id"] == reclaimed_from_id
-                                   for c in e["after"].get("complements", []))
-                           for e in record.plan["effects"])):
-                raise EntityRegisterError("target evolution split complement checkpoint mismatch")
+            if cid is None:
+                legacy_entries = dict(entries) if entries is not None else {e.entity_id: e for e in self._all_entries()}
+                reclaimed = legacy_entries.get(reclaimed_from_id)
+                if record is not None or reclaimed is None or not (reclaimed.complement_id or "").startswith("cmp:legacy:"):
+                    raise EntityRegisterError("target evolution split complement checkpoint mismatch")
+                self._validate_legacy_split_copy(split_link, legacy_entries)
+                original_id, _ = self._legacy_relation_origin(reclaimed, legacy_entries)
+                if reclaimed.complement_id != _complement_id(self.vault_identity, reclaimed_from_id, original_id, None):
+                    raise EntityRegisterError("legacy split contradicts immutable complement identity")
+            else:
+                self._validate_split_checkpoint(split_link, record)
             hop_key = (predecessor_id, successor_id, reclaimed_from_id)
             if hop_key in visited:
                 raise EntityRegisterError(
@@ -1114,6 +1182,8 @@ class EntityRegister:
                 raise EntityRegisterError(
                     "target evolution split lacks a complete successor complement"
                 )
+            if cid is not None and reclaimed_entry.complement_id != cid:
+                raise EntityRegisterError("target evolution split complement identity mismatch")
             if reclaimed_from_id in predecessor_entry.merged_from:
                 raise EntityRegisterError(
                     "target evolution split has a contradictory partial complement"
@@ -1262,8 +1332,44 @@ class EntityRegister:
                or any(not isinstance(alias, str) or not alias for alias in aliases)
                for label, aliases in partition_criteria.items()):
             raise EntityRegisterError("split(): malformed partition")
-        effective_id = operation_id or _direct_split_operation_id(entity_id, partition_criteria)
+        direct_key = _direct_split_operation_id(entity_id, partition_criteria)
+        effective_id = operation_id or direct_key
+        generation = 0
         record = self._split_journal.load_split(self.vault_identity, effective_id)
+        if operation_id is None:
+            # The stable request key has contiguous generations. A partial
+            # generation always wins over changes its own note writes caused.
+            while record is not None:
+                stored_generation = record.plan.get("direct_generation", 0)
+                if (record.plan["entity_id"] != entity_id or record.plan["partition"] != partition
+                    or record.plan.get("direct_request_key", direct_key if generation == 0 else None) != direct_key
+                    or type(stored_generation) is not int or stored_generation != generation):
+                    raise EntityRegisterError("split(): direct generation plan mismatch")
+                if not record.completed:
+                    break
+                next_id = f"{direct_key}:generation:{generation + 1}"
+                following = self._split_journal.load_split(self.vault_identity, next_id)
+                if following is None:
+                    normalized = self._validated_entries(legacy=True)
+                    original = normalized.get(entity_id)
+                    if original is None:
+                        raise EntityRegisterError("split(): completed original is missing")
+                    prior_original = RegisterEntry.from_frontmatter(record.plan["effects"][0]["after"])
+                    requested_aliases = {a for _, aliases in partition for a in aliases}
+                    new_aliases = (set(original.aliases) - set(prior_original.aliases)) & requested_aliases
+                    new_children = [child for child in normalized.values()
+                                    if child.merged_into == entity_id
+                                    and child.complement_id not in record.plan["complement_ids"]
+                                    and any({child.label, *child.aliases} & set(aliases) or child.label == label
+                                            for label, aliases in partition)]
+                    if not new_aliases and not new_children:
+                        break
+                    # A later matching input is new work; unrelated downstream
+                    # evolution alone remains a replay of the latest generation.
+                    self._validate_completed_split_notes(record, normalized)
+                generation += 1
+                effective_id = next_id
+                record = following
         if record is None:
             original = self._read_entry(entity_id)
             if original is None:
@@ -1326,6 +1432,8 @@ class EntityRegister:
                     "entity_id": entity_id, "partition": partition, "successor_ids": new_ids,
                     "effects": effects, "events": events,
                     "complement_ids": [l["complement_id"] for l in links]}
+            if operation_id is None:
+                plan.update(direct_request_key=direct_key, direct_generation=generation)
             final = dict(normalized)
             for effect in effects:
                 entry = RegisterEntry.from_frontmatter(effect["after"])
@@ -1342,13 +1450,7 @@ class EntityRegister:
         if record.completed:
             if record.checkpoints != keys:
                 raise EntityRegisterError("split(): incomplete terminal checkpoints")
-            self._validated_entries()
-            for effect in record.plan["effects"]:
-                expected = RegisterEntry.from_frontmatter(effect["after"])
-                observed = self._read_entry(expected.entity_id)
-                if (observed is None or observed.split_from != expected.split_from
-                    or any(link not in observed.lineage for link in expected.lineage)):
-                    raise EntityRegisterError("split(): completed note or lineage evidence is missing")
+            self._validate_completed_split_notes(record, self._validated_entries())
             return tuple(record.plan["successor_ids"])
         # Authenticate every affected note before the first retry write. Only the
         # next unchecked effect may have landed without its checkpoint.
@@ -1381,6 +1483,17 @@ class EntityRegister:
             record = self._split_journal.checkpoint_split(record, "complement:" + cid)
         self._split_journal.finish_split(record)
         return tuple(record.plan["successor_ids"])
+
+    @staticmethod
+    def _validate_completed_split_notes(record: SplitRecord, entries: Mapping[str, RegisterEntry]) -> None:
+        if record.checkpoints != split_checkpoint_keys(record.plan):
+            raise EntityRegisterError("split(): incomplete terminal checkpoints")
+        for effect in record.plan["effects"]:
+            expected = RegisterEntry.from_frontmatter(effect["after"])
+            observed = entries.get(expected.entity_id)
+            if (observed is None or observed.split_from != expected.split_from
+                or any(link not in observed.lineage for link in expected.lineage)):
+                raise EntityRegisterError("split(): completed note or lineage evidence is missing")
 
     def resolve_redirects(self, entity_id: str) -> str:
         """`resolve_redirects(entity_id) -> entity_id` — follow merge chains.

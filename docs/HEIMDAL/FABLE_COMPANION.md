@@ -171,6 +171,11 @@ commit together. A restart reuses the same ordered partition and ids, verifies e
 and writes only missing effects. A changed partition, unexpected note, out-of-order checkpoint,
 missing event, or duplicate relation refuses completion. A completed split retains its evidence for
 later target-lineage recovery; a subsequent split keeps the original relation's id and `into_id`.
+An explicit operation id always replays that exact operation. An implicit request groups identical
+entity/partition requests into contiguous generations: unfinished work resumes its saved plan;
+newly merged matching sources or newly available partition aliases start a new generation. An
+unchanged retry returns the latest generation's successors. Unrelated downstream evolution alone
+does not manufacture another split.
 
 Register mutations and review completion serialize on the canonical register directory through a
 single-host, process-safe lock. Note writes still pass WriteGuard and the governed write port with
@@ -179,7 +184,12 @@ or split must be resumed before unrelated relation evolution can proceed. Extern
 not treated as governed lineage and cannot supply missing execution evidence.
 
 Legacy compatibility converts only an unambiguous source redirect plus exactly one matching target
-membership. The deterministic legacy id binds vault identity and the original pair. All notes are
+membership. The deterministic legacy id binds vault identity and the original pair. Retained
+EROJ-02 splits additionally require the exact historical split link once on source, predecessor,
+and successor, the successor's `split_from`, and an unambiguous path from the source's original
+operation-bound merge to its current owner. Missing or conflicting copies refuse recovery. These
+historical links create no synthetic split journal, checkpoint, or event; links with complement ids
+still require their completed journal evidence. All notes are
 validated before the first conversion write; a partial conversion can retry with the same id.
 Duplicate memberships, absent opposite sides, multiple targets, cycles, malformed structured
 records, and contradictory ids fail with repair guidance and no guessed conversion. Every current

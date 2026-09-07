@@ -849,22 +849,46 @@ def test_split_complement_ids_are_globally_unique_across_repeated_splits(tmp_pat
         assert records[0][1]['from_id'] == source
 
 
-def test_completed_split_replay_preserves_later_valid_evolution(tmp_path: Path) -> None:
+@pytest.mark.parametrize("implicit", [False, True])
+def test_completed_split_replay_preserves_later_valid_evolution(tmp_path: Path, implicit: bool) -> None:
     register = _register(tmp_path)
     source = register.mint_canonical("Source", aliases=["S"])
     target = register.mint_canonical("Target")
     register.merge(source, target, operation_id="original-merge")
     partition = {"First": ["Source", "S"]}
-    successors = register.split(target, partition, operation_id="original-split")
+    operation = None if implicit else "original-split"
+    successors = register.split(target, partition, operation_id=operation)
     later = register.split(successors[0], {"Second": ["Source", "S"]}, operation_id="later-split")[0]
     terminal = register.mint_canonical("Terminal")
     register.merge(later, terminal, operation_id="later-merge")
     before = _relation_snapshot(register)
     events_before = dict(register._conn.rows)
-    assert register.split(target, partition, operation_id="original-split") == successors
+    assert register.split(target, partition, operation_id=operation) == successors
     assert _relation_snapshot(register) == before
     assert register._conn.rows == events_before
     assert register.resolve_target_evolution(source, target, operation_id="original-merge") == terminal
+
+
+def test_implicit_split_distinguishes_a_later_matching_merge_from_retry(tmp_path: Path) -> None:
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.merge(source, target)
+    partition = {"Recovered": ["Source", "S"]}
+    first = register.split(target, partition)
+    later_source = register.mint_canonical("Source", aliases=["S"])
+    assert later_source != source
+    register.merge(later_source, target)
+
+    second = register.split(target, partition)
+
+    assert second != first
+    assert register.get_entry(later_source).merged_into == second[0]
+    assert register.get_entry(source).merged_into == first[0]
+    before = _relation_snapshot(register)
+    assert register.split(target, partition) == second
+    assert _relation_snapshot(register) == before
+    assert len(register._conn.rows_for(HEIMDAL_REGISTER_ENTITY_SPLIT)) == 2
 
 
 @pytest.mark.parametrize('split_number', [1, 2])
