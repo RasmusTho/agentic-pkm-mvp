@@ -154,7 +154,7 @@ _COLUMNS = (
 
 _SELECT_COLUMNS = (
     "operation_id, vault_identity, queue_entry_id, decision_position, "
-    "decision_digest, from_id, into_id, state, outbox_event_id"
+    "decision_digest, from_id, into_id, state, outbox_event_id, updated_at"
 )
 
 
@@ -254,6 +254,7 @@ class OperationRecord:
     into_id: str
     state: str
     outbox_event_id: str
+    updated_at: object | None = None
 
 
 class EntityReviewOperationJournalPort(Protocol):
@@ -462,6 +463,7 @@ class EntityReviewOperationJournal:
             into_id=str(_col(row, 6, "into_id")),
             state=str(_col(row, 7, "state")),
             outbox_event_id=str(_col(row, 8, "outbox_event_id")),
+            updated_at=_col(row, 9, "updated_at"),
         )
         if record.state not in _STATES:
             raise EntityReviewOperationJournalError(

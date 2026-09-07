@@ -400,6 +400,37 @@ def _matches_operation_identity(
     )
 
 
+def _pending_generation_precedes_cleared_operation(
+    pending_entry: Mapping[str, Any] | None, operation: OperationRecord
+) -> bool:
+    """Prove this pending row predates the durable clear boundary.
+
+    A cleared row releases a queue id for re-queue.  Queue/pair equality is
+    therefore insufficient to distinguish an interrupted pending clear from
+    a later generation of the same mention.  Both timestamps are durable
+    fields already owned by their respective records; absent, malformed, or
+    simultaneous values remain ambiguous and fail closed.
+    """
+    if pending_entry is None or operation.updated_at is None:
+        return False
+    queued_at = pending_entry.get("queued_at")
+    if not isinstance(queued_at, str):
+        return False
+    try:
+        queued = datetime.fromisoformat(queued_at.replace("Z", "+00:00"))
+        cleared_raw = operation.updated_at
+        cleared = (
+            cleared_raw
+            if isinstance(cleared_raw, datetime)
+            else datetime.fromisoformat(str(cleared_raw).replace("Z", "+00:00"))
+        )
+        if queued.tzinfo is None or cleared.tzinfo is None:
+            return False
+        return queued < cleared
+    except (TypeError, ValueError):
+        return False
+
+
 def apply_human_review_decisions(
     vault_root: Path,
     *,
@@ -543,6 +574,14 @@ def apply_human_review_decisions(
         operation_id: str | None = None
         active_operation: OperationRecord | None = None
         queue_entry_id = effective_decision.queue_entry_id
+        pending_entry = next(
+            (
+                pending
+                for pending in remaining_pending
+                if pending.get("queue_entry_id") == queue_entry_id
+            ),
+            None,
+        )
         try:
             if journal is not None:
                 # Entry-keyed resume (review F1): an edited decision history
@@ -680,18 +719,21 @@ def apply_human_review_decisions(
                 )
                 if (
                     cleared_twin is not None
+                    and _pending_generation_precedes_cleared_operation(
+                        pending_entry, cleared_twin
+                    )
                     and register.merge_effect_state(
                         effective_decision.from_id, effective_decision.into_id
                     )
                     == MERGE_EFFECTS_COMPLETE
                 ):
                     # A cleared row already has its one committed event and
-                    # is located by this exact queue entry + original pair.
-                    # A later undo/reapproval can carry a different decision
-                    # digest or position, but must finish this interrupted
-                    # clear rather than claim another operation/event. This
-                    # exception is intentionally unavailable to STATE_CLAIMED
-                    # retries, which still require complete identity parity.
+                    # its pending generation predates that clear. A later
+                    # undo/reapproval can carry a different decision digest or
+                    # position, but must finish this interrupted clear rather
+                    # than claim another operation/event. A re-queued or
+                    # timestamp-ambiguous generation cannot take this path;
+                    # claimed retries still require complete identity parity.
                     merged = True
                     operation_id = cleared_twin.operation_id
                 else:

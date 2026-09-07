@@ -26,6 +26,7 @@ read/write path, never a mock of either.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -243,7 +244,11 @@ class _InMemoryJournal:
         )
 
     def mark_cleared(self, operation: OperationRecord) -> OperationRecord:
-        record = replace(self.operations[operation.operation_id], state=STATE_CLEARED)
+        record = replace(
+            self.operations[operation.operation_id],
+            state=STATE_CLEARED,
+            updated_at=datetime.now(timezone.utc),
+        )
         self.operations[record.operation_id] = record
         self.log.append(("mark_cleared", record.operation_id))
         return record
@@ -432,6 +437,48 @@ def test_apply_merge_recovers_when_later_split_reclaims_intermediate_target(tmp_
         source, target, operation_id=operation.operation_id
     ) == successor
     assert pending_review_entries(vault_root) == ()
+
+
+def test_apply_merge_refuses_requeued_entry_after_cleared_source_reclaim(tmp_path: Path) -> None:
+    """A newer pending generation cannot masquerade as an interrupted clear."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="requeued"),
+        candidate_entity_ids=[source, target],
+    )
+    initial = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [initial.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert len(applied) == 1 and pending_review_entries(vault_root) == ()
+
+    register.split(target, {"Recovered source": ["Source", "S"]})
+    requeued = replace(entry, queued_at="2099-01-01T00:00:00+00:00")
+    reapproval = ReviewDecision(
+        queue_entry_id=entry.queue_entry_id,
+        action="merge",
+        from_id=source,
+        into_id=target,
+        decided_at="2099-01-01T00:00:01+00:00",
+    )
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [requeued.to_dict()],
+        "decisions": [initial.to_dict(), reapproval.to_dict()],
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+
+    with pytest.raises(EntityConfirmError, match="not bound to this prospective operation"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert [pending.queue_entry_id for pending in pending_review_entries(vault_root)] == [
+        entry.queue_entry_id
+    ]
+    assert len(journal.operations) == 1
 
 
 def test_apply_merge_refuses_public_effects_before_claiming_new_operation(tmp_path: Path) -> None:
