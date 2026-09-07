@@ -97,7 +97,9 @@ def reattest_legacy_owner(
         ledger._assert_existing_artifacts()
         if os.path.lexists(ledger.rotation_path) or os.path.lexists(store.transaction_path):
             raise _refuse()
-        with ledger._locked(recover_rotation=False), store._locked():
+        with ledger._locked(recover_rotation=False), store._locked(recover_transactions=False):
+            if os.path.lexists(ledger.rotation_path):
+                raise _refuse()
             key = ledger._load_or_create_key_locked(allow_create=False)
             current = ledger._load_or_create_ledger_locked(
                 key, allow_create=False, allow_legacy=True,

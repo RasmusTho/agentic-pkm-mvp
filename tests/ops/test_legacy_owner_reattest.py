@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -296,3 +297,34 @@ def test_receipt_rejects_changed_replay_authority(tmp_path, monkeypatch, change)
     assert runtime_module.main(args) == 1
     assert _protected(runtime) == before
     assert runtime_module._deployment_fence_path(runtime.ledger.root, 'dev').exists()
+
+
+def test_backup_overlap_uses_canonical_protected_roots(tmp_path):
+    (tmp_path / 'vault').mkdir()
+    (tmp_path / 'alias-parent').mkdir()
+    lexical = tmp_path / 'alias-parent' / '..' / 'vault'
+    with pytest.raises(runtime_module.InstanceStatePreflightError):
+        recovery._backup_destination(tmp_path / 'vault' / 'backup', (lexical,))
+    assert not (tmp_path / 'vault' / 'backup').exists()
+
+
+@pytest.mark.parametrize('journal', ['rotation', 'registry_transaction'])
+def test_cli_refuses_journal_created_while_waiting_for_lock(tmp_path, monkeypatch, journal):
+    runtime, args, proof, inventory = _fixture(tmp_path)
+    before = _protected(runtime)
+    lock = OwnershipLedger._locked
+    journal_path = runtime.ledger.rotation_path if journal == 'rotation' else runtime.registry.transaction_path
+
+    @contextmanager
+    def concurrent_journal(self, **kwargs):
+        # Another writer crashes just before this call wins the ledger lock.
+        journal_path.write_text('{}')
+        journal_path.chmod(0o600)
+        with lock(self, **kwargs):
+            yield
+
+    monkeypatch.setattr(OwnershipLedger, '_locked', concurrent_journal)
+    assert runtime_module.main(args) == 1
+    assert _protected(runtime) == before
+    assert journal_path.read_text() == '{}'
+    assert not (tmp_path / 'backup').exists()
