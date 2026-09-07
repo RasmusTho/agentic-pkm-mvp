@@ -4,8 +4,8 @@ Evidence View v0 proof, pure server-declared Overview composer, and the source-l
 owner synthesis projection delivered by PR #5413 are delivered. The synthesis remains proposal-only
 and source-bound; it does not create authority, tasks, approvals, or effects. Producer enrichment for
 owner and ready classification is the next nonvisual work. The Focus UI, provider conversation runtime,
-Builder System Control lens, visual shell, and general authority-bearing stages remain targets.
-Existing GitHub Issues remain executable backlog truth.
+Builder System Control lens, visual handoff, production deployment, and general authority-bearing
+stages remain targets. Existing GitHub Issues remain executable backlog truth.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
@@ -101,7 +101,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Live status | `DeliveryRunView.v1` | Specified target, not delivered |
 | Delivery truth | GitHub/dispatcher/Git/CI/review/merge/closure | Existing authority |
 | Results | `DeliveryReceipt.v2` and attempt-terminal evidence | Receipt seam delivered; complete attempt terminality target |
-| Visual base | Yggdrasil Design System and tested Cockpit patterns | Reusable sources; new handoff required |
+| Visual base | Yggdrasil Design System and tested Cockpit patterns | The connected read-only repository shell is delivered by PR #5157; visual handoff, VM102 deployment, and owner acceptance remain targets |
 
 ## Three delivery stages
 

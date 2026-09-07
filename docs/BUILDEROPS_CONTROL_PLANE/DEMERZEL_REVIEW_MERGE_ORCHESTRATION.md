@@ -27,9 +27,11 @@ idempotent ingest, attempt ledger, and verification-gated merge baseline; later 
 are also on `main`. That baseline extends dispatcher SQLite, which ADR-0062 retires as production
 authority. This task is the migration delta for delivered work, not a duplicate orchestrator and not
 a request to reopen the merged PR. The repo-side API/PostgreSQL/outbox adapter and privileged
-merge-effect fence are now implemented. The remaining installed-main cycle and parent-hub receipt
-are a separately governed acceptance gate whose current target placement is TARS VM 102
-(`builder-system`); historical Demerzel observations are evidence only.
+merge-effect fence are now implemented. #3603 closed after read-only topology reconciliation and
+remains historical implementation evidence. The remaining installed-main cycle and parent acceptance
+are owned by the active VM-102 chain (#5052/#5056 and #5181), with FCA parent #5399 tracking the
+cross-contract acceptance; the target placement is TARS VM 102 (`builder-system`). Historical
+Demerzel observations are evidence only.
 
 ## What This Task Does
 
@@ -164,10 +166,10 @@ weaken them and does not enter Product Runtime.
   material.
   Verify: `tests/security/test_builderops_executor_credentials.py::test_executor_secrets_are_referenced_not_persisted`.
 - [ ] The delivered flow runs one real/dry-run-safe review→repair/verify→merge-or-no-merge cycle on
-  the currently qualified target host and posts its receipt to the parent validation hub. Until the
+  the target host once it is qualified and posts its receipt to the active validation owner. Until the
   VM-102 qualification and executor-placement gates are evidenced, this criterion remains open.
-  Verify: runtime receipt on the BuilderOps control-plane parent issue, bound to issue/PR/SHA and
-  target identity.
+  Verify: runtime receipt on the active VM-102 validation owner, bound to issue/PR/SHA and target
+  identity.
 
 ## Out of Scope
 
@@ -233,8 +235,9 @@ best-effort fallback between the Linux and Darwin profiles.
 Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits the BCP-05 cycle
 receipt; older receipts may use the historical `bcp05_demerzel_cycle.v1` identifier. Repository
 delivery is not accepted until a real installed-main target-host invocation posts a target-bound
-receipt to the governing parent. The command itself does not satisfy that parent gate or activate
-BCP-06. BuilderOps backup/restore is deferred and non-gating under #5056; this cycle must not
+receipt to the active VM-102 validation owner (#5052/#5181); #3603's topology receipt is already
+complete. The command itself does not satisfy that parent gate or activate BCP-06. BuilderOps
+backup/restore is deferred and non-gating under #5056; this cycle must not
 introduce a WAL, restore, or recovery-target prerequisite. Before constructing any client or effect
 adapter, the command requires the
 selected worktree to be clean `main` at the exact locally fetched `origin/main`; a detached, dirty,
