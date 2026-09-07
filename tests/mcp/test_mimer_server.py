@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import sys
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -145,6 +148,82 @@ def test_loopback_factory_disables_environment_proxy_trust(monkeypatch: pytest.M
     assert seen["trust_env"] is False
 
 
+def test_model_backed_operations_use_runtime_aligned_timeouts() -> None:
+    seen: dict[str, dict[str, Any]] = {}
+
+    class _TimeoutRecordingClient:
+        def post(self, path: str, **kwargs: Any) -> _Response:
+            seen[path] = kwargs
+            return _Response(200, {})
+
+        def get(self, path: str, **kwargs: Any) -> _Response:
+            seen[path] = kwargs
+            return _Response(200, {})
+
+    operations = _GovernedMimerHttpOperations(_TimeoutRecordingClient())
+    operations.ask(question="where?", trace_id="ask-trace")
+    operations.capture(text="remember this", trace_id="capture-trace")
+    operations.retrieve(query="where?", trace_id="retrieve-trace")
+    operations.read_note(note_path="inbox.md", artifact_id=None, trace_id="note-trace")
+    operations.health(trace_id="health-trace")
+
+    assert seen["/api/ask"]["timeout"].read is None
+    assert seen["/api/companion/capture"]["timeout"].read is None
+    assert seen["/search"]["timeout"].read == 10.0
+    assert seen["/api/artifacts/note"]["timeout"].read == 10.0
+    assert seen["/healthz"]["timeout"].read == 10.0
+
+    class _DelayedHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - stdlib handler protocol
+            body_length = int(self.headers.get("content-length", "0"))
+            self.rfile.read(body_length)
+            time.sleep(0.05)
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return None
+
+    http_server = ThreadingHTTPServer(("127.0.0.1", 0), _DelayedHandler)
+    server_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    server_thread.start()
+    client = httpx.Client(
+        base_url=f"http://127.0.0.1:{http_server.server_port}",
+        timeout=httpx.Timeout(0.01),
+    )
+    try:
+        delayed_operations = _GovernedMimerHttpOperations(client)
+        assert delayed_operations.ask(question="where?", trace_id="ask-trace").status_code == 200
+        assert delayed_operations.capture(text="remember this", trace_id="capture-trace").status_code == 200
+    finally:
+        client.close()
+        http_server.shutdown()
+        http_server.server_close()
+        server_thread.join(timeout=1)
+
+
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout("response lost"), httpx.ReadError("connection lost")])
+def test_capture_transport_loss_is_ambiguous_and_non_retryable(failure: httpx.HTTPError) -> None:
+    operations = _Operations(failure)
+
+    result = MimerMcpServer(operations).call_tool(
+        "mimer.capture", {"text": "x", "trace_id": "capture-trace"}
+    )
+
+    assert result.error == {
+        "error": "capture_ambiguous",
+        "state": "not_acknowledged",
+        "message": "Capture response was not acknowledged; the append may have landed. Verify before retrying.",
+        "retryable": False,
+        "trace_id": "capture-trace",
+    }
+    assert len(operations.calls) == 1
+
+
 def test_read_tools_delegate_to_existing_client_contract() -> None:
     payload = {"sources": [{"uuid": "u-1"}], "trace_id": "trace-1"}
     operations = _Operations(_Response(200, payload))
@@ -204,7 +283,9 @@ def test_capture_failures_never_retry_or_fallback_to_filesystem() -> None:
 
     timeout_operations = _Operations(httpx.ReadTimeout("response lost"))
     timeout = MimerMcpServer(timeout_operations).call_tool("mimer.capture", {"text": "x"})
-    assert timeout.error and timeout.error["error"] == "timeout"
+    assert timeout.error and timeout.error["error"] == "capture_ambiguous"
+    assert timeout.error["state"] == "not_acknowledged"
+    assert timeout.error["retryable"] is False
     assert len(timeout_operations.calls) == 1
 
 
