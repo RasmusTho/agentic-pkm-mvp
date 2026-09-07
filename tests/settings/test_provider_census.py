@@ -129,11 +129,27 @@ def test_builder_execution_profiles_cover_supported_capability_tiers() -> None:
         assert set(profiles) == expected_tiers
         for capability, profile in profiles.items():
             assert profile.capability_tier == capability
-            assert profile.reasoning_effort in {"low", "medium", "high"}
+            assert profile.reasoning_effort in {"low", "medium", "high", "max"}
             _assert_mapping(census, profile)
 
 
-def test_sol_profile_declares_gpt_6_astra_selectable_without_default_change() -> None:
+def test_builder_execution_profiles_use_tcd_default_ladder() -> None:
+    census = _census()
+
+    for profiles in census.runtime_channels.builder_execution.values():
+        assert profiles["luna"].model == "gpt-5.6-luna"
+        assert profiles["luna"].reasoning_effort == "low"
+        assert profiles["terra"].model == "gpt-5.6-luna"
+        assert profiles["terra"].reasoning_effort == "high"
+        assert profiles["sol"].model == "gpt-5.6-sol"
+        assert profiles["sol"].reasoning_effort == "high"
+        assert profiles["sol"].model_reasoning_efforts == {
+            "gpt-5.6-sol": "high",
+            "gpt-6-astra": "max",
+        }
+
+
+def test_sol_profile_declares_gpt_6_astra_with_explicit_reasoning_effort() -> None:
     census = _census()
     openai = census.provider("openai")
 
@@ -141,6 +157,7 @@ def test_sol_profile_declares_gpt_6_astra_selectable_without_default_change() ->
         sol = profiles["sol"]
         assert sol.model == "gpt-5.6-sol"
         assert sol.selectable_models == ["gpt-5.6-sol", "gpt-6-astra"]
+        assert sol.model_reasoning_efforts["gpt-6-astra"] == "max"
         assert any(model.id == "gpt-6-astra" for model in openai.models)
 
 
@@ -160,7 +177,7 @@ def test_openai_census_declares_gpt_6_astra_without_default_change() -> None:
     )
 
 
-def test_gpt_6_astra_does_not_change_runtime_channel_defaults() -> None:
+def test_builder_defaults_keep_astra_non_default() -> None:
     census = _census()
 
     assert {
@@ -170,17 +187,29 @@ def test_gpt_6_astra_does_not_change_runtime_channel_defaults() -> None:
     } == {
         ("dev", "spark", "gpt-5.3-codex-spark"),
         ("dev", "luna", "gpt-5.6-luna"),
-        ("dev", "terra", "gpt-5.6-terra"),
+        ("dev", "terra", "gpt-5.6-luna"),
         ("dev", "sol", "gpt-5.6-sol"),
         ("test", "spark", "gpt-5.3-codex-spark"),
         ("test", "luna", "gpt-5.6-luna"),
-        ("test", "terra", "gpt-5.6-terra"),
+        ("test", "terra", "gpt-5.6-luna"),
         ("test", "sol", "gpt-5.6-sol"),
         ("prod", "spark", "gpt-5.3-codex-spark"),
         ("prod", "luna", "gpt-5.6-luna"),
-        ("prod", "terra", "gpt-5.6-terra"),
+        ("prod", "terra", "gpt-5.6-luna"),
         ("prod", "sol", "gpt-5.6-sol"),
     }
+
+
+def test_invalid_model_reasoning_mapping_fails_closed(tmp_path: Path) -> None:
+    source = yaml.safe_load(Path("docs/settings/models/providers.yaml").read_text(encoding="utf-8"))
+    source["runtime_channels"]["builder_execution"]["dev"]["sol"][
+        "model_reasoning_efforts"
+    ]["gpt-5.6-terra"] = "high"
+    census_path = tmp_path / "providers.yaml"
+    census_path.write_text(yaml.safe_dump(source, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-selectable model"):
+        load_provider_census(census_path)
 
 
 def test_model_inquiry_profiles_bind_configured_capability() -> None:

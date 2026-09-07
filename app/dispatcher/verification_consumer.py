@@ -2808,7 +2808,7 @@ class CodexExecLauncher:
             raise ValueError("verification closer adapter is unavailable") from exc
         required = {
             "name": "verification_closer",
-            "model": "gpt-5.6-terra",
+            "model": "gpt-5.6-sol",
             "model_reasoning_effort": "high",
             "sandbox_mode": "workspace-write",
         }
@@ -2819,7 +2819,7 @@ class CodexExecLauncher:
             raise ValueError("verification closer developer instructions are missing")
         self.config = LaunchConfig(
             adapter_name="verification_closer",
-            model="gpt-5.6-terra",
+            model="gpt-5.6-sol",
             reasoning_effort="high",
             sandbox="workspace-write",
             developer_instructions=instructions.strip(),
