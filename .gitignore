@@ -35,6 +35,7 @@ scripts/codex_verify.sh
 scripts/export_objects.py
 scripts/ingest_real.sh
 !requirements-smoke.txt
+!requirements-builderops.txt
 !requirements-tts.txt
 .pytest_cache/
 .hypothesis/
