@@ -275,6 +275,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # is owned above, without widening builder_system to all
             # architecture tests.
             "tests/architecture/test_pr_hot_path_governance.py",
+            # The separate-schema-plane inventory is Builder System/CES
+            # governance. Keep this exact architecture gate on the Builder
+            # selection rather than failing closed as an unowned test path.
+            "tests/architecture/test_multi_vault_projection_inventory.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -290,6 +294,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/governance",
             "tests/architecture/test_builderops_store_boundary.py",
             "tests/architecture/test_pr_hot_path_governance.py",
+            "tests/architecture/test_multi_vault_projection_inventory.py",
         ),
     ),
     (
