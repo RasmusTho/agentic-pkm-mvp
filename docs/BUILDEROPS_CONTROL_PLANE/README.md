@@ -122,6 +122,14 @@ Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid
 and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
 material is invalid. A live guest check without the named receipt remains only an observation.
 
+The attestation prerequisite may run on VM 102 or a named access-controlled operator runner. The
+validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the runner records its
+observed version and command exit without recording credentials. The exact command and fail-closed
+boundary are defined in [Independent Authenticated Deployment :: Approved candidate attestation
+runner](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#approved-candidate-attestation-runner). A verifier
+exit of `0` proves only the candidate source/image attestation; it does not prove VM identity,
+qualification, writer selection, migration, readiness, or deployment.
+
 The inventory-only boundary is executable through the
 [`devsystem_vm102_component_inventory.v1` schema](../../config/platform/devsystem_vm102_component_inventory.v1.schema.json)
 and its [pure producer/validator](../../app/ops/devsystem_vm102_component_inventory.py). The
