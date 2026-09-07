@@ -19,10 +19,12 @@ refusal to carry a domain, a source, and (where a root is involved) a redacted
 identifier for it -- while still never emitting the raw host path.
 """
 
+import io
 import json
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -71,6 +73,26 @@ def test_read_env_bytes_matches_compose_quoted_comment_rules() -> None:
         "ESCAPED": 'prefix"suffix',
         "PLAIN": "/app/tmp/runtime.env",
     }
+
+
+def test_docker_copy_file_reads_a_complete_tar_after_member_scan(monkeypatch) -> None:
+    """Colima's docker-cp tar output remains readable after validation."""
+
+    payload = b"---\npaths:\n  vault: /app/vault\n---\n"
+    archive_bytes = io.BytesIO()
+    with tarfile.open(fileobj=archive_bytes, mode="w") as archive:
+        member = tarfile.TarInfo("app-local.md")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+
+    class Result:
+        returncode = 0
+        stdout = archive_bytes.getvalue()
+        stderr = b""
+
+    monkeypatch.setattr(writer_inventory.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert writer_inventory._docker_copy_file("container", "/app-local.md") == payload
 
 
 def test_config_sources_accept_quoted_container_app_local_setting(tmp_path, monkeypatch) -> None:
