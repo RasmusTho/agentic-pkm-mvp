@@ -1147,7 +1147,7 @@ def test_interrupted_clear_never_emits_second_event_on_reapproval(
     operation = journal.claim_operation(
         **_claim_kwargs(register, queue_entry_id, from_id, into_id, raw_decision)
     )
-    register.ensure_merge_effects(from_id, into_id)
+    register.ensure_merge_effects(from_id, into_id, operation_id=operation.operation_id)
     operation = journal.commit_merge_event(operation)
     assert journal.verify_committed_visibility(operation) is True
     journal.mark_cleared(operation)
@@ -1178,3 +1178,137 @@ def test_interrupted_clear_never_emits_second_event_on_reapproval(
             (queue_entry_id,),
         ).fetchone()
     assert count == (1,), "no second operation may be claimed for the finished clear"
+
+
+@pytest.mark.parametrize('stop_at', range(1, 5))
+@pytest.mark.parametrize('after_write', [False, True])
+def test_split_retry_reuses_preallocated_successors_and_checkpoints(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop_at: int, after_write: bool
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target', aliases=['T'])
+    register.merge(source, target)
+    first = register.split(target, {'First': ['Source', 'T']}, operation_id='first')[0]
+    partition = {'Second': ['Source'], 'Other': ['T']}
+    real_write = register._write_entry
+    writes = 0
+    plans = []
+
+    def crash(entry):
+        nonlocal writes
+        # This is a fresh connection, before ANY split note effect.
+        saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'second')
+        assert saved is not None
+        plans.append(saved.plan)
+        writes += 1
+        if writes == stop_at and not after_write:
+            raise RuntimeError('stop second split')
+        real_write(entry)
+        if writes == stop_at and after_write:
+            raise RuntimeError('stop second split')
+
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError, match='stop second split'):
+        register.split(first, partition, operation_id='second')
+    restarted = _register(vault_root)
+    ids = restarted.split(first, partition, operation_id='second')
+    assert list(ids) == plans[0]['successor_ids']
+    saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'second')
+    assert saved.completed
+    assert saved.plan == plans[0]
+    assert saved.checkpoints == journal_module.split_checkpoint_keys(saved.plan)
+    cid = restarted.get_entry(source).complement_id
+    assert 'complement:' + cid in saved.checkpoints
+    assert restarted.split(first, partition, operation_id='second') == ids
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM outbox WHERE topic = 'heimdal.register.entity.split'").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize('event_already_committed', [False, True])
+def test_pending_clear_waits_for_unique_split_recovery(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_already_committed: bool
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    if event_already_committed:
+        journal.commit_merge_event(operation)
+    first = register.split(target, {'First': ['Anna fran gymmet', 'Anna G']}, operation_id='first')[0]
+    partition = {'Second': ['Anna fran gymmet', 'Anna G']}
+    real_write = register._write_entry
+    writes = 0
+
+    def crash(entry):
+        nonlocal writes
+        real_write(entry)
+        writes += 1
+        if writes == 2:
+            raise RuntimeError('partial second split')
+
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError):
+        register.split(first, partition, operation_id='second')
+    before = read_settings_note(vault_root, ENTITY_REVIEW).values
+    with pytest.raises(EntityConfirmError, match='pending'):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert read_settings_note(vault_root, ENTITY_REVIEW).values == before
+    assert journal.load_operation(operation.operation_id).state != STATE_CLEARED
+    restarted = _register(vault_root)
+    second = restarted.split(first, partition, operation_id='second')[0]
+    # Even a fully checkpointed split cannot hide a duplicate elsewhere.
+    other = restarted.mint_canonical('Corrupt duplicate')
+    clean = restarted.get_entry(other)
+    relation = restarted.get_entry(second).complements
+    restarted._write_entry(replace(clean, complements=relation, merged_from=(source,)))
+    with pytest.raises(EntityConfirmError, match='complement'):
+        apply_human_review_decisions(vault_root, register=restarted, journal=journal)
+    assert read_settings_note(vault_root, ENTITY_REVIEW).values == before
+    restarted._write_entry(clean)
+    assert apply_human_review_decisions(vault_root, register=restarted, journal=journal)[0].operation_id == operation.operation_id
+    assert pending_review_entries(vault_root) == ()
+    assert len(_merged_event_rows(scratch_dsn)) == 1
+
+
+def test_split_checkpoint_mismatch_fails_without_mutating_notes(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register = _register(_vault_root(tmp_path))
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target')
+    register.merge(source, target)
+    def crash(entry):
+        raise RuntimeError('before notes')
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError):
+        register.split(target, {'New': ['Source']}, operation_id='split')
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute("UPDATE entity_register_split_operations SET checkpoints = '[\"forged\"]'::jsonb")
+    before = {p: p.read_bytes() for p in register.vault_root.rglob('*.md')}
+    with pytest.raises(EntityReviewOperationJournalError, match='checkpoint mismatch'):
+        _register(register.vault_root).split(target, {'New': ['Source']}, operation_id='split')
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_split_event_conflict_rolls_back_terminal_checkpoint(
+    scratch_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register = _register(_vault_root(tmp_path))
+    target = register.mint_canonical('Target')
+    write_event = journal_module.write_outbox_event
+    def corrupt(event, **kwargs):
+        return write_event(event.model_copy(update={'payload': {'wrong': 'event'}}), **kwargs)
+    monkeypatch.setattr(journal_module, 'write_outbox_event', corrupt)
+    with pytest.raises(EntityReviewOperationJournalError, match='completion refused'):
+        register.split(target, {'New': []}, operation_id='event-conflict')
+    saved = journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'event-conflict')
+    assert not saved.completed
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM outbox WHERE topic = 'heimdal.register.entity.split'").fetchone()[0] == 0
+    monkeypatch.setattr(journal_module, 'write_outbox_event', write_event)
+    register.split(target, {'New': []}, operation_id='event-conflict')
+    assert journal_module.EntityRegisterSplitJournal().load_split(register.vault_identity, 'event-conflict').completed

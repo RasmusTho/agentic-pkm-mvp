@@ -1078,8 +1078,8 @@ For entity-review operation recovery, `from_id`, `into_id`, and `operation_id` r
 immutable original human-decided pair. A later governed target evolution may add
 `resolved_into_id` as resolution context only; it never rewrites `into_id`. Missing,
 contradictory, cyclic, or fork-ambiguous operation-bound note lineage emits no event and
-leaves the review entry pending. This does not establish globally unique split-complement
-recovery, which remains a separate contract.
+leaves the review entry pending. Recovery also requires globally unique paired complement identity
+and the completed, event-visible checkpoints for every source-reclaiming split hop.
 Lineage/audit event, same non-dispatched posture as above. Two emitters:
 
 - **Entity-review merges** (the production human-review path, EROJ-01 #4350): emitted by the
@@ -1090,8 +1090,8 @@ Lineage/audit event, same non-dispatched posture as above. Two emitters:
   `entities/review.md` `pending` entry may be cleared only after a **fresh** connection observes
   both the terminal journal row and this committed event (INV-EROJ-3) — visibility on the writer's
   or a caller's own uncommitted transaction never authorizes the clear. Source:
-  `heimdal.entity_review`. Globally unique split-complement recovery remains unclaimed here
-  (EROJ-03).
+  `heimdal.entity_review`. The register lock holds identity and lineage validation through the
+  pending clear, including recovery of an already event-committed or cleared operation.
 - **Direct `EntityRegister.merge()` calls** (the A1 register API outside the review path): emitted
   by the register immediately after the note writes. The event keeps its existing payload shape, while
   the canonical note lineage derives a retry-stable direct merge operation identity; it is not an
@@ -1117,11 +1117,21 @@ derives a retry-stable direct split identity and names that reclaimed child; onl
 successor-complete source-bound proof can provide entity-review target-evolution context. The split
 event payload does not rewrite an entity-review operation's original pair.
 
+The journal commits the exact preallocated plan before split note effects, then checkpoints each
+note effect and moved complement. After global relation validation, all split events commit in the
+same transaction as plan completion. Event keys bind vault, split operation, and preallocated
+successor, so a crash/retry cannot duplicate an event. A fresh transaction must observe the complete
+plan and exact event payloads before split success or review queue clear. A collision with a
+contradictory event refuses completion. The original merge relation's complement id and `into_id`
+survive first and repeated splits unchanged.
+
 Payload fields (in addition to the envelope):
 - `split_from` (`string`): the entity_id that was partitioned.
 - `new_entity_id` (`string`): the newly minted canonical entity for this partition.
 - `label` (`string`): the new entity's label.
 - `aliases` (`array[string]`): the alias subset moved into the new entity.
+- `operation_id` (`string`): the retry-stable split plan identity.
+- `complement_ids` (`array[string]`): the original relation ids moved into this successor.
 
 ### `heimdal.register.entity.redirect_resolved`
 

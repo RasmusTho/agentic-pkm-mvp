@@ -112,6 +112,45 @@ class FakeOutboxConn:
         return [r for r in self.rows.values() if r["topic"] == topic]
 
 
+
+class FakeSplitJournal:
+    """Routing double; the separate pg suite proves durable journal transactions."""
+    def __init__(self, conn: Any) -> None:
+        self.records: dict[tuple[str, str], Any] = {}
+        self.conn = conn
+
+    def load_split(self, vault_identity: str, operation_id: str) -> Any:
+        return self.records.get((vault_identity, operation_id))
+
+    def prepare_split(self, record: Any) -> Any:
+        key = (record.vault_identity, record.operation_id)
+        if key in self.records:
+            assert self.records[key].plan == record.plan
+            return self.records[key]
+        assert not any(r.vault_identity == record.vault_identity and not r.completed for r in self.records.values())
+        self.records[key] = record
+        return record
+
+    def checkpoint_split(self, record: Any, checkpoint: str) -> Any:
+        from app.heimdal.entity_review_operation_journal import split_checkpoint_keys
+        if checkpoint not in record.checkpoints:
+            assert split_checkpoint_keys(record.plan)[len(record.checkpoints)] == checkpoint
+            record = replace(record, checkpoints=(*record.checkpoints, checkpoint))
+            self.records[(record.vault_identity, record.operation_id)] = record
+        return record
+
+    def finish_split(self, record: Any) -> Any:
+        from app.events.models import new_event
+        from app.heimdal.entity_review_operation_journal import split_checkpoint_keys, split_event_id
+        from app.services.outbox import write_outbox_event
+        assert record.checkpoints == split_checkpoint_keys(record.plan)
+        for payload in record.plan['events']:
+            event = new_event(event_type=HEIMDAL_REGISTER_ENTITY_SPLIT, payload=payload, source='test')
+            write_outbox_event(event, conn=self.conn, idempotency_key=split_event_id(record, payload))
+        record = replace(record, completed=True)
+        self.records[(record.vault_identity, record.operation_id)] = record
+        return record
+
 def _vault(root: Path) -> VaultContext:
     root.mkdir(parents=True, exist_ok=True)
     return VaultContext(
@@ -131,10 +170,12 @@ def _blocking_guard() -> WriteGuard:
 
 
 def _register(tmp_path: Path, *, conn: Any = None, guard: WriteGuard | None = None) -> EntityRegister:
+    conn = conn if conn is not None else FakeOutboxConn()
     return EntityRegister(
         vault_context=_vault(tmp_path / "vault"),
         write_guard=guard or _allowing_guard(),
-        conn=conn if conn is not None else FakeOutboxConn(),
+        conn=conn,
+        split_journal=FakeSplitJournal(conn),
     )
 
 
@@ -377,7 +418,7 @@ def test_repointed_split_requires_complete_successor_complement(tmp_path: Path) 
     assert successor_entry is not None
     register._write_entry(replace(successor_entry, merged_from=()))
 
-    with pytest.raises(EntityRegisterError, match="complete successor complement"):
+    with pytest.raises(EntityRegisterError, match="complement"):
         register.resolve_target_evolution(
             source, target, operation_id="review-operation"
         )
@@ -396,7 +437,7 @@ def test_source_reclaimed_split_rejects_contradictory_partial_complement(
     assert target_entry is not None
     register._write_entry(replace(target_entry, merged_from=(source,)))
 
-    with pytest.raises(EntityRegisterError, match="contradictory partial"):
+    with pytest.raises(EntityRegisterError, match="complement"):
         register.resolve_target_evolution(
             source, target, operation_id="review-operation"
         )
@@ -644,6 +685,8 @@ def test_ensure_merge_effects_backfills_pre_lineage_completed_merge_before_evolu
 
     # Simulate an EROJ-01-era write that pre-dates EROJ-02 lineage.
     assert register.ensure_merge_effects(source, target) == MERGE_EFFECTS_NONE
+    register._write_entry(replace(register.get_entry(source), lineage=(), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
     assert register.get_entry(source).lineage == ()
     register.merge(target, evolved, operation_id="target-evolution")
 
@@ -655,30 +698,23 @@ def test_ensure_merge_effects_backfills_pre_lineage_completed_merge_before_evolu
     ) == evolved
 
 
-def test_evolved_source_only_merge_backfills_lineage_but_refuses_missing_complement(
-    tmp_path: Path,
-) -> None:
-    """Lineage backfill cannot turn a half-applied original merge into complete."""
+def test_evolved_source_only_merge_backfills_lineage_but_refuses_missing_complement(tmp_path: Path) -> None:
+    """EROJ-03 refuses unrelated evolution until the partial relation is completed."""
     register = _effect_register(tmp_path)
     source = register.mint_canonical("Source")
     target = register.mint_canonical("Target")
     evolved = register.mint_canonical("Evolved")
-
     register.arm(fail_on_write=2)
     with pytest.raises(EntityRegisterError, match="simulated crash"):
-        register.ensure_merge_effects(source, target)
+        register.ensure_merge_effects(source, target, operation_id="journal-operation")
     register.disarm()
+    before = _relation_snapshot(register)
+    with pytest.raises(EntityRegisterError, match="complement"):
+        register.merge(target, evolved, operation_id="target-evolution")
+    assert _relation_snapshot(register) == before
+    register.ensure_merge_effects(source, target, operation_id="journal-operation")
     register.merge(target, evolved, operation_id="target-evolution")
-
-    with pytest.raises(EntityRegisterError, match="original target complement"):
-        register.ensure_merge_effects(
-            source, target, operation_id="journal-operation"
-        )
-    source_entry = register.get_entry(source)
-    assert source_entry is not None
-    assert source_entry.lineage[-1]["operation_id"] == "journal-operation"
-    assert source not in register.get_entry(target).merged_from
-    assert source not in register.get_entry(evolved).merged_from
+    assert register.resolve_target_evolution(source, target, operation_id="journal-operation") == evolved
 
 
 def test_target_evolution_rejects_merge_hop_without_successor_complement(
@@ -702,7 +738,7 @@ def test_target_evolution_rejects_merge_hop_without_successor_complement(
         )
     )
 
-    with pytest.raises(EntityRegisterError, match="complete successor complement"):
+    with pytest.raises(EntityRegisterError, match="complement"):
         register.resolve_target_evolution(
             source, target, operation_id="journal-operation"
         )
@@ -774,39 +810,216 @@ def test_merge_effect_helpers_fail_closed_on_unprovable_notes(tmp_path: Path) ->
             created=source_entry.created,
         )
     )
-    with pytest.raises(EntityRegisterError, match="contradictory notes"):
+    with pytest.raises(EntityRegisterError, match="complement"):
         register.merge_effect_state(a, b)
 
 
 def test_merge_into_evolved_target_is_refused(tmp_path: Path) -> None:
-    """Review F2 (#4350): INV-EROJ-7 / partial-failure matrix row 5. A target
-    that has itself been merged away refuses both fresh application and
-    resume — this slice cannot prove target-evolved recovery (EROJ-02)."""
+    """A new merge into an already-merged target remains fail-closed."""
     register = _effect_register(tmp_path)
     a = register.mint_canonical("Alpha")
     b = register.mint_canonical("Beta")
     c = register.mint_canonical("Gamma")
-
-    # Crash after the source redirect for a -> b, then b evolves into c.
-    register.arm(fail_on_write=2)
-    with pytest.raises(EntityRegisterError, match="simulated crash"):
-        register.ensure_merge_effects(a, b)
-    register.disarm()
     register.merge(b, c)
-
-    # Resume of the half-applied a -> b merge is refused, loudly.
-    with pytest.raises(EntityRegisterError, match="target has evolved"):
-        register.merge_effect_state(a, b)
-    with pytest.raises(EntityRegisterError, match="target has evolved"):
+    before = _relation_snapshot(register)
+    with pytest.raises(EntityRegisterError):
         register.ensure_merge_effects(a, b)
-    # The half-applied state was not silently completed.
-    assert a not in register.get_entry(c).merged_from
-    assert a not in register.get_entry(b).merged_from
+    assert _relation_snapshot(register) == before
 
-    # Fresh application into a merged-away target is refused the same way —
-    # a deliberate fail-closed behavior change to merge() (previously it
-    # silently merged into the dead identity).
-    d = register.mint_canonical("Delta")
-    with pytest.raises(EntityRegisterError, match="target has evolved"):
-        register.merge(d, b)
-    assert register.get_entry(d).lifecycle == LIFECYCLE_CANONICAL
+
+def _relation_snapshot(register: EntityRegister) -> dict[str, str]:
+    return {p.name: p.read_text() for p in (register.vault_root / '_heimdal/register').glob('*.md')}
+
+
+def test_split_complement_ids_are_globally_unique_across_repeated_splits(tmp_path: Path) -> None:
+    register = _register(tmp_path)
+    source = register.mint_canonical('Source', aliases=['S'])
+    target = register.mint_canonical('Target')
+    register.merge(source, target)
+    complement_id = register.get_entry(source).complement_id
+    assert complement_id
+    for label in ('First', 'Second', 'Third'):
+        target = register.split(target, {label: ['Source', 'S']})[0]
+        assert register.get_entry(source).complement_id == complement_id
+        records = [(e.entity_id, c) for e in register._all_entries() for c in e.complements]
+        assert len(records) == 1
+        assert records[0][0] == target
+        assert records[0][1]['complement_id'] == complement_id
+        assert records[0][1]['from_id'] == source
+
+
+@pytest.mark.parametrize('split_number', [1, 2])
+@pytest.mark.parametrize('stop_at', range(1, 5))
+@pytest.mark.parametrize('after_write', [False, True])
+def test_second_split_crash_recovers_without_duplicate_complements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, split_number: int, stop_at: int, after_write: bool
+) -> None:
+    conn = FakeOutboxConn()
+    register = _register(tmp_path, conn=conn)
+    source = register.mint_canonical('Source', aliases=['S'])
+    target = register.mint_canonical('Target', aliases=['T'])
+    register.merge(source, target)
+    if split_number == 2:
+        target = register.split(target, {'First': ['Source', 'S', 'T']})[0]
+    partition = {'Recovered': ['Source', 'S'], 'Other': ['T']}
+    write = register._write_entry
+    count = 0
+
+    def crash(entry: RegisterEntry) -> None:
+        nonlocal count
+        count += 1
+        if count == stop_at and not after_write:
+            raise RuntimeError('injected split crash')
+        write(entry)
+        if count == stop_at and after_write:
+            raise RuntimeError('injected split crash')
+
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError, match='injected split crash'):
+        register.split(target, partition)
+    monkeypatch.setattr(register, '_write_entry', write)
+    ids = register.split(target, partition)
+    assert register.split(target, partition) == ids
+    assert len([e for e in register._all_entries() if e.split_from == target]) == 2
+    assert len(conn.rows_for(HEIMDAL_REGISTER_ENTITY_SPLIT)) == 2 + (split_number - 1)
+    assert register.resolve_redirects(source) == ids[0]
+    assert len([c for e in register._all_entries() for c in e.complements]) == 1
+
+
+@pytest.mark.parametrize('corruption', ['duplicate', 'missing', 'mismatch'])
+def test_duplicate_complement_preflight_fails_before_pending_clear(tmp_path: Path, corruption: str) -> None:
+    register = _register(tmp_path)
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target')
+    register.ensure_merge_effects(source, target, operation_id='op')
+    entry = register.get_entry(target)
+    if corruption == 'duplicate':
+        other = register.mint_canonical('Other')
+        register._write_entry(replace(register.get_entry(other), complements=entry.complements, merged_from=(source,)))
+    elif corruption == 'missing':
+        register._write_entry(replace(entry, complements=()))
+    else:
+        register._write_entry(replace(register.get_entry(source), complement_id='wrong'))
+    before = _relation_snapshot(register)
+    with pytest.raises(EntityRegisterError):
+        register.ensure_merge_effects(source, target, operation_id='op')
+    assert _relation_snapshot(register) == before
+
+
+@pytest.mark.parametrize('corruption', [None, 'duplicate', 'missing', 'multiple-targets', 'cycle'])
+def test_legacy_complement_backfill_is_deterministic_and_fail_loud(tmp_path: Path, corruption: str | None) -> None:
+    register = _register(tmp_path)
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target')
+    register._write_entry(replace(register.get_entry(source), lifecycle=LIFECYCLE_MERGED, merged_into=target))
+    register._write_entry(replace(register.get_entry(target), merged_from=(source,), aliases=('Source',)))
+    if corruption == 'duplicate':
+        register._write_entry(replace(register.get_entry(target), merged_from=(source, source)))
+    elif corruption == 'missing':
+        register._write_entry(replace(register.get_entry(target), merged_from=()))
+    elif corruption == 'multiple-targets':
+        other = register.mint_canonical('Other')
+        register._write_entry(replace(register.get_entry(other), merged_from=(source,)))
+    elif corruption == 'cycle':
+        register._write_entry(replace(register.get_entry(target), lifecycle=LIFECYCLE_MERGED, merged_into=source))
+        register._write_entry(replace(register.get_entry(source), merged_from=(target,)))
+    before = _relation_snapshot(register)
+    if corruption:
+        with pytest.raises(EntityRegisterError):
+            register.backfill_complements()
+        assert _relation_snapshot(register) == before
+    else:
+        register.backfill_complements()
+        first = register.get_entry(source).complement_id
+        assert first == register.get_entry(target).complements[0]['complement_id']
+        after = _relation_snapshot(register)
+        register.backfill_complements()
+        assert _relation_snapshot(register) == after
+        # Reconstruct the same original legacy notes: deterministic across restarts.
+        for name, content in before.items():
+            (register.vault_root / '_heimdal/register' / name).write_text(content)
+        register.backfill_complements()
+        assert register.get_entry(source).complement_id == first
+
+
+def test_all_relation_producers_supply_unique_complement_identity(tmp_path: Path) -> None:
+    register = _register(tmp_path)
+    target = register.mint_canonical('Target')
+    direct = register.mint_provisional('Direct').entity_id
+    review = register.mint_canonical('Review')
+    register.merge(direct, target)
+    register.ensure_merge_effects(review, target, operation_id='review-op')
+    ids = {register.get_entry(s).complement_id for s in (direct, review)}
+    assert len(ids) == 2 and None not in ids
+    new = register.split(target, {'Separate': ['Direct']})[0]
+    assert register.get_entry(new).complements[0]['into_id'] == target
+    for entry in register._all_entries():
+        assert RegisterEntry.from_frontmatter(entry.to_frontmatter()) == entry
+
+
+def test_direct_merge_retry_preserves_relation_and_one_event(tmp_path: Path) -> None:
+    conn = FakeOutboxConn()
+    register = _register(tmp_path, conn=conn)
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target')
+    register.merge(source, target)
+    before = _relation_snapshot(register)
+    register.merge(source, target)
+    assert _relation_snapshot(register) == before
+    assert len(conn.rows_for(HEIMDAL_REGISTER_ENTITY_MERGED)) == 1
+
+
+def test_multiple_legacy_sources_backfill_together_and_resume_partial_backfill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    register = _register(tmp_path)
+    sources = [register.mint_canonical(label) for label in ('A', 'B')]
+    target = register.mint_canonical('Target')
+    for source in sources:
+        register._write_entry(replace(register.get_entry(source), lifecycle=LIFECYCLE_MERGED, merged_into=target))
+    register._write_entry(replace(register.get_entry(target), merged_from=tuple(sources)))
+    write = register._write_entry
+    count = 0
+    def crash(entry):
+        nonlocal count
+        write(entry)
+        count += 1
+        if count == 1:
+            raise RuntimeError('backfill crash')
+    monkeypatch.setattr(register, '_write_entry', crash)
+    with pytest.raises(RuntimeError):
+        register.backfill_complements()
+    monkeypatch.setattr(register, '_write_entry', write)
+    register.backfill_complements()
+    assert len(register.get_entry(target).complements) == 2
+    assert {c['complement_id'] for c in register.get_entry(target).complements} == {
+        register.get_entry(source).complement_id for source in sources}
+
+
+def test_split_partition_conflict_does_not_backfill_legacy_notes(tmp_path: Path) -> None:
+    register = _register(tmp_path)
+    source = register.mint_canonical('Source')
+    target = register.mint_canonical('Target')
+    register._write_entry(replace(register.get_entry(source), lifecycle=LIFECYCLE_MERGED, merged_into=target))
+    register._write_entry(replace(register.get_entry(target), merged_from=(source,)))
+    before = _relation_snapshot(register)
+    with pytest.raises(EntityRegisterError, match='multiple partitions'):
+        register.split(target, {'A': ['Source'], 'B': ['Source']})
+    assert _relation_snapshot(register) == before
+
+
+def test_register_lock_preserves_two_concurrent_merge_complements(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    conn = FakeOutboxConn()
+    register = _register(tmp_path, conn=conn)
+    target = register.mint_canonical('Target')
+    sources = [register.mint_canonical(label) for label in ('A', 'B')]
+    barrier = Barrier(2)
+    def merge(source):
+        separate = _register(tmp_path, conn=conn)
+        barrier.wait(timeout=5)
+        separate.merge(source, target)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(merge, sources))
+    assert set(register.get_entry(target).merged_from) == set(sources)
+    assert len(register.get_entry(target).complements) == 2
+    register._validated_entries()

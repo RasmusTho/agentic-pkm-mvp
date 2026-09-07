@@ -111,9 +111,10 @@ def _run_module_autocreate(dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
     with psycopg.connect(dsn) as conn:
         journal_module.ensure_journal_schema(conn)
+        journal_module.ensure_split_schema(conn)
 
 
-def _schema_snapshot(dsn: str) -> dict:
+def _schema_snapshot(dsn: str, table: str = TABLE) -> dict:
     """Column/PK/index/check shape of the journal table, normalized."""
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
@@ -125,7 +126,7 @@ def _schema_snapshot(dsn: str) -> dict:
                 WHERE table_schema = 'public' AND table_name = %s
                 ORDER BY column_name
                 """,
-                (TABLE,),
+                (table,),
             )
             columns = [tuple(row) for row in cur.fetchall()]
             cur.execute(
@@ -140,7 +141,7 @@ def _schema_snapshot(dsn: str) -> dict:
                   AND tc.constraint_type = 'PRIMARY KEY'
                 ORDER BY kcu.ordinal_position
                 """,
-                (TABLE,),
+                (table,),
             )
             pk = [row[0] for row in cur.fetchall()]
             cur.execute(
@@ -150,7 +151,7 @@ def _schema_snapshot(dsn: str) -> dict:
                 WHERE schemaname = 'public' AND tablename = %s
                 ORDER BY indexname
                 """,
-                (TABLE,),
+                (table,),
             )
             indexes = [tuple(row) for row in cur.fetchall()]
             # Auto-generated NOT NULL check rows carry per-database OIDs in
@@ -170,7 +171,7 @@ def _schema_snapshot(dsn: str) -> dict:
                   AND cc.constraint_name NOT LIKE '%%\\_not\\_null' ESCAPE '\\'
                 ORDER BY cc.constraint_name
                 """,
-                (TABLE,),
+                (table,),
             )
             checks = [tuple(row) for row in cur.fetchall()]
     return {"columns": columns, "pk": pk, "indexes": indexes, "checks": checks}
@@ -186,6 +187,9 @@ def test_entity_review_operation_journal_schema_matches_head(
     _alembic_upgrade(migrated, monkeypatch, "head")
     _run_module_autocreate(autocreated, monkeypatch)
 
+    assert _schema_snapshot(migrated, "entity_register_split_operations") == _schema_snapshot(
+        autocreated, "entity_register_split_operations")
+    assert _schema_snapshot(migrated, "entity_register_split_operations")["columns"]
     migrated_shape = _schema_snapshot(migrated)
     autocreated_shape = _schema_snapshot(autocreated)
 

@@ -440,7 +440,7 @@ def _pending_generation_precedes_cleared_operation(
         return False
 
 
-def apply_human_review_decisions(
+def _apply_human_review_decisions_locked(
     vault_root: Path,
     *,
     register: EntityRegister,
@@ -615,6 +615,7 @@ def apply_human_review_decisions(
                             )
                         )
                         continue
+                    register.resolve_target_evolution(active.from_id, active.into_id, operation_id=active.operation_id)
                     journal.mark_cleared(active)
                     remaining_pending = [
                         p
@@ -743,6 +744,10 @@ def apply_human_review_decisions(
                     # than claim another operation/event. A re-queued or
                     # timestamp-ambiguous generation cannot take this path;
                     # claimed retries still require complete identity parity.
+                    register.resolve_target_evolution(cleared_twin.from_id, cleared_twin.into_id,
+                                                      operation_id=cleared_twin.operation_id)
+                    if not journal.verify_committed_visibility(cleared_twin):
+                        raise EntityRegisterError("cleared operation event is not freshly visible; entry stays pending")
                     merged = True
                     operation_id = cleared_twin.operation_id
                 else:
@@ -907,3 +912,15 @@ __all__ = [
     "queue_for_review",
     "route_mention",
 ]
+
+
+def apply_human_review_decisions(
+    vault_root: Path, *, register: EntityRegister,
+    settings_dir: str = DEFAULT_SETTINGS_DIR,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    journal: EntityReviewOperationJournalPort | None = None,
+) -> tuple[AppliedDecision, ...]:
+    """Apply confirmed review intent under the register-wide relation fence."""
+    with register.locked():
+        return _apply_human_review_decisions_locked(vault_root, register=register,
+            settings_dir=settings_dir, write_guard=write_guard, journal=journal)
