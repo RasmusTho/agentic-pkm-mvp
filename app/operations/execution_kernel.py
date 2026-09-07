@@ -55,10 +55,23 @@ class OwnerExecutionResult:
     status: OperationStatus
     items: tuple[Mapping[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
+    effect_id: str | None = None
+    effect_receipt: Mapping[str, Any] | None = None
 
     @classmethod
-    def succeeded(cls, *, items: tuple[Mapping[str, Any], ...] = ()) -> "OwnerExecutionResult":
-        return cls(OperationStatus.SUCCEEDED, items)
+    def succeeded(
+        cls,
+        *,
+        items: tuple[Mapping[str, Any], ...] = (),
+        effect_id: str | None = None,
+        effect_receipt: Mapping[str, Any] | None = None,
+    ) -> "OwnerExecutionResult":
+        return cls(
+            OperationStatus.SUCCEEDED,
+            items,
+            effect_id=effect_id,
+            effect_receipt=effect_receipt,
+        )
 
     @classmethod
     def ambiguous(cls) -> "OwnerExecutionResult":
@@ -364,7 +377,14 @@ class OperationExecutionKernel:
                 request, OperationStatus.REJECTED, warnings=("bounded delegation is required",)
             )
         operation_ids = delegation.get("operation_ids")
-        target_ids = tuple(str(target.get("artifact_id", "")) for target in request.targets)
+        target_ids = tuple(target.get("artifact_id") for target in request.targets)
+        if not all(_stable_nonempty_identity(target_id) for target_id in target_ids):
+            return self._outcome(
+                request,
+                OperationStatus.REJECTED,
+                warnings=("every target requires a stable artifact identity",),
+            )
+        stable_target_ids = tuple(str(target_id) for target_id in target_ids)
         admitted_targets = delegation.get("target_ids")
         if (
             delegation.get("active_context_ref") != request.context.active_context_ref
@@ -378,9 +398,9 @@ class OperationExecutionKernel:
                 for field in ("principal", "client", "surface", "receipt_ref", "authority_class")
             )
             or not isinstance(admitted_targets, (list, tuple, set))
-            or not set(target_ids).issubset({str(item) for item in admitted_targets})
+            or not set(stable_target_ids).issubset({str(item) for item in admitted_targets})
             or not isinstance(delegation.get("max_targets"), int)
-            or delegation["max_targets"] < len(target_ids)
+            or delegation["max_targets"] < len(stable_target_ids)
             or not isinstance(delegation.get("allowed_effects"), (list, tuple, set))
             or request.operation_id not in delegation["allowed_effects"]
             or not isinstance(delegation.get("expires_at"), (int, float))
@@ -392,12 +412,28 @@ class OperationExecutionKernel:
                 OperationStatus.REJECTED,
                 warnings=("delegation does not admit this operation",),
             )
-        if len(target_ids) > 1 and delegation.get("batch_policy") != request.batch_policy:
-            return self._outcome(
-                request,
-                OperationStatus.REJECTED,
-                warnings=("batch policy is not bound by delegation",),
-            )
+        if len(stable_target_ids) > 1:
+            request_batch_policy = request.batch_policy
+            delegation_batch_policy = delegation.get("batch_policy")
+            if not (
+                _valid_batch_policy(request_batch_policy)
+                or _valid_batch_policy(delegation_batch_policy)
+            ):
+                return self._outcome(
+                    request,
+                    OperationStatus.REJECTED,
+                    warnings=("a valid batch policy is required for multiple targets",),
+                )
+            if (
+                _valid_batch_policy(request_batch_policy)
+                and _valid_batch_policy(delegation_batch_policy)
+                and request_batch_policy != delegation_batch_policy
+            ):
+                return self._outcome(
+                    request,
+                    OperationStatus.REJECTED,
+                    warnings=("batch policy is not bound by delegation",),
+                )
         if request.operation_version != "ygg.operation.v1":
             return self._outcome(
                 request, OperationStatus.NOT_SUPPORTED, warnings=("unsupported operation version",)
@@ -413,11 +449,33 @@ class OperationExecutionKernel:
         delegation: Mapping[str, Any],
     ) -> OperationOutcome:
         if result.status is OperationStatus.SUCCEEDED:
+            if not _has_durable_owner_effect_receipt(result):
+                return self._outcome(
+                    request,
+                    OperationStatus.RECOVERY_REQUIRED,
+                    items=_redact_items(result.items),
+                    receipt=_receipt(
+                        request, policy_version, intent_digest, "recovery_required", delegation
+                    ),
+                    warnings=result.warnings
+                    + (
+                        "owner success is missing a durable effect receipt or stable effect identity",
+                        "read receipt before retry",
+                    ),
+                )
             return self._outcome(
                 request,
                 result.status,
                 items=_redact_items(result.items),
-                receipt=_receipt(request, policy_version, intent_digest, "completed", delegation),
+                receipt=_receipt(
+                    request,
+                    policy_version,
+                    intent_digest,
+                    "completed",
+                    delegation,
+                    result.effect_id,
+                    result.effect_receipt,
+                ),
                 warnings=result.warnings,
             )
         if result.status is OperationStatus.RECOVERY_REQUIRED:
@@ -475,6 +533,8 @@ def _receipt(
     intent_digest: str,
     state: str,
     delegation: Mapping[str, Any] | None = None,
+    effect_id: str | None = None,
+    effect_receipt: Mapping[str, Any] | None = None,
 ) -> OperationReceipt:
     """Receipt projection intentionally excludes arguments, secrets, and raw delegation."""
     return OperationReceipt(
@@ -493,10 +553,30 @@ def _receipt(
             "client": None if delegation is None else delegation.get("client"),
             "surface": None if delegation is None else delegation.get("surface"),
             "delegation_ref": None if delegation is None else delegation.get("receipt_ref"),
+            "effect_id": effect_id,
+            "effect_receipt_ref": None
+            if effect_receipt is None
+            else effect_receipt.get("receipt_id"),
             "intent_digest": intent_digest,
             "state": state,
             "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
         },
+    )
+
+
+def _stable_nonempty_identity(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _valid_batch_policy(value: object) -> bool:
+    return isinstance(value, Mapping) and bool(value)
+
+
+def _has_durable_owner_effect_receipt(result: OwnerExecutionResult) -> bool:
+    return (
+        _stable_nonempty_identity(result.effect_id)
+        and isinstance(result.effect_receipt, Mapping)
+        and _stable_nonempty_identity(result.effect_receipt.get("receipt_id"))
     )
 
 

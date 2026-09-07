@@ -43,6 +43,12 @@ def _delegation(**overrides: object) -> dict[str, object]:
     return values
 
 
+def _owner_success() -> OwnerExecutionResult:
+    return OwnerExecutionResult.succeeded(
+        effect_id="effect-1", effect_receipt={"receipt_id": "owner-receipt-1"}
+    )
+
+
 def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
     calls: list[str] = []
     kernel = OperationExecutionKernel(
@@ -50,7 +56,7 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
         handlers={
             "artifact.move": lambda request: calls.append(request.request_id)
-            or OwnerExecutionResult.succeeded()
+            or _owner_success()
         },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
@@ -71,7 +77,7 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
         policy_evaluator=lambda request, delegation: PolicyDecision.denied("policy-7", "denied"),
         handlers={
             "artifact.move": lambda request: calls.append("denied")
-            or OwnerExecutionResult.succeeded()
+            or _owner_success()
         },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
@@ -100,7 +106,7 @@ def test_executor_enforces_all_preconditions_before_owner_handler() -> None:
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
         handlers={
             "artifact.move": lambda request: calls.append("stale")
-            or OwnerExecutionResult.succeeded()
+            or _owner_success()
         },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: False,
@@ -117,7 +123,7 @@ def test_idempotency_replay_is_stable_and_intent_mismatch_conflicts() -> None:
         policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
         handlers={
             "artifact.move": lambda request: calls.append(request.request_id)
-            or OwnerExecutionResult.succeeded()
+            or _owner_success()
         },
         receipt_store=InMemoryReceiptStore(),
         version_checker=lambda request: True,
@@ -157,3 +163,87 @@ def test_ambiguous_owner_outcome_is_fail_closed_and_recoverable() -> None:
     assert first.receipt is not None
     assert first.receipt.payload["recovery"] == "read_receipt_before_retry"
     assert calls == ["request-1"]
+
+
+def test_success_requires_owner_receipt_before_acknowledgement() -> None:
+    kernel = OperationExecutionKernel(
+        context_resolver=lambda context: True,
+        policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
+        handlers={
+            "artifact.move": lambda request: OwnerExecutionResult.succeeded(effect_id="effect-1")
+        },
+        receipt_store=InMemoryReceiptStore(),
+        version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
+    )
+
+    outcome = kernel.execute(_request(), _delegation())
+
+    assert outcome.status is OperationStatus.RECOVERY_REQUIRED
+    assert outcome.receipt is not None
+    assert outcome.receipt.payload["state"] == "recovery_required"
+
+    missing_effect_identity = OperationExecutionKernel(
+        context_resolver=lambda context: True,
+        policy_evaluator=lambda request, delegation: PolicyDecision.allowed("policy-7"),
+        handlers={
+            "artifact.move": lambda request: OwnerExecutionResult.succeeded(
+                effect_receipt={"receipt_id": "owner-receipt-1"}
+            )
+        },
+        receipt_store=InMemoryReceiptStore(),
+        version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
+    ).execute(_request(request_id="request-2"), _delegation())
+
+    assert missing_effect_identity.status is OperationStatus.RECOVERY_REQUIRED
+
+
+def test_multi_target_request_requires_bound_batch_policy() -> None:
+    policy_calls: list[str] = []
+    owner_calls: list[str] = []
+    kernel = OperationExecutionKernel(
+        context_resolver=lambda context: True,
+        policy_evaluator=lambda request, delegation: policy_calls.append(request.request_id)
+        or PolicyDecision.allowed("policy-7"),
+        handlers={
+            "artifact.move": lambda request: owner_calls.append(request.request_id)
+            or _owner_success()
+        },
+        receipt_store=InMemoryReceiptStore(),
+        version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
+    )
+    request = _request(
+        targets=({"artifact_id": "artifact-1"}, {"artifact_id": "artifact-2"})
+    )
+    delegation = _delegation(target_ids=["artifact-1", "artifact-2"], max_targets=2)
+
+    outcome = kernel.execute(request, delegation)
+
+    assert outcome.status is OperationStatus.REJECTED
+    assert policy_calls == []
+    assert owner_calls == []
+
+
+def test_target_identity_is_required_before_dispatch() -> None:
+    policy_calls: list[str] = []
+    owner_calls: list[str] = []
+    kernel = OperationExecutionKernel(
+        context_resolver=lambda context: True,
+        policy_evaluator=lambda request, delegation: policy_calls.append(request.request_id)
+        or PolicyDecision.allowed("policy-7"),
+        handlers={
+            "artifact.move": lambda request: owner_calls.append(request.request_id)
+            or _owner_success()
+        },
+        receipt_store=InMemoryReceiptStore(),
+        version_checker=lambda request: True,
+        token_validator=lambda request, decision: True,
+    )
+
+    outcome = kernel.execute(_request(targets=({},)), _delegation(target_ids=[""]))
+
+    assert outcome.status is OperationStatus.REJECTED
+    assert policy_calls == []
+    assert owner_calls == []
