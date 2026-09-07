@@ -10,7 +10,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Target-state task specification; not implemented or runtime acceptance.
+State: Implementation delivered by PR #5413 (issue #5402, 2026-09-07); runtime acceptance remains parent-owned.
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -36,13 +36,13 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The production synthesis entrypoint carries addressed repo, captured evidence versions and source references through a mocked model response; unreferenced or conflicting completion claims cannot become canonical status.
+- [x] The production synthesis entrypoint carries addressed repo, captured evidence versions and source references through a mocked model response; unreferenced or conflicting completion claims cannot become canonical status.
   - Verify: `tests/builderops/test_devui_owner_synthesis.py::test_production_synthesis_preserves_sources_and_withdraws_unsupported_claims`
-- [ ] Prompt injection in Issue/comment evidence and generated action text cannot invoke tools, mutate sources or turn a suggestion into an approved command from the production composition call site.
+- [x] Prompt injection in Issue/comment evidence and generated action text cannot invoke tools, mutate sources or turn a suggestion into an approved command from the production composition call site.
   - Verify: `tests/builderops/test_devui_owner_synthesis.py::test_untrusted_source_and_model_text_have_no_effect_authority`
-- [ ] Missing model access, timeout or malformed output returns readable source facts with explicit model failure and no hidden provider/billing fallback.
+- [x] Missing model access, timeout or malformed output returns readable source facts with explicit model failure and no hidden provider/billing fallback.
   - Verify: `tests/builderops/test_devui_owner_synthesis.py::test_model_failure_preserves_usable_source_view`
-- [ ] The production path uses Builder-owned configuration and invocation, and never imports or calls the Product model policy/facade to synthesize this view.
+- [x] The production path uses Builder-owned configuration and invocation, and never imports or calls the Product model policy/facade to synthesize this view.
   - Verify: `tests/builderops/test_devui_owner_synthesis.py::test_production_call_uses_builder_model_boundary`
 
 ## How to Verify (Pre-Merge)
