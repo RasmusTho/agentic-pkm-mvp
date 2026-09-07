@@ -90,6 +90,78 @@ pytestmark = pytest.mark.pg
 MERGED_TOPIC = "heimdal.register.entity.merged"
 
 
+def test_eventless_merge_then_target_merge_backfills_original_event(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """EROJ-02 must prove an evolved target without changing the original pair."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    evolved = register.mint_canonical("Evolved target")
+    register.merge(target, evolved, operation_id="target-merge")
+    resolved = register.resolve_target_evolution(source, target, operation_id=operation.operation_id)
+    committed = journal.commit_merge_event(operation, resolution_context=resolved)
+    assert journal.verify_committed_visibility(committed) is True
+    events = _merged_event_rows(scratch_dsn)
+    assert len(events) == 1
+    assert events[0][1] == {"from_id": source, "into_id": target, "operation_id": operation.operation_id, "resolved_into_id": evolved}
+
+
+def test_target_split_lineage_preserves_original_operation_identity(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """EROJ-02 must use an explicit split successor, never rewrite the event pair."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    successor = register.split(
+        target,
+        {"Recovered source": ["Anna fran gymmet", "Anna G"]},
+        operation_id="target-split",
+    )[0]
+    assert register.resolve_target_evolution(source, target, operation_id=operation.operation_id) == successor
+    committed = journal.commit_merge_event(operation, resolution_context=successor)
+    assert _merged_event_rows(scratch_dsn)[0][1]["operation_id"] == committed.operation_id
+
+
+def test_contradictory_or_cyclic_target_evolution_fails_closed(tmp_path: Path) -> None:
+    """EROJ-02 must leave pending and history intact for unprovable lineage."""
+    register = _register(_vault_root(tmp_path))
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="operation")
+    entry = register.get_entry(target)
+    assert entry is not None
+    register._write_entry(replace(entry, lineage=({
+        "predecessor_id": target, "successor_id": target,
+        "operation_id": "cycle", "mutation_kind": "merge",
+    },)))
+    with pytest.raises(EntityRegisterError, match="cycle"):
+        register.resolve_target_evolution(source, target, operation_id="operation")
+
+
+def test_target_evolution_recovery_still_requires_fresh_event_visibility(
+    scratch_dsn: str, tmp_path: Path
+) -> None:
+    """EROJ-02 must retain the EROJ-01 fresh-connection visibility fence."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_entry_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_entry_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    evolved = register.mint_canonical("Evolved")
+    register.merge(target, evolved, operation_id="target-merge")
+    # No terminal journal/outbox commit: lineage alone cannot pass the fence.
+    assert journal.verify_committed_visibility(operation) is False
+
+
 # ---------------------------------------------------------------------------
 # Scratch database plumbing (per-test isolation on the configured Postgres)
 # ---------------------------------------------------------------------------

@@ -1074,6 +1074,12 @@ Emitted when a governed, human-confirmed merge folds one entity into another
 (`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 3 / §9-g). Append-only (HEIM-1): the source
 entity's note is never deleted, only marked `lifecycle: merged` with a `merged_into`
 redirect; the target note's aliases are folded to include the source's label/aliases.
+For entity-review operation recovery, `from_id`, `into_id`, and `operation_id` remain the
+immutable original human-decided pair. A later governed target evolution may add
+`resolved_into_id` as resolution context only; it never rewrites `into_id`. Missing,
+contradictory, cyclic, or fork-ambiguous operation-bound note lineage emits no event and
+leaves the review entry pending. This does not establish globally unique split-complement
+recovery, which remains a separate contract.
 Lineage/audit event, same non-dispatched posture as above. Two emitters:
 
 - **Entity-review merges** (the production human-review path, EROJ-01 #4350): emitted by the
@@ -1084,10 +1090,12 @@ Lineage/audit event, same non-dispatched posture as above. Two emitters:
   `entities/review.md` `pending` entry may be cleared only after a **fresh** connection observes
   both the terminal journal row and this committed event (INV-EROJ-3) — visibility on the writer's
   or a caller's own uncommitted transaction never authorizes the clear. Source:
-  `heimdal.entity_review`. Recovery across later target evolution or splits is NOT claimed here
-  (EROJ-02/EROJ-03).
+  `heimdal.entity_review`. Globally unique split-complement recovery remains unclaimed here
+  (EROJ-03).
 - **Direct `EntityRegister.merge()` calls** (the A1 register API outside the review path): emitted
-  by the register immediately after the note writes, without an `operation_id`. Source:
+  by the register immediately after the note writes. The event keeps its existing payload shape, while
+  the canonical note lineage derives a retry-stable direct merge operation identity; it is not an
+  entity-review journal identity and cannot rewrite a review event's original pair. Source:
   `heimdal.entity_register`.
 
 Payload fields (in addition to the envelope):
@@ -1104,6 +1112,10 @@ requires before any merge ships (`docs/HEIMDAL/FABLE_COMPANION.md` §10 F5). One
 resulting new entity. Splitting a merge target re-points any previously-merged child
 entity whose aliases fall in the new partition, restoring `resolve_redirects()` to the
 pre-merge identity — see `tests/heimdal/test_entity_register.py::test_split_reverses_merge`.
+When a public split re-points a child from a previously complete merge, its canonical note lineage
+derives a retry-stable direct split identity and names that reclaimed child; only that explicit,
+successor-complete source-bound proof can provide entity-review target-evolution context. The split
+event payload does not rewrite an entity-review operation's original pair.
 
 Payload fields (in addition to the envelope):
 - `split_from` (`string`): the entity_id that was partitioned.

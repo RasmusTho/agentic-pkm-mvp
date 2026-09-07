@@ -23,6 +23,7 @@ temp-vault fixture (`VaultContext` over `tmp_path`) — never a real vault.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -227,6 +228,179 @@ def test_split_rejects_unknown_entity(tmp_path: Path) -> None:
     register = _register(tmp_path)
     with pytest.raises(EntityRegisterError):
         register.split("ent:does-not-exist", {"x": ["y"]})
+
+
+def test_lineage_round_trip_covers_every_merge_and_split_producer(tmp_path: Path) -> None:
+    """EROJ-02 preserves producer-written lineage through note round-trips."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    register.merge(source, target, operation_id="operation-original")
+    register.merge(target, evolved, operation_id="operation-target-merge")
+
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    assert source_entry.lineage == (
+        {
+            "predecessor_id": source,
+            "successor_id": target,
+            "operation_id": "operation-original",
+            "mutation_kind": "merge",
+        },
+    )
+    assert register.resolve_target_evolution(
+        source, target, operation_id="operation-original"
+    ) == evolved
+
+    successor = register.split(
+        evolved,
+        {"Target successor": ["Target", "Source"]},
+        operation_id="operation-target-split",
+    )[0]
+    assert register.resolve_target_evolution(
+        source, target, operation_id="operation-original"
+    ) == successor
+    assert register.resolve_redirects(source) == successor
+
+
+def test_direct_merge_derives_stable_lineage_identity_for_target_evolution(
+    tmp_path: Path,
+) -> None:
+    """The public merge producer must not strand a later target evolution."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    register.merge(source, target)
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    direct_operation_id = source_entry.lineage[-1]["operation_id"]
+    assert direct_operation_id == f"direct-merge:{source}:{target}"
+
+    register.merge(target, evolved)
+    assert register.resolve_target_evolution(
+        source, target, operation_id=direct_operation_id
+    ) == evolved
+
+
+def test_target_split_ignores_partition_that_does_not_reclaim_original_source(
+    tmp_path: Path,
+) -> None:
+    """EROJ-02 cannot choose an unrelated split partition for the original source."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    other = register.mint_canonical("Other")
+    target = register.mint_canonical("Target")
+    register.merge(source, target, operation_id="original-operation")
+    register.merge(other, target, operation_id="other-operation")
+
+    unrelated = register.split(
+        target,
+        {"Other restored": ["Other"]},
+    )[0]
+
+    assert register.resolve_redirects(source) == target
+    assert register.resolve_target_evolution(
+        source, target, operation_id="original-operation"
+    ) == target
+    assert unrelated != target
+
+
+def test_public_split_derives_lineage_for_reclaimed_source_recovery(tmp_path: Path) -> None:
+    """A public split preserves a provable evolved target for an awaiting review."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    split_links = [
+        link for link in source_entry.lineage if link.get("mutation_kind") == "split"
+    ]
+    assert len(split_links) == 1
+    assert split_links[0]["operation_id"].startswith(f"direct-split:{target}:")
+    assert register.merge_effect_state(source, target) == MERGE_EFFECTS_COMPLETE
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == successor
+
+
+def test_source_reclaimed_split_precedes_later_residual_target_merge(tmp_path: Path) -> None:
+    """The original source's explicit split proof wins over later T evolution."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    residual_target = register.mint_canonical("Residual target")
+    register.merge(target, residual_target)
+
+    assert register.resolve_redirects(source) == successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == successor
+
+
+def test_consecutive_source_reclaimed_splits_follow_each_lineage_hop(tmp_path: Path) -> None:
+    """Each source-reclaim split hop remains eligible after the first one."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    second_successor = register.split(
+        first_successor, {"Recovered twice": ["Source", "S"]}
+    )[0]
+
+    assert register.resolve_redirects(source) == second_successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == second_successor
+
+
+def test_repointed_split_requires_complete_successor_complement(tmp_path: Path) -> None:
+    """A split redirect without the successor complement is not lineage proof."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.merge(source, target, operation_id="review-operation")
+    evolved = register.mint_canonical("Evolved")
+    register.merge(target, evolved, operation_id="target-evolution")
+    successor = register.split(evolved, {"Recovered target": ["Target", "Source"]})[0]
+    successor_entry = register.get_entry(successor)
+    assert successor_entry is not None
+    register._write_entry(replace(successor_entry, merged_from=()))
+
+    with pytest.raises(EntityRegisterError, match="complete successor complement"):
+        register.resolve_target_evolution(
+            source, target, operation_id="review-operation"
+        )
+
+
+def test_source_reclaimed_split_rejects_contradictory_partial_complement(
+    tmp_path: Path,
+) -> None:
+    """Both split predecessor and successor retaining S is contradictory."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    target_entry = register.get_entry(target)
+    assert target_entry is not None
+    register._write_entry(replace(target_entry, merged_from=(source,)))
+
+    with pytest.raises(EntityRegisterError, match="contradictory partial"):
+        register.resolve_target_evolution(
+            source, target, operation_id="review-operation"
+        )
+    assert register.get_entry(successor) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +631,109 @@ def test_merge_effect_state_classifies_all_note_shapes(tmp_path: Path) -> None:
 
     # Idempotent: a fully applied merge is left untouched.
     assert register.ensure_merge_effects(a, b) == MERGE_EFFECTS_COMPLETE
+
+
+def test_ensure_merge_effects_backfills_pre_lineage_completed_merge_before_evolution(
+    tmp_path: Path,
+) -> None:
+    """A retry binds the journal operation to an old, already-complete effect."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    # Simulate an EROJ-01-era write that pre-dates EROJ-02 lineage.
+    assert register.ensure_merge_effects(source, target) == MERGE_EFFECTS_NONE
+    assert register.get_entry(source).lineage == ()
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    assert register.ensure_merge_effects(
+        source, target, operation_id="journal-operation"
+    ) == MERGE_EFFECTS_COMPLETE
+    assert register.resolve_target_evolution(
+        source, target, operation_id="journal-operation"
+    ) == evolved
+
+
+def test_evolved_source_only_merge_backfills_lineage_but_refuses_missing_complement(
+    tmp_path: Path,
+) -> None:
+    """Lineage backfill cannot turn a half-applied original merge into complete."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+
+    register.arm(fail_on_write=2)
+    with pytest.raises(EntityRegisterError, match="simulated crash"):
+        register.ensure_merge_effects(source, target)
+    register.disarm()
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    with pytest.raises(EntityRegisterError, match="original target complement"):
+        register.ensure_merge_effects(
+            source, target, operation_id="journal-operation"
+        )
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    assert source_entry.lineage[-1]["operation_id"] == "journal-operation"
+    assert source not in register.get_entry(target).merged_from
+    assert source not in register.get_entry(evolved).merged_from
+
+
+def test_target_evolution_rejects_merge_hop_without_successor_complement(
+    tmp_path: Path,
+) -> None:
+    """Every evolved merge hop proves its own target-side effect before recovery."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    evolved = register.mint_canonical("Evolved")
+    register.ensure_merge_effects(source, target, operation_id="journal-operation")
+    register.merge(target, evolved, operation_id="target-evolution")
+
+    evolved_entry = register.get_entry(evolved)
+    assert evolved_entry is not None
+    register._write_entry(
+        replace(
+            evolved_entry,
+            merged_from=tuple(item for item in evolved_entry.merged_from if item != target),
+            aliases=tuple(item for item in evolved_entry.aliases if item != "Target"),
+        )
+    )
+
+    with pytest.raises(EntityRegisterError, match="complete successor complement"):
+        register.resolve_target_evolution(
+            source, target, operation_id="journal-operation"
+        )
+
+
+def test_target_evolution_prioritizes_cycle_detection_over_hop_complement(
+    tmp_path: Path,
+) -> None:
+    """A cyclic lineage is deterministic even when its synthetic hop is incomplete."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="journal-operation")
+    target_entry = register.get_entry(target)
+    assert target_entry is not None
+    register._write_entry(
+        replace(
+            target_entry,
+            lineage=({
+                "predecessor_id": target,
+                "successor_id": target,
+                "operation_id": "cycle",
+                "mutation_kind": "merge",
+            },),
+        )
+    )
+
+    with pytest.raises(EntityRegisterError, match="cycle"):
+        register.resolve_target_evolution(
+            source, target, operation_id="journal-operation"
+        )
 
 
 def test_merge_effect_helpers_fail_closed_on_unprovable_notes(tmp_path: Path) -> None:
