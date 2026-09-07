@@ -137,7 +137,10 @@ A published event says "at 09:12 the operator mentioned surface form 'Northvolt-
 
 ### 3.2 The minimal register contract (Entity Register v0)
 
-No register exists in code; only the `Concept` ontology stub (`concept_id`, `label`, `aliases` — `docs/architecture/functional-ontology.md` §3). D-IDENTITY fixes the register as shared Layer-2 substrate. **The register contract below is the minimal thing Heimdal needs; it is deliberately `Concept`-compatible — register entries are the operationalization of SIP's `Concept` for named entities, extended with kind, lifecycle, and resolution semantics — extension, not a fork.** `[extend — of the Concept stub; ownership/governance reserved, R-IDENTITY-OWNER]`
+`app/heimdal/entity_register.py` implements the Mimer-owned, markdown-built register. Its entries
+extend the `Concept` ontology (`concept_id`, `label`, `aliases`) with kind, lifecycle, and governed
+relation identity. Canonical notes remain authoritative; the operation journal records execution
+and recovery evidence only.
 
 Register entry (prose mirror):
 
@@ -147,6 +150,8 @@ Register entry (prose mirror):
 | `kind` | `person`, `organization`, `project`, `place`, `agent`, `thing`. Extensible family; owned by the register contract, not by any one constituent. |
 | `label`, `aliases[]` | Canonical label + surface forms. `[conform — Concept fields]` |
 | `lifecycle` | `provisional` → `canonical` → `merged`. `merged` entries carry `merged_into` (redirect chain; consumers must follow it). Entries are never deleted — merged, deprecated, never removed (identity refs in the append-only stream must always resolve). |
+| `complement_id` | A merged source's stable relation id, shared with exactly one target-side structured complement across the active register. Splits move that same id; they never create a replacement id for the old relation. |
+| `complements[]` | Each target record carries `complement_id`, `from_id`, original `into_id`, and the governing merge `operation_id` when available. `merged_from[]` is the ordered compatibility projection of these records, never recovery proof. |
 | `sensitivity` | The register itself is high-sensitivity substrate (§7.4): it is a map of everyone and everything in the operator's life. Reads are governed. |
 | `provenance` | Who/what minted or merged the entry, when, on what basis — register mutations are themselves receipted events (`register.entity.minted/merged/aliased`). |
 | `lineage[]` | Durable operation-bound predecessor/successor proof written with every merge and with a split only for a partition that reclaims a previously complete relevant merged source. Entity-review merges preserve their immutable journal operation id; direct public merges and lineage-bearing direct splits derive retry-stable direct identities. It permits recovery to report a current resolved target without changing the original human-decided merge pair; missing, contradictory, cyclic, or fork-ambiguous lineage refuses recovery. It is not a general lineage graph and never chooses an unrelated or ambiguous split complement. |
@@ -157,6 +162,38 @@ Operations Heimdal needs (the whole v0 API surface):
 2. `mint_provisional(surface_form, kind_hint) → ent:prov:<uuid>` — unknowns become durable provisional entities immediately, so recurrence is linkable from the first sighting.
 3. `merge(from_id, into_id)` / `assert_alias(entity_id, alias)` — the convergence operations. **Merge is a governed mutation**: agent-proposed, human-confirmed by default (a wrong merge corrodes identity everywhere — `propose_when_uncertain` applies). Every direct merge derives a retry-stable lineage operation identity; entity-review passes its immutable journal operation identity instead. Merge authority is part of R-IDENTITY-OWNER (§9-g).
 4. `resolve_redirects(entity_id) → entity_id` — follow merge chains; every consumer of historical events uses this.
+
+`split(entity_id, partition_criteria)` preallocates all successor ids and exact before/after note
+effects in the migration-owned split journal before the first split effect. It removes the old
+target's complements, writes successors, and repoints sources in that order, checkpointing each
+effect and each moved complement. Only then do the complete checkpoints and one event per successor
+commit together. A restart reuses the same ordered partition and ids, verifies every named note,
+and writes only missing effects. A changed partition, unexpected note, out-of-order checkpoint,
+missing event, or duplicate relation refuses completion. A completed split retains its evidence for
+later target-lineage recovery; a subsequent split keeps the original relation's id and `into_id`.
+An explicit operation id always replays that exact operation. An implicit request groups identical
+entity/partition requests into contiguous generations: unfinished work resumes its saved plan;
+newly merged matching sources or newly available partition aliases start a new generation. An
+unchanged retry returns the latest generation's successors. Unrelated downstream evolution alone
+does not manufacture another split.
+
+Register mutations and review completion serialize on the canonical register directory through a
+single-host, process-safe lock. Note writes still pass WriteGuard and the governed write port with
+read-bound version checks. Global relation validation happens under that lock; an incomplete merge
+or split must be resumed before unrelated relation evolution can proceed. External note edits are
+not treated as governed lineage and cannot supply missing execution evidence.
+
+Legacy compatibility converts only an unambiguous source redirect plus exactly one matching target
+membership. The deterministic legacy id binds vault identity and the original pair. Retained
+EROJ-02 splits additionally require the exact historical split link once on source, predecessor,
+and successor, the successor's `split_from`, and an unambiguous path from the source's original
+operation-bound merge to its current owner. Missing or conflicting copies refuse recovery. These
+historical links create no synthetic split journal, checkpoint, or event; links with complement ids
+still require their completed journal evidence. All notes are
+validated before the first conversion write; a partial conversion can retry with the same id.
+Duplicate memberships, absent opposite sides, multiple targets, cycles, malformed structured
+records, and contradictory ids fail with repair guidance and no guessed conversion. Every current
+merge producer supplies structured identity, including direct callers without a review operation.
 
 ### 3.3 Representing unknown and ambiguous
 

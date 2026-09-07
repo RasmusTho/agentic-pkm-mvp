@@ -292,10 +292,13 @@ def _allowing_guard() -> WriteGuard:
 
 
 def _register(vault_root: Path, *, conn: Any = None) -> EntityRegister:
+    from tests.heimdal.test_entity_register import FakeSplitJournal
+    conn = conn if conn is not None else FakeOutboxConn()
     return EntityRegister(
         vault_context=_vault_context(vault_root),
         write_guard=_allowing_guard(),
-        conn=conn if conn is not None else FakeOutboxConn(),
+        conn=conn,
+        split_journal=FakeSplitJournal(conn),
     )
 
 
@@ -350,6 +353,8 @@ def test_apply_merge_recovers_after_target_evolution_without_graph_replay(tmp_pa
     # The already-claimed journal operation is the only authority allowed to
     # backfill that missing proof on applicator resume.
     register.ensure_merge_effects(source, target)
+    register._write_entry(replace(register.get_entry(source), lineage=(), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
     register.merge(target, evolved, operation_id="target-evolution")
 
     applied = apply_human_review_decisions(vault_root, register=register, journal=journal)

@@ -54,9 +54,10 @@ Test environments opt in to create-on-demand via ``STORE_SCHEMA_AUTOCREATE=1``
 and this module's audited shape is asserted by
 ``tests/migrations/test_entity_review_operation_journal_schema_parity.py``.
 
-Deliberately out of scope here (INV-EROJ-7, INV-EROJ-9): target-evolution
-lineage recovery (EROJ-02), globally unique split complements (EROJ-03), and
-any generic saga API, worker, event bus, graph, second outbox, or UI.
+EROJ-03 extends this module with a narrow split-plan companion whose checkpoints
+and successor events commit together. Target lineage and complement identity
+remain in canonical notes. No generic saga, worker, graph, second outbox, or UI
+is introduced.
 """
 
 from __future__ import annotations
@@ -69,7 +70,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Protocol
 
 from app.events.models import new_event
-from app.events.types import HEIMDAL_REGISTER_ENTITY_MERGED
+from app.events.types import HEIMDAL_REGISTER_ENTITY_MERGED, HEIMDAL_REGISTER_ENTITY_SPLIT
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.services.outbox import write_outbox_event
 
@@ -412,6 +413,7 @@ def bootstrap(conn: Any = None, *, connection_factory: Callable[[], Any] | None 
         close = True
     try:
         ensure_journal_schema(conn)
+        ensure_split_schema(conn)
     finally:
         if close:
             conn.close()
@@ -854,3 +856,202 @@ __all__ = [
     "derive_operation_id",
     "ensure_journal_schema",
 ]
+
+
+# EROJ-03: the direct split API has no review queue entry. Its narrow journal
+# companion stores execution evidence only; note identity remains canonical.
+SPLIT_TABLE = "entity_register_split_operations"
+_SPLIT_DDL = """
+CREATE TABLE IF NOT EXISTS entity_register_split_operations (
+    vault_identity TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    plan JSONB NOT NULL,
+    plan_digest TEXT NOT NULL,
+    checkpoints JSONB NOT NULL DEFAULT '[]'::jsonb,
+    completed BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (vault_identity, operation_id)
+)
+"""
+_SPLIT_INDEX_DDL = """
+CREATE UNIQUE INDEX IF NOT EXISTS entity_register_split_active_idx
+    ON entity_register_split_operations (vault_identity) WHERE NOT completed
+"""
+
+
+def split_plan_digest(plan: Mapping[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class SplitRecord:
+    vault_identity: str
+    operation_id: str
+    plan: Mapping[str, Any]
+    checkpoints: tuple[str, ...] = ()
+    completed: bool = False
+
+
+class SplitJournalPort(Protocol):
+    def load_split(self, vault_identity: str, operation_id: str) -> SplitRecord | None: ...
+    def prepare_split(self, record: SplitRecord) -> SplitRecord: ...
+    def checkpoint_split(self, record: SplitRecord, checkpoint: str) -> SplitRecord: ...
+    def finish_split(self, record: SplitRecord) -> SplitRecord: ...
+
+
+def split_checkpoint_keys(plan: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(e["key"] for e in plan["effects"]) + tuple(
+        "complement:" + c for c in plan["complement_ids"]
+    )
+
+
+def ensure_split_schema(conn: Any) -> None:
+    """Assert migration-owned schema; fixture DDL requires explicit opt-in."""
+    if _schema_autocreate_enabled():
+        table_groups = ((SPLIT_TABLE, (_SPLIT_DDL, _SPLIT_INDEX_DDL)),)
+        for table_name, statements in table_groups:
+            cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table_name,))
+            row = cur.fetchone()
+            table_present = bool(_col(row, 0, "oid"))
+            if table_present:
+                continue
+            for statement in statements:
+                _exec(conn, statement)
+            conn.commit()
+    cur = _exec(conn, "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = %s", (SPLIT_TABLE,))
+    present = {_col(r, 0, "column_name") for r in cur.fetchall()}
+    if not {"vault_identity", "operation_id", "plan", "plan_digest", "checkpoints", "completed"} <= present:
+        raise EntityReviewOperationSchemaMissingError(
+            "entity_register_split_operations schema is migration-owned; run alembic upgrade head"
+        )
+
+
+class EntityRegisterSplitJournal(EntityReviewOperationJournal):
+    """Journal-owned transactions for exact split plans and event completion."""
+
+    def _load_split(self, conn: Any, vault_identity: str, operation_id: str, *, lock: bool = False) -> SplitRecord | None:
+        cur = _exec(conn, "SELECT plan, plan_digest, checkpoints, completed FROM " + SPLIT_TABLE
+                    + " WHERE vault_identity = %s AND operation_id = %s" + (" FOR UPDATE" if lock else ""),
+                    (vault_identity, operation_id))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        plan, digest, checkpoints, completed = (_col(row, i, key) for i, key in enumerate(
+            ("plan", "plan_digest", "checkpoints", "completed")))
+        try:
+            valid = (
+                isinstance(plan, dict) and split_plan_digest(plan) == digest
+                and plan["version"] == 1 and plan["operation_id"] == operation_id
+                and plan["vault_identity"] == vault_identity
+                and isinstance(checkpoints, list)
+                and checkpoints == list(split_checkpoint_keys(plan)[:len(checkpoints)])
+                and (not completed or checkpoints == list(split_checkpoint_keys(plan)))
+            )
+        except (KeyError, TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise EntityReviewOperationJournalError("split plan/checkpoint mismatch; repair required")
+        return SplitRecord(vault_identity, operation_id, plan, tuple(checkpoints), completed)
+
+    def load_split(self, vault_identity: str, operation_id: str) -> SplitRecord | None:
+        conn = self._open()
+        try:
+            ensure_split_schema(conn)
+            record = self._load_split(conn, vault_identity, operation_id)
+            if record is not None and record.completed:
+                for payload in record.plan["events"]:
+                    event_id = split_event_id(record, payload)
+                    cur = _exec(conn, "SELECT payload FROM outbox WHERE vault_binding_id = %s "
+                                "AND (id = %s OR legacy_key = %s) AND topic = %s",
+                                (COMPATIBILITY_BINDING_ID, event_id, event_id, HEIMDAL_REGISTER_ENTITY_SPLIT))
+                    row = cur.fetchone()
+                    envelope = _col(row, 0, "payload") if row is not None else None
+                    if isinstance(envelope, str):
+                        envelope = json.loads(envelope)
+                    if not isinstance(envelope, dict) or envelope.get("payload") != payload:
+                        raise EntityReviewOperationJournalError("split committed event visibility mismatch")
+            return record
+        finally:
+            conn.close()
+
+    def prepare_split(self, record: SplitRecord) -> SplitRecord:
+        conn = self._open()
+        try:
+            ensure_split_schema(conn)
+            _exec(conn, "INSERT INTO " + SPLIT_TABLE +
+                  " (vault_identity, operation_id, plan, plan_digest) VALUES (%s, %s, %s::jsonb, %s) "
+                  "ON CONFLICT (vault_identity, operation_id) DO NOTHING",
+                  (record.vault_identity, record.operation_id, json.dumps(record.plan), split_plan_digest(record.plan)))
+            loaded = self._load_split(conn, record.vault_identity, record.operation_id, lock=True)
+            if loaded is None or loaded.plan != record.plan:
+                raise EntityReviewOperationJournalError("split operation is bound to another exact plan")
+            conn.commit()
+            return loaded
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def checkpoint_split(self, record: SplitRecord, checkpoint: str) -> SplitRecord:
+        conn = self._open()
+        try:
+            ensure_split_schema(conn)
+            loaded = self._load_split(conn, record.vault_identity, record.operation_id, lock=True)
+            if loaded is None or loaded.plan != record.plan:
+                raise EntityReviewOperationJournalError("split checkpoint has no matching plan")
+            keys = split_checkpoint_keys(loaded.plan)
+            if checkpoint not in loaded.checkpoints:
+                if loaded.completed or len(loaded.checkpoints) >= len(keys) or keys[len(loaded.checkpoints)] != checkpoint:
+                    raise EntityReviewOperationJournalError("split checkpoint out of order")
+                loaded = replace(loaded, checkpoints=(*loaded.checkpoints, checkpoint))
+                _exec(conn, "UPDATE " + SPLIT_TABLE + " SET checkpoints = %s::jsonb "
+                      "WHERE vault_identity = %s AND operation_id = %s",
+                      (json.dumps(loaded.checkpoints), record.vault_identity, record.operation_id))
+            conn.commit()
+            return loaded
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def finish_split(self, record: SplitRecord) -> SplitRecord:
+        conn = self._open()
+        try:
+            ensure_split_schema(conn)
+            loaded = self._load_split(conn, record.vault_identity, record.operation_id, lock=True)
+            if loaded is None or loaded.plan != record.plan or loaded.checkpoints != split_checkpoint_keys(loaded.plan):
+                raise EntityReviewOperationJournalError("split cannot complete before every checkpoint")
+            for payload in loaded.plan["events"]:
+                event = new_event(event_type=HEIMDAL_REGISTER_ENTITY_SPLIT, payload=payload, source=OPERATION_EVENT_SOURCE)
+                event_id = split_event_id(loaded, payload)
+                write_outbox_event(event, conn=conn, idempotency_key=event_id)
+                cur = _exec(conn, "SELECT payload FROM outbox WHERE vault_binding_id = %s "
+                            "AND (id = %s OR legacy_key = %s) AND topic = %s",
+                            (COMPATIBILITY_BINDING_ID, event_id, event_id, HEIMDAL_REGISTER_ENTITY_SPLIT))
+                row = cur.fetchone()
+                envelope = _col(row, 0, "payload") if row is not None else None
+                if isinstance(envelope, str):
+                    envelope = json.loads(envelope)
+                if not isinstance(envelope, dict) or envelope.get("payload") != payload:
+                    raise EntityReviewOperationJournalError("split event conflicts with its plan; completion refused")
+            _exec(conn, "UPDATE " + SPLIT_TABLE + " SET completed = true WHERE vault_identity = %s AND operation_id = %s",
+                  (record.vault_identity, record.operation_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        # A fresh connection must see the checkpoint and its exact event set.
+        observed = self.load_split(record.vault_identity, record.operation_id)
+        if observed is None or not observed.completed:
+            raise EntityReviewOperationJournalError("split completion not freshly visible")
+        return observed
+
+
+def split_event_id(record: SplitRecord, payload: Mapping[str, Any]) -> str:
+    from app.services.outbox import derive_idempotency_key
+    return derive_idempotency_key(HEIMDAL_REGISTER_ENTITY_SPLIT, payload["new_entity_id"],
+                                  f"split:{record.vault_identity}:{record.operation_id}")
