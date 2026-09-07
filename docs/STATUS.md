@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-07
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
@@ -143,6 +143,10 @@ promote public internet readiness.
   undecided pending state, while an already-applied merge or reject remains an idempotent no-op for
   later undo. The bounded contract and authority details remain owned by
   `docs/MIMER_IPAD_THINKING_CANVAS/SIDE_BY_SIDE_ENTITY_CONFIRMATION_ON_IPAD.md`.
+- Entity-review target-evolution lineage is a review candidate in PR #5396 for issue #4351. Its
+  register-note and event-context preservation are validated on the dedicated non-production
+  PostgreSQL target, but this operational snapshot does not claim the behavior as shipped until the
+  required review, verified merge, and closure path completes.
 - Governed media ingress with durable receipts is shipped (CDLM-01, #4384):
   `POST /api/heimdal/capture/media` acknowledges a capture only after the original is durably in the
   encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event is committed, so a
