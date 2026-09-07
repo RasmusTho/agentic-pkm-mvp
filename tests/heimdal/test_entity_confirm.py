@@ -383,10 +383,51 @@ def test_apply_merge_recovers_after_source_reclaiming_target_split(tmp_path: Pat
     successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
     residual_target = register.mint_canonical("Residual target")
     register.merge(target, residual_target)
+    terminal_successor = register.mint_canonical("Evolved recovered source")
+    register.merge(successor, terminal_successor)
 
     applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
     assert applied[0].operation_id == operation.operation_id
-    assert register.resolve_redirects(source) == successor
+    assert register.resolve_redirects(source) == terminal_successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == terminal_successor
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_apply_merge_recovers_when_later_split_reclaims_intermediate_target(tmp_path: Path) -> None:
+    """A split-repointed T retains S's complement for the original S -> T."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    entry = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="reclaim-target"),
+        candidate_entity_ids=[source, target],
+    )
+    decision = ReviewDecision(queue_entry_id=entry.queue_entry_id, action="merge", from_id=source, into_id=target)
+    write_settings_note(vault_root, SettingsNote(spec=ENTITY_REVIEW, values={
+        "pending": [entry.to_dict()], "decisions": [decision.to_dict()]
+    }), settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+    journal = _InMemoryJournal()
+    operation = journal.claim_operation(
+        vault_identity=register.operation_vault_identity,
+        queue_entry_id=entry.queue_entry_id,
+        decision_position=0,
+        decision_digest=decision_mapping_digest(decision.to_dict()),
+        from_id=source,
+        into_id=target,
+    )
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    intermediate = register.mint_canonical("Intermediate")
+    register.merge(target, intermediate, operation_id="target-evolution")
+    successor = register.split(intermediate, {"Recovered target": ["Target"]})[0]
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+    rewritten_target = register.get_entry(target)
+    assert applied[0].operation_id == operation.operation_id
+    assert rewritten_target is not None and source in rewritten_target.merged_from
     assert register.resolve_target_evolution(
         source, target, operation_id=operation.operation_id
     ) == successor

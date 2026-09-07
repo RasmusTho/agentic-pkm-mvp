@@ -642,13 +642,17 @@ class EntityRegister:
                 len(original_links) == 1
                 and len(reclaimed_splits) == 1
                 and reclaimed_complement_complete
-                and self.resolve_target_evolution(
+            ):
+                # The immediate split successor must retain the complete
+                # reclaimed-source complement above. Any later evolution is
+                # accepted only through the resolver, which proves each
+                # explicit hop (and rejects cycles or ambiguity) before this
+                # classification may resume the original operation.
+                self.resolve_target_evolution(
                     from_id,
                     into_id,
                     operation_id=str(original_links[0]["operation_id"]),
                 )
-                == resolved_source_id
-            ):
                 return MERGE_EFFECTS_COMPLETE
             raise EntityRegisterError(
                 f"merge_effect_state(): {from_id!r} redirects to "
@@ -1032,6 +1036,7 @@ class EntityRegister:
                         aliases=child.aliases,
                         lifecycle=LIFECYCLE_MERGED,
                         merged_into=new_entity_id,
+                        merged_from=child.merged_from,
                         split_from=child.split_from,
                         lineage=(*child.lineage, *((split_link,) if split_link else ())),
                         created=child.created,
