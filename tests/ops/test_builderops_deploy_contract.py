@@ -244,6 +244,10 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
         """#!/usr/bin/env bash
 set -eu
 printf 'gh %s\n' "$*" >> "$FAKE_EVENT_LOG"
+[ "${FAKE_ATTESTATION_UNAVAILABLE:-0}" != 1 ] || {
+  printf 'unknown command "attestation" for "gh"\n' >&2
+  exit 127
+}
 [ "${FAKE_FAIL_ATTESTATION:-0}" != 1 ]
 """,
     )
@@ -535,6 +539,32 @@ def test_deploy_rejects_unattested_candidate_pair_before_docker(tmp_path: Path) 
     assert "gh attestation verify" in events
     assert "--source-ref refs/heads/main" in events
     assert f"--source-digest {source_sha}" in events
+    assert "docker " not in events
+
+
+def test_deploy_refuses_unavailable_attestation_verifier_before_docker(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_ATTESTATION_UNAVAILABLE"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "gh attestation verify" in events
     assert "docker " not in events
 
 
