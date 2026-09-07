@@ -1,9 +1,11 @@
 State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam,
-pure `focus-view.v1` composer, nonvisual external context-pack/export composer, and bounded SoI
-Evidence View v0 proof and the pure server-declared Overview composer are delivered. Producer
-enrichment for owner and ready classification is the next nonvisual work. The Focus UI, provider conversation runtime, Builder System
-Control lens, visual shell, and general authority-bearing stages remain targets. Existing GitHub
-Issues remain executable backlog truth.
+pure `focus-view.v1` composer, nonvisual external context-pack/export composer, bounded SoI
+Evidence View v0 proof, pure server-declared Overview composer, and the source-linked LLM-assisted
+owner synthesis projection delivered by PR #5413 are delivered. The synthesis remains proposal-only
+and source-bound; it does not create authority, tasks, approvals, or effects. Producer enrichment for
+owner and ready classification is the next nonvisual work. The Focus UI, provider conversation runtime,
+Builder System Control lens, visual handoff, production deployment, and general authority-bearing
+stages remain targets. Existing GitHub Issues remain executable backlog truth.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
@@ -99,11 +101,17 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Live status | `DeliveryRunView.v1` | Specified target, not delivered |
 | Delivery truth | GitHub/dispatcher/Git/CI/review/merge/closure | Existing authority |
 | Results | `DeliveryReceipt.v2` and attempt-terminal evidence | Receipt seam delivered; complete attempt terminality target |
-| Visual base | Yggdrasil Design System and tested Cockpit patterns | Reusable sources; new handoff required |
+| Visual base | Yggdrasil Design System and tested Cockpit patterns | The connected read-only repository shell is delivered by PR #5157; visual handoff, VM102 deployment, and owner acceptance remain targets |
 
 ## Three delivery stages
 
 ### Stage A — see: coherent read-only devUI
+
+The first owner-value increment is the source-linked LLM-assisted owner synthesis delivered by #5402
+(PR #5413). It summarizes the current Builder proposal/plan evidence with explicit source references,
+bounded input/output limits, model-unavailable and configuration-failure states, and proposal-only
+semantics. It is a read projection: model text may explain or prioritize what the owner sees, but it
+may not become an approval, task, lease, workflow transition, or repository/runtime effect.
 
 Deliver the three home zones and contextual focus view by composing CKM for capability evidence,
 BuilderOps Cockpit for live work, and dispatcher/Signboard contracts for queue, claim, lease, and
@@ -157,7 +165,11 @@ the next legal step without exposing subsystem topology.
 
 ### Stage A2 — Focus + external Conversation Port
 
-After the composition seam and before the general delivery-command path, deliver the bounded slice
+After the read-only synthesis/overview and before the general delivery-command path, deliver the
+bounded owner-control slice specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`. The first
+authenticated action remains the narrow Start Model Inquiry path; it is the smallest useful steering
+surface and is intentionally sequenced before full DDO controls.
+
 specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`:
 
 1. compose one stable Issue/capability Focus with owner intent, governing source, evidence,
@@ -196,6 +208,10 @@ existing route once; valid/ambiguous receipts preserve its contract; and Builder
 cannot appear as a tab or evidence join inside the subject Focus.
 
 ### Stage B — decide and act: contextual command surface
+
+Full DDO remains a later mechanism chain. It must not block the LLM-assisted overview or the bounded
+first control path above, but every authority-bearing effect still waits for its named authenticated
+owners, exact scope, and truthful readback.
 
 Attach proposal, preview, exact approval, live progress, and lawful controls to the selected item.
 The owner sees **AI can continue**, **Your decision is needed**, or **Blocked by evidence or
