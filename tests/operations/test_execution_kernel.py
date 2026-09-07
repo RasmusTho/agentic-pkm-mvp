@@ -182,6 +182,7 @@ def test_success_requires_owner_receipt_before_acknowledgement() -> None:
     assert outcome.status is OperationStatus.RECOVERY_REQUIRED
     assert outcome.receipt is not None
     assert outcome.receipt.payload["state"] == "recovery_required"
+    assert outcome.receipt.payload["effect_id"] == "effect-1"
 
     missing_effect_identity = OperationExecutionKernel(
         context_resolver=lambda context: True,
@@ -197,17 +198,21 @@ def test_success_requires_owner_receipt_before_acknowledgement() -> None:
     ).execute(_request(request_id="request-2"), _delegation())
 
     assert missing_effect_identity.status is OperationStatus.RECOVERY_REQUIRED
+    assert missing_effect_identity.receipt is not None
+    assert missing_effect_identity.receipt.payload["effect_receipt_ref"] == "owner-receipt-1"
 
 
 def test_multi_target_request_requires_bound_batch_policy() -> None:
     policy_calls: list[str] = []
     owner_calls: list[str] = []
+    owner_batch_policies: list[object] = []
     kernel = OperationExecutionKernel(
         context_resolver=lambda context: True,
         policy_evaluator=lambda request, delegation: policy_calls.append(request.request_id)
         or PolicyDecision.allowed("policy-7"),
         handlers={
             "artifact.move": lambda request: owner_calls.append(request.request_id)
+            or owner_batch_policies.append(request.batch_policy)
             or _owner_success()
         },
         receipt_store=InMemoryReceiptStore(),
@@ -224,6 +229,20 @@ def test_multi_target_request_requires_bound_batch_policy() -> None:
     assert outcome.status is OperationStatus.REJECTED
     assert policy_calls == []
     assert owner_calls == []
+
+    admitted = kernel.execute(
+        request,
+        _delegation(
+            target_ids=["artifact-1", "artifact-2"],
+            max_targets=2,
+            batch_policy={"mode": "atomic"},
+        ),
+    )
+
+    assert admitted.status is OperationStatus.SUCCEEDED
+    assert policy_calls == ["request-1"]
+    assert owner_calls == ["request-1"]
+    assert owner_batch_policies == [{"mode": "atomic"}]
 
 
 def test_target_identity_is_required_before_dispatch() -> None:

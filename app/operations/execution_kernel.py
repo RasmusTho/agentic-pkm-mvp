@@ -7,7 +7,7 @@ is dispatched once to its registered owner-native handler.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from contextlib import contextmanager
 import fcntl
 from hashlib import sha256
@@ -257,6 +257,13 @@ class OperationExecutionKernel:
         refusal = self._precondition_refusal(request, delegation)
         if refusal is not None:
             return refusal
+        dispatch_request = request
+        if (
+            len(request.targets) > 1
+            and not _valid_batch_policy(request.batch_policy)
+            and _valid_batch_policy(delegation.get("batch_policy"))
+        ):
+            dispatch_request = replace(request, batch_policy=delegation["batch_policy"])
         try:
             decision = self.policy_evaluator(request, delegation)
         except Exception:
@@ -332,7 +339,7 @@ class OperationExecutionKernel:
             )
         else:
             try:
-                owner_result = handler(request)
+                owner_result = handler(dispatch_request)
             except Exception:
                 owner_result = OwnerExecutionResult.ambiguous()
             outcome = self._owner_outcome(
@@ -455,7 +462,13 @@ class OperationExecutionKernel:
                     OperationStatus.RECOVERY_REQUIRED,
                     items=_redact_items(result.items),
                     receipt=_receipt(
-                        request, policy_version, intent_digest, "recovery_required", delegation
+                        request,
+                        policy_version,
+                        intent_digest,
+                        "recovery_required",
+                        delegation,
+                        result.effect_id,
+                        result.effect_receipt,
                     ),
                     warnings=result.warnings
                     + (
@@ -553,10 +566,8 @@ def _receipt(
             "client": None if delegation is None else delegation.get("client"),
             "surface": None if delegation is None else delegation.get("surface"),
             "delegation_ref": None if delegation is None else delegation.get("receipt_ref"),
-            "effect_id": effect_id,
-            "effect_receipt_ref": None
-            if effect_receipt is None
-            else effect_receipt.get("receipt_id"),
+            "effect_id": effect_id if _stable_nonempty_identity(effect_id) else None,
+            "effect_receipt_ref": _effect_receipt_ref(effect_receipt),
             "intent_digest": intent_digest,
             "state": state,
             "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
@@ -572,11 +583,18 @@ def _valid_batch_policy(value: object) -> bool:
     return isinstance(value, Mapping) and bool(value)
 
 
+def _effect_receipt_ref(value: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    receipt_id = value.get("receipt_id")
+    return str(receipt_id) if _stable_nonempty_identity(receipt_id) else None
+
+
 def _has_durable_owner_effect_receipt(result: OwnerExecutionResult) -> bool:
     return (
         _stable_nonempty_identity(result.effect_id)
         and isinstance(result.effect_receipt, Mapping)
-        and _stable_nonempty_identity(result.effect_receipt.get("receipt_id"))
+        and _effect_receipt_ref(result.effect_receipt) is not None
     )
 
 
