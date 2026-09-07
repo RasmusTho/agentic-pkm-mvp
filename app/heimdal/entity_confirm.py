@@ -89,6 +89,8 @@ from app.heimdal.entity_register import (
     EntityRegisterError,
 )
 from app.heimdal.entity_review_operation_journal import (
+    OperationRecord,
+    STATE_CLAIMED,
     STATE_EVENT_COMMITTED,
     EntityReviewOperationConflictError,
     EntityReviewOperationJournalError,
@@ -506,6 +508,7 @@ def apply_human_review_decisions(
     for index, effective_decision in ordered_terminals:
         merged = False
         operation_id: str | None = None
+        active_operation: OperationRecord | None = None
         queue_entry_id = effective_decision.queue_entry_id
         try:
             if journal is not None:
@@ -515,6 +518,7 @@ def apply_human_review_decisions(
                 active = journal.find_active_operation(
                     vault_identity=vault_identity, queue_entry_id=queue_entry_id
                 )
+                active_operation = active
                 if active is not None and active.state == STATE_EVENT_COMMITTED:
                     # An already-authorized merge whose clear was interrupted:
                     # finish it first. The merge is materialised and its event
@@ -642,25 +646,35 @@ def apply_human_review_decisions(
                     merged = True
                     operation_id = cleared_twin.operation_id
                 else:
-                    # Pre-claim validation: prove the merge is executable (or
-                    # resumable) from current notes BEFORE binding an
-                    # operation, so a typo'd decision never strands an active
-                    # operation row.
-                    register.merge_effect_state(
-                        effective_decision.from_id, effective_decision.into_id
-                    )
-                    # 1. Operation identity commits before the first register
-                    #    effect (INV-EROJ-2; a changed mapping fails closed).
-                    operation = journal.claim_operation(
-                        vault_identity=vault_identity,
-                        queue_entry_id=queue_entry_id,
-                        decision_position=index,
-                        decision_digest=decision_mapping_digest(raw_decisions[index]),
-                        from_id=effective_decision.from_id,
-                        into_id=effective_decision.into_id,
-                    )
-                    # 2. Resumable note effects (skips sides a crash already
-                    #    wrote).
+                    if (
+                        active_operation is not None
+                        and active_operation.state == STATE_CLAIMED
+                        and active_operation.from_id == effective_decision.from_id
+                        and active_operation.into_id == effective_decision.into_id
+                    ):
+                        # A claimed operation already binds the exact human
+                        # ruling. Let its operation id backfill legacy note
+                        # effects before generic state classification; doing
+                        # so cannot bind a different decision or replay a
+                        # graph-only target evolution.
+                        operation = active_operation
+                    else:
+                        # Pre-claim validation: prove the merge is executable
+                        # (or resumable) before binding a new operation, so a
+                        # typo'd decision never strands one.
+                        register.merge_effect_state(
+                            effective_decision.from_id, effective_decision.into_id
+                        )
+                        operation = journal.claim_operation(
+                            vault_identity=vault_identity,
+                            queue_entry_id=queue_entry_id,
+                            decision_position=index,
+                            decision_digest=decision_mapping_digest(raw_decisions[index]),
+                            from_id=effective_decision.from_id,
+                            into_id=effective_decision.into_id,
+                        )
+                    # Resumable note effects (skips sides a crash already
+                    # wrote, and backfills only an already-bound operation).
                     register.ensure_merge_effects(
                         effective_decision.from_id,
                         effective_decision.into_id,

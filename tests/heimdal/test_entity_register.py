@@ -330,6 +330,22 @@ def test_public_split_derives_lineage_for_reclaimed_source_recovery(tmp_path: Pa
     ) == successor
 
 
+def test_source_reclaimed_split_precedes_later_residual_target_merge(tmp_path: Path) -> None:
+    """The original source's explicit split proof wins over later T evolution."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    residual_target = register.mint_canonical("Residual target")
+    register.merge(target, residual_target)
+
+    assert register.resolve_redirects(source) == successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == successor
+
+
 # ---------------------------------------------------------------------------
 # AC: resolve() returns exactly one of the three resolution states and never
 # a free-text name as canonical identity.

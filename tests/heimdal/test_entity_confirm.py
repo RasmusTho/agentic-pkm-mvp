@@ -341,11 +341,17 @@ def test_apply_merge_recovers_after_target_evolution_without_graph_replay(tmp_pa
         from_id=source,
         into_id=target,
     )
-    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    # Simulate complete EROJ-01-era effects that pre-date EROJ-02 lineage.
+    # The already-claimed journal operation is the only authority allowed to
+    # backfill that missing proof on applicator resume.
+    register.ensure_merge_effects(source, target)
     register.merge(target, evolved, operation_id="target-evolution")
 
     applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
     assert applied[0].operation_id == operation.operation_id
+    assert register.resolve_target_evolution(
+        source, target, operation_id=operation.operation_id
+    ) == evolved
     assert pending_review_entries(vault_root) == ()
 
 

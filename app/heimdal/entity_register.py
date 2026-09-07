@@ -849,7 +849,17 @@ class EntityRegister:
                 and entry.lifecycle == LIFECYCLE_MERGED
                 and entry.merged_into == link.get("successor_id")
             ]
-            candidates = re_pointed_splits or [
+            source_reclaimed_splits = [
+                link for link in (*source.lineage, *entry.lineage)
+                if link.get("predecessor_id") == current
+                and link.get("mutation_kind") == "split"
+                and link.get("reclaimed_from_id") == from_id
+                and link.get("successor_id") == source.merged_into
+                and isinstance(link.get("operation_id"), str)
+                and link.get("operation_id")
+            ]
+            using_source_reclaimed_split = bool(source_reclaimed_splits)
+            candidates = source_reclaimed_splits or re_pointed_splits or [
                 link for link in (*source.lineage, *entry.lineage)
                 if link.get("predecessor_id") == current
                 and link.get("mutation_kind") in {"merge", "split"}
@@ -874,7 +884,11 @@ class EntityRegister:
             # diagnostics remain deterministic and the queue stays pending.
             if successor in seen:
                 raise EntityRegisterError("target evolution lineage cycle; queue entry stays pending")
-            if entry.lifecycle == LIFECYCLE_MERGED and entry.merged_into != successor:
+            if (
+                entry.lifecycle == LIFECYCLE_MERGED
+                and entry.merged_into != successor
+                and not using_source_reclaimed_split
+            ):
                 raise EntityRegisterError("target evolution lineage contradicts the redirect")
             if any(link.get("mutation_kind") == "merge" for link in candidates):
                 successor_entry = self._read_entry(successor)
