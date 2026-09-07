@@ -22,6 +22,12 @@ Expose capability discovery and the full supported operation matrix through vers
 delegate exclusively to the shared operations API, preserve typed outcomes/receipts, retain ADR-0061
 MCP v1 behavior, and run integrated human/agent parity and recovery acceptance.
 
+## Governance gate
+
+This task remains target-state only. Any broader external MCP operation set requires a superseding
+accepted ADR and a matching owner-contract update before the broader external MCP operation set may
+be treated as authorized or executable. ADR-0061's exact five-operation v1 profile remains unchanged.
+
 ## Concretely
 
 ```text
