@@ -1049,6 +1049,79 @@ def test_split_partition_conflict_does_not_backfill_legacy_notes(tmp_path: Path)
     assert _relation_snapshot(register) == before
 
 
+@pytest.mark.parametrize('action', ['backfill', 'unrelated_merge'])
+@pytest.mark.parametrize('state', [None, 'missing_copy', 'wrong_operation', 'wrong_original', 'omitted_operation'])
+def test_target_first_legacy_backfill_retry_authenticates_history(
+    tmp_path: Path, action: str, state: str | None,
+) -> None:
+    from app.heimdal.entity_register import _complement_id
+
+    register = _register(tmp_path)
+    source, original, successor, other_source, other_target = [
+        register.mint_canonical(label) for label in ('Source', 'Original', 'Successor', 'Other source', 'Other target')]
+    merge_link = {'predecessor_id': source, 'successor_id': original,
+                  'operation_id': 'historical-merge', 'mutation_kind': 'merge'}
+    split_link = {'predecessor_id': original, 'successor_id': successor,
+                  'operation_id': 'historical-split', 'mutation_kind': 'split', 'reclaimed_from_id': source}
+    register._write_entry(replace(register.get_entry(source), lifecycle=LIFECYCLE_MERGED,
+                                  merged_into=successor, lineage=(merge_link, split_link)))
+    register._write_entry(replace(register.get_entry(original), lineage=(split_link,)))
+    register._write_entry(replace(register.get_entry(successor), merged_from=(source,), aliases=('Source',),
+                                  split_from=original, lineage=(split_link,)))
+    # Persist only the authentic target-side effect, as an interrupted backfill can.
+    planned = register._validated_entries(legacy=True)
+    register._write_entry(planned[successor])
+    relation = dict(register.get_entry(successor).complements[0])
+    expected_relation = dict(relation)
+    if state == 'missing_copy':
+        register._write_entry(replace(register.get_entry(original), lineage=()))
+    elif state == 'wrong_operation':
+        relation['operation_id'] = 'another-merge'
+    elif state == 'wrong_original':
+        relation['into_id'] = successor
+        relation['complement_id'] = _complement_id(register.vault_identity, source, successor, None)
+    elif state == 'omitted_operation':
+        relation.pop('operation_id')
+    register._write_entry(replace(register.get_entry(successor), complements=(relation,)))
+    assert register.get_entry(source).complement_id is None
+    before = _relation_snapshot(register)
+
+    def retry() -> None:
+        if action == 'backfill':
+            register.backfill_complements()
+        else:
+            register.ensure_merge_effects(other_source, other_target, operation_id='unrelated')
+
+    if state in ('missing_copy', 'wrong_operation', 'wrong_original'):
+        with pytest.raises(EntityRegisterError):
+            retry()
+        assert _relation_snapshot(register) == before
+    else:
+        retry()
+        assert register.get_entry(successor).complements == (expected_relation,)
+        assert register.get_entry(source).complement_id == expected_relation['complement_id']
+        assert register.resolve_target_evolution(source, original, operation_id='historical-merge') == successor
+        completed = _relation_snapshot(register)
+        retry()
+        assert _relation_snapshot(register) == completed
+
+
+def test_target_first_legacy_retry_preserves_later_authenticated_operation(tmp_path: Path) -> None:
+    register = _register(tmp_path)
+    source, target = [register.mint_canonical(label) for label in ('Source', 'Target')]
+    register._write_entry(replace(register.get_entry(source), lifecycle=LIFECYCLE_MERGED, merged_into=target))
+    register._write_entry(replace(register.get_entry(target), merged_from=(source,), aliases=('Source',)))
+    planned = register._validated_entries(legacy=True)
+    relation = {**planned[target].complements[0], 'operation_id': 'journal-merge'}
+    # A journal retry may bind target metadata before source lineage/id is written.
+    register._write_entry(replace(planned[target], complements=(relation,)))
+    register.backfill_complements()
+    register.ensure_merge_effects(source, target, operation_id='journal-merge', require_complete=True)
+    assert register.get_entry(target).complements == (relation,)
+    assert register.get_entry(source).complement_id == relation['complement_id']
+    assert register.resolve_target_evolution(source, target, operation_id='journal-merge') == target
+
+
 def test_register_lock_preserves_two_concurrent_merge_complements(tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier

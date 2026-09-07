@@ -578,8 +578,10 @@ class EntityRegister:
                 raise EntityRegisterError("complement has missing opposite side or multiple targets")
             target = original_by_id[target_id]
             matches = [c for c in target.complements if c["from_id"] == source.entity_id]
+            legacy_origin = None
             if not matches and legacy and not target.complements:
-                original_id, original_operation = self._legacy_relation_origin(source, original_by_id)
+                legacy_origin = self._legacy_relation_origin(source, original_by_id)
+                original_id, original_operation = legacy_origin
                 cid = _complement_id(self.vault_identity, source.entity_id, original_id, None)
                 if source.complement_id not in (None, cid):
                     raise EntityRegisterError("missing structured complement for current identity")
@@ -591,6 +593,16 @@ class EntityRegister:
                 raise EntityRegisterError("missing or duplicate structured complement")
             relation = matches[0]
             cid = relation["complement_id"]
+            if legacy and cid.startswith("cmp:legacy:"):
+                # A durable target side is still an interrupted compatibility
+                # state, not proof of the original merge or historical splits.
+                original_id, original_operation = legacy_origin or self._legacy_relation_origin(source, original_by_id)
+                if relation["into_id"] != original_id:
+                    raise EntityRegisterError("legacy complement contradicts its original target")
+                if original_operation:
+                    if relation.get("operation_id", original_operation) != original_operation:
+                        raise EntityRegisterError("legacy complement contradicts its original operation")
+                    relation = {**relation, "operation_id": original_operation}
             expected_id = _complement_id(self.vault_identity, source.entity_id, relation["into_id"],
                 relation.get("operation_id") if cid.startswith("cmp:operation:") else None)
             if cid != expected_id:
@@ -606,6 +618,10 @@ class EntityRegister:
                 # Collect all legacy pairs against the original snapshot before writing.
                 existing = by_id[target_id]
                 by_id[target_id] = replace(existing, complements=(*existing.complements, relation))
+            else:
+                existing = by_id[target_id]
+                by_id[target_id] = replace(existing, complements=tuple(
+                    relation if item["from_id"] == source.entity_id else item for item in existing.complements))
         if set(memberships) - set(by_id):
             raise EntityRegisterError("complement has missing source note")
         if set(relations) - source_ids:
