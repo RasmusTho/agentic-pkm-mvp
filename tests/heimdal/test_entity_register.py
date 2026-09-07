@@ -256,7 +256,7 @@ def test_lineage_round_trip_covers_every_merge_and_split_producer(tmp_path: Path
 
     successor = register.split(
         evolved,
-        {"Target successor": ["Target"]},
+        {"Target successor": ["Target", "Source"]},
         operation_id="operation-target-split",
     )[0]
     assert register.resolve_target_evolution(
@@ -344,6 +344,63 @@ def test_source_reclaimed_split_precedes_later_residual_target_merge(tmp_path: P
     assert register.resolve_target_evolution(
         source, target, operation_id="review-operation"
     ) == successor
+
+
+def test_consecutive_source_reclaimed_splits_follow_each_lineage_hop(tmp_path: Path) -> None:
+    """Each source-reclaim split hop remains eligible after the first one."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    second_successor = register.split(
+        first_successor, {"Recovered twice": ["Source", "S"]}
+    )[0]
+
+    assert register.resolve_redirects(source) == second_successor
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == second_successor
+
+
+def test_repointed_split_requires_complete_successor_complement(tmp_path: Path) -> None:
+    """A split redirect without the successor complement is not lineage proof."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.merge(source, target, operation_id="review-operation")
+    evolved = register.mint_canonical("Evolved")
+    register.merge(target, evolved, operation_id="target-evolution")
+    successor = register.split(evolved, {"Recovered target": ["Target", "Source"]})[0]
+    successor_entry = register.get_entry(successor)
+    assert successor_entry is not None
+    register._write_entry(replace(successor_entry, merged_from=()))
+
+    with pytest.raises(EntityRegisterError, match="complete successor complement"):
+        register.resolve_target_evolution(
+            source, target, operation_id="review-operation"
+        )
+
+
+def test_source_reclaimed_split_rejects_contradictory_partial_complement(
+    tmp_path: Path,
+) -> None:
+    """Both split predecessor and successor retaining S is contradictory."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+    successor = register.split(target, {"Recovered source": ["Source", "S"]})[0]
+    target_entry = register.get_entry(target)
+    assert target_entry is not None
+    register._write_entry(replace(target_entry, merged_from=(source,)))
+
+    with pytest.raises(EntityRegisterError, match="contradictory partial"):
+        register.resolve_target_evolution(
+            source, target, operation_id="review-operation"
+        )
+    assert register.get_entry(successor) is not None
 
 
 # ---------------------------------------------------------------------------

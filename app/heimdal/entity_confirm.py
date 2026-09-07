@@ -75,7 +75,7 @@ compare rendering (a lens); voiceprint/diarization attribution (v2).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -272,6 +272,15 @@ def queue_for_review(
     # Idempotent: re-queuing the same mention_id replaces its stale entry
     # rather than duplicating it (a stage re-run is a revision, not a rewrite
     # -- mirrors attribution_stage's own append-only-but-idempotent posture).
+    existing = next(
+        (p for p in pending if p.get("queue_entry_id") == entry.queue_entry_id),
+        None,
+    )
+    if existing is not None and isinstance(existing.get("queued_at"), str):
+        # Replacing the still-pending projection is an idempotent refresh of
+        # the same clear-generation, not a new review generation. Only a row
+        # removed from pending and later queued receives a new timestamp.
+        entry = replace(entry, queued_at=str(existing["queued_at"]))
     pending = [p for p in pending if p.get("queue_entry_id") != entry.queue_entry_id]
     pending.append(entry.to_dict())
 

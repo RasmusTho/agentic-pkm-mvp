@@ -871,6 +871,65 @@ class EntityRegister:
             raise EntityRegisterError("target evolution lacks the journal-bound original merge proof")
         current = into_id
         seen: set[str] = set()
+
+        def validate_split_link(
+            split_link: Mapping[str, str], visited: frozenset[tuple[str, str, str]] = frozenset()
+        ) -> None:
+            """Validate one split hop, including a consecutive source-reclaim hop."""
+            reclaimed_from_id = split_link.get("reclaimed_from_id")
+            predecessor_id = split_link.get("predecessor_id")
+            successor_id = split_link.get("successor_id")
+            if not (
+                isinstance(reclaimed_from_id, str)
+                and isinstance(predecessor_id, str)
+                and isinstance(successor_id, str)
+            ):
+                raise EntityRegisterError(
+                    "target evolution split lacks a complete reclaimed-source proof"
+                )
+            hop_key = (predecessor_id, successor_id, reclaimed_from_id)
+            if hop_key in visited:
+                raise EntityRegisterError(
+                    "target evolution lineage cycle; queue entry stays pending"
+                )
+            predecessor_entry = self._read_entry(predecessor_id)
+            successor_entry = self._read_entry(successor_id)
+            reclaimed_entry = self._read_entry(reclaimed_from_id)
+            if predecessor_entry is None or successor_entry is None or reclaimed_entry is None:
+                raise EntityRegisterError(
+                    "target evolution split lacks a complete successor complement"
+                )
+            if reclaimed_from_id in predecessor_entry.merged_from:
+                raise EntityRegisterError(
+                    "target evolution split has a contradictory partial complement"
+                )
+            if (
+                reclaimed_from_id in successor_entry.merged_from
+                and {reclaimed_entry.label, *reclaimed_entry.aliases}.issubset(
+                    successor_entry.aliases
+                )
+            ):
+                return
+
+            # A consecutive source-reclaim split legitimately consumes the
+            # prior successor's complement while preserving the proof in its
+            # own lineage. Follow exactly one unambiguous next source-reclaim
+            # link and validate that hop's successor complement; ambiguity or
+            # a cycle remains fail-closed.
+            continuation = [
+                link for link in successor_entry.lineage
+                if link.get("predecessor_id") == successor_id
+                and link.get("mutation_kind") == "split"
+                and link.get("reclaimed_from_id") == reclaimed_from_id
+                and isinstance(link.get("successor_id"), str)
+                and link.get("successor_id")
+            ]
+            if len(continuation) != 1:
+                raise EntityRegisterError(
+                    "target evolution split lacks the complete successor complement"
+                )
+            validate_split_link(continuation[0], visited | {hop_key})
+
         while True:
             if current in seen:
                 raise EntityRegisterError("target evolution lineage cycle; queue entry stays pending")
@@ -893,7 +952,6 @@ class EntityRegister:
                 if link.get("predecessor_id") == current
                 and link.get("mutation_kind") == "split"
                 and link.get("reclaimed_from_id") == from_id
-                and link.get("successor_id") == source.merged_into
                 and isinstance(link.get("operation_id"), str)
                 and link.get("operation_id")
             ]
@@ -923,6 +981,11 @@ class EntityRegister:
             # diagnostics remain deterministic and the queue stays pending.
             if successor in seen:
                 raise EntityRegisterError("target evolution lineage cycle; queue entry stays pending")
+            split_candidates = [
+                link for link in candidates if link.get("mutation_kind") == "split"
+            ]
+            for split_link in split_candidates:
+                validate_split_link(split_link)
             if (
                 entry.lifecycle == LIFECYCLE_MERGED
                 and entry.merged_into != successor

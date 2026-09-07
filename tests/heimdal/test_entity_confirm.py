@@ -427,7 +427,7 @@ def test_apply_merge_recovers_when_later_split_reclaims_intermediate_target(tmp_
     register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
     intermediate = register.mint_canonical("Intermediate")
     register.merge(target, intermediate, operation_id="target-evolution")
-    successor = register.split(intermediate, {"Recovered target": ["Target"]})[0]
+    successor = register.split(intermediate, {"Recovered target": ["Target", "Source"]})[0]
 
     applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
     rewritten_target = register.get_entry(target)
@@ -459,7 +459,12 @@ def test_apply_merge_refuses_requeued_entry_after_cleared_source_reclaim(tmp_pat
     assert len(applied) == 1 and pending_review_entries(vault_root) == ()
 
     register.split(target, {"Recovered source": ["Source", "S"]})
-    requeued = replace(entry, queued_at="2099-01-01T00:00:00+00:00")
+    public_requeue = queue_for_review(
+        vault_root,
+        _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="requeued"),
+        candidate_entity_ids=[source, target],
+    )
+    requeued = replace(public_requeue, queued_at="2099-01-01T00:00:00+00:00")
     reapproval = ReviewDecision(
         queue_entry_id=entry.queue_entry_id,
         action="merge",
@@ -919,12 +924,13 @@ def test_queue_for_review_replaces_stale_entry_for_same_mention(tmp_path: Path) 
     vault_root = _vault_root(tmp_path)
     mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.65, mention_id="mention:dup-1")
 
-    queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a"])
-    queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a", "ent:c"])
+    first = queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a"])
+    second = queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a", "ent:c"])
 
     pending = pending_review_entries(vault_root)
     assert len(pending) == 1
     assert pending[0].candidate_entity_ids == ("ent:a", "ent:c")
+    assert second.queued_at == first.queued_at == pending[0].queued_at
 
 
 def test_queue_for_review_requires_confidence(tmp_path: Path) -> None:
