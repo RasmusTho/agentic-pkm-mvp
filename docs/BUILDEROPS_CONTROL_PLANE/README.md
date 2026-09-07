@@ -249,7 +249,9 @@ non-authoritative). The BCP-05 migration (#3603) follows BCP-04 acceptance, and 
 blocked.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
-not by rewriting that merge.
+not by rewriting that merge. The BCP-05 filename and historical Demerzel label remain for traceability;
+the current candidate runtime placement is the VM-102 `builder-system` target, and no Demerzel
+residency or activation is implied by the document name or the repository baseline.
 
 ## Cross-task invariants / partial-failure safety
 

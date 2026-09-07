@@ -13,24 +13,31 @@ existing_pr: 3620
 existing_pr_status: merged
 ---
 
+State: Target-state BCP-05 contract. The historical “Demerzel” name and filename remain for
+traceability, but the current candidate runtime target is TARS VM 102 (`builder-system`). This
+document does not claim VM residency, host qualification, deployment, or activation.
+
 # Demerzel Review And Merge Orchestration
 
 ## Purpose
 
-Issue #3603 owns Demerzel review/repair/verification/merge orchestration. PR #3620 merged on
-2026-07-15 and delivers the repo-side consumer, retries, recovery, idempotent ingest, attempt ledger,
-and verification-gated merge baseline; later correctness repairs are also on `main`. That baseline
-extends dispatcher SQLite, which ADR-0062 retires as production authority. This task is the migration
-delta for delivered work, not a duplicate orchestrator and not a request to reopen the merged PR.
-The repo-side API/PostgreSQL/outbox adapter and privileged merge-effect fence are now implemented;
-the installed-main Demerzel cycle and its parent-hub receipt remain the final acceptance gate.
+Issue #3603 owns the BuilderOps review/repair/verification/merge orchestration historically named
+Demerzel. PR #3620 merged on 2026-07-15 and delivers the repo-side consumer, retries, recovery,
+idempotent ingest, attempt ledger, and verification-gated merge baseline; later correctness repairs
+are also on `main`. That baseline extends dispatcher SQLite, which ADR-0062 retires as production
+authority. This task is the migration delta for delivered work, not a duplicate orchestrator and not
+a request to reopen the merged PR. The repo-side API/PostgreSQL/outbox adapter and privileged
+merge-effect fence are now implemented. The remaining installed-main cycle and parent-hub receipt
+are a separately governed acceptance gate whose current target placement is TARS VM 102
+(`builder-system`); historical Demerzel observations are evidence only.
 
 ## What This Task Does
 
 - migrate the delivered #3603 / PR #3620 orchestration so claims and attempt/result/receipt state
   pass through the BCP-02 API and BCP-01 PostgreSQL/outbox;
-- run the privileged executor on Demerzel with host-local model sessions and the narrowest practical
-  repo-scoped GitHub credential;
+- run the privileged executor only on a separately qualified target host, currently TARS VM 102
+  (`builder-system`), with host-local model sessions and the narrowest practical repo-scoped
+  GitHub credential; this repository contract does not perform that host operation;
 - bind every attempt to `RepoRef`, governing Issue, PR, exact head SHA, workflow/model identity,
   lease/fencing token, and deterministic operation key;
 - independently load the delivery manifest from the target repository's protected default branch/
@@ -157,8 +164,10 @@ weaken them and does not enter Product Runtime.
   material.
   Verify: `tests/security/test_builderops_executor_credentials.py::test_executor_secrets_are_referenced_not_persisted`.
 - [ ] The delivered flow runs one real/dry-run-safe review→repair/verify→merge-or-no-merge cycle on
-  Demerzel and posts its receipt to the parent validation hub.
-  Verify: runtime receipt on the BuilderOps control-plane parent issue, bound to issue/PR/SHA.
+  the currently qualified target host and posts its receipt to the parent validation hub. Until the
+  VM-102 qualification and executor-placement gates are evidenced, this criterion remains open.
+  Verify: runtime receipt on the BuilderOps control-plane parent issue, bound to issue/PR/SHA and
+  target identity.
 
 ## Out of Scope
 
@@ -172,7 +181,8 @@ weaken them and does not enter Product Runtime.
 - retain and migrate the existing #3603/#3620 test suite instead of replacing it;
 - test crashes before/after attempt commit, provider result, GitHub call, and readback;
 - verify REST-vs-GraphQL budget behavior; and
-- run one Demerzel acceptance receipt before BCP-06.
+- run one target-host BCP-05 acceptance receipt before BCP-06; the historical
+  `bcp05_demerzel_cycle.v1` identifier may remain in older receipts for traceability.
 
 The installed-main composition root is:
 
@@ -220,10 +230,13 @@ Linux recovery uses the same explicit
 `linux-systemd-cgroup-v2-scope-v1` profile. There is no platform-derived or
 best-effort fallback between the Linux and Darwin profiles.
 
-Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits the existing
-`bcp05_demerzel_cycle.v1` receipt; repository delivery is not accepted until a real installed-main
-Demerzel invocation posts that receipt to #3603. The command itself does not satisfy that parent
-gate or activate BCP-06. Before constructing any client or effect adapter, the command requires the
+Both forms are dry-run-safe and API/PostgreSQL-only. A successful command emits the BCP-05 cycle
+receipt; older receipts may use the historical `bcp05_demerzel_cycle.v1` identifier. Repository
+delivery is not accepted until a real installed-main target-host invocation posts a target-bound
+receipt to the governing parent. The command itself does not satisfy that parent gate or activate
+BCP-06. BuilderOps backup/restore is deferred and non-gating under #5056; this cycle must not
+introduce a WAL, restore, or recovery-target prerequisite. Before constructing any client or effect
+adapter, the command requires the
 selected worktree to be clean `main` at the exact locally fetched `origin/main`; a detached, dirty,
 stale, or feature-branch checkout fails closed. It also requires the explicit
 containment profile matching the host. On Darwin this remains the unchanged
