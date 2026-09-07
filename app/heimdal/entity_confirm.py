@@ -680,20 +680,18 @@ def apply_human_review_decisions(
                 )
                 if (
                     cleared_twin is not None
-                    and _matches_operation_identity(
-                        cleared_twin,
-                        vault_identity=vault_identity,
-                        queue_entry_id=queue_entry_id,
-                        decision_position=index,
-                        decision_digest=decision_digest,
-                        from_id=effective_decision.from_id,
-                        into_id=effective_decision.into_id,
-                    )
                     and register.merge_effect_state(
                         effective_decision.from_id, effective_decision.into_id
                     )
                     == MERGE_EFFECTS_COMPLETE
                 ):
+                    # A cleared row already has its one committed event and
+                    # is located by this exact queue entry + original pair.
+                    # A later undo/reapproval can carry a different decision
+                    # digest or position, but must finish this interrupted
+                    # clear rather than claim another operation/event. This
+                    # exception is intentionally unavailable to STATE_CLAIMED
+                    # retries, which still require complete identity parity.
                     merged = True
                     operation_id = cleared_twin.operation_id
                 else:
