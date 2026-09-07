@@ -184,7 +184,8 @@ shipped runtime capability here.
 For a retained DEV v1 ownership record whose old container ancestor inode chain is unavailable,
 operators can use the explicit, stopped-window [DEV legacy-owner re-attestation](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#explicit-dev-legacy-owner-re-attestation)
 command. It requires a fresh authority decision and verified private recovery evidence; normal
-startup remains fail-closed and activation remains a separate deployment step.
+startup remains fail-closed and activation remains a separate deployment step. Missing or
+inconsistent registry backup artifacts are refused without being repaired during admission.
 
 ## Environment posture
 

@@ -328,3 +328,27 @@ def test_cli_refuses_journal_created_while_waiting_for_lock(tmp_path, monkeypatc
     assert _protected(runtime) == before
     assert journal_path.read_text() == '{}'
     assert not (tmp_path / 'backup').exists()
+
+
+@pytest.mark.parametrize("artifact", ["rollback_export_path", "snapshot_path", "snapshot_checksum_path"])
+@pytest.mark.parametrize("damage", ["missing", "stale"])
+@pytest.mark.parametrize("stale_expected_digest", [False, True])
+def test_cli_refuses_damaged_registry_artifacts_without_healing(
+    tmp_path, artifact, damage, stale_expected_digest,
+):
+    runtime, args, _, _ = _fixture(tmp_path)
+    path = getattr(runtime.registry, artifact)
+    if damage == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(b"retained damaged evidence\n")
+    if stale_expected_digest:
+        _set(args, "--expected-registry-sha256", "0" * 64)
+    protected = [runtime.ledger.path, runtime.ledger.key_path, runtime.registry.path,
+                 runtime.registry.rollback_export_path, runtime.registry.snapshot_path,
+                 runtime.registry.snapshot_checksum_path]
+    before = {p: p.read_bytes() if p.exists() else None for p in protected}
+    assert runtime_module.main(args) == 1
+    assert {p: p.read_bytes() if p.exists() else None for p in protected} == before
+    assert not (tmp_path / "backup").exists()
+    assert runtime_module._deployment_fence_path(runtime.ledger.root, "dev").exists()
