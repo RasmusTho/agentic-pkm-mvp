@@ -10,7 +10,7 @@ depends_on: [RECONCILE_EXECUTABLE_CONTRACTS.md]
 can_parallelize_with: []
 ---
 
-State: Target-state task specification; not implemented or runtime acceptance.
+State: Implemented. Delivered by PR #5424 (issue #5401, 2026-09-07).
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -34,16 +34,20 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The owner fact table names source/producer/identity/auth/revision/readback for the four finite fact kinds, including withdrawal and changed-candidate behavior.
+- [x] The owner fact table names source/producer/identity/auth/revision/readback for the four finite fact kinds, including withdrawal and changed-candidate behavior.
   - Verify: doc writeback at `docs/DEVUI.md :: Owner language and source states`
-- [ ] The plan distinguishes model suggestions, actual owner asks and accepted actions; a single existing action boundary owns exact-target approval and destination readback, with the first non-DDO path and later DDO scope explicit.
+- [x] The plan distinguishes model suggestions, actual owner asks and accepted actions; a single existing action boundary owns exact-target approval and destination readback, with the first non-DDO path and later DDO scope explicit.
   - Verify: doc writeback at `docs/plans/DEVUI_IMPLEMENTATION.md :: Three delivery stages`
-- [ ] Nonvisual examples cover genuine decision, technical wait, deployed-but-untried, owner rejection, changed candidate and ambiguous start without assigning new authority to DevUI.
+- [x] Nonvisual examples cover genuine decision, technical wait, deployed-but-untried, owner rejection, changed candidate and ambiguous start without assigning new authority to DevUI.
   - Verify: runtime receipt: builder_owner_fact_contract.v1
 
 ## How to Verify (Pre-Merge)
 
 Review the finite examples against existing source contracts and production seams; validate source anchors and docs. The receipt must identify committed source sections and any remaining decision, with no runtime support claim.
+
+## Delivery Verification
+
+PR #5424 merged exact head `3238909926f31228da35f43124aca2663917e307` at `f002f3016460c18410d35eea1f38f3a4928effbc` after the named source-backed owner-fact sections, 68 targeted DevUI/governance tests, documentation guard, contract validation, and the full non-PG CI lane passed. The delivery defines carriers and handoff boundaries only; runtime fact producers, UI changes, VM102 operation, and owner acceptance remain separately gated.
 
 ## Out of Scope
 
