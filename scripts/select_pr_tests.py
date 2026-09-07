@@ -275,6 +275,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # is owned above, without widening builder_system to all
             # architecture tests.
             "tests/architecture/test_pr_hot_path_governance.py",
+            # Durable-table and producer inventory fitness belongs to the
+            # Builder System architecture gate. Own this exact file so a
+            # count/contract repair cannot fail closed as an unowned PR.
+            "tests/architecture/test_multi_vault_projection_inventory.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -290,6 +294,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/governance",
             "tests/architecture/test_builderops_store_boundary.py",
             "tests/architecture/test_pr_hot_path_governance.py",
+            "tests/architecture/test_multi_vault_projection_inventory.py",
         ),
     ),
     (
