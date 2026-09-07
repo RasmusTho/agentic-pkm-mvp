@@ -80,8 +80,11 @@ class _MimerHttpOperations(Protocol):
 class _GovernedMimerHttpOperations:
     """The fixed allowlist to the existing loopback HTTP client contract."""
 
+    # Keep the adapter deadline aligned with the runtime's single LLM_TIMEOUT
+    # default (60 seconds) while retaining short connection/pool bounds.
+    _RUNTIME_TIMEOUT_SECONDS = 60.0
     _RUNTIME_MANAGED_TIMEOUT = httpx.Timeout(
-        None,
+        _RUNTIME_TIMEOUT_SECONDS,
         connect=10.0,
         write=10.0,
         pool=10.0,
