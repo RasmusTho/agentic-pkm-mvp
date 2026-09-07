@@ -3,7 +3,7 @@ status: active
 kind: chat
 provider: openai
 model: gpt-6-astra
-notes: Optional GPT-6 Astra candidate; not a channel default or Builder capability-tier mapping.
+notes: Explicit high-risk TCD candidate in the Sol capability; not a default model. When selected through the declared Builder resolver it uses max reasoning effort.
 pricing:
   standard_input_usd_per_million_tokens: 10.0
   standard_output_usd_per_million_tokens: 50.0

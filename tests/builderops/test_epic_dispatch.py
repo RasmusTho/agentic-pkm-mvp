@@ -21,6 +21,8 @@ from app.builderops.epic_dispatch import (
     dispatch_issue_sessions,
     frozen_dispatch_plan_hash,
 )
+from app.builderops.execution_routing import resolve_execution_target
+from app.components.settings.providers_loader import load_provider_census
 from app.builderops.epic_run_state import (
     apply_epic_run_update,
     create_epic_run_state,
@@ -1068,7 +1070,7 @@ def test_codex_tcd_route_resolves_explicit_gpt_6_astra(tmp_path: Path) -> None:
     command = launcher.command(plan["context_packs"][0])
 
     assert command[command.index("--model") + 1] == "gpt-6-astra"
-    assert 'model_reasoning_effort="high"' in command
+    assert 'model_reasoning_effort="max"' in command
 
     default_plan = build_dispatch_plan(
         independent_issue_numbers=[5803],
@@ -1091,6 +1093,33 @@ def test_codex_tcd_route_resolves_explicit_gpt_6_astra(tmp_path: Path) -> None:
     invalid_pack["runtime"] = invalid_runtime
     with pytest.raises(EpicDispatchError, match="not selectable"):
         launcher.command(invalid_pack)
+
+
+def test_resolve_execution_target_uses_declared_model_reasoning() -> None:
+    census = load_provider_census()
+
+    default_target = resolve_execution_target(
+        census, channel="dev", capability="sol"
+    )
+    astra_target = resolve_execution_target(
+        census, channel="dev", capability="sol", model_id="gpt-6-astra"
+    )
+    standard_target = resolve_execution_target(
+        census, channel="dev", capability="terra"
+    )
+
+    assert (default_target.model, default_target.reasoning_effort) == (
+        "gpt-5.6-sol",
+        "high",
+    )
+    assert (astra_target.model, astra_target.reasoning_effort) == (
+        "gpt-6-astra",
+        "max",
+    )
+    assert (standard_target.model, standard_target.reasoning_effort) == (
+        "gpt-5.6-luna",
+        "high",
+    )
 
 
 def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launch_policy(

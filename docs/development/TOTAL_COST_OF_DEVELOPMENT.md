@@ -36,10 +36,15 @@ profile. TCD first selects the lowest intelligence/capability that adequately ha
 then weighs model cost, latency, human time, rework, defects, delay, and coordination. A deeper
 model is justified when its expected avoided cost exceeds that increment; the configured profile
 model is only the backwards-compatible fallback when no selection intent is supplied, not a claim
-that it is always optimal. `gpt-6-astra` is therefore a selectable candidate for the
-`high-reasoning` / `sol` capability when that TCD assessment supports it. Internal Yggdrasil
-decisions and external Codex launcher invocations use the same declared census/resolver seam;
-workflow skills do not carry model-specific branches, and an undeclared model choice fails closed.
+that it is always optimal. The current Builder default ladder is Luna/low for cheap coordination
+and bounded low-risk work, Luna/high through the compatibility `terra` capability slot for normal
+delivery, and Sol/high for hard repair, backlog correction, and verification. `Terra` remains a
+compatibility key in the provider-neutral contract; it is not the normal model binding. `gpt-6-astra`
+is an explicit candidate inside the `sol` capability and resolves to max reasoning only when that
+TCD assessment selects it; omitted selection remains Sol/high. Sol/xhigh is an escalation, not a
+default. Internal Yggdrasil decisions and external Codex launcher invocations use the same declared
+census/resolver seam; workflow skills do not carry model-specific branches, and an undeclared model
+choice fails closed.
 
 Escalate after two failed attempts or review rejects, unclear requirements, missing/hard-to-interpret
 tests, high blast radius, non-trivial CI failure, or hard-to-assess residual risk. De-escalate when the

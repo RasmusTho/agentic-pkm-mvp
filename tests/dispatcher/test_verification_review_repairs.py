@@ -500,7 +500,7 @@ def test_adapter_model_reasoning_and_instructions_are_applied(tmp_path) -> None:
         adapter_path=Path(__file__).resolve().parents[2] / ".codex/agents/verification-closer.toml",
     )
     command = launcher.command()
-    assert command[command.index("--model") + 1] == "gpt-5.6-terra"
+    assert command[command.index("--model") + 1] == "gpt-5.6-sol"
     assert 'model_reasoning_effort="high"' in command
     assert "verification_closer" in command[-1]
     assert "Do not merge unless" in command[-1]
