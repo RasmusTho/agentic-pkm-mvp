@@ -57,6 +57,8 @@ jobs:
             requirements.txt
             dev-requirements.txt
             pyproject.toml
+            mimer-mcp-sidecar/requirements.txt
+            mimer-mcp-sidecar/pyproject.toml
 
       - name: Detect heavy smoke surface
         id: changes
@@ -749,6 +751,8 @@ jobs:
             requirements.txt
             dev-requirements.txt
             pyproject.toml
+            mimer-mcp-sidecar/requirements.txt
+            mimer-mcp-sidecar/pyproject.toml
 
       - name: Install Linux ACL tools
         if: steps.changes.outputs.code == 'true'
@@ -762,6 +766,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
+
+      - name: Install standalone sidecar test dependencies
+        if: steps.changes.outputs.code == 'true'
+        run: |
+          pip install --requirement mimer-mcp-sidecar/requirements.txt
+          pip install --no-deps --editable mimer-mcp-sidecar
 
       - name: Intent-classification golden gate (KERNEL-13)
         # Explicit, named gate over the classification_case.v1 golden set

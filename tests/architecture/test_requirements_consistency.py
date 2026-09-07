@@ -15,6 +15,7 @@ ROOT_REQUIREMENTS = REPO_ROOT / "requirements.txt"
 APP_REQUIREMENTS = REPO_ROOT / "app" / "requirements.txt"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+CI_SMOKE_WORKFLOW = WORKFLOWS / "ci-smoke.yaml"
 SETTINGS_CI_WORKFLOW = WORKFLOWS / "settings-ci.yaml"
 PY312_SMOKE = REPO_ROOT / "scripts" / "py312_smoke_test.sh"
 
@@ -184,6 +185,29 @@ def test_pyproject_and_requirements_are_consistent() -> None:
     assert str(sidecar["mcp"].requirement.specifier) == "==1.29.1"
     assert str(sidecar["httpx"].requirement.specifier) == "==0.27.2"
     assert "mcp" not in runtime
+
+
+def test_sidecar_dependencies_are_installed_by_ci_without_core_leak() -> None:
+    workflow = _load_workflow(CI_SMOKE_WORKFLOW)
+    unit_job = workflow["jobs"]["pr-unit-tests-not-pg"]
+    steps = unit_job["steps"]
+    install_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("name") == "Install standalone sidecar test dependencies"
+    )
+    selection_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("name") == "Select subsystem-scoped pytest targets"
+    )
+    install_text = steps[install_index]["run"]
+
+    assert install_index < selection_index
+    assert "pip install --requirement mimer-mcp-sidecar/requirements.txt" in install_text
+    assert "pip install --no-deps --editable mimer-mcp-sidecar" in install_text
+    assert "mcp" not in (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "mcp" not in (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def test_docker_and_ci_install_same_numpy_major() -> None:
