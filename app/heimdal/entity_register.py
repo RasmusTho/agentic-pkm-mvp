@@ -793,6 +793,12 @@ class EntityRegister:
             if len(successors) != 1:
                 raise EntityRegisterError("target evolution lineage is fork-ambiguous")
             successor = successors.pop()
+            # A cycle is already decisive and must not depend on whether its
+            # synthetic/corrupt hop happens to retain a target complement.
+            # Check it before validating the ordinary merge-hop effects so
+            # diagnostics remain deterministic and the queue stays pending.
+            if successor in seen:
+                raise EntityRegisterError("target evolution lineage cycle; queue entry stays pending")
             if entry.lifecycle == LIFECYCLE_MERGED and entry.merged_into != successor:
                 raise EntityRegisterError("target evolution lineage contradicts the redirect")
             if any(link.get("mutation_kind") == "merge" for link in candidates):

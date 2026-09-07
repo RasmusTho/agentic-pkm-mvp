@@ -569,6 +569,34 @@ def test_target_evolution_rejects_merge_hop_without_successor_complement(
         )
 
 
+def test_target_evolution_prioritizes_cycle_detection_over_hop_complement(
+    tmp_path: Path,
+) -> None:
+    """A cyclic lineage is deterministic even when its synthetic hop is incomplete."""
+    register = _effect_register(tmp_path)
+    source = register.mint_canonical("Source")
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="journal-operation")
+    target_entry = register.get_entry(target)
+    assert target_entry is not None
+    register._write_entry(
+        replace(
+            target_entry,
+            lineage=({
+                "predecessor_id": target,
+                "successor_id": target,
+                "operation_id": "cycle",
+                "mutation_kind": "merge",
+            },),
+        )
+    )
+
+    with pytest.raises(EntityRegisterError, match="cycle"):
+        register.resolve_target_evolution(
+            source, target, operation_id="journal-operation"
+        )
+
+
 def test_merge_effect_helpers_fail_closed_on_unprovable_notes(tmp_path: Path) -> None:
     register = _effect_register(tmp_path)
     a = register.mint_canonical("Alpha")
