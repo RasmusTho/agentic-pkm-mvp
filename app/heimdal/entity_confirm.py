@@ -84,7 +84,6 @@ from typing import Any, Mapping, Sequence
 from app.heimdal.attribution_stage import RESOLUTION_UNRESOLVED, EntityMention
 from app.heimdal.entity_register import (
     LIFECYCLE_MERGED,
-    MERGE_EFFECTS_COMPLETE,
     EntityRegister,
     EntityRegisterError,
 )
@@ -615,6 +614,10 @@ def _apply_human_review_decisions_locked(
                             )
                         )
                         continue
+                    register.ensure_merge_effects(
+                        active.from_id, active.into_id,
+                        operation_id=active.operation_id, require_complete=True,
+                    )
                     register.resolve_target_evolution(active.from_id, active.into_id, operation_id=active.operation_id)
                     journal.mark_cleared(active)
                     remaining_pending = [
@@ -732,10 +735,6 @@ def _apply_human_review_decisions_locked(
                     and _pending_generation_precedes_cleared_operation(
                         pending_entry, cleared_twin
                     )
-                    and register.merge_effect_state(
-                        effective_decision.from_id, effective_decision.into_id
-                    )
-                    == MERGE_EFFECTS_COMPLETE
                 ):
                     # A cleared row already has its one committed event and
                     # its pending generation predates that clear. A later
@@ -744,10 +743,14 @@ def _apply_human_review_decisions_locked(
                     # than claim another operation/event. A re-queued or
                     # timestamp-ambiguous generation cannot take this path;
                     # claimed retries still require complete identity parity.
-                    register.resolve_target_evolution(cleared_twin.from_id, cleared_twin.into_id,
-                                                      operation_id=cleared_twin.operation_id)
                     if not journal.verify_committed_visibility(cleared_twin):
                         raise EntityRegisterError("cleared operation event is not freshly visible; entry stays pending")
+                    register.ensure_merge_effects(
+                        cleared_twin.from_id, cleared_twin.into_id,
+                        operation_id=cleared_twin.operation_id, require_complete=True,
+                    )
+                    register.resolve_target_evolution(cleared_twin.from_id, cleared_twin.into_id,
+                                                      operation_id=cleared_twin.operation_id)
                     merged = True
                     operation_id = cleared_twin.operation_id
                 else:

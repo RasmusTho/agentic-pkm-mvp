@@ -951,7 +951,8 @@ class EntityRegister:
 
     @_locked
     def ensure_merge_effects(
-        self, from_id: str, into_id: str, *, operation_id: str | None = None
+        self, from_id: str, into_id: str, *, operation_id: str | None = None,
+        require_complete: bool = False,
     ) -> str:
         """Idempotently apply the two note effects of one exact merge. No event.
 
@@ -963,7 +964,9 @@ class EntityRegister:
         emits — the journal path commits its event atomically with the
         operation row, and :meth:`merge` keeps its own emission.
 
-        Returns the pre-application :meth:`merge_effect_state` value.
+        Returns the pre-application :meth:`merge_effect_state` value. A committed
+        journal retry may require complete effects, allowing only compatibility
+        metadata backfill rather than replaying a missing merge.
         """
         effective_id = operation_id or f"direct-merge:{from_id}:{into_id}"
         source = self._read_entry(from_id)
@@ -985,7 +988,24 @@ class EntityRegister:
                 planned[from_id] = replace(old, lineage=(*old.lineage, {
                     "predecessor_id": from_id, "successor_id": into_id,
                     "operation_id": effective_id, "mutation_kind": "merge"}))
+        # An authenticated retry can supply an operation that old notes did not
+        # record. Preserve the deterministic legacy identity while binding that
+        # operation on the current owner of the original complement.
+        current_source = planned[from_id]
+        if current_source.lifecycle == LIFECYCLE_MERGED:
+            assert current_source.merged_into is not None  # globally validated above
+            current_target = planned[current_source.merged_into]
+            bound = []
+            for relation in current_target.complements:
+                if relation["from_id"] == from_id and relation["into_id"] == into_id:
+                    if relation.get("operation_id", effective_id) != effective_id:
+                        raise EntityRegisterError("merge complement operation mismatch")
+                    relation = {**relation, "operation_id": effective_id}
+                bound.append(relation)
+            planned[current_target.entity_id] = replace(current_target, complements=tuple(bound))
         state = self._merge_effect_state(from_id, into_id, entries=planned)
+        if require_complete and state != MERGE_EFFECTS_COMPLETE:
+            raise EntityRegisterError("committed merge lacks complete note effects")
         if state == MERGE_EFFECTS_COMPLETE:
             self._validated_entries(list(planned.values()))
             for old in self._all_entries():

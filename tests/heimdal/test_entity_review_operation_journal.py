@@ -901,6 +901,59 @@ def _append_decisions(vault_root: Path, *decisions: dict[str, Any]) -> None:
     )
 
 
+@pytest.mark.parametrize("state", [STATE_CLAIMED, STATE_EVENT_COMMITTED, STATE_CLEARED])
+def test_authenticated_legacy_merge_recovery_binds_operation_on_both_sides(
+    scratch_dsn: str, tmp_path: Path, state: str
+) -> None:
+    """Every retained EROJ-01 resume window upgrades complete legacy notes."""
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_id, source, target, raw))
+    register.ensure_merge_effects(source, target, operation_id=operation.operation_id)
+    if state != STATE_CLAIMED:
+        operation = journal.commit_merge_event(operation)
+    if state == STATE_CLEARED:
+        operation = journal.mark_cleared(operation)
+    register._write_entry(replace(register.get_entry(source), lineage=(), complement_id=None))
+    register._write_entry(replace(register.get_entry(target), complements=()))
+    decisions_before = _persisted_decisions(vault_root)
+
+    applied = apply_human_review_decisions(vault_root, register=register, journal=journal)
+
+    assert len(applied) == 1 and applied[0].operation_id == operation.operation_id
+    source_entry = register.get_entry(source)
+    relation = register.get_entry(target).complements[0]
+    assert source_entry.complement_id == relation["complement_id"]
+    assert source_entry.complement_id.startswith("cmp:legacy:")
+    assert relation["operation_id"] == operation.operation_id
+    assert source_entry.lineage[0]["operation_id"] == operation.operation_id
+    assert _journal_row(scratch_dsn, operation.operation_id)[0] == STATE_CLEARED
+    assert pending_review_entries(vault_root) == ()
+    assert _persisted_decisions(vault_root) == decisions_before
+    assert len(_merged_event_rows(scratch_dsn)) == 1
+
+
+@pytest.mark.parametrize("state", [STATE_EVENT_COMMITTED, STATE_CLEARED])
+def test_committed_merge_recovery_does_not_replay_missing_effects(
+    scratch_dsn: str, tmp_path: Path, state: str
+) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    queue_id, source, target, raw = _queue_merge_decision(vault_root, register)
+    journal = _journal(scratch_dsn)
+    operation = journal.claim_operation(**_claim_kwargs(register, queue_id, source, target, raw))
+    operation = journal.commit_merge_event(operation)
+    if state == STATE_CLEARED:
+        operation = journal.mark_cleared(operation)
+    before = {p: p.read_bytes() for p in vault_root.rglob("*.md")}
+    with pytest.raises(EntityConfirmError, match="lacks complete note effects"):
+        apply_human_review_decisions(vault_root, register=register, journal=journal)
+    assert {p: p.read_bytes() for p in vault_root.rglob("*.md")} == before
+    assert [entry.queue_entry_id for entry in pending_review_entries(vault_root)] == [queue_id]
+
+
 @pytest.mark.parametrize("late_ruling", ["reapprove", "reject"])
 def test_edited_history_after_refusal_converges_without_manual_repair(
     scratch_dsn: str, tmp_path: Path, late_ruling: str

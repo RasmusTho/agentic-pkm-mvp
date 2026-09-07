@@ -696,6 +696,7 @@ def test_ensure_merge_effects_backfills_pre_lineage_completed_merge_before_evolu
     assert register.resolve_target_evolution(
         source, target, operation_id="journal-operation"
     ) == evolved
+    assert register.get_entry(target).complements[0]["operation_id"] == "journal-operation"
 
 
 def test_evolved_source_only_merge_backfills_lineage_but_refuses_missing_complement(tmp_path: Path) -> None:
@@ -846,6 +847,24 @@ def test_split_complement_ids_are_globally_unique_across_repeated_splits(tmp_pat
         assert records[0][0] == target
         assert records[0][1]['complement_id'] == complement_id
         assert records[0][1]['from_id'] == source
+
+
+def test_completed_split_replay_preserves_later_valid_evolution(tmp_path: Path) -> None:
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.merge(source, target, operation_id="original-merge")
+    partition = {"First": ["Source", "S"]}
+    successors = register.split(target, partition, operation_id="original-split")
+    later = register.split(successors[0], {"Second": ["Source", "S"]}, operation_id="later-split")[0]
+    terminal = register.mint_canonical("Terminal")
+    register.merge(later, terminal, operation_id="later-merge")
+    before = _relation_snapshot(register)
+    events_before = dict(register._conn.rows)
+    assert register.split(target, partition, operation_id="original-split") == successors
+    assert _relation_snapshot(register) == before
+    assert register._conn.rows == events_before
+    assert register.resolve_target_evolution(source, target, operation_id="original-merge") == terminal
 
 
 @pytest.mark.parametrize('split_number', [1, 2])
