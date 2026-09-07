@@ -1,4 +1,4 @@
-State: Accepted target-state gap/acceptance specification, 2026-09-07; not implemented, deployed or owner-accepted. Parent #5399 is the blocked live validation hub; seven children are filed, source publication/readiness pending.
+State: Accepted target-state gap/acceptance specification, 2026-09-07; not implemented, deployed or owner-accepted. Parent #5399 is the blocked live validation hub; seven children are filed, live readiness is owned by GitHub.
 Doc role: Specification directory
 Authority: User-authorized research-to-backlog handoff `prom_20260907052807_ef79007c`, accepted receipt `receipt_20260907052822_aa95b743`; subordinate to DEVUI, ADR-0062 and the Builder System process map.
 Owner: Builder System governance and owner-experience acceptance
@@ -19,13 +19,13 @@ Serial pickup is the default. FCA-04 can run independently of the first two gove
 | --- | --- | --- |
 | #5400 [FCA-01 — Reconcile executable Builder contracts](RECONCILE_EXECUTABLE_CONTRACTS.md) | reconcile VM102 and owner-control execution contracts | Spec publication and normal readiness |
 | #5401 [FCA-02 — Define owner facts and bounded action handoff](DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md) | define source-backed owner decisions trials and agent handoff | FCA-01 |
-| #5402 [FCA-03 — Compose LLM-assisted owner overview](COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md) | compose source-linked LLM overview and next-step proposals | FCA-02 |
+| #5402 [FCA-03 — Compose LLM-assisted owner overview](COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md) | compose source-linked LLM overview and next-step proposals | Existing admitted source envelopes; no FCA-02/DDO dependency |
 | #5403 [FCA-04 — Isolate Builder package boot](ISOLATE_BUILDER_PACKAGE_BOOT.md) | boot Builder without Product imports configuration or dependencies | Spec publication and normal readiness |
 | #5404 [FCA-05 — Produce owner decision and trial facts](PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md) | produce and project explicit owner decision and trial receipts | FCA-02, #4169 |
 | #5405 [FCA-06 — Qualify a second consumer repository](QUALIFY_SECOND_CONSUMER_REPOSITORY.md) | qualify Builder against an explicitly addressed second repo | FCA-04, #3793, #5181 |
 | #5406 [FCA-07 — Prepare composed owner acceptance](PREPARE_COMPOSED_OWNER_ACCEPTANCE.md) | prepare whole owner-platform acceptance over existing workflow proofs | FCA-03, FCA-05, FCA-06, #4749, #4697, #4982, #5181 |
 
-FCA-02 is a contract-enrichment task, not authorization to invent a source store. FCA-03 and FCA-05 cannot become ready until its exact producer/source/action contract exists. If the contract changes their implementation boundaries, amend their specs and Issues before pickup. #4169's prerequisite means its admitted first action boundary after FCA-01 reconciliation; it does not silently require all DDO effects for a non-DDO workflow.
+FCA-02 is a contract-enrichment task, not authorization to invent a source store. FCA-05 cannot become ready until its exact producer/source/action contract exists. FCA-03 may start earlier using the existing admitted sources; it emits interpretations/proposals rather than the missing canonical owner facts. If the contract changes their implementation boundaries, amend their specs and Issues before pickup. #4169's prerequisite means its admitted first action boundary after FCA-01 reconciliation; it does not silently require all DDO effects for a non-DDO workflow.
 
 ## Existing epics and validation hubs
 

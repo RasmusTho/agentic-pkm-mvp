@@ -5,8 +5,8 @@ task_id: FCA-03
 github_issue: 5402
 source_anchor: docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent
 parent_capability: Builder Factory Acceptance
-prerequisites: [FCA-02]
-depends_on: [DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md]
+prerequisites: []
+depends_on: []
 can_parallelize_with: []
 ---
 
@@ -21,6 +21,8 @@ Authority: Accepted research-to-backlog handoff; existing owner contracts remain
 The owner explicitly accepts an LLM as part of Builder and prioritizes useful overview/control over determinism. Existing DevUI composers and Conversation Port are read-only building blocks; the live Focus adapter is still title-only and empty of execution/receipt context.
 
 ## What This Task Does
+
+This read-only synthesis can use the already-admitted source envelopes immediately after source publication; it does not wait for FCA-02 or the new decision/trial producers. Until those facts exist, explain the limitation and show proposals separately from actual owner decisions.
 
 Add a bounded Builder-owned nonvisual synthesis entrypoint over the existing DevUI source envelopes and selected Issue/PR/run/receipt evidence. Use the configured Builder model/launcher boundary, not Product LLM globals, hard-coded provider IDs or silently billed fallback. Return source-linked plain-language current work, blockers, change since captured evidence and proposed next steps; preserve explicit unknowns, contradictions and timestamps. Production caller supplies addressed repo and bounded source snapshot. Model output is interpretation/proposal, never a verified state or execution instruction. Return the usable source snapshot and an honest model-unavailable state when model access fails. Wire the result into the existing read composition seam; visual rendering follows #4982/design and is outside this child.
 
