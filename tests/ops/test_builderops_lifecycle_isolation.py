@@ -21,7 +21,7 @@ printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 context=""
 if [ "${1:-}" = "--context" ]; then context="$2"; shift 2; fi
 if [ "${1:-}" = "info" ]; then
-  [ "$context" = builderops ] && printf 'builder-engine\n' || printf 'product-engine\n'
+  [ "$context" = builderops ] && printf '799a3d86-54f6-4208-b71a-36ae3eee61b6\n' || printf '2cae4764-d613-484d-b63d-0d353d5eab7c\n'
   exit 0
 fi
 if [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
@@ -80,6 +80,26 @@ def test_failure_domain_preflight_rejects_product_project_on_builder_engine(
     result = _run_contract(tmp_path, FAKE_BUILDER_PROJECTS='[{"Name":"pkm-prod"}]')
     assert result.returncode == 72
     assert "Product project detected on BuilderOps engine" in result.stderr
+
+
+def test_failure_domain_preflight_decodes_product_project_names_before_boundary_check(
+    tmp_path: Path,
+) -> None:
+    result = _run_contract(tmp_path, FAKE_BUILDER_PROJECTS='[{"Name":"\\u0070km-prod"}]')
+    assert result.returncode == 72
+    assert "Product project detected on BuilderOps engine" in result.stderr
+
+
+def test_failure_domain_preflight_rejects_noncanonical_engine_ids(tmp_path: Path) -> None:
+    for engine_id in ("builder-engine", "f" * 36, "00000000-0000-0000-0000-000000000000"):
+        result = subprocess.run(
+            ["bash", "-c", f"source {LIB!s}; builderops_valid_engine_id \"$1\"", "bash", engine_id],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
 
 
 def test_failure_domain_preflight_rejects_same_context(tmp_path: Path) -> None:

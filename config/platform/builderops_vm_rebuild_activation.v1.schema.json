@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "builderops_vm_rebuild_activation.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_type",
+    "receipt_version",
+    "target_vm",
+    "observed_at",
+    "source_refs",
+    "component_inventory_digest",
+    "activation_mode",
+    "candidate_identity",
+    "host_identity",
+    "dedicated_engine",
+    "product_engine",
+    "migration",
+    "fencing",
+    "no_dual_writer",
+    "readiness",
+    "secret_material",
+    "gaps",
+    "refusals",
+    "claims",
+    "evidence_fingerprint"
+  ],
+  "properties": {
+    "receipt_type": {"const": "builderops_vm_rebuild_activation.v1"},
+    "receipt_version": {"const": 1},
+    "target_vm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vmid", "name"],
+      "properties": {"vmid": {"const": 102}, "name": {"const": "builder-system"}}
+    },
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source_refs": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "component_inventory_digest": {"$ref": "#/$defs/digest"},
+    "activation_mode": {"enum": ["fresh_rebuild", "existing_runtime_reconciled"]},
+    "candidate_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha", "control_plane_image_digest", "postgres_image_digest", "config_fingerprint"],
+      "properties": {
+        "source_sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "control_plane_image_digest": {"$ref": "#/$defs/sha256_digest"},
+        "postgres_image_digest": {"$ref": "#/$defs/sha256_digest"},
+        "config_fingerprint": {"$ref": "#/$defs/sha256_digest"}
+      }
+    },
+    "host_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proxmox_node", "proxmox_vm_name", "guest_hostname", "guest_ip", "host_key_fingerprint", "vm_running", "qemu_agent_ready"],
+      "properties": {
+        "proxmox_node": {"const": "tars"},
+        "proxmox_vm_name": {"const": "bob-1"},
+        "guest_hostname": {"const": "builder-system"},
+        "guest_ip": {"const": "10.42.42.121"},
+        "host_key_fingerprint": {"type": "string", "pattern": "^ssh-ed25519:SHA256:[A-Za-z0-9+/=]+$"},
+        "vm_running": {"const": true},
+        "qemu_agent_ready": {"const": true}
+      }
+    },
+    "dedicated_engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context", "socket", "engine_id", "project", "compose_config_fingerprint", "services", "healthy_services"],
+      "properties": {
+        "context": {"const": "builderops"},
+        "socket": {"const": "unix:///run/docker-builderops.sock"},
+        "engine_id": {"$ref": "#/$defs/engine_id"},
+        "project": {"const": "builderops-control-plane"},
+        "compose_config_fingerprint": {"$ref": "#/$defs/sha256_digest"},
+        "services": {"const": ["api", "db", "migrate", "worker"]},
+        "healthy_services": {"const": ["api", "db", "worker"]}
+      }
+    },
+    "product_engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context", "socket", "engine_id", "projects", "duplicate_observed_before_quarantine"],
+      "properties": {
+        "context": {"const": "default"},
+        "socket": {"const": "unix:///var/run/docker.sock"},
+        "engine_id": {"$ref": "#/$defs/engine_id"},
+        "projects": {"const": []},
+        "duplicate_observed_before_quarantine": {"const": true}
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed", "schema_version", "authority_epoch", "classification", "rollback_data_rewind"],
+      "properties": {
+        "completed": {"const": true},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "authority_epoch": {"type": "integer", "minimum": 1},
+        "classification": {"const": "forward_only_no_data_rewind"},
+        "rollback_data_rewind": {"const": "forbidden"}
+      }
+    },
+    "fencing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proven", "engine_service", "engine_service_enabled", "engine_service_restart", "control_plane_service", "control_plane_service_enabled", "forwarder_service", "forwarder_service_enabled", "post_reboot_verified"],
+      "properties": {
+        "proven": {"const": true},
+        "engine_service": {"const": "docker-builderops.service"},
+        "engine_service_enabled": {"const": true},
+        "engine_service_restart": {"const": "always"},
+        "control_plane_service": {"const": "builderops-control-plane.service"},
+        "control_plane_service_enabled": {"const": true},
+        "forwarder_service": {"const": "builderops-loopback-forwarder.service"},
+        "forwarder_service_enabled": {"const": true},
+        "post_reboot_verified": {"const": true}
+      }
+    },
+    "no_dual_writer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proven", "pre_quarantine_duplicate_project", "quarantine_action", "post_quarantine_product_projects", "volume_removal"],
+      "properties": {
+        "proven": {"const": true},
+        "pre_quarantine_duplicate_project": {"const": true},
+        "quarantine_action": {"const": "default_engine_project_down_without_volume_removal"},
+        "post_quarantine_product_projects": {"const": []},
+        "volume_removal": {"const": false}
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "unauthenticated_status", "loopback_endpoint", "authentication", "private_ingress", "no_funnel"],
+      "properties": {
+        "ready": {"const": true},
+        "unauthenticated_status": {"const": 401},
+        "loopback_endpoint": {"const": "127.0.0.1:18100"},
+        "authentication": {"const": "scoped-bearer-over-loopback"},
+        "private_ingress": {"const": "tailscale-serve-https-loopback-no-funnel"},
+        "no_funnel": {"const": true}
+      }
+    },
+    "secret_material": {"const": "absent"},
+    "gaps": {"const": []},
+    "refusals": {"const": []},
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activation_proven", "dedicated_engine_proven", "migration_proven", "fencing_proven", "no_dual_writer_proven", "readiness_proven"],
+      "properties": {
+        "activation_proven": {"const": true},
+        "dedicated_engine_proven": {"const": true},
+        "migration_proven": {"const": true},
+        "fencing_proven": {"const": true},
+        "no_dual_writer_proven": {"const": true},
+        "readiness_proven": {"const": true}
+      }
+    },
+    "evidence_fingerprint": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "sha256_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "engine_id": {"type": "string", "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
+  }
+}

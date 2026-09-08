@@ -476,6 +476,30 @@ Companion docs:
   select(.name=="github-live")'`. Full path and rationale:
   `docs/BUILDEROPS_COCKPIT/GITHUB_LIVE_PLANE.md :: What makes that command answer fresh (#4484)`.
 
+### BuilderOps VM102 failure-domain preflight
+
+The repository-side BuilderOps deploy wrapper reads the configured project listings before any
+Docker pull, Compose mutation, readiness probe, or Tailscale action. It refuses closed-loop
+operation when `builderops-control-plane` is present in both the dedicated `builderops-engine`
+context and the Product context, and it also refuses malformed or incomplete listings. The
+preflight records a redacted `builderops_vm_rebuild_activation_refusal.v1` envelope with
+`mutation_performed: false`; it does not select a winner, stop a stack, or remove a competing
+writer. The refusal envelope is deliberately distinct from the successful
+`builderops_vm_rebuild_activation.v1` receipt and is defined by
+`config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json`. The contract is implemented by `scripts/lib/builderops_compose.sh` and
+`scripts/deploy_builderops.sh`, with the receipt shape defined in
+`docs/BUILDEROPS_CONTROL_PLANE/README.md`.
+
+The successful activation receipt is admitted only with a matching
+`component_inventory_digest` and exactly one inventory-receipt source reference. Its
+`observed_at` must be within the 24-hour evidence window and no more than five minutes ahead of
+the verifier clock. Re-entry also validates the inherited lock descriptor itself; an unrelated
+open descriptor for the same lock path cannot authorize deployment mutation.
+
+This repository-side guard is not VM102 activation or health evidence. Live activation,
+single-writer proof, deploy, health, and owner read-back remain separate receipt-gated operations
+under #5056 and #5181.
+
 ### Builder Thread serialized writer
 
 Builder Thread is retired under #5128. There is no service, endpoint, client,

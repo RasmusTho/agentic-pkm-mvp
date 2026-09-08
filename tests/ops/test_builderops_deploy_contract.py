@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
+import pytest
 import yaml
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -185,6 +189,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     root = tmp_path / "repo"
     for relative in (
         "scripts/lib/builderops_compose.sh",
+        "scripts/builderops/deployment_lock.py",
         "scripts/deploy_builderops.sh",
         "scripts/builderops/preflight_app_password_secret.sh",
         "scripts/builderops/configure_tailnet_tls.sh",
@@ -259,9 +264,34 @@ printf 'docker %s\n' "$*" >> "$FAKE_EVENT_LOG"
 context=""
 if [ "${1:-}" = "--context" ]; then context="$2"; shift 2; fi
 if [ "${1:-}" = info ]; then
-  [ "$context" = builderops ] && printf 'builder-engine\n' || printf 'product-engine\n'
+  if [ "$context" = builderops ] && [ -n "${FAKE_ENGINE_INFO_OUTPUT:-}" ]; then
+    printf '%s' "$FAKE_ENGINE_INFO_OUTPUT"
+    exit 0
+  fi
+  if [ "${FAKE_FAIL_INFO_CONTEXT:-}" = "$context" ]; then
+    printf 'partial-engine\n'
+    exit 17
+  fi
+  [ "$context" = builderops ] && printf '799a3d86-54f6-4208-b71a-36ae3eee61b6\n' || printf '2cae4764-d613-484d-b63d-0d353d5eab7c\n'
 elif [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
-  printf '[]\n'
+  if [ "${FAKE_FAIL_PROJECT_LISTING_CONTEXT:-}" = "$context" ]; then
+    printf '[{"Name":"partial-listing"}]\n'
+    exit 18
+  fi
+  if [ "$context" = builderops ]; then
+    printf '%s\n' "${FAKE_BUILDER_PROJECTS:-[]}"
+  else
+    product_projects="${FAKE_PRODUCT_PROJECTS:-[]}"
+    if [ "${FAKE_PRODUCT_PROJECTS_AFTER_TARGET_MUTATION:-0}" = 1 ] \
+      && grep -q 'up -d --force-recreate api worker' "$FAKE_EVENT_LOG"; then
+      product_projects='[{"Name":"builderops-control-plane"}]'
+    fi
+    if [ "${FAKE_PRODUCT_PROJECTS_AFTER_ROLLBACK_MUTATION:-0}" = 1 ] \
+      && grep -q 'up -d --force-recreate db api worker' "$FAKE_EVENT_LOG"; then
+      product_projects='[{"Name":"builderops-control-plane"}]'
+    fi
+    printf '%s\n' "$product_projects"
+  fi
 elif [ "${FAKE_FAIL_PULL:-0}" = 1 ]; then
   case " $* " in
     *" pull "*) exit 19 ;;
@@ -318,6 +348,7 @@ fi
 
 def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) -> None:
     root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
     deploy = subprocess.run(
         [
             "bash",
@@ -337,7 +368,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert receipt["action"] == "deploy"
     assert receipt["project"] == "builderops-control-plane"
     assert receipt["engine_context"] == "builderops"
-    assert receipt["engine_id"] == "builder-engine"
+    assert receipt["engine_id"] == "799a3d86-54f6-4208-b71a-36ae3eee61b6"
     assert receipt["source_sha"] == source_sha
     assert receipt["image_digest"] == digest
     assert receipt["postgres_image_digest"] == postgres_digest
@@ -391,6 +422,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
 def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
     root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
     env["FAKE_SECRET_STAT"] = "0:400"
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
 
     result = subprocess.run(
         ["bash", "scripts/deploy_builderops.sh", "deploy", env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]],
@@ -494,6 +526,7 @@ def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> 
     root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
     pin_path = root / "config/deploy/builderops.env"
     before = pin_path.read_text(encoding="utf-8")
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
     env["FAKE_FAIL_READY_DIGEST"] = digest
 
     failed = subprocess.run(
@@ -566,6 +599,387 @@ def test_deploy_refuses_unavailable_attestation_verifier_before_docker(
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "gh attestation verify" in events
     assert "docker " not in events
+
+
+def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_PRODUCT_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 74
+    assert "duplicate BuilderOps project detected across Docker engines" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "compose ls --format json" in events
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["receipt_type"] == "builderops_vm_rebuild_activation_refusal.v1"
+    refusal_schema = json.loads(
+        (ROOT / "config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json").read_text()
+    )
+    assert not list(Draft202012Validator(refusal_schema).iter_errors(refusal))
+    assert refusal["activation_verdict"] == "refused"
+    assert refusal["mutation_performed"] is False
+    assert refusal["selected_engine"] == {
+        "context": "builderops",
+        "engine_id": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
+        "project": "builderops-control-plane",
+    }
+    assert refusal["observed_engine_ids"] == {
+        "builderops": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
+        "product": "2cae4764-d613-484d-b63d-0d353d5eab7c",
+    }
+    assert "duplicate_builderops_engine_writers" in refusal["refusals"]
+    assert refusal["secret_material"] == "absent"
+    assert len(refusal["evidence_fingerprint"]) == 64
+    fingerprint = refusal.pop("evidence_fingerprint")
+    assert fingerprint == hashlib.sha256(
+        json.dumps(refusal, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def test_deploy_refuses_malformed_project_listing_before_docker_mutation(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = "not-json"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    assert "invalid or unavailable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["invalid_docker_project_listing", "no_mutation_performed"]
+
+
+def test_deploy_refuses_failed_engine_info_with_partial_stdout(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_FAIL_INFO_CONTEXT"] = "builderops"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    assert "engine info is invalid or unavailable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " compose ls " not in events
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["builderops_engine_info_unavailable", "no_mutation_performed"]
+
+
+def test_deploy_refuses_malformed_successful_engine_info_before_docker(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_ENGINE_INFO_OUTPUT"] = "builder-engine\npartial-engine"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    assert "engine info is invalid or unavailable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " compose ls " not in events
+    assert " pull " not in events
+    assert " up " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["builderops_engine_info_unavailable", "no_mutation_performed"]
+
+
+def test_deploy_refusal_preserves_builder_engine_identity_when_product_read_fails(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_FAIL_INFO_CONTEXT"] = "default"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["observed_engine_ids"] == {
+        "builderops": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
+        "product": None,
+    }
+    assert refusal["selected_engine"]["engine_id"] == "799a3d86-54f6-4208-b71a-36ae3eee61b6"
+
+
+def test_deployment_interlock_is_non_reentrant_and_fail_closed(tmp_path: Path) -> None:
+    lock_path = tmp_path / "builderops-deployment.lock"
+    holder = subprocess.Popen(
+        [
+            "python3",
+            "scripts/builderops/deployment_lock.py",
+            "--lock-path",
+            str(lock_path),
+            "--",
+            "python3",
+            "-c",
+            "import time; time.sleep(0.8)",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not lock_path.exists():
+            time.sleep(0.01)
+        if not lock_path.exists():
+            pytest.fail("deployment interlock was not created")
+        contender = subprocess.run(
+            [
+                "python3",
+                "scripts/builderops/deployment_lock.py",
+                "--lock-path",
+                str(lock_path),
+                "--",
+                "python3",
+                "-c",
+                "pass",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert contender.returncode == 75
+        assert "interlock is busy" in contender.stderr
+    finally:
+        holder.wait(timeout=3)
+    assert holder.returncode == 0
+
+
+def test_deployment_wrapper_rejects_forged_inherited_lock_proof(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    lock_path = tmp_path / "forged.lock"
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    env["BUILDEROPS_DEPLOYMENT_LOCK_FD"] = str(lock_fd)
+    env["BUILDEROPS_DEPLOYMENT_LOCK_PATH"] = str(lock_path)
+    try:
+        result = subprocess.run(
+            ["bash", "scripts/deploy_builderops.sh", "rollback"],
+            cwd=root,
+            env=env,
+            pass_fds=(lock_fd,),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        os.close(lock_fd)
+
+    assert result.returncode == 75
+    assert "interlock proof" in result.stderr
+    assert "--__builderops_deployment_lock_held" not in (
+        ROOT / "scripts/deploy_builderops.sh"
+    ).read_text(encoding="utf-8")
+    assert "BUILDEROPS_DEPLOYMENT_LOCK_PATH" not in (
+        ROOT / "scripts/deploy_builderops.sh"
+    ).read_text(encoding="utf-8")
+
+
+def test_deployment_wrapper_rejects_unlocked_descriptor_while_other_deployment_holds_lock(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "held.lock"
+    holder = subprocess.Popen(
+        [
+            "python3",
+            "scripts/builderops/deployment_lock.py",
+            "--lock-path",
+            str(lock_path),
+            "--",
+            "python3",
+            "-c",
+            "import time; time.sleep(1.2)",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    forged_fd = -1
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not lock_path.exists():
+            time.sleep(0.01)
+        if not lock_path.exists():
+            pytest.fail("deployment interlock was not created")
+        forged_fd = os.open(lock_path, os.O_RDWR)
+        result = subprocess.run(
+            [
+                "python3",
+                "scripts/builderops/deployment_lock.py",
+                "--lock-path",
+                str(lock_path),
+                "--assert-held",
+                "--fd",
+                str(forged_fd),
+            ],
+            cwd=ROOT,
+            pass_fds=(forged_fd,),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        if forged_fd != -1:
+            os.close(forged_fd)
+        holder.wait(timeout=3)
+
+    assert result.returncode == 75
+    assert "descriptor does not own" in result.stderr
+
+
+def test_activation_refuses_writer_appearing_before_final_readback(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_PRODUCT_PROJECTS_AFTER_TARGET_MUTATION"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "up -d --force-recreate api worker" in events
+    assert "previous pin and live API/worker release restored" not in result.stderr
+
+
+def test_rollback_refuses_writer_appearing_after_restore_mutation(tmp_path: Path) -> None:
+    root, env, _source_sha, digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_FAIL_READY_DIGEST"] = digest
+    env["FAKE_PRODUCT_PROJECTS_AFTER_ROLLBACK_MUTATION"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "up -d --force-recreate db api worker" in events
+
+
+def test_deploy_refuses_failed_project_listing_with_partial_stdout(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_FAIL_PROJECT_LISTING_CONTEXT"] = "builderops"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    assert "project listing is invalid or unavailable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["builderops_project_listing_unavailable", "no_mutation_performed"]
 
 
 def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None:

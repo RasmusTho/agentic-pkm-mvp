@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PIN_FILE="${BUILDEROPS_PIN_FILE:-${ROOT}/config/deploy/builderops.env}"
 PREVIOUS_PIN_FILE="${BUILDEROPS_PREVIOUS_PIN_FILE:-${ROOT}/config/deploy/builderops.previous.env}"
 RECEIPT_DIR="${BUILDEROPS_RECEIPT_DIR:-${ROOT}/ops/deployments/builderops}"
+# This host-local path is intentionally fixed so callers cannot select
+# different lock files and run concurrent deployments under separate locks.
+LOCK_PATH="/tmp/agentic-pkm-mvp-builderops-lock/deployment.lock"
 BUILDEROPS_PIN_FILE="${PIN_FILE}"
 export BUILDEROPS_PIN_FILE
 
@@ -12,6 +15,23 @@ export BUILDEROPS_PIN_FILE
 source "${ROOT}/scripts/lib/builderops_compose.sh"
 # shellcheck source=builderops/preflight_app_password_secret.sh
 source "${ROOT}/scripts/builderops/preflight_app_password_secret.sh"
+
+# Keep the duplicate-writer snapshot and every subsequent pin/Compose/Tailscale
+# mutation in one host-local critical section. Re-entry is accepted only when
+# the lock helper passes an inherited descriptor whose lock is still held;
+# argv/environment markers alone cannot bypass the interlock.
+if [ -z "${BUILDEROPS_DEPLOYMENT_LOCK_FD:-}" ]; then
+  exec python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
+    --lock-path "${LOCK_PATH}" \
+    -- bash "${BASH_SOURCE[0]}" "$@"
+fi
+
+python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
+  --lock-path "${LOCK_PATH}" \
+  --assert-held --fd "${BUILDEROPS_DEPLOYMENT_LOCK_FD}" || {
+  echo "BuilderOps deployment interlock proof is missing or invalid" >&2
+  exit 75
+}
 
 usage() {
   echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback" >&2
@@ -133,6 +153,10 @@ wait_ready() {
 record_receipt() {
   local action="${1}" source_sha="${2}" digest="${3}" postgres_digest="${4}" previous_digest="${5}" previous_postgres_digest="${6}" engine_id timestamp path
   engine_id="$(builderops_engine_id "${BUILDEROPS_DOCKER_CONTEXT}")"
+  builderops_valid_engine_id "${engine_id}" || {
+    echo "BuilderOps Docker engine info is invalid or unavailable while recording receipt" >&2
+    return 75
+  }
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "${RECEIPT_DIR}"
   path="${RECEIPT_DIR}/${timestamp}-${action}.json"
@@ -174,6 +198,72 @@ PY
   echo "recorded BuilderOps ${action} receipt: ${path}"
 }
 
+record_preflight_refusal() {
+  local reason_code="${1:?refusal reason required}" exit_code="${2:?refusal exit code required}"
+  local source_sha="${3:-}" image_digest="${4:-}" postgres_digest="${5:-}" timestamp path
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "${RECEIPT_DIR}"
+  path="${RECEIPT_DIR}/${timestamp}-preflight-refused.json"
+  REASON_CODE="${reason_code}" EXIT_CODE="${exit_code}" SOURCE_SHA="${source_sha}" IMAGE_DIGEST="${image_digest}" POSTGRES_IMAGE_DIGEST="${postgres_digest}" \
+    BUILDER_ENGINE_ID="${BUILDEROPS_OBSERVED_BUILDER_ENGINE_ID:-}" PRODUCT_ENGINE_ID="${BUILDEROPS_OBSERVED_PRODUCT_ENGINE_ID:-}" \
+    OBSERVED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" python3 - "${path}" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+payload = {
+    "receipt_type": "builderops_vm_rebuild_activation_refusal.v1",
+    "receipt_version": 1,
+    "target_vm": {"vmid": 102, "name": "builder-system"},
+    "observed_at": os.environ["OBSERVED_AT"],
+    "source_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract",
+        "repo:scripts/deploy_builderops.sh#builderops_assert_failure_domain",
+    ],
+    "candidate_identity": {
+        "source_sha": os.environ["SOURCE_SHA"] or None,
+        "control_plane_image_digest": os.environ["IMAGE_DIGEST"] or None,
+        "postgres_image_digest": os.environ["POSTGRES_IMAGE_DIGEST"] or None,
+    },
+    "selected_engine": {
+        "context": os.environ["BUILDEROPS_DOCKER_CONTEXT"],
+        "project": "builderops-control-plane",
+        "engine_id": os.environ["BUILDER_ENGINE_ID"] or None,
+    },
+    "observed_engine_ids": {
+        "builderops": os.environ["BUILDER_ENGINE_ID"] or None,
+        "product": os.environ["PRODUCT_ENGINE_ID"] or None,
+    },
+    "activation_verdict": "refused",
+    "activation_proven": False,
+    "fencing_proven": False,
+    "no_dual_writer_proven": False,
+    "mutation_performed": False,
+    "secret_material": "absent",
+    "gaps": [
+        "activation_not_proven",
+        "fencing_not_proven",
+        "no_dual_writer_not_proven",
+    ],
+    "refusals": [
+        os.environ["REASON_CODE"],
+        "no_mutation_performed",
+    ],
+    "preflight_exit_code": int(os.environ["EXIT_CODE"]),
+}
+payload["evidence_fingerprint"] = hashlib.sha256(
+    json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
+path = Path(sys.argv[1])
+serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+path.write_text(serialized, encoding="utf-8")
+(path.parent / "latest.json").write_text(serialized, encoding="utf-8")
+PY
+  echo "recorded BuilderOps preflight refusal receipt: ${path}" >&2
+}
+
 action="${1:-}"
 load_contexts
 current_sha="$(read_pin "${PIN_FILE}" BUILDEROPS_SOURCE_SHA)"
@@ -196,7 +286,25 @@ case "${action}" in
 esac
 
 validate_identity "${target_sha}" "${target_digest}" "${target_postgres_digest}"
-builderops_assert_failure_domain
+if builderops_assert_failure_domain; then
+  :
+else
+  failure_domain_exit=$?
+  failure_domain_reason="${BUILDEROPS_FAILURE_DOMAIN_REASON:-}"
+  if [ -z "${failure_domain_reason}" ]; then
+    case "${failure_domain_exit}" in
+      70) failure_domain_reason="builderops_product_contexts_must_differ" ;;
+      71) failure_domain_reason="builderops_product_engines_must_differ" ;;
+      72) failure_domain_reason="product_project_on_builderops_engine" ;;
+      73) failure_domain_reason="builderops_project_on_product_engine" ;;
+      74) failure_domain_reason="duplicate_builderops_engine_writers" ;;
+      75) failure_domain_reason="invalid_docker_project_listing" ;;
+      *) failure_domain_reason="failure_domain_preflight_refused" ;;
+    esac
+  fi
+  record_preflight_refusal "${failure_domain_reason}" "${failure_domain_exit}" "${target_sha}" "${target_digest}" "${target_postgres_digest}"
+  exit "${failure_domain_exit}"
+fi
 assert_local_durability_posture
 "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" --preflight
 
@@ -213,14 +321,20 @@ activate_target() {
   builderops_compose "${ROOT}" up -d --force-recreate api worker || return
   wait_ready || return
   "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" || return
+  builderops_assert_single_writer_after_activation || return
 }
 
 reactivate_previous_release() {
+  # Never restore a previous BuilderOps release while a competing Product or
+  # BuilderOps writer is visible. The original failure remains actionable and
+  # the operator must resolve the writer boundary before another mutation.
+  builderops_assert_failure_domain || return
   builderops_preflight_app_password_secret || return
   cp "${pin_backup}" "${PIN_FILE}" || return
   builderops_compose "${ROOT}" pull db api worker || return
   builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
   wait_ready || return
+  builderops_assert_single_writer_after_activation || return
 }
 
 if ! activate_target; then

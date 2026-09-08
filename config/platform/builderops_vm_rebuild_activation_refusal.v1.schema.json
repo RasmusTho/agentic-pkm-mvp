@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "builderops_vm_rebuild_activation_refusal.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_type",
+    "receipt_version",
+    "target_vm",
+    "observed_at",
+    "source_refs",
+    "candidate_identity",
+    "selected_engine",
+    "observed_engine_ids",
+    "activation_verdict",
+    "activation_proven",
+    "fencing_proven",
+    "no_dual_writer_proven",
+    "mutation_performed",
+    "secret_material",
+    "gaps",
+    "refusals",
+    "preflight_exit_code",
+    "evidence_fingerprint"
+  ],
+  "properties": {
+    "receipt_type": {"const": "builderops_vm_rebuild_activation_refusal.v1"},
+    "receipt_version": {"const": 1},
+    "target_vm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vmid", "name"],
+      "properties": {"vmid": {"const": 102}, "name": {"const": "builder-system"}}
+    },
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source_refs": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"enum": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract",
+        "repo:scripts/deploy_builderops.sh#builderops_assert_failure_domain"
+      ]}
+    },
+    "candidate_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha", "control_plane_image_digest", "postgres_image_digest"],
+      "properties": {
+        "source_sha": {"type": ["string", "null"], "pattern": "^[a-f0-9]{40}$"},
+        "control_plane_image_digest": {"$ref": "#/$defs/nullable_sha256_digest"},
+        "postgres_image_digest": {"$ref": "#/$defs/nullable_sha256_digest"}
+      }
+    },
+    "selected_engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context", "project", "engine_id"],
+      "properties": {
+        "context": {"const": "builderops"},
+        "project": {"const": "builderops-control-plane"},
+        "engine_id": {"$ref": "#/$defs/nullable_engine_id"}
+      }
+    },
+    "observed_engine_ids": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["builderops", "product"],
+      "properties": {
+        "builderops": {"$ref": "#/$defs/nullable_engine_id"},
+        "product": {"$ref": "#/$defs/nullable_engine_id"}
+      }
+    },
+    "activation_verdict": {"const": "refused"},
+    "activation_proven": {"const": false},
+    "fencing_proven": {"const": false},
+    "no_dual_writer_proven": {"const": false},
+    "mutation_performed": {"const": false},
+    "secret_material": {"const": "absent"},
+    "gaps": {"const": ["activation_not_proven", "fencing_not_proven", "no_dual_writer_not_proven"]},
+    "refusals": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "preflight_exit_code": {"type": "integer", "minimum": 70, "maximum": 75},
+    "evidence_fingerprint": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nullable_sha256_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
+    "nullable_engine_id": {
+      "type": ["string", "null"],
+      "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+}

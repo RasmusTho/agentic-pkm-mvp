@@ -119,8 +119,34 @@ establishes that runnable baseline.
 Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid: 102`,
 `name: builder-system`), `observed_at`, `source_refs`, `candidate_identity` when applicable,
 `component_inventory_digest` when applicable, `evidence_fingerprint`, `secret_material: absent`,
-and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
-material is invalid. A live guest check without the named receipt remains only an observation.
+and an explicit `gaps`/`refusals` list. The activation receipt must carry the inventory digest
+and exactly one `receipt:devsystem_vm102_component_inventory.v1:<digest>` source reference;
+its observation must be no more than 24 hours old and no more than five minutes in the future.
+A receipt without the required evidence or with secret material is invalid. A live guest check
+without the named receipt remains only an observation.
+
+The normative `builderops_vm_rebuild_activation.v1` schema is closed at
+[`config/platform/builderops_vm_rebuild_activation.v1.schema.json`](../../config/platform/builderops_vm_rebuild_activation.v1.schema.json)
+and its pure producer/validator is
+[`app/ops/builderops_vm_rebuild_activation.py`](../../app/ops/builderops_vm_rebuild_activation.py).
+The producer consumes only a redacted operator evidence bundle; it performs no SSH, Proxmox,
+Docker, Vault, or network access. A successful receipt binds the prerequisite inventory digest,
+the VM identity, immutable candidate, dedicated engine/project, migration and epoch, post-reboot
+service fencing, no-dual-writer quarantine, private authenticated ingress, and readiness.
+`existing_runtime_reconciled` is an explicit activation mode for a bounded single-writer repair;
+it does not claim that the current PR was deployed or that DevUI owner acceptance occurred.
+
+The deploy preflight refusal envelope is a separate contract,
+`builderops_vm_rebuild_activation_refusal.v1`, defined at
+[`config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json`](../../config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json).
+It is non-activating evidence (`activation_verdict: refused`, `mutation_performed: false`) and
+must never be consumed as a successful activation receipt.
+
+The deploy preflight also compares the configured BuilderOps and Product engine project listings.
+If `builderops-control-plane` is present on both engines, it refuses with a duplicate-writer result
+before image pull, database/service activation, readiness probing, or Tailscale configuration. The
+preflight does not choose or stop either stack; an operator must make that bounded decision and
+record the resulting single-writer evidence in `builderops_vm_rebuild_activation.v1`.
 
 The attestation prerequisite may run on VM 102 or a named access-controlled operator runner. The
 validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the runner records its
@@ -150,8 +176,9 @@ is digest-referenced, so a gap cannot carry a credential or contradict the requi
 Committed all-zero source, image, or configuration placeholders are invalid rollback identities;
 they are bootstrap sentinels, not releases. Rollback remains refused until a later successful
 deployment establishes a runnable baseline. The existing lower-level deploy-script receipt is
-implementation evidence only and is not `devsystem_vm102_deploy.v1` until a separate code/test slice
-implements and verifies this typed schema.
+implementation evidence only and is not `devsystem_vm102_deploy.v1`; deployment and health
+receipts remain separate typed contracts. The activation producer above is the implemented
+boundary for `builderops_vm_rebuild_activation.v1`.
 
 BCP-03 is implemented in the development baseline by #3789/PR #3929
 (`app/builderops/control_plane/legacy_migration.py`): producer-derived expected-source
