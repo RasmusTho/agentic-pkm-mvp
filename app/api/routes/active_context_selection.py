@@ -233,6 +233,8 @@ def _selection_failure(exc: Exception) -> HTTPException:
         return HTTPException(status_code=401, detail=_RESELECTION_REQUIRED_DETAIL)
     if isinstance(exc, SelectionIntentError):
         return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, PrincipalPreflightError):
+        return HTTPException(status_code=401, detail="reselection_required")
     if isinstance(exc, DimensionResolutionError):
         # All-or-nothing, and the status distinguishes *why* the whole resolution failed
         # so an operator can repair the dimension. The detail carries the opaque dimension

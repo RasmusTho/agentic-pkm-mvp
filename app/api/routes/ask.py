@@ -248,7 +248,7 @@ async def ask_scoped(
     if not registry_path:
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     try:
-        resolve_context_settings(
+        settings = resolve_context_settings(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         )
@@ -256,7 +256,13 @@ async def ask_scoped(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         ):
-            return _run_ask(req, request, active_scope=context.scope, active_context=context)
+            return _run_ask(
+                req,
+                request,
+                active_scope=context.scope,
+                active_context=context,
+                settings_bundle_digest=settings.cache_bundle_digest,
+            )
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
@@ -267,6 +273,7 @@ def _run_ask(
     *,
     active_scope: str | None,
     active_context: ActiveContextSetV1 | None,
+    settings_bundle_digest: str | None = None,
 ) -> AskResponse:
     if not _HYBRID_WARMED:
         _ensure_hybrid_store_loaded()
@@ -280,6 +287,7 @@ def _run_ask(
             ask_settings=ask_settings,
             active_scope=active_scope,
             active_context=active_context,
+            settings_bundle_digest=settings_bundle_digest,
         )
     except LLMBackendTimeout as exc:
         record_ask_error()

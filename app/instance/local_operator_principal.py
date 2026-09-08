@@ -240,6 +240,7 @@ class LocalOperatorPrincipalRecord:
             principal_id=self.local_operator_role_id,
             principal_kind="delegated_operator_role",
             subject=subject,
+            revision=self.revision,
         )
 
     def additional_principal(self, role_id: str, subject: AuthSubject) -> PrincipalContext:
@@ -250,6 +251,7 @@ class LocalOperatorPrincipalRecord:
                     principal_id=role.role_id,
                     principal_kind=kind,
                     subject=subject,
+                    revision=self.revision,
                 )
         raise PrincipalPreflightError(
             "unknown principal role",
@@ -286,7 +288,7 @@ class LocalOperatorPrincipalStore:
     # -- private io ---------------------------------------------------------
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self, *, shared: bool = False) -> Iterator[None]:
         self._ensure_private_directory(self.path.parent)
         descriptor = os.open(
             self.lock_path,
@@ -299,11 +301,33 @@ class LocalOperatorPrincipalStore:
             os.close(descriptor)
             raise
         with os.fdopen(descriptor, "a+b", closefd=True) as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
             try:
                 yield
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def read_effect_window(
+        self, *, expected_revision: int | None = None
+    ) -> Iterator[LocalOperatorPrincipalRecord]:
+        """Hold the principal read fence through downstream publication.
+
+        Rotation and subject revocation use the same lock exclusively.  A scoped
+        request therefore cannot publish filesystem, retrieval, or response data
+        while an authority mutation is crossing its final revalidation.  The
+        revision check makes a snapshot captured before the mutation fail closed
+        instead of being silently rebound.
+        """
+
+        with self._locked(shared=True):
+            current = self.require()
+            if expected_revision is not None and current.revision != expected_revision:
+                raise PrincipalPreflightError(
+                    "active context principal revision changed",
+                    provisioning_action="reselect the active context before reading",
+                )
+            yield current
 
     @contextmanager
     def cutover_lock(self) -> Iterator[None]:

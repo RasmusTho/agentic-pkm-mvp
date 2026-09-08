@@ -7,6 +7,7 @@ from app.retrieval.hybrid import (
     ScopeDenial,
     _clamp_in_context,
     _intrinsic_evidence_role,
+    get_store,
     scoped_hybrid_search,
 )
 from app.retrieval.context_cache import runtime_context_cache_identity
@@ -65,6 +66,8 @@ class RetrievalRequest:
     #: Legacy callers deliberately omit it while their compatibility route is
     #: retained; it is never reconstructed from a global vault selection.
     active_context: ActiveContextSetV1 | None = None
+    #: Effective per-binding settings provenance for scoped retrieval.
+    settings_bundle_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,11 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         # per-request active-scope binding, so the prefilter partitions in production instead of
         # waiting on an ambient `ASK_DOMAIN_SCOPE` that no production code ever set.
         scope=request.scope,
+        allowed_binding_ids=(
+            set(request.active_context.binding_ids)
+            if request.active_context is not None
+            else None
+        ),
     )
     raw_hits = scoped.results
     diagnostics: dict[str, Any] = {
@@ -274,7 +282,10 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     if request.provenance_metadata:
         metadata["provenance"]["hints"] = dict(request.provenance_metadata)
     if request.active_context is not None:
-        cache_identity = runtime_context_cache_identity(request.active_context)
+        cache_identity = runtime_context_cache_identity(
+            request.active_context,
+            settings_bundle_digest=request.settings_bundle_digest,
+        )
         metadata["provenance"]["active_context"] = {
             "context_id": request.active_context.context_id,
             "generation": request.active_context.generation,
@@ -288,6 +299,13 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         allowed_bindings = set(request.active_context.binding_ids)
         admitted: list[dict[str, Any]] = []
         rejected = 0
+        # Count the complete candidate set, not only the already-ranked result
+        # window. Binding eligibility itself runs in hybrid.py before scoring
+        # and top-k; this count is observability only.
+        for document in get_store().all():
+            binding_id = (document.payload or {}).get("vault_binding_id")
+            if not isinstance(binding_id, str) or binding_id not in allowed_bindings:
+                rejected += 1
         for raw in raw_hits:
             payload = dict(raw.get("payload") or {})
             binding_id = payload.get("vault_binding_id")
@@ -296,7 +314,6 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             # producer/migration must add provenance before the row can serve a
             # multi-vault session.
             if not isinstance(binding_id, str) or binding_id not in allowed_bindings:
-                rejected += 1
                 continue
             bound = dict(raw)
             payload["context_generation"] = request.active_context.generation

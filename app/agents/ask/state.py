@@ -45,6 +45,8 @@ class AgentState(RuntimeStateModel):
     # The exact immutable context supplied by a scoped HTTP ingress.  It is
     # optional solely for legacy/CLI callers; graph nodes never re-resolve it.
     active_context: ActiveContextSetV1 | None = None
+    # Digest of the effective settings bundles resolved for this scoped request.
+    settings_bundle_digest: Optional[str] = None
     hits: List[RetrievedHit] = Field(default_factory=list)
     # Authoritative metadata observed on the retrieval response. Shadow
     # experiments may inspect it, but it never feeds ranking or answer text.

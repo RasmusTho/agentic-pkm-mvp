@@ -97,6 +97,7 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
             # the production path instead of relying on an ambient env var nothing ever sets.
             scope=_active_scope(state),
             active_context=state.active_context,
+            settings_bundle_digest=state.settings_bundle_digest,
         )
     )
     enriched: list[RetrievedHit] = []
@@ -669,6 +670,7 @@ def run_ask_graph(
     ask_settings=None,
     active_scope: Optional[str] = None,
     active_context=None,
+    settings_bundle_digest: Optional[str] = None,
 ) -> AgentState:
     """Run one ASK turn.
 
@@ -685,6 +687,7 @@ def run_ask_graph(
         query=query,
         active_scope=resolved_scope,
         active_context=active_context,
+        settings_bundle_digest=settings_bundle_digest,
         hits=[],
     )
     result = compiled.invoke(initial)
@@ -699,6 +702,7 @@ def run_ask_graph(
             query=query,
             active_scope=resolved_scope,
             active_context=active_context,
+            settings_bundle_digest=settings_bundle_digest,
             hits=[],
             answer=None,
         )

@@ -1,14 +1,95 @@
-from pathlib import Path
+"""Behavioural guards for the migrated backend read ingress."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.app import app
+from app.api.routes import active_context_selection as selection_routes
+from app.api.routes import ask as ask_routes
+from tests._mvr03_principal_harness import provisioned_instance
+
+SELECTION_URL = "/api/companion/active-context/selection"
 
 
-SOURCE = (Path(__file__).resolve().parents[2] / "app/api/request_active_context.py").read_text()
+@pytest.fixture()
+def instance(tmp_path, monkeypatch):
+    runtime, first, _extra, _record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", runtime.layout.channel_id)
+    selection_routes.reset_selection_store_for_tests()
+    return runtime, first
 
 
-def test_migrated_scoped_read_rejects_stripped_carrier_without_default_downgrade() -> None:
-    assert "detail=\"reselection_required\"" in SOURCE
-    assert "status.HTTP_401_UNAUTHORIZED" in SOURCE
+@pytest.fixture()
+def client() -> TestClient:
+    return TestClient(app)
 
 
-def test_invalid_selection_never_falls_back() -> None:
-    assert "except (" in SOURCE
-    assert "raise _selection_failure(exc)" in SOURCE
+@pytest.fixture(autouse=True)
+def reset_global_vault_manager(monkeypatch):
+    import app.vault.manager as vault_manager_module
+
+    monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", None)
+    yield
+
+
+def _create(client: TestClient, binding_id: str) -> dict:
+    response = client.post(SELECTION_URL, json={"vault_binding_ids": [binding_id]})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_migrated_scoped_read_rejects_stripped_carrier_without_default_downgrade(
+    instance, client, monkeypatch
+) -> None:
+    """A scoped route fails before ASK and cannot fall back to the legacy default."""
+
+    monkeypatch.setattr(ask_routes, "run_ask_graph", lambda *_a, **_kw: pytest.fail("ASK ran"))
+    response = client.post("/api/ask/scoped", json={"question": "which context?"})
+
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "reselection_required"
+
+
+def test_invalid_override_fails_closed_without_falling_back_to_session(
+    instance, client, monkeypatch
+) -> None:
+    _runtime, first = instance
+    session = _create(client, first.vault_binding_id)
+    monkeypatch.setattr(ask_routes, "run_ask_graph", lambda *_a, **_kw: pytest.fail("ASK ran"))
+
+    response = client.post(
+        "/api/ask/scoped",
+        json={"question": "which context?"},
+        headers={
+            "X-Active-Context-Session": session["context_selection_id"],
+            "X-Active-Context-Override": "stale-override",
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"].startswith("reselection_required")
+    assert "stale-override" not in response.text
+
+
+def test_backend_read_enabling_preserves_dormant_producers(instance, client) -> None:
+    """Scoped backend reads work while the legacy client journey remains separate."""
+
+    _runtime, first = instance
+    session = _create(client, first.vault_binding_id)
+    scoped = client.get(
+        "/api/companion/vault/notes/scoped",
+        headers={"X-Active-Context-Session": session["context_selection_id"]},
+    )
+    assert scoped.status_code == 200, scoped.text
+    assert scoped.json()["context_generation"] == 1
+
+    # The shipped legacy route still uses its existing global-selection adapter;
+    # enabling the backend carrier never silently activates the picker or rewires
+    # that producer into the scoped route.
+    legacy = client.get("/api/companion/vault/notes")
+    assert legacy.status_code == 200, legacy.text
+    assert "context_generation" not in legacy.json()

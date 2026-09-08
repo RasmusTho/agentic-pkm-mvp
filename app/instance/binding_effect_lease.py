@@ -20,8 +20,11 @@ from pathlib import Path
 from typing import Iterator, Mapping, TypedDict, cast
 from uuid import uuid4
 
-from app.instance._storage_boundary import _StorageMutationCapability
-from app.instance.ownership_ledger import OwnershipLedger
+from app.instance._storage_boundary import (
+    _STORAGE_MUTATION_CAPABILITY,
+    _StorageMutationCapability,
+)
+from app.instance.ownership_ledger import LedgerError, OwnershipLedger, OwnershipLease
 from app.instance.vault_registry import VaultRegistryStore
 
 
@@ -139,6 +142,10 @@ class BindingEffectLeaseError(RuntimeError):
     """The binding effect window cannot be entered or recovered safely."""
 
 
+class OwnershipFenceUnavailable(BindingEffectLeaseError, LedgerError):
+    """The ledger refused a foreground binding effect acquisition."""
+
+
 class BindingEffectLeaseTimeout(BindingEffectLeaseError):
     """The requested effect window did not become available in time."""
 
@@ -183,6 +190,25 @@ class _HeldLease:
 class BindingEffectLeaseManager:
     """Persist fairness state while `flock` owns effect-window exclusion."""
 
+    @classmethod
+    def for_runtime(
+        cls,
+        *,
+        registry_store: VaultRegistryStore,
+        ownership_root: Path,
+        state_root: Path,
+        poll_interval: float = 0.02,
+    ) -> BindingEffectLeaseManager:
+        """Build the sanctioned runtime manager with its private capability."""
+
+        return cls(
+            registry_store=registry_store,
+            ownership_ledger=OwnershipLedger(Path(ownership_root).expanduser().resolve(strict=False)),
+            state_root=state_root,
+            capability=_STORAGE_MUTATION_CAPABILITY,
+            poll_interval=poll_interval,
+        )
+
     def __init__(
         self,
         *,
@@ -197,6 +223,11 @@ class BindingEffectLeaseManager:
         self.state_root = Path(state_root)
         self.capability = capability
         self.poll_interval = poll_interval
+
+    def active_owner(self, vault_binding_id: str) -> OwnershipLease | None:
+        """Return the current ownership lease through the runtime seam."""
+
+        return self.ownership_ledger.active_owner(vault_binding_id)
 
     @contextmanager
     def shared_effect(
@@ -396,6 +427,8 @@ class BindingEffectLeaseManager:
             if held is None:
                 raise BindingEffectLeaseError("binding effect acquisition ended without a holder")
             yield held
+        except LedgerError as exc:
+            raise OwnershipFenceUnavailable(str(exc)) from exc
         finally:
             try:
                 if held is not None:
@@ -1132,5 +1165,6 @@ __all__ = [
     "BindingEffectLeaseManager",
     "BindingEffectLeaseObservation",
     "BindingEffectLeaseTimeout",
+    "OwnershipFenceUnavailable",
     "LEASE_SCHEMA",
 ]

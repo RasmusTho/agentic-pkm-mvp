@@ -766,6 +766,7 @@ def scoped_hybrid_search(
     language: Optional[str] = None,
     query_vector: list[float] | None = None,
     scope: str | None = None,
+    allowed_binding_ids: set[str] | None = None,
 ) -> ScopedRetrieval:
     """Scope-prefiltered retrieval with content-free denials — the structured entrypoint.
 
@@ -788,6 +789,16 @@ def scoped_hybrid_search(
     _revalidate_cache_generation()
 
     docs = _STORE.all()
+    if allowed_binding_ids is not None:
+        # Binding eligibility is a candidate-set boundary, not a post-ranking
+        # decoration. Legacy/unattributed rows are excluded before embeddings,
+        # scoring, reranking, and top-k selection.
+        docs = [
+            doc
+            for doc in docs
+            if isinstance((doc.payload or {}).get("vault_binding_id"), str)
+            and (doc.payload or {}).get("vault_binding_id") in allowed_binding_ids
+        ]
     scope = (scope or "").strip() or _resolve_domain_scope()
     if not docs:
         return ScopedRetrieval(results=[], denials=(), scope_policy_prefiltered=True, active_scope=scope)

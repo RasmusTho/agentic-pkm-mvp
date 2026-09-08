@@ -4,7 +4,7 @@ import contextlib
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.request_active_context import require_scoped_read_context
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
@@ -66,7 +66,7 @@ async def search_scoped(
     try:
         # Resolve all selected bundles before opening the effect window: a
         # combined request never gets a first-binding settings winner.
-        resolve_context_settings(
+        settings = resolve_context_settings(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         )
@@ -82,6 +82,7 @@ async def search_scoped(
                         trace_id=trace_id,
                         scope=context.scope,
                         active_context=context,
+                        settings_bundle_digest=settings.cache_bundle_digest,
                     )
                 )
     except ContextBoundReadError as exc:

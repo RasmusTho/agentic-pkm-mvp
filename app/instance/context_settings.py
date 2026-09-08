@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,16 @@ class ContextSettingsResolution:
 
     binding_bundle_digests: dict[str, str]
     request_wide_values: dict[str, object]
+
+    @property
+    def cache_bundle_digest(self) -> str:
+        """Digest complete per-binding settings provenance without values."""
+
+        material = "|".join(
+            f"{binding_id}={digest}"
+            for binding_id, digest in sorted(self.binding_bundle_digests.items())
+        )
+        return hashlib.sha256(f"active-context-settings.v1|{material}".encode()).hexdigest()
 
 
 def resolve_context_settings(

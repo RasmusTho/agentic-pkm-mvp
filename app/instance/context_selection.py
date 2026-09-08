@@ -263,6 +263,7 @@ class ContextSelectionStore:
             raise ReselectionRequiredError("selection is expired, unknown, or pre-restart")
         if (
             record.principal.principal_id != principal.principal_id
+            or record.principal.revision != principal.revision
             or record.instance_identity != instance_identity
         ):
             raise SelectionPrincipalMismatchError()
