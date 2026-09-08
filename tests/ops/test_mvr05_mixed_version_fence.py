@@ -478,8 +478,12 @@ def test_fresh_instance_state_materializes_authenticated_owner_without_legacy_se
     )
 
 
+@pytest.mark.parametrize(
+    ("inventory_binding_id", "expected_error"),
+    (("binding-existing", None), ("binding-unleased", "does not match its ownership binding")),
+)
 def test_finish_path_materializes_authenticated_owner_on_fresh_instance_state(
-    tmp_path,
+    tmp_path, inventory_binding_id: str, expected_error: str | None
 ) -> None:
     """Finalization must materialize a fresh registry from the fenced owner receipt."""
 
@@ -543,7 +547,7 @@ def test_finish_path_materializes_authenticated_owner_on_fresh_instance_state(
                 [
                     {
                         "channel_id": "test",
-                        "vault_binding_id": "binding-existing",
+                        "vault_binding_id": inventory_binding_id,
                         "root": str(existing_root),
                     }
                 ]
@@ -558,6 +562,23 @@ def test_finish_path_materializes_authenticated_owner_on_fresh_instance_state(
         channel="test",
         host_global_root=ownership_root,
     )
+
+    if expected_error is not None:
+        with pytest.raises(runtime_module.InstanceStatePreflightError, match=expected_error):
+            runtime_module._finish_instance_state_deployment(
+                channel="test",
+                instance_state_root=state_root,
+                host_global_root=ownership_root,
+                legacy_path=legacy_path,
+                inventory_path=owner_inventory,
+                backup_root=tmp_path / "backup",
+                restore_root=None,
+                quiescence_proof=proof,
+            )
+        rejected = VaultRegistryStore(layout.registry_path).load()
+        assert rejected.revision == 0
+        assert not rejected.registrations
+        return
 
     result = runtime_module._finish_instance_state_deployment(
         channel="test",

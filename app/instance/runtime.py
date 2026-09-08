@@ -2942,6 +2942,23 @@ def _materialize_authenticated_channel_registrations(
     if not channel_owners:
         return snapshot
     for owner in channel_owners:
+        try:
+            resolved = ledger.resolve_live_owner_bindings(
+                (replace(owner, vault_binding_id=""),),
+                allow_legacy=True,
+            )
+        except LedgerError as exc:
+            raise InstanceStatePreflightError(
+                "authenticated owner does not match an active ownership lease"
+            ) from exc
+        if (
+            len(resolved) != 1
+            or resolved[0].vault_binding_id != owner.vault_binding_id
+        ):
+            raise InstanceStatePreflightError(
+                "authenticated owner does not match its ownership binding"
+            )
+    for owner in channel_owners:
         root = str(owner.root.expanduser().resolve(strict=False))
         registration = VaultRegistration(
             vault_binding_id=owner.vault_binding_id,
