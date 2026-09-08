@@ -123,7 +123,7 @@ _LEGACY_CAPABILITY_FOR_MODEL_CLASS = {
     "high-reasoning": "sol",
 }
 _SELECTION_INTENT_FOR_MODEL_CLASS: dict[str, SelectionIntent] = {
-    "low-cost": "coordination",
+    "low-cost": "general_delivery",
     "standard": "general_delivery",
     "high-reasoning": "strong_reasoning",
 }
@@ -349,9 +349,11 @@ class CodexIssueSessionLauncher:
         capability_override = runtime.get("capability_override")
         if capability_override is not None and (
             not isinstance(capability_override, str)
-            or capability_override not in {"spark", "luna", "terra", "sol"}
+            or capability_override not in {"luna", "terra", "sol"}
         ):
-            raise EpicDispatchError("context pack has unsupported capability override")
+            raise EpicDispatchError(
+                "context pack has unsupported capability override; Spark requires bounded-fast admission"
+            )
         try:
             expected_target = (
                 resolve_execution_target(
@@ -1608,11 +1610,15 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         raise EpicDispatchError("execution_routing must be an object when supplied")
     model_override = _normalize_optional_string(candidate.get("model_override"))
     capability_override = candidate.get("capability_override")
+    if capability_override == "spark":
+        raise EpicDispatchError(
+            "capability_override spark requires bounded-fast admission"
+        )
     if capability_override is not None:
         capability_override = _normalize_choice(
             capability_override,
             "capability_override",
-            {"spark", "luna", "terra", "sol"},
+            {"luna", "terra", "sol"},
         )
     selection_intent = candidate.get("selection_intent")
     if selection_intent is not None:

@@ -1186,6 +1186,45 @@ def test_explicit_sol_capability_override_uses_sol_profile_default(
     assert launcher._tcd_route({"runtime": runtime}) == ("gpt-5.6-sol", "high")
 
 
+def test_legacy_low_cost_context_pack_uses_general_delivery_intent(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5817,
+        risk="low",
+        expected_value="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5817"),
+    )
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5817],
+        run_id="legacy-low-cost-selection-intent",
+        candidates=[candidate],
+    )
+    legacy_runtime = dict(plan["context_packs"][0]["runtime"])
+    legacy_runtime.pop("selection_intent")
+    legacy_runtime["model_class"] = "low-cost"
+    legacy_runtime["capability"] = "luna"
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    assert launcher._tcd_route({"runtime": legacy_runtime}) == (
+        "gpt-5.6-luna",
+        "xhigh",
+    )
+
+
+def test_spark_capability_override_requires_bounded_fast_admission() -> None:
+    candidate = _candidate(5818, risk="medium", files=["app/a.py"])
+    candidate["capability_override"] = "spark"
+
+    with pytest.raises(EpicDispatchError, match="bounded-fast admission"):
+        build_dispatch_plan(
+            independent_issue_numbers=[5818],
+            run_id="generic-spark-override-rejected",
+            candidates=[candidate],
+        )
+
+
 def test_codex_launcher_uses_resolved_target_and_claude_adapter_is_not_invoked(
     tmp_path: Path,
 ) -> None:
