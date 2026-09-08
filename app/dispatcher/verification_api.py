@@ -287,6 +287,13 @@ class BuilderOpsVerificationLedger:
             raise ValueError("verification capability is not declared")
         return normalized
 
+    def _canonical_persisted_capability(self, kind: str, capability: str) -> str:
+        """Read old safe placeholders without admitting them on new writes."""
+
+        if capability == "unknown-capability":
+            return capability
+        return self._canonical_capability(kind, capability)
+
     def _admit_validated_verification_receipt(
         self,
         run_id: str,
@@ -954,7 +961,7 @@ class BuilderOpsVerificationLedger:
                     if not isinstance(event, Mapping):
                         raise ValueError("BuilderOps verification attempt batch is malformed")
                     normalized_event = dict(event)
-                    normalized_event["capability"] = self._canonical_capability(
+                    normalized_event["capability"] = self._canonical_persisted_capability(
                         str(normalized_event["kind"]),
                         str(normalized_event["capability"]),
                     )
@@ -964,7 +971,7 @@ class BuilderOpsVerificationLedger:
                     ))
             else:
                 attempt = dict(payload)
-                attempt["capability"] = self._canonical_capability(
+                attempt["capability"] = self._canonical_persisted_capability(
                     str(attempt["kind"]), str(attempt["capability"])
                 )
                 if "containment" in attempt:

@@ -905,6 +905,66 @@ def test_atomic_batch_persists_canonical_nested_receipt_authority(
     assert authority == _progress_digest(raw_receipt)
 
 
+def test_builderops_batch_readback_preserves_legacy_unknown_capability() -> None:
+    client = FakeBuilderOpsClient()
+    state = BuilderOpsVerificationLedger(client, repository=REPO)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "verification-host")
+    assert claimed.lease_id is not None
+    admitted_receipt = admit_verification_receipt(
+        state,
+        run.run_id,
+        "legacy-builderops-placeholder-session",
+        verified_attempt_receipt(),
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+    )
+
+    def plan(attempts, attempt_id_for):
+        return [
+            {
+                "attempt_id": attempt_id_for(0),
+                "kind": "verification",
+                "ordinal": 1,
+                "session_id": "legacy-builderops-placeholder-session",
+                "capability": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+                "context_hash": "0" * 64,
+                "outcome": "launched",
+                "receipt": admitted_receipt,
+            }
+        ]
+
+    assert state.record_attempt_batch(
+        run.run_id,
+        "legacy-builderops-placeholder-batch",
+        1,
+        HEAD,
+        plan,
+        holder="verification-host",
+        lease_id=claimed.lease_id,
+    ) == 1
+
+    persisted = client.attempt_rows[run.run_id][0]["payload"]
+    persisted_event = persisted["batch_events"][0]
+    persisted_event["capability"] = "unknown-capability"
+    persisted_receipt = persisted_event["receipt"]
+    assert isinstance(persisted_receipt, dict)
+    persisted_receipt["review_events"][0]["capability"] = "unknown-capability"
+    authority = persisted_receipt.pop("verification_receipt_sha256")
+    assert isinstance(authority, str)
+    persisted_receipt["verification_receipt_sha256"] = _progress_digest(
+        persisted_receipt
+    )
+
+    attempts = state.attempts(run.run_id)
+
+    assert attempts[0]["capability"] == "unknown-capability"
+    assert attempts[0]["receipt"]["review_events"][0]["capability"] == (
+        "unknown-capability"
+    )
+
+
 @pytest.mark.parametrize("backend", ("sqlite", "builderops"))
 def test_atomic_batch_rejects_forged_planner_attempt_id_before_write(
     tmp_path,
