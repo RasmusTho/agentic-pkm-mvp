@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import threading
@@ -21,24 +23,9 @@ SIDECAR = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
 
 
 def _entrypoint(tmp_path: Path) -> Path:
-    venv = tmp_path / "venv"
-    subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True
-    )
-    python = venv / "bin" / "python"
-    subprocess.run(
-        [
-            str(python),
-            "-m",
-            "pip",
-            "install",
-            "--no-deps",
-            "--no-build-isolation",
-            str(SIDECAR),
-        ],
-        check=True,
-    )
-    return python
+    installed = tmp_path / "installed-sidecar"
+    shutil.copytree(SIDECAR / "mimer_mcp_sidecar", installed / "mimer_mcp_sidecar")
+    return installed
 
 
 def _call(
@@ -63,13 +50,19 @@ def _call(
     return json.loads(process.stdout.readline())
 
 
-def _start(python: Path, base_url: str) -> subprocess.Popen[str]:
+def _start(package_root: Path, base_url: str) -> subprocess.Popen[str]:
+    env = os.environ.copy()
+    python_path = str(package_root)
+    if env.get("PYTHONPATH"):
+        python_path = os.pathsep.join((python_path, env["PYTHONPATH"]))
+    env["PYTHONPATH"] = python_path
     process = subprocess.Popen(
-        [str(python), "-m", "mimer_mcp_sidecar", "--base-url", base_url],
+        [sys.executable, "-m", "mimer_mcp_sidecar", "--base-url", base_url],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     assert process.stdin and process.stdout
     process.stdin.write(
