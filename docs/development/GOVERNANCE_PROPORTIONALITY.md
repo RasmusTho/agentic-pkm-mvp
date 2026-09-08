@@ -57,8 +57,9 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 
 ## Delivery budgets and stop-loss
 
-Every delivery carries a default budget of **2 CI-repair rounds per failure mechanism** (the full
-path keeps the 2+2 capability-escalated repair budget owned by `verification-and-closure`). When
+Every delivery carries a default budget of **2 CI-repair rounds per failure mechanism** (the separate
+P0/P1 review-repair loop uses evidence-based convergence owned by `verification-and-closure`, not a
+numeric attempt budget). When
 the budget is spent, stop grinding: ship the smallest passing subset of the change, or hand the
 work back with a one-paragraph stop report and a `LearningSignal` naming the artifact that made it
 expensive. A handback requires the stop-loss assessment below; budget exhaustion first triggers

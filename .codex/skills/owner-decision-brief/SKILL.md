@@ -33,16 +33,19 @@ Apply the `decision-quality :: Yggdrasil profile` together with these repo autho
   owner.
 - `AGENTS.md :: Communicating with the owner` is canonical for owner-facing language and the
   Problem -> Options -> Consequences shape.
-- Current repo owner docs and live GitHub, Git, CI, dispatcher, or BuilderOps authority outrank
-  screens, plans, generated projections, chat history, and agent memory.
+- For system facts, current repo owner docs and live GitHub, Git, CI, dispatcher, or BuilderOps
+  evidence outrank screens, plans, generated projections, and agent memory. This evidence ordering
+  does not override explicit user instructions; resolve the current mandate through
+  `decision-quality :: Current mandate and delegated choices` before applying repo constraints.
 - Keep observation, proposal, decision, command, and receipt distinct. This skill does not create a
   decision log, task store, lifecycle authority, or execution tracker.
 
 ## Contractual operator gates
 
-Never use the decision ownership gate to remove an unconditional operator gate defined by another
-skill or contract. Promotion acknowledgment, consent-class changes, and any prod-touching action
-whose owning workflow requires explicit human acknowledgment still fire exactly as defined. Use
+Never use the decision ownership gate to remove an unconditional operator gate that remains
+applicable after resolving instruction priority and the current mandate. Promotion acknowledgment,
+consent-class changes, and any prod-touching action whose owning workflow independently requires
+explicit human acknowledgment still fire exactly as defined. Use
 `decision-quality` to diagnose and prepare the ask, while this profile shapes its repository-safe
 form.
 
@@ -57,7 +60,7 @@ record, and report the decision afterwards.
 Before creating an owner ask, adding `agent:needs-human`, or presenting options, apply the
 repo-local method's contract-dominance preflight, then delegate terminal routing to the canonical classifier:
 
-1. Select the live contract that actually governs the work. For a governing Issue, read its current
+1. Resolve the current mandate through the required method, then select the live contract that actually governs the work. For a governing Issue, read its current
    body, acceptance criteria, `Verify:` targets, and named owner authority. For Issue-free work,
    select the complete Direct Repair block, workflow contract, owner document, protected invariant,
    or operator gate that applies. Do not manufacture an Issue or acceptance-criterion dependency
@@ -72,14 +75,20 @@ repo-local method's contract-dominance preflight, then delegate terminal routing
 3. After filtering the apparent options, apply
    `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier` and do not
    copy or redefine its route table here. Technical drift remains `blocked_technical` only when no
-   authority is missing. Contradictory source authority remains `needs_owner`, as does every other
+   authority is missing. Contradictory source authority remains `needs_owner` when it is unresolved
+   after instruction-priority and current-mandate resolution, as does every other
    explicit `needs_owner` authority category in that classifier. Every non-`needs_owner` route and
    every protected-finding, follow-up, or deferred disposition remains governed by its owning
    contract and must not be reclassified here. Retry exhaustion or technical uncertainty alone does
    not change that authority boundary.
 
-Contractual operator gates still fire exactly as their owning workflows define. This preflight may
-shape a discretionary escalation, but it must never retest or remove an unconditional gate.
+Contractual operator gates still fire exactly as their owning workflows define when independently
+applicable. This preflight does not waive them. Use the required method's delegated-choice handling
+to distinguish a user's revised instruction from an unsatisfied gate; do not repeatedly request an
+already authorized technical decision. Machine identities and evidence belong in the prepared
+record, not in a technical questionnaire for the owner. A required exact-field acknowledgment must
+still be complete and attributable to its authorized decision maker; agent preparation is not that
+acknowledgment, and an unknown rollback baseline must not become an asserted absence.
 
 ## Local vault-binding preflight
 

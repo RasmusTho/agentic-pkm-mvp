@@ -566,7 +566,21 @@ repair counter is updated. A retry counter alone must never select
 | `auto_repair` | The failure is repo-local, reversible, inside the issue's declared scope, and has a deterministic validation target. | Create or continue the bounded repair path, then run fresh validation/review. |
 | `auto_backoff` | Authentication, rate limit, or an external tool is temporarily unavailable and no mutation has occurred. | Retain the request, record a receipt, and retry with bounded backoff. |
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
-| `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
+| `needs_owner` | Continuing needs new authority for an irreversible/external effect, a security/privacy/cost commitment, a reserved production/release operator action, or resolution of still-contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
+
+Before selecting a route, apply `.codex/skills/decision-quality/SKILL.md :: Current mandate and
+delegated choices`. Distinguish missing technical evidence from missing authorization. An effect's
+production/external classification does not require another ask when valid authority for that exact
+effect already exists; independently required operator acknowledgments remain binding. A later
+same-owner instruction that validly revises an earlier restriction is not unresolved contradictory
+authority. Never infer that revision from a label, generated plan, silence, or technical convenience.
+
+The route governs the affected operation, not automatic session termination. Honor immediate-stop
+boundaries (including prohibited follow-on reads), continue other authorized evidence/recovery work,
+and return to the owning workflow after revalidation. Exhaust accessible technical preparation
+before a human ask; do not turn unresolved machine facts into owner choices or repeat an already
+answered request. Session suspension still follows
+`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
 
 Repair history applies only to blocking failures and is partitioned by stable failure
 mechanism and failure domain. The closed domains are review/code correctness,
