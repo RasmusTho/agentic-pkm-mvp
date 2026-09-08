@@ -9,6 +9,7 @@ MIMER-MCP-03; composed protocol acceptance belongs to MIMER-MCP-04.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -77,22 +78,59 @@ class _MimerHttpOperations(Protocol):
     def health(self, *, trace_id: str | None) -> _HttpResponse: ...
 
 
-class _GovernedMimerHttpOperations:
-    """The fixed allowlist to the existing loopback HTTP client contract."""
+_DEFAULT_RUNTIME_OPERATION_TIMEOUT_SECONDS = 60.0
+DEFAULT_RUNTIME_READ_DEADLINE_SECONDS = 75.0
 
-    # Keep the adapter deadline aligned with the runtime's single LLM_TIMEOUT
-    # default (60 seconds) while retaining short connection/pool bounds.
-    _RUNTIME_TIMEOUT_SECONDS = 60.0
-    _RUNTIME_MANAGED_TIMEOUT = httpx.Timeout(
-        _RUNTIME_TIMEOUT_SECONDS,
+
+def _build_runtime_managed_timeout(read_deadline_seconds: float) -> httpx.Timeout:
+    if (
+        isinstance(read_deadline_seconds, bool)
+        or not isinstance(read_deadline_seconds, (int, float))
+        or not math.isfinite(read_deadline_seconds)
+        or read_deadline_seconds <= _DEFAULT_RUNTIME_OPERATION_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "Mimer MCP runtime read deadline must be finite and longer than "
+            f"{_DEFAULT_RUNTIME_OPERATION_TIMEOUT_SECONDS:g} seconds"
+        )
+    return httpx.Timeout(
+        read=read_deadline_seconds,
         connect=10.0,
         write=10.0,
         pool=10.0,
     )
+
+
+def validate_runtime_read_deadline_seconds(read_deadline_seconds: float) -> None:
+    """Reject an outer read bound that can expire before the runtime operation."""
+
+    _build_runtime_managed_timeout(read_deadline_seconds)
+
+
+class _GovernedMimerHttpOperations:
+    """The fixed allowlist to the existing loopback HTTP client contract."""
+
+    # The runtime's single LLM_TIMEOUT default is 60 seconds. The sidecar's
+    # outer read bound leaves a small response/serialization margin so an
+    # accepted runtime operation is not reported as a client timeout first.
+    _RUNTIME_TIMEOUT_SECONDS = _DEFAULT_RUNTIME_OPERATION_TIMEOUT_SECONDS
+    _RUNTIME_MANAGED_TIMEOUT = _build_runtime_managed_timeout(
+        DEFAULT_RUNTIME_READ_DEADLINE_SECONDS
+    )
     _SHORT_OPERATION_TIMEOUT = httpx.Timeout(10.0)
 
-    def __init__(self, client: httpx.Client) -> None:
+    def __init__(
+        self,
+        client: httpx.Client,
+        *,
+        runtime_read_deadline_seconds: float | None = None,
+    ) -> None:
         self._client = client
+        self._runtime_managed_timeout = (
+            self._RUNTIME_MANAGED_TIMEOUT
+            if runtime_read_deadline_seconds is None
+            else _build_runtime_managed_timeout(runtime_read_deadline_seconds)
+        )
 
     @staticmethod
     def _headers(trace_id: str | None) -> dict[str, str] | None:
@@ -103,7 +141,7 @@ class _GovernedMimerHttpOperations:
             "/api/ask",
             json={"question": question},
             headers=self._headers(trace_id),
-            timeout=self._RUNTIME_MANAGED_TIMEOUT,
+            timeout=self._runtime_managed_timeout,
         )
 
     def capture(self, *, text: str, trace_id: str | None) -> httpx.Response:
@@ -111,7 +149,7 @@ class _GovernedMimerHttpOperations:
             "/api/companion/capture",
             json={"text": text},
             headers=self._headers(trace_id),
-            timeout=self._RUNTIME_MANAGED_TIMEOUT,
+            timeout=self._runtime_managed_timeout,
         )
 
     def retrieve(self, *, query: str, trace_id: str | None) -> httpx.Response:
@@ -208,7 +246,12 @@ class MimerMcpServer:
         self._operations = operations
 
     @classmethod
-    def for_loopback(cls, base_url: str = "http://127.0.0.1:8000") -> "MimerMcpServer":
+    def for_loopback(
+        cls,
+        base_url: str = "http://127.0.0.1:8000",
+        *,
+        runtime_read_deadline_seconds: float | None = None,
+    ) -> "MimerMcpServer":
         """Build the accepted A2/C1 client; wire/process lifecycle stays elsewhere."""
         hostname = urlparse(base_url).hostname
         if hostname not in {"127.0.0.1", "::1", "localhost"}:
@@ -219,7 +262,8 @@ class MimerMcpServer:
                     base_url=base_url,
                     timeout=_GovernedMimerHttpOperations._SHORT_OPERATION_TIMEOUT,
                     trust_env=False,
-                )
+                ),
+                runtime_read_deadline_seconds=runtime_read_deadline_seconds,
             )
         )
 
