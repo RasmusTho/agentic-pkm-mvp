@@ -263,6 +263,8 @@ def _unknowns(
         missing.append("check run evidence unavailable")
     if owner_doc_declaration == "unknown":
         missing.append("owner-doc writeback declaration unavailable")
+    elif owner_doc_declaration == "conflicting_declarations":
+        missing.append("owner-doc writeback declaration conflicting")
     return missing
 
 
@@ -300,8 +302,7 @@ def build_pack(
     owner_doc = _owner_doc_declaration(body)
     unknowns = _unknowns(governing_issue, issue_evidence, checks, owner_doc)
     human_exception_required = (
-        owner_doc == "conflicting_declarations"
-        or any(hint.startswith("codeowner_required:") for hint in risks)
+        any(hint.startswith("codeowner_required:") for hint in risks)
         or any("agent:needs-human" in evidence.labels for evidence in issue_evidence)
     )
     return EvidencePack(

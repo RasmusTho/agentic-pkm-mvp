@@ -129,6 +129,13 @@ NOT_AGENTABLE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
+# A pickup hold is not a human decision. Keep these independent so incomplete
+# bodies and technical labels cannot either manufacture or hide human evidence.
+HUMAN_ONLY_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (r"\bhuman only\b", r"\bmanual only\b", r"\boperator gated\b")
+)
+
 
 @dataclass(frozen=True)
 class AcceptanceCriteriaReport:
@@ -494,17 +501,18 @@ def classify_issue_body(
     label_names = sorted(dict.fromkeys(labels))
 
     classification = "ready_candidate"
-    human_exception_required = False
+    human_exception_required = (
+        "agent:needs-human" in label_names
+        or _contains_any(HUMAN_ONLY_PATTERNS, body)
+        or _contains_any(AUTHORITY_RISK_PATTERNS, body)
+    )
 
     if _unknown_body(body, present_normalized):
         classification = "unknown"
-        human_exception_required = True
     elif "agent:needs-human" in label_names or "agent:blocked" in label_names:
         classification = "not_agentable"
-        human_exception_required = True
     elif _contains_any(NOT_AGENTABLE_PATTERNS, body):
         classification = "not_agentable"
-        human_exception_required = True
     elif "Source Docs" in missing or not source_docs_present:
         classification = "missing_source_docs"
     elif missing:
@@ -521,10 +529,8 @@ def classify_issue_body(
         classification = "admission_contract_conflict"
     elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
         classification = "authority_risk"
-        human_exception_required = True
     elif _contains_any(AMBIGUOUS_PATTERNS, body):
         classification = "ambiguous_intent"
-        human_exception_required = True
 
     guidance = repair_guidance(
         classification=classification,

@@ -40,12 +40,46 @@ Separate each statement into one of these classes:
 
 Do not hide uncertainty through confident prose or invent background, authority, objectives, alternatives, or agreement. A label, task, plan, generated view, screen, agent history, or linked record is routing evidence only unless a current authoritative source explicitly makes it binding.
 
+Bind negative evidence to the actual target and query coverage: not found locally is not absent on
+the remote system; not checked is unknown. Health or successful execution does not prove ownership,
+exclusive write authority, attestation, or recoverability. Keep those claims separate until their
+own evidence is verified. Reused observations retain their original freshness; do not describe them
+as a new live readback. Claim use of this method only for the steps actually performed, not merely
+because the skill was loaded.
+
+## Current mandate and delegated choices
+
+Before applying a prior decision or asking again, reconcile the latest explicit instructions with
+earlier instructions by priority and scope. A later instruction from the same decision maker can
+revise their earlier restriction; an old ask or an agent-authored plan cannot freeze that restriction
+forever. Record what changed and what remains reserved. Source evidence establishes system facts;
+it does not outrank the user's instructions or supply execution authority.
+
+Treat an explicit delegation such as "you decide" as authority to make the in-scope technical
+choice, not as a request to return that choice for the person to repeat. Carry existing authorization
+through retries and workflow transitions while its target, scope, constraints, and validity still
+hold. Delegation does not itself prove safety, approve additional effects, or satisfy a separately
+required human acknowledgment. If the apparent conflict remains material after instruction-priority
+resolution, keep the affected effect blocked; do not invent supersession or an approval receipt.
+
+Complete accessible technical preparation before any remaining ask: resolve exact identities,
+candidate evidence, validation and recovery facts using permitted sources. The agent owns those
+details and the recommendation. Never ask a person to discover or copy back machine fields merely
+to echo the agent's choice. If an independently applicable gate still requires human acknowledgment,
+present the prepared choice and its human consequence once, in the gate's required form; mark agent
+selections as proposals, not operator decisions. Missing facts stay unknown, not guessed defaults.
+
+When a gate fails, separate authority to choose, evidence to execute, and authority for the effect.
+Pause exactly the prohibited work, including further reads if an immediate-stop rule requires it.
+Continue other authorized preparation or repair, then revalidate before the effect. A failed gate
+is neither permission to bypass it nor an automatic reason to end the whole task or repeat an ask.
+
 ## Universal preflight: classify the situation before escalating
 
 Run this preflight for every material incoming problem, question, alert, proposal, or apparent blocker. Use current authoritative sources where they exist.
 
 1. State the provisional decision-maker context and the apparent problem in ordinary human terms.
-2. Check whether a contract, policy, prior decision, acceptance criterion, law, or explicit operator gate already settles the desired outcome. Remove options that violate it.
+2. Apply `Current mandate and delegated choices`, then check whether a still-applicable contract, policy, prior decision, acceptance criterion, law, or explicit operator gate already settles the desired outcome. Remove options that violate it.
 3. Classify the situation into exactly one current route:
    - **Agent-actionable:** the agent can investigate, interpret, repair, recover, or make an authorized low-risk decision.
    - **Technical or external access:** the outcome is already established, but a system, credential, service, host, supplier, or other external dependency is unavailable. Route it technically; do not manufacture a value choice. If granting access would itself create a new rights, cost, or risk commitment, classify that commitment as a human decision instead.

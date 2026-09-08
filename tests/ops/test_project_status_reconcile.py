@@ -318,7 +318,22 @@ def test_canonical_maintenance_surfaces_document_split_lane_precedence() -> None
         assert "Needs Human" in content
         assert "Blocked" in content
         assert "explicit open-Issue `Review`" in content
-    assert maintenance_skill.count("--remove-label agent:in-progress") >= 8
+    # Explicit state transitions must clear stale active state, but repairing
+    # metadata under a valid active claim must not evict the current owner.
+    state_transitions = [
+        line.strip()
+        for line in maintenance_skill.splitlines()
+        if line.lstrip().startswith("gh issue edit ") and "--add-label agent:" in line
+    ]
+    assert state_transitions
+    for command in state_transitions:
+        assert "--remove-label agent:in-progress" in command
+    malformed = maintenance_skill.split("### Action: Malformed or Stale Open Issue", 1)[1].split(
+        "### Maintenance path versus hot path", 1
+    )[0]
+    assert "retain an active owner's valid claim" in malformed
+    assert "Do not remove or transfer a foreign active claim" in malformed
+    assert "--remove-label agent:in-progress" not in malformed
     issue_to_code = Path(".codex/skills/issue-to-code/SKILL.md").read_text(encoding="utf-8")
     assert (
         "--add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress"

@@ -437,7 +437,12 @@ An SBS-relevant issue is Ready (`agent:ready`, Status=Ready) only when its `SBS 
 - **Boundary risk** stated: the single most important way the change could let something cross a boundary it must not, or `none`.
 - **Verification plan** present: each acceptance criterion carries a resolvable `Verify:` target (test pointer, doc writeback anchor, roadmap diff, or runtime receipt), per the issue template.
 
-An issue that cannot resolve these is `agent:needs-human`, not Ready.
+An issue with unresolved fields remains non-ready. Recover accessible classification/evidence and
+repair its contract through `issue-maintenance-change-control`; a remaining technical blocker uses
+`agent:blocked` and its compatible action receipt. Use
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier` to establish
+an independent authority category before `agent:needs-human`. Incomplete SBS fields alone do not
+establish that category, and a valid active claim remains with its current owner during repair.
 
 ## 6. Definition of Done (SBS-relevant PRs)
 
@@ -454,7 +459,7 @@ An SBS-relevant PR is Done only when:
 ## 7. Issue lifecycle expectations
 
 - SBS-relevant work uses `.github/ISSUE_TEMPLATE/task.yml`. The `SBS Impact` section is a required section per `.github/github-governance.yml`.
-- Issues carry `agent:ready` only when the Definition of Ready (§5) holds; otherwise `agent:needs-human` or `agent:blocked`.
+- Issues carry `agent:ready` only when the Definition of Ready (§5) holds. Otherwise apply its maintenance/classification route; unreadiness alone never establishes `agent:needs-human`.
 - Project Status is an optional projection of issue/PR truth (governance config): opened → Backlog; ready → Ready; PR open → Review; merged/closed → Done. It is not a pickup, claim, blocked-state, or review-handoff gate. Do not hand-edit Status to mask issue state.
 - Larger SBS work hangs off the tracking issue `#2337` (Operationalize Target SBS) and the delivery parent `#2355`. New initiative-level SBS work should reference the relevant `docs/architecture/SBS_ROADMAP.md` phase.
 

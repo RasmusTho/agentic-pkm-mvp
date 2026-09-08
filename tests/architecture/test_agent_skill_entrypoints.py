@@ -264,6 +264,79 @@ def test_owner_decision_profile_delegates_classification_and_preserves_operator_
     assert "Contractual operator gates still fire exactly as their owning workflows define" in preflight
 
 
+def test_escalation_entrypoints_resolve_current_mandate_before_owner_routing() -> None:
+    """Check prompt routing, not a simulated runtime authorization decision."""
+    method = _read(".codex/skills/decision-quality/SKILL.md")
+    mandate = " ".join(
+        _section_between(method, "## Current mandate and delegated choices", "## Universal preflight").split()
+    )
+    assert "latest explicit instructions" in mandate
+    assert "by priority and scope" in mandate
+    assert "Record what changed and what remains reserved" in mandate
+    assert "Carry existing authorization through retries and workflow transitions" in mandate
+    assert "do not invent supersession or an approval receipt" in mandate
+
+    preflight = " ".join(_owner_decision_contract_preflight().split())
+    assert preflight.index("Resolve the current mandate") < preflight.index("select the live contract")
+    assert "after instruction-priority and current-mandate resolution" in preflight
+    profile = " ".join(_read(".codex/skills/owner-decision-brief/SKILL.md").split())
+    assert "does not override explicit user instructions" in profile
+    assert "decision-quality :: Current mandate and delegated choices" in profile
+
+    classifier = " ".join(_section_between(
+        _read("docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"),
+        "## Escalation Classifier", "### Packet Schema",
+    ).split())
+    assert ".codex/skills/decision-quality/SKILL.md :: Current mandate and delegated choices" in classifier
+    assert "independently required operator acknowledgments remain binding" in classifier
+    assert "Never infer that revision from a label, generated plan, silence" in classifier
+
+
+def test_delegation_keeps_technical_preparation_agent_owned_without_forging_acknowledgment() -> None:
+    method = " ".join(_read(".codex/skills/decision-quality/SKILL.md").split())
+    assert "Complete accessible technical preparation before any remaining ask" in method
+    assert "Never ask a person to discover or copy back machine fields merely to echo" in method
+    assert "in the gate's required form" in method
+    assert "selections as proposals, not operator decisions" in method
+    assert "Delegation does not itself prove safety, approve additional effects" in method
+    assert "separately required human acknowledgment" in method
+    assert "Missing facts stay unknown, not guessed defaults" in method
+
+
+def test_decision_evidence_does_not_promote_health_or_missing_local_state_to_authority() -> None:
+    evidence = " ".join(_section_between(
+        _read(".codex/skills/decision-quality/SKILL.md"),
+        "## Evidence discipline", "## Current mandate and delegated choices",
+    ).split())
+    assert "not found locally is not absent on the remote system" in evidence
+    assert "not checked is unknown" in evidence
+    assert "Health or successful execution does not prove ownership" in evidence
+    assert "exclusive write authority, attestation, or recoverability" in evidence
+    assert "Reused observations retain their original freshness" in evidence
+    assert "Claim use of this method only for the steps actually performed" in evidence
+
+
+def test_technical_stop_routes_recovery_without_broadening_authority_or_investigation() -> None:
+    protocol = " ".join(_section_between(
+        _read("docs/development/AGENT_OPERATING_PROTOCOL.md"),
+        "## Stop conditions", "## Related docs",
+    ).split())
+    assert "Stop the affected operation" in protocol
+    assert "Escalation Classifier" in protocol
+    assert "does not authorize probing past the boundary" in protocol
+    assert "execute and verify only if current authority covers that exact effect" in protocol
+    assert "A prose claim never creates mutation authority" in protocol
+    assert "Execute and verify before continuing." not in protocol
+
+    budgets = _section_between(
+        _read("docs/development/GOVERNANCE_PROPORTIONALITY.md"),
+        "## Delivery budgets and stop-loss", "## Post-validation base-drift evidence reuse",
+    )
+    assert "evidence-based convergence" in budgets
+    assert "2+2" not in budgets
+    assert "Technical stop-loss alone does not create `agent:needs-human`" in budgets
+
+
 def test_builder_thread_capability_is_retired() -> None:
     removed_paths = (
         "app/builderops/builder_threads_serialized.py",
@@ -697,6 +770,37 @@ def test_supporting_workflows_do_not_park_followup_work() -> None:
     retro = _read(".codex/skills/learning-retrospective/SKILL.md")
     assert "do not request approval already supplied by the task" in retro
     assert "follow-up\nagent run using" not in retro
+
+
+def test_maintenance_incompleteness_does_not_imply_human_authority() -> None:
+    skill = _read(".codex/skills/issue-maintenance-change-control/SKILL.md")
+    malformed = _section_between(
+        skill, "### Action: Malformed or Stale Open Issue", "### Maintenance path versus hot path",
+    )
+    for invariant in (
+        "Escalation Classifier", "technical incompleteness alone", "current lifecycle owner",
+        "agent:blocked", "owner-decision-brief", "independent authority category",
+    ):
+        assert invariant in malformed, invariant
+    assert "**Add needs-human label:**" not in malformed
+    table = _section_between(skill, "## Quick Reference: Maintenance State Corrections", "## When splitting")
+    assert "Malformed/stale open | Execute Malformed/Stale | +agent:needs-human" not in table
+    assert "Delivered but open | Execute Delivered Open | +agent:needs-human" not in table
+    assert "after classifier" in table
+    assert "set to needs-human if ambiguous" not in skill
+    child = _section_between(skill, "### Child Slice Issues", "## Quick Reference")
+    assert "`agent:blocked` or `agent:needs-human`" not in child
+
+
+def test_sbs_readiness_routes_technical_incompleteness_through_maintenance() -> None:
+    doc = _read("docs/architecture/SBS_OPERATING_MODEL.md")
+    readiness = _section_between(doc, "## 5. Definition of Ready", "## 6. Definition of Done")
+    for invariant in ("non-ready", "issue-maintenance-change-control", "Escalation Classifier", "independent authority category"):
+        assert invariant in readiness, invariant
+    assert "cannot resolve these is `agent:needs-human`" not in readiness
+    lifecycle = _section_between(doc, "## 7. Issue lifecycle expectations", "## 8. PR lifecycle expectations")
+    assert "unreadiness alone" in lifecycle
+    assert "otherwise `agent:needs-human` or `agent:blocked`" not in lifecycle
 
 
 def test_promotion_continuation_requires_observed_effect_before_rollback() -> None:

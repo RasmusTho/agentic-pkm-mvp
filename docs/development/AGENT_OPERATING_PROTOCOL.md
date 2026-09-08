@@ -77,14 +77,19 @@ worktree, and retain serial delivery unless an explicit independent-wave TCD rat
 
 ## Stop conditions
 
-Stop and route to Issue maintenance, human review, or docs repair when any of the following is true:
+Stop the affected operation when any of the following is true. Recover missing reads, evidence,
+verification targets, or bounded contract repairs through the owning workflow; do not turn those
+technical prerequisites into an owner decision or a terminal handoff. Use
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier` to distinguish
+authorized recovery from a genuine authority gap. An explicit immediate-stop boundary still limits
+further investigation of that target; it does not authorize probing past the boundary.
 
 - **Authority boundary unclear**: the governing doc is ambiguous, a plan doc has not been cross-checked against current-state SoT truth, or the source anchor points to a stale or archived doc.
 - **Prod/stable/migration/vault/DSN/watcher execution without ops docs**: the task touches these surfaces and `docs/RELEASE_CHANNELS/README.md`, `docs/ENVIRONMENTS.md`, or the relevant runbook has not been read.
 - **Target-state/spec docs without code/test evidence**: the task depends on a capability spec, plan doc, or roadmap entry as if it were shipped runtime behavior, but no code path, passing test, or owner-doc acceptance record confirms the behavior is live.
 - **Acceptance criteria lack `Verify:` targets**: any behavioral AC is missing a test pointer, or any non-behavioral AC is missing a doc anchor, roadmap diff, or runtime receipt. Route through `issue-maintenance-change-control` before coding.
 - **Scope exceeds the governing Issue**: the task has expanded beyond the bounded slice contract. Update the Issue contract first; do not silently expand scope.
-- **Governance-bearing mutation without explicit command execution**: any GitHub label, Project status, or release-pointer change was described rather than executed. Execute and verify before continuing.
+- **Governance-bearing mutation without explicit command execution**: any GitHub label, Project status, or release-pointer change was described rather than executed. Correct the unsupported claim; execute and verify only if current authority covers that exact effect. A prose claim never creates mutation authority.
 
 ## Related docs
 

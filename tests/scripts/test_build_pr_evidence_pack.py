@@ -236,6 +236,21 @@ def test_multi_issue_evidence_keeps_parent_state_separate_from_closing_child() -
     assert pack.human_exception_required is True
 
 
+def test_conflicting_owner_doc_metadata_does_not_require_human() -> None:
+    pack = build_pack(
+        pr={"number": 99, "body": _pr_body(
+            "- [x] No owner-doc change implied.\n- [x] Owner-doc updated in this PR."
+        )},
+        files_payload=["scripts/build_pr_evidence_pack.py"],
+        checks_payload={},
+        issue={"number": 3214, "labels": [{"name": "agent:blocked"}]},
+    )
+    assert pack.owner_doc_writeback_declaration == "conflicting_declarations"
+    assert pack.human_exception_required is False
+    assert "owner-doc writeback declaration conflicting" in pack.unknowns_missing_evidence
+    assert "check run evidence unavailable" in pack.unknowns_missing_evidence
+
+
 def test_missing_data_is_reported_as_unknown_not_guessed() -> None:
     pack = build_pack(
         pr={"number": 99, "title": "unknown", "body": "", "head": {}, "base": {}},
