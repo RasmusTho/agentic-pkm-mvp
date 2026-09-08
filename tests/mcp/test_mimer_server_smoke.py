@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import threading
+import tomllib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,8 +24,22 @@ SIDECAR = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
 
 def _entrypoint(tmp_path: Path) -> Path:
     installed = tmp_path / "installed-sidecar"
-    shutil.copytree(SIDECAR / "mimer_mcp_sidecar", installed / "mimer_mcp_sidecar")
-    return installed
+    package_root = installed / "site-packages"
+    shutil.copytree(SIDECAR / "mimer_mcp_sidecar", package_root / "mimer_mcp_sidecar")
+
+    project = tomllib.loads((SIDECAR / "pyproject.toml").read_text(encoding="utf-8"))
+    target = project["project"]["scripts"]["mimer-mcp"]
+    module, function = target.split(":", 1)
+    launcher = installed / "bin" / "mimer-mcp"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        "#!/usr/bin/env python3\n"
+        f"from {module} import {function}\n"
+        f"raise SystemExit({function}())\n",
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    return launcher
 
 
 def _call(
@@ -50,14 +64,14 @@ def _call(
     return json.loads(process.stdout.readline())
 
 
-def _start(package_root: Path, base_url: str) -> subprocess.Popen[str]:
+def _start(entrypoint: Path, base_url: str) -> subprocess.Popen[str]:
     env = os.environ.copy()
-    python_path = str(package_root)
+    python_path = str(entrypoint.parent.parent / "site-packages")
     if env.get("PYTHONPATH"):
         python_path = os.pathsep.join((python_path, env["PYTHONPATH"]))
     env["PYTHONPATH"] = python_path
     process = subprocess.Popen(
-        [sys.executable, "-m", "mimer_mcp_sidecar", "--base-url", base_url],
+        [str(entrypoint), "--base-url", base_url],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -110,6 +124,7 @@ def _server(
     bind_initialized_vault(monkeypatch, vault, store_dir=tmp_path)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
     monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
     inbox = vault / "Inbox" / "inbox.md"
     inbox.parent.mkdir(parents=True, exist_ok=True)
     inbox.write_text("# Test inbox\n\nA real runtime note.\n", encoding="utf-8")
