@@ -195,7 +195,8 @@ def test_rescue_wrapper_checks_original_branch(phase, monkeypatch, activity):
     elif activity == "resumable_original":
         monkeypatch.setattr(gh, "_dispatcher_snapshot_from_connection", lambda *a: [
             {"kind": "task", "record": {
-                "task_id": "github-issue-999",
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-999",
+                "repo": "RasmusTho/agentic-pkm-mvp",
                 "issue_number": 999,
                 "status": "blocked",
                 "branch": "old",

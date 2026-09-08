@@ -1362,13 +1362,15 @@ def _dispatcher_source_anchors(value: object) -> set[str]:
 
 
 _DISPATCHER_PICKUP_RECEIPT_RE = re.compile(
-    r"\bpickup intent receipt\s*:", re.IGNORECASE
+    r"^\s*pickup intent receipt\s*:", re.IGNORECASE
 )
 _DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
-    r"\bpreserved\s+worktree\s*:\s*/", re.IGNORECASE
+    r"(?:^|[.!?]\s+)preserved\s+worktree\s*:\s*/", re.IGNORECASE
 )
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
-    r"\bdedicated\s+worktree\s+/", re.IGNORECASE
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+/[^\s;`,]+\s+is\s+still\s+dirty\s+"
+    r"on\s+branch\s+[^\s;`,]+\s+at\s+head\s+[0-9a-f]{40,64}",
+    re.IGNORECASE,
 )
 _DISPATCHER_WORKTREE_BINDING_RE = re.compile(
     r"\bworktree(?:\s*[:=]\s*|\s+)(?P<value>/[^\s;`,]+)",
@@ -1395,14 +1397,20 @@ def _dispatcher_resumable_binding_resources(
     preserved-worktree binding shape.
     """
     task_id = record.get("task_id")
-    if not isinstance(task_id, str) or not task_id:
-        raise RuntimeError("dispatcher_activity_invalid")
+    repository = record.get("repo")
     issue = record.get("issue_number")
-    resources: set[str] = set()
-    if issue is not None:
-        if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
-            raise RuntimeError("dispatcher_activity_invalid")
-        resources.update({f"issue:{issue}", f"github:issue:{issue}"})
+    if (
+        not isinstance(task_id, str)
+        or not task_id
+        or not isinstance(repository, str)
+        or not re.fullmatch(r"[^/\s]+/[^/\s]+", repository)
+        or not isinstance(issue, int)
+        or isinstance(issue, bool)
+        or issue < 1
+        or task_id != f"github-{repository.replace('/', '--')}-issue-{issue}"
+    ):
+        raise RuntimeError("dispatcher_activity_invalid")
+    resources: set[str] = {f"issue:{issue}", f"github:issue:{issue}"}
     linked_pr = _dispatcher_linked_pr(record.get("linked_pr"))
     if linked_pr is not None:
         resources.update({f"pull:{linked_pr}", f"github:pull:{linked_pr}"})
@@ -1463,13 +1471,11 @@ def _dispatcher_resumable_binding_resources(
             worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(line)
             branch = _DISPATCHER_BRANCH_BINDING_RE.search(line)
             head = _DISPATCHER_HEAD_BINDING_RE.search(line)
-            if not any((worktree, branch, head)):
-                # A pickup receipt is a structured claim and must never be
-                # accepted without at least one parseable resource. Narrative
-                # preservation text without an exact binding is not authority.
-                if _DISPATCHER_PICKUP_RECEIPT_RE.search(line):
-                    raise RuntimeError("dispatcher_activity_invalid")
-                continue
+            if not any((branch, head)):
+                # An explicit marker with only a path (or no parseable
+                # branch/head) is unsafe: the remaining binding may be on a
+                # different line and must not be guessed or joined.
+                raise RuntimeError("dispatcher_activity_invalid")
             if worktree:
                 resources.add(f"worktree:{worktree.group('value')}")
             if branch:
