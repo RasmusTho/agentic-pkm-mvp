@@ -1132,6 +1132,24 @@ def test_concurrent_same_target_callers_wait_for_commit_and_resume(
     assert reloads == [vault_b]
 
 
+def test_completed_rebind_wait_allows_both_post_commit_scan_cycles(
+    tmp_path: Path,
+) -> None:
+    """Completion waits for drain plus the resumed old-root scan."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    activation = SettingsRebindActivation(
+        _runtime(tmp_path).registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=5.0,
+    )
+
+    assert activation._wait_timeout_seconds == 5.0
+    assert activation._stage_wait_timeout("acknowledged") == 5.0
+    assert activation._stage_wait_timeout("completed") == 10.0
+
+
 def test_settings05_parent_acceptance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

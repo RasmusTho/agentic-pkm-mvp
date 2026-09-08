@@ -346,6 +346,9 @@ def _activation_fault_point(stage: str) -> None:
     del stage
 
 
+_COMPLETION_SCAN_CYCLES = 2
+
+
 class SettingsRebindActivation:
     """Production choose/open transaction for the compatibility binding.
 
@@ -551,7 +554,8 @@ class SettingsRebindActivation:
             self._watcher_state_dir,
             record.desired_revision,
         )
-        deadline = time.monotonic() + max(self._wait_timeout_seconds, 0.0)
+        wait_timeout = self._stage_wait_timeout(required_stage)
+        deadline = time.monotonic() + max(wait_timeout, 0.0)
         while True:
             try:
                 receipt = load_settings_rebind_watcher_receipt(receipt_path)
@@ -576,6 +580,16 @@ class SettingsRebindActivation:
                     f"{required_stage} for revision {record.desired_revision}"
                 )
             time.sleep(self._poll_seconds)
+
+    def _stage_wait_timeout(self, required_stage: str) -> float:
+        """Return the deadline budget for one acknowledgement stage."""
+
+        # Completion is published only after the post-commit drain and the
+        # resumed old-root scan. Give that two-cycle transition a deadline
+        # derived from the same per-cycle budget used for acknowledgement.
+        if required_stage == "completed":
+            return self._wait_timeout_seconds * _COMPLETION_SCAN_CYCLES
+        return self._wait_timeout_seconds
 
 
 def _install_dormant_settings_rebind(
