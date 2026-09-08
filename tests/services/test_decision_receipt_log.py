@@ -180,14 +180,20 @@ def test_decisions_schema_assertion_memo_has_a_reset_hook(monkeypatch: pytest.Mo
     import app.db.decisions_schema as schema
 
     calls: list[object] = []
-    monkeypatch.setattr(schema, "_assert_decisions_schema_uncached", lambda conn: calls.append(conn))
+    def fake_uncached(conn: object) -> None:
+        calls.append(conn)
+        if len(calls) == 2:
+            raise RuntimeError("stale schema")
+
+    monkeypatch.setattr(schema, "_assert_decisions_schema_uncached", fake_uncached)
     schema.reset_decisions_schema_assertion_memo()
     try:
         schema.assert_decisions_schema("first")
         schema.assert_decisions_schema("second")
         assert calls == ["first"]
         schema.reset_decisions_schema_assertion_memo()
-        schema.assert_decisions_schema("after-reset")
+        with pytest.raises(RuntimeError, match="stale schema"):
+            schema.assert_decisions_schema("after-reset")
         assert calls == ["first", "after-reset"]
     finally:
         schema.reset_decisions_schema_assertion_memo()
