@@ -777,17 +777,47 @@ class VerificationMergeExecutor:
         if not isinstance(base_sha, str):
             raise MergeAuthorityError("merge recovery base identity is malformed")
         manifest = self.repository.delivery_manifest(canonical, base_sha)
+        reconciliation_evidence = pending.get(
+            "reconciliation_evidence"
+        )
+        reconciliation_sequence = pending.get(
+            "reconciliation_receipt_sequence"
+        )
+        durable_reconciliation = (
+            isinstance(reconciliation_evidence, Mapping)
+            and isinstance(reconciliation_sequence, int)
+            and not isinstance(reconciliation_sequence, bool)
+        )
+        terminal_reconciliation = (
+            pending.get("outbox_status") == "succeeded"
+            and durable_reconciliation
+            and isinstance(reconciliation_evidence, Mapping)
+            and reconciliation_evidence.get("outcome")
+            in {"terminal_no_effect", "terminal_no_effect_after_recovery"}
+        )
         prepared_gate: Mapping[str, object] | None = None
         if not dry_run:
-            prepared_gate = self.repository.verified_merge_prepared(
-                canonical,
-                run.pr_number,
-                run_id=run.run_id,
-                head_sha=run.current_head_sha,
-                expected_repair_budget=(
-                    self.ledger.repair_budget_projection(run.run_id)
-                ),
-            )
+            if terminal_reconciliation:
+                # A durable terminal no-effect receipt is already the
+                # authenticated recovery authority. Do not re-read the live
+                # prepared gate: the rejected body may intentionally remain
+                # invalid after the effect boundary has been fenced.
+                stored_prepared_gate = payload.get("verified_merge_prepared")
+                if not isinstance(stored_prepared_gate, Mapping):
+                    raise MergeAuthorityError(
+                        "terminal recovery prepared authority is unavailable"
+                    )
+                prepared_gate = stored_prepared_gate
+            else:
+                prepared_gate = self.repository.verified_merge_prepared(
+                    canonical,
+                    run.pr_number,
+                    run_id=run.run_id,
+                    head_sha=run.current_head_sha,
+                    expected_repair_budget=(
+                        self.ledger.repair_budget_projection(run.run_id)
+                    ),
+                )
         expected_payload: dict[str, object] = {
             "repository": canonical,
             "governing_issue": run.request.get("linked_issue"),
@@ -819,17 +849,6 @@ class VerificationMergeExecutor:
             raise MergeAuthorityError(
                 "merge recovery manifest binding is inconsistent"
             )
-        reconciliation_evidence = pending.get(
-            "reconciliation_evidence"
-        )
-        reconciliation_sequence = pending.get(
-            "reconciliation_receipt_sequence"
-        )
-        durable_reconciliation = (
-            isinstance(reconciliation_evidence, Mapping)
-            and isinstance(reconciliation_sequence, int)
-            and not isinstance(reconciliation_sequence, bool)
-        )
         if dry_run and durable_reconciliation:
             assert isinstance(reconciliation_evidence, Mapping)
             if (
@@ -866,7 +885,7 @@ class VerificationMergeExecutor:
                 outcome = "merged"
             elif (
                 reconciliation_evidence.get("outcome")
-                == "terminal_no_effect_after_recovery"
+                in {"terminal_no_effect", "terminal_no_effect_after_recovery"}
             ):
                 outcome = "terminal_no_effect"
             else:

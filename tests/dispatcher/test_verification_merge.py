@@ -212,7 +212,7 @@ class RejectingBoundaryPreparedRepository(RepositoryAuthority):
 
     def verified_merge_prepared(self, *args, **kwargs):
         self.prepared_gate_calls += 1
-        if self.prepared_gate_calls == 3:
+        if self.prepared_gate_calls >= 3:
             raise MergeAuthorityError(
                 "live prepared authority rejected raced body edit"
             )
@@ -946,15 +946,13 @@ def test_rejected_effect_boundary_authority_terminalizes_no_effect() -> None:
         "closing_reference_count": 0,
     }
     repository = RejectingBoundaryPreparedRepository(
-        prepared_gates=[prepared, prepared]
+        prepared_gates=[prepared, prepared],
     )
+    repository.manifest_blobs = iter(["blob-1", "blob-1", "blob-1"])
 
-    with pytest.raises(
-        MergeAuthorityError, match="rejected raced body edit"
-    ):
-        VerificationMergeExecutor(
-            ledger, outbox, repository, Credentials()
-        ).execute(
+    executor = VerificationMergeExecutor(ledger, outbox, repository, Credentials())
+    with pytest.raises(MergeAuthorityError, match="rejected raced body edit"):
+        executor.execute(
             run,
             holder="verification-host",
             lease_id=run.lease_id or "",
@@ -962,6 +960,10 @@ def test_rejected_effect_boundary_authority_terminalizes_no_effect() -> None:
 
     assert repository.calls == []
     assert outbox.state == "succeeded"
+    receipt = executor.recover(run)
+
+    assert receipt.outcome == "terminal_no_effect"
+    assert repository.prepared_gate_calls == 3
 
 
 def test_response_loss_reconciles_before_retry() -> None:
