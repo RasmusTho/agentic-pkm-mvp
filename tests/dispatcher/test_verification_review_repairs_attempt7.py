@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +21,7 @@ from app.dispatcher.verification_dispatch import (
     VerificationDispatchLedger,
     _ValidatedVerificationAttemptReceipt,
     _is_exact_event_batch_replay,
+    _progress_digest,
     _verification_receipt_admission_binding,
     build_repair_transition_evidence,
     plan_repair_progress_intents,
@@ -835,6 +837,72 @@ def test_atomic_batch_replay_rejects_boolean_size_alias() -> None:
             batch_size=1,
             attempt_id_for=lambda index: "vattempt-expected",
         )
+
+
+@pytest.mark.parametrize("backend", ("sqlite", "builderops"))
+def test_atomic_batch_persists_canonical_nested_receipt_authority(
+    tmp_path,
+    backend: str,
+) -> None:
+    client = FakeBuilderOpsClient()
+    state = (
+        BuilderOpsVerificationLedger(client, repository=REPO)
+        if backend == "builderops"
+        else ledger(tmp_path)
+    )
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "verification-host")
+    assert claimed.claimed_by is not None
+    assert claimed.lease_id is not None
+    admitted_receipt = admit_verification_receipt(
+        state,
+        run.run_id,
+        "verification-session",
+        _verified_receipt(),
+        holder=claimed.claimed_by,
+        lease_id=claimed.lease_id,
+    )
+
+    def plan(attempts, attempt_id_for):
+        return [
+            {
+                "attempt_id": attempt_id_for(0),
+                "kind": "verification",
+                "ordinal": 1,
+                "session_id": "verification-session",
+                "capability": "gpt-5.6-terra",
+                "reasoning_effort": "high",
+                "context_hash": "0" * 64,
+                "outcome": "launched",
+                "receipt": admitted_receipt,
+            }
+        ]
+
+    assert state.record_attempt_batch(
+        run.run_id,
+        "canonical-receipt-batch",
+        1,
+        HEAD,
+        plan,
+        holder=claimed.claimed_by,
+        lease_id=claimed.lease_id,
+    ) == 1
+
+    if backend == "sqlite":
+        with sqlite3.connect(state.store.db_path) as conn:
+            raw_receipt = json.loads(
+                conn.execute(
+                    "SELECT receipt_json FROM verification_attempts WHERE run_id=?",
+                    (run.run_id,),
+                ).fetchone()[0]
+            )
+    else:
+        raw_receipt = client.attempt_rows[run.run_id][0]["payload"]["batch_events"][0][
+            "receipt"
+        ]
+    assert raw_receipt["review_events"][0]["capability"] == "sol"
+    authority = raw_receipt.pop("verification_receipt_sha256")
+    assert authority == _progress_digest(raw_receipt)
 
 
 @pytest.mark.parametrize("backend", ("sqlite", "builderops"))

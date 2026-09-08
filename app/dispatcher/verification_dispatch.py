@@ -3530,6 +3530,10 @@ class VerificationDispatchLedger:
                         "event_batch_size": batch_size,
                     }
                 )
+                canonical_receipt = _canonicalize_receipt_for_replay(
+                    receipt,
+                    self.capability_aliases,
+                )
                 conn.execute(
                     """
                     INSERT INTO verification_attempts (
@@ -3552,7 +3556,9 @@ class VerificationDispatchLedger:
                         item["finding_id"],
                         item["failure_domain"],
                         item["mechanism_id"],
-                        _json(receipt),
+                        _json(dict(canonical_receipt))
+                        if canonical_receipt is not None
+                        else None,
                         (batch_started + timedelta(microseconds=index)).isoformat(
                             timespec="microseconds"
                         ),

@@ -1259,21 +1259,26 @@ class BuilderOpsVerificationLedger:
             )
             if item.get("ordinal") != ordinal:
                 raise ValueError("verification event batch ordinal is malformed")
+            batch_receipt = {
+                **(dict(persisted_receipt) if persisted_receipt is not None else {}),
+                "event_batch_id": batch_id,
+                "event_batch_index": index,
+                "event_batch_size": batch_size,
+            }
+            canonical_receipt = _canonicalize_receipt_for_replay(
+                batch_receipt,
+                self.capability_aliases,
+            )
             item.update(
                 {
                     "finding_id": finding_id,
                     "failure_domain": failure_domain,
                     "mechanism_id": mechanism_id,
-                    "receipt": {
-                        **(
-                            dict(persisted_receipt)
-                            if persisted_receipt is not None
-                            else {}
-                        ),
-                        "event_batch_id": batch_id,
-                        "event_batch_index": index,
-                        "event_batch_size": batch_size,
-                    },
+                    "receipt": (
+                        dict(canonical_receipt)
+                        if canonical_receipt is not None
+                        else None
+                    ),
                 }
             )
             working.append(item)
