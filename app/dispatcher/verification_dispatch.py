@@ -1780,6 +1780,91 @@ def _is_exact_event_batch_replay(
     return True
 
 
+def _event_batch_projection(row: Mapping[str, object]) -> tuple[object, ...]:
+    kind = row.get("kind")
+    if kind in REPAIR_ATTEMPT_KINDS:
+        kind = "repair"
+    return (
+        kind,
+        row.get("session_id"),
+        row.get("capability"),
+        row.get("reasoning_effort"),
+        row.get("outcome"),
+        row.get("finding_id"),
+        row.get("failure_domain"),
+        row.get("mechanism_id"),
+    )
+
+
+def _is_semantic_event_batch_replay(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    replay_events: Sequence[Mapping[str, object]],
+    batch_size: int,
+    attempt_id_for_batch: Callable[[str, int], str],
+) -> bool:
+    """Recognize a legacy batch after provider-alias canonicalization.
+
+    Pre-census batches hashed carrier model IDs into their batch identity.
+    Readback now exposes provider-neutral capabilities, so the newly computed
+    batch id can differ even though the durable event rows are identical.
+    Match the authenticated batch metadata and event projection while keeping
+    the original batch id and attempt ids authoritative.
+    """
+
+    if len(replay_events) != batch_size:
+        return False
+    expected = [_event_batch_projection(event) for event in replay_events]
+    grouped: dict[str, list[Mapping[str, object]]] = {}
+    for row in attempts:
+        receipt = row.get("receipt")
+        batch_id = (
+            receipt.get("event_batch_id")
+            if isinstance(receipt, Mapping)
+            else None
+        )
+        if isinstance(batch_id, str):
+            grouped.setdefault(batch_id, []).append(row)
+
+    for batch_id, rows in grouped.items():
+        indexed: dict[int, Mapping[str, object]] = {}
+        for row in rows:
+            receipt = row.get("receipt")
+            if not isinstance(receipt, Mapping):
+                continue
+            index = receipt.get("event_batch_index")
+            size = receipt.get("event_batch_size")
+            if (
+                isinstance(index, int)
+                and not isinstance(index, bool)
+                and isinstance(size, int)
+                and not isinstance(size, bool)
+                and size == batch_size
+            ):
+                indexed[index] = row
+        if not indexed:
+            continue
+        semantic_match = all(
+            index in indexed
+            and 0 <= index < batch_size
+            and _event_batch_projection(indexed[index]) == expected[index]
+            for index in indexed
+        )
+        if not semantic_match:
+            continue
+        if len(indexed) != batch_size or set(indexed) != set(range(batch_size)):
+            raise ValueError("verification event batch is partially persisted")
+        if not _is_exact_event_batch_replay(
+            attempts,
+            batch_id=batch_id,
+            batch_size=batch_size,
+            attempt_id_for=lambda index: attempt_id_for_batch(batch_id, index),
+        ):
+            raise ValueError("verification event batch is partially persisted")
+        return True
+    return False
+
+
 def _progress_digest(value: object) -> str:
     return hashlib.sha256(_json(value).encode()).hexdigest()
 
@@ -3428,6 +3513,7 @@ class VerificationDispatchLedger:
             Sequence[Mapping[str, object]],
         ],
         *,
+        replay_events: Sequence[Mapping[str, object]] | None = None,
         holder: str,
         lease_id: str,
     ) -> int:
@@ -3475,6 +3561,19 @@ class VerificationDispatchLedger:
                 batch_id=batch_id,
                 batch_size=batch_size,
                 attempt_id_for=attempt_id,
+            ):
+                conn.commit()
+                return 0
+            if replay_events is not None and _is_semantic_event_batch_replay(
+                attempts,
+                replay_events=replay_events,
+                batch_size=batch_size,
+                attempt_id_for_batch=lambda legacy_batch_id, index: (
+                    "vattempt-"
+                    + hashlib.sha256(
+                        f"{run_id}:{legacy_batch_id}:{index}".encode()
+                    ).hexdigest()[:16]
+                ),
             ):
                 conn.commit()
                 return 0

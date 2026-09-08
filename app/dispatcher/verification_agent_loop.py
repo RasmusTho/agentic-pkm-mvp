@@ -546,6 +546,23 @@ class VerificationAgentLoop:
             len(events),
             head_sha,
             plan,
+            replay_events=[
+                {
+                    "kind": event.get("kind"),
+                    "session_id": str(event["session_id"]),
+                    "capability": self._capability_key(str(event["capability"])),
+                    "reasoning_effort": str(event["reasoning_effort"]),
+                    "outcome": (
+                        str(event["outcome"]).lower()
+                        if event.get("kind") == "review"
+                        else str(event["outcome"])
+                    ),
+                    "finding_id": event.get("finding_id"),
+                    "failure_domain": event.get("failure_domain"),
+                    "mechanism_id": event.get("mechanism_id"),
+                }
+                for event in events
+            ],
             holder=self.holder,
             lease_id=self.lease_id,
         )

@@ -45,6 +45,7 @@ from app.dispatcher.verification_dispatch import (
     _attempt_plan,
     _canonicalize_persisted_attempt_receipt,
     _is_exact_event_batch_replay,
+    _is_semantic_event_batch_replay,
     _latest_closure_anchor,
     _persisted_attempt_receipt,
     _find_semantic_replay,
@@ -1179,6 +1180,7 @@ class BuilderOpsVerificationLedger:
             Sequence[Mapping[str, object]],
         ],
         *,
+        replay_events: Sequence[Mapping[str, object]] | None = None,
         holder: str,
         lease_id: str,
     ) -> int:
@@ -1204,6 +1206,15 @@ class BuilderOpsVerificationLedger:
             batch_id=batch_id,
             batch_size=batch_size,
             attempt_id_for=attempt_id,
+        ):
+            return 0
+        if replay_events is not None and _is_semantic_event_batch_replay(
+            prior,
+            replay_events=replay_events,
+            batch_size=batch_size,
+            attempt_id_for_batch=lambda legacy_batch_id, index: (
+                "vattempt-" + _digest(run_id, legacy_batch_id, index)[:16]
+            ),
         ):
             return 0
 
