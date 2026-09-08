@@ -7,6 +7,29 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / ".codex/skills/verification-and-closure/SKILL.md"
 
 
+def test_pre_neutralization_authenticates_readback_repository_identity() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    freeze = text.index("1. freeze the authenticated v2 context")
+    readback = text.index("2a. authenticate the just-posted receipt")
+    effect = text.index("3. replace the live PR body")
+    assert freeze < readback < effect
+    pre_effect = text[freeze:effect]
+    for requirement in (
+        "gh api repos/<owner>/<repo> --jq .full_name",
+        "preserve its exact case",
+        "resolve_verified_merge_authority_receipt",
+        "expected_run_id", "expected_repair_budget",
+        "original canonical body", "complete bounded comment snapshot",
+        "equals the plan's exact receipt", "no body effect",
+    ):
+        assert requirement in pre_effect
+    recovery = text.split("### Restoring a neutralized body after a head change", 1)[1]
+    assert "case-only repository metadata" in recovery
+    assert "never becomes merge authority" in recovery
+    assert "new run" in recovery
+    assert "repair accounting" in recovery
+
+
 def test_terminal_closure_requires_source_thread_and_dispatcher_readback() -> None:
     text = SKILL.read_text(encoding="utf-8")
 
