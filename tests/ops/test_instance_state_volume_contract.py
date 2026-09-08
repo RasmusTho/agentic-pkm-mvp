@@ -1529,6 +1529,46 @@ def test_quiescence_proof_recovers_publication_after_proved_lease(
     assert _deployment_lease_path(ownership).read_bytes() == proved_lease_bytes
 
 
+def test_quiescence_proof_retries_transient_truncated_inventory(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
+    )
+    inventory = _write_empty_quiescence_inventory(host_global_root=ownership)
+    original_read_bytes = Path.read_bytes
+    truncated_reads = 0
+
+    def read_with_transient_projection(path: Path) -> bytes:
+        nonlocal truncated_reads
+        if path == inventory and truncated_reads == 0:
+            truncated_reads += 1
+            return b'{"schema":"agentic-pkm.host-deployment-quiescence.v2"'
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_with_transient_projection)
+
+    proof = _prove_instance_state_quiescence(
+        channel="prod",
+        host_global_root=ownership,
+        inventory_path=inventory,
+    )
+
+    assert truncated_reads == 1
+    assert proof.channel_id == "prod"
+    assert json.loads(_deployment_lease_path(ownership).read_text())["phase"] == "proved"
+
+
 def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
     tmp_path,
     monkeypatch,
@@ -3666,6 +3706,38 @@ def test_v2_inventory_proof_is_accepted_by_the_production_proof_consumer(tmp_pat
     assert after == before
 
 
+def test_owner_inventory_reader_retries_transient_truncated_projection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory_payload(
+                [{"channel_id": "prod", "root": str(tmp_path / "vault")}]
+            )
+        ),
+        encoding="utf-8",
+    )
+    inventory.chmod(0o600)
+    original_read_bytes = Path.read_bytes
+    truncated_reads = 0
+
+    def read_with_transient_projection(path: Path) -> bytes:
+        nonlocal truncated_reads
+        if path == inventory and truncated_reads == 0:
+            truncated_reads += 1
+            return b'{"schema":"agentic-pkm.legacy-owner-inventory.v1"'
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_with_transient_projection)
+
+    payload = runtime_module._load_legacy_owner_inventory_payload(inventory)
+
+    assert truncated_reads == 1
+    assert payload["inventory_complete"] is True
+
+
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
     layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev")
     layout.ensure()
@@ -4826,6 +4898,14 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     assert f'_pkm_resolved_channel="{selector}"' in start
     assert preflight_marker in start
     assert 'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"' in start
+    database_precondition = start.index(
+        "start_database_before_instance_state_deployment()"
+    )
+    assert database_precondition < start.index(
+        "prepare_instance_state_deployment run_docker_compose"
+    )
+    assert "run_docker_compose up -d db" in start
+    assert "pg_isready" in start
     for selector_name in ("ENVIRONMENT", "CHANNEL", "PKM_CHANNEL"):
         assert f"${{{selector_name}:-" in selector
     assert "unset _pkm_resolved_channel" not in start
@@ -4835,6 +4915,22 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     assert expected_key["key_id"] != json.loads(
         (backup_root / "ownership-key.json").read_text(encoding="utf-8")
     )["key_id"]
+
+
+def test_start_full_system_starts_database_before_instance_state_deployment() -> None:
+    start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+
+    database_precondition = start.index(
+        "start_database_before_instance_state_deployment()"
+    )
+    fence_call = start.index(
+        'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"'
+    )
+
+    assert database_precondition < fence_call
+    assert "check_compose_port_conflicts db" in start
+    assert "run_docker_compose up -d db" in start
+    assert "pg_isready" in start
 
 
 def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore(tmp_path) -> None:

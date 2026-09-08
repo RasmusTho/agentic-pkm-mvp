@@ -91,10 +91,15 @@ def derive_test_channel_env(
     )
     vault_abs = Path(chosen_vault).expanduser().resolve()
     tmp_test = root / "tmp-test"
+    test_llm_provider = (env.get("TEST_LLM_PROVIDER") or "").strip() or "mock"
 
     return {
         "PKM_ENVIRONMENT": "test",
         "PKM_CHANNEL": "test",
+        # The Makefile's test target defaults to the deterministic mock
+        # provider. Carry that same default through the canonical bootstrap
+        # environment so a clean runtime start needs no ambient export.
+        "LLM_PROVIDER": test_llm_provider,
         "COMPOSE_FILE": "docker-compose.yaml:docker-compose.test.yml",
         "COMPOSE_PROJECT_NAME": "pkm-test",
         "VAULT_ROOT": str(vault_abs),

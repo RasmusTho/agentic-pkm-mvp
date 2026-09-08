@@ -427,6 +427,57 @@ def test_established_legacy_ledger_converges_before_mvr05_floor(tmp_path) -> Non
     assert set(migrated.leases) == {"binding-existing", "binding-foreign"}
 
 
+def test_fresh_instance_state_materializes_authenticated_owner_without_legacy_settings(
+    tmp_path,
+) -> None:
+    root = tmp_path / "existing-vault"
+    root.mkdir()
+    retired_root = tmp_path / "retired-vault"
+    retired_root.mkdir()
+    ledger = OwnershipLedger(tmp_path / "host-global")
+    ledger.reserve(
+        channel_id="test",
+        vault_binding_id="binding-existing",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-existing", _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.reserve(
+        channel_id="test",
+        vault_binding_id="binding-retired",
+        root=retired_root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-retired", _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.release_to_tombstone(
+        "binding-retired", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    registry = VaultRegistryStore(
+        tmp_path / "instance-state" / "agentic-pkm" / "vault-registry.md"
+    )
+    registry.load()
+
+    materialized = runtime_module._materialize_authenticated_channel_registrations(
+        channel="test",
+        registry=registry,
+        ledger=ledger,
+        owners=(
+            LegacyOwner("test", "binding-existing", root),
+            LegacyOwner("prod", "binding-foreign", tmp_path / "foreign-vault"),
+        ),
+    )
+
+    assert materialized.revision == 2
+    assert set(materialized.registrations) == {"binding-existing"}
+    assert set(materialized.removal_tombstones) == {"binding-retired"}
+    registration = materialized.registrations["binding-existing"]
+    assert registration.path == str(root.resolve())
+    assert registration.ref == f"path:{root.resolve()}"
+    assert registration.extensions["provenance"] == (
+        "authenticated_legacy_owner_inventory"
+    )
+
+
 def test_mvr05_floor_cli_converges_established_legacy_ledger(
     tmp_path, monkeypatch
 ) -> None:
