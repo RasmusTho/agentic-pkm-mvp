@@ -176,6 +176,61 @@ def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
         assert fragment in normalized_text
 
 
+def test_verified_merge_uses_authenticated_closing_projection_convergence() -> None:
+    closure_skill = _read(
+        ".codex/skills/verification-and-closure/SKILL.md"
+    )
+    process_map = _read("docs/development/BUILDER_SYSTEM_PROCESS_MAP.md")
+    phase_cli = _read("scripts/build_verified_issue_set_merge_phase.py")
+    convergence_cli = _read(
+        "scripts/await_verified_merge_projection_convergence.py"
+    )
+    verification_consumer = _read("app/dispatcher/verification_consumer.py")
+    verification_github = _read("app/dispatcher/verification_github.py")
+
+    for fragment in (
+        "verified-merge-closing-projection-convergence.v1",
+        "scripts/await_verified_merge_projection_convergence.py",
+        "two empty admissible reads separated by bounded backoff",
+        "one fresh final empty read",
+        "reuse that receipt",
+        "never post a duplicate authority receipt",
+        "restore only the authority-authenticated canonical body",
+        "no phase, merge, Issue, dispatcher, or lifecycle effect",
+        "post-merge event enumeration and exact closure-attribution reconciliation",
+    ):
+        assert fragment in closure_skill or fragment in process_map, fragment
+
+    for fragment in (
+        "--projection-convergence-json",
+        "--comments-json",
+        "--final-projection-observation-json",
+        "phase requires projection convergence",
+        "one authenticated durable projection convergence",
+        "prepared phase requires projection convergence and final observation",
+    ):
+        assert fragment in phase_cli, fragment
+
+    for fragment in (
+        "closingIssuesReferences(first: 11)",
+        "userContentEdits(first: 1)",
+        "rateLimit { cost remaining resetAt }",
+        '"status": "failed_closed"',
+        "return 2 if failure == \"timeout\" else 3",
+    ):
+        assert fragment in convergence_cli, fragment
+
+    for reader in (verification_consumer, verification_github):
+        assert "userContentEdits(first: 1)" in reader
+        assert "userContentEdits(last: 1)" not in reader
+
+    operating_model = _read("docs/architecture/SBS_OPERATING_MODEL.md")
+    assert "verified-merge convergence rails" in operating_model
+    assert "projection reads never replace post-merge closure attribution" in (
+        operating_model
+    )
+
+
 def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_traceability() -> None:
     text = _read(".codex/skills/issue-to-code/SKILL.md")
 
