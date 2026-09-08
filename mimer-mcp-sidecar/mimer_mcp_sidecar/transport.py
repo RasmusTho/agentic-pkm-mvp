@@ -18,7 +18,12 @@ from mcp import types
 from mcp.server import InitializationOptions, NotificationOptions, Server
 from mcp.server.stdio import stdio_server
 
-from .semantic import McpToolResult, MimerMcpServer
+from .semantic import (
+    DEFAULT_RUNTIME_READ_DEADLINE_SECONDS,
+    McpToolResult,
+    MimerMcpServer,
+    validate_runtime_read_deadline_seconds,
+)
 
 _LOG = logging.getLogger("mimer_mcp_sidecar")
 _ALLOWED_TRANSPORT = "stdio"
@@ -41,12 +46,14 @@ class MimerMcpTransportConfig:
     tls_cert: str | None = None
     tls_key: str | None = None
     auth_token: str | None = None
+    runtime_read_deadline_seconds: float = DEFAULT_RUNTIME_READ_DEADLINE_SECONDS
 
     def validate(self) -> None:
         if self.transport != _ALLOWED_TRANSPORT:
             raise ValueError("Mimer MCP v1 supports only the stdio transport")
         if any(value is not None for value in (self.bind, self.port, self.tls_cert, self.tls_key, self.auth_token)):
             raise ValueError("Mimer MCP stdio transport rejects network, TLS, and auth configuration")
+        validate_runtime_read_deadline_seconds(self.runtime_read_deadline_seconds)
         parsed = urlparse(self.base_url)
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("Mimer MCP v1 requires a loopback HTTP API endpoint")
@@ -101,12 +108,15 @@ def create_stdio_server(semantic: MimerMcpServer) -> Server:
 
 async def serve_stdio(
     config: MimerMcpTransportConfig,
-    semantic_factory: Callable[[str], MimerMcpServer] = MimerMcpServer.for_loopback,
+    semantic_factory: Callable[..., MimerMcpServer] = MimerMcpServer.for_loopback,
 ) -> None:
     """Run one client-spawned stdio server until the client closes its streams."""
 
     config.validate()
-    semantic = semantic_factory(config.base_url)
+    semantic = semantic_factory(
+        config.base_url,
+        runtime_read_deadline_seconds=config.runtime_read_deadline_seconds,
+    )
     server = create_stdio_server(semantic)
     dependency = semantic.call_tool("mimer.health", {})
     readiness = "degraded" if dependency.is_error else "ready"
@@ -146,6 +156,11 @@ def parse_config(argv: Sequence[str] | None = None) -> MimerMcpTransportConfig:
     parser.add_argument("--tls-cert")
     parser.add_argument("--tls-key")
     parser.add_argument("--auth-token")
+    parser.add_argument(
+        "--runtime-read-deadline-seconds",
+        type=float,
+        default=DEFAULT_RUNTIME_READ_DEADLINE_SECONDS,
+    )
     parsed = parser.parse_args(argv)
     config = MimerMcpTransportConfig(**vars(parsed))
     config.validate()
