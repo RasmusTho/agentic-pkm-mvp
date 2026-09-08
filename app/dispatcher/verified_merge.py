@@ -843,12 +843,96 @@ def _resolve_same_head_stranded_transport(
     }
 
 
+def _resolve_repository_case_restoration(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    expected_run_id: str | None,
+    expected_repair_budget: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Prove only a restore target for one otherwise exact case-mistyped receipt.
+
+    The supplied repository must agree byte-for-byte with canonical live REST
+    base-repository and PR identities. Never pass a corrected receipt to a merge
+    consumer: validation below uses the original receipt's spelling solely to
+    authenticate its remaining fields for this read-only recovery result.
+    """
+    base = pr.get("base")
+    live_repository = base.get("repo") if isinstance(base, Mapping) else None
+    title = pr.get("title")
+    if (
+        not isinstance(live_repository, Mapping)
+        or live_repository.get("full_name") != repository
+        or pr.get("html_url") != f"https://github.com/{repository}/pull/{pr.get('number')}"
+        or pr.get("merged") is not False
+        or "merged_at" not in pr
+        or pr.get("draft") is not False
+        or not isinstance(title, str)
+        or has_closing_issue_attempt(title)
+        or not expected_run_id
+        or expected_repair_budget is None
+    ):
+        return None
+    # Inspect raw evidence before parsing. A malformed/duplicate/untrusted
+    # authority or phase must not disappear through the ordinary parser and
+    # thereby permit restoration to race an unproven merge attempt.
+    authority_comments = []
+    for comment in comments:
+        text = comment.get("body")
+        if not isinstance(text, str):
+            return None
+        if VERIFIED_MERGE_PHASE_MARKER in text:
+            return None
+        if VERIFIED_MERGE_AUTHORITY_MARKER in text:
+            authority_comments.append(comment)
+    if len(authority_comments) != 1:
+        return None
+    entries = _comment_receipt_entries(authority_comments, VERIFIED_MERGE_AUTHORITY_MARKER)
+    if len(entries) != 1:
+        return None
+    receipt, comment = entries[0]
+    stored_repository = receipt.get("repository")
+    # Require the existing producer's complete canonical comment. This rejects
+    # extra blocks/markers, duplicate JSON keys, and hidden conflicting payloads.
+    receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    if (
+        comment.get("body") != f"{VERIFIED_MERGE_AUTHORITY_MARKER}\n```json\n{receipt_json}\n```"
+        or not isinstance(stored_repository, str)
+        or not stored_repository.isascii()
+        or not repository.isascii()
+        or stored_repository == repository
+        or stored_repository.lower() != repository.lower()
+        or receipt.get("repair_budget") != expected_repair_budget
+        or not _valid_authority_receipt(
+            receipt, pr=pr, repository=stored_repository,
+            expected_run_id=expected_run_id,
+        )
+    ):
+        return None
+    return {
+        "closing_issues": receipt["closing_issues"],
+        "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
+        "governing_issue": receipt["governing_issue"],
+        "head_sha": receipt["head_sha"],
+        "matching_attempts": 1,
+        "neutralized_body_sha256": receipt["neutralized_body_sha256"],
+        "neutralized_head_sha": receipt["head_sha"],
+        "pr_number": receipt["pr_number"],
+        "reason": "neutralized-repository-case-mismatch",
+        "repository": repository,
+        "restore_body_sha256": receipt["body_sha256"],
+        "run_id": receipt["run_id"],
+    }
+
+
 def resolve_neutralized_body_restoration(
     comments: Sequence[Mapping[str, object]],
     *,
     pr: Mapping[str, object],
     repository: str,
     expected_run_id: str | None = None,
+    expected_repair_budget: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     """Surface a neutralized PR body stranded by its head or GitHub transport.
 
@@ -909,6 +993,13 @@ def resolve_neutralized_body_restoration(
     )
     if stranded_transport is not None:
         return stranded_transport
+    case_restoration = _resolve_repository_case_restoration(
+        comments, pr=pr, repository=repository,
+        expected_run_id=expected_run_id,
+        expected_repair_budget=expected_repair_budget,
+    )
+    if case_restoration is not None:
+        return case_restoration
     # Any trusted authority evidence naming the live head means a merge for this
     # attempt may still be in flight, so an older head must never name a restore
     # target that could race it. Scan the raw comment text rather than only
@@ -986,6 +1077,7 @@ def classify_neutralized_body_state(
     pr: Mapping[str, object],
     repository: str,
     expected_run_id: str | None = None,
+    expected_repair_budget: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Separate a positively safe body state from an indeterminate one.
 
@@ -1019,6 +1111,7 @@ def classify_neutralized_body_state(
         pr=pr,
         repository=repository,
         expected_run_id=expected_run_id,
+        expected_repair_budget=expected_repair_budget,
     )
     merge_state = _resolve_merge_state(pr)
     if restoration is not None:

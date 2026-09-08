@@ -467,7 +467,10 @@ same exact head back to the ordinary verified-merge sequence below.
 
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
    `closing_issues`, durable `supporting_issues`, attempts, and the compatibility-named
-   `repair_budget` accounting projection); re-read
+   `repair_budget` accounting projection). Derive repository identity from
+   `gh api repos/<owner>/<repo> --jq .full_name` and preserve its exact case; require agreement
+   with the live PR's `base.repo.full_name` and canonical `html_url`. Never lowercase the frozen
+   repository or infer canonical spelling from a remote URL. Re-read
    the live PR title/body/head and GitHub `closingIssuesReferences`, and reject any mismatch or title
    closing attempt even when an earlier `pr-contract` run was green
 2. run `scripts/prepare_verified_issue_set_merge.py` against those snapshots; require its
@@ -482,6 +485,15 @@ same exact head back to the ordinary verified-merge sequence below.
    any repair, rebase, base-branch update, review-feedback fix, or other commit is still expected;
    finish those commits first and restart at step 1 on the new head. A readiness statement is never
    reusable across heads, and the planner refuses neutralization when the precondition is unmet
+2a. authenticate the just-posted receipt before any neutralization: fetch the live original canonical body,
+   title/head/closing links and complete bounded comment snapshot independently of the POST response.
+   Call `resolve_verified_merge_authority_receipt(comments, pr=live_pr, repository=canonical_repository,
+   expected_run_id=context["run_id"], expected_repair_budget=context["repair_budget"])` and require that
+   the resolved value equals the plan's exact receipt. Recheck canonical live repository identity,
+   unchanged original body digest, title, head, governing/closing/supporting sets, run and accounting
+   against the frozen context/plan. Missing, malformed, conflicting, case-mismatched or unavailable
+   readback is a pre-effect technical repair: no body effect is permitted. Recover the evidence or
+   prepare a new valid attempt before continuing; do not treat a successful comment POST as proof.
 3. replace the live PR body with the plan's neutralized body, which converts every authenticated
    closer to evidence-only `Refs`. Resolve exactly one trusted same-head authority receipt and reuse
    it when the canonical body was restored with zero phase receipts; never post a duplicate authority receipt
@@ -594,7 +606,7 @@ durable PR state, so it must not outlive its exact head.
 The same body-only restoration applies when authenticated projection convergence times out or fails:
 restore the authority receipt's canonical-body digest, leave its immutable authority and any existing
 phase receipts untouched, and perform no merge, Issue, dispatcher, lifecycle, or post-merge effect.
-Once restored, a later attempt on the unchanged head must reuse the one trusted authority receipt and
+Once restored, a later attempt on the unchanged head must reuse the one valid trusted authority receipt and
 restart at the post-edit `pr-contract`/convergence gate; it must never post a second receipt.
 
 Whenever a new head is observed on a PR whose body is still neutralized — a repair commit, a rebase,
@@ -612,6 +624,23 @@ restoration classifier may use it only to name the receipt's exact restore targe
 missing, untrusted, conflicting, body-drifted, or already-phased evidence so restoration cannot race
 an in-flight merge.
 
+An exact case-only repository metadata mistake has a separate restoration-only proof. Supply the
+canonical live REST PR snapshot (including `base.repo.full_name`, canonical `html_url`, explicit
+`merged: false` and `merged_at: null`), the complete bounded comments, the expected run and unchanged
+repair accounting. The existing classifier requires one trusted, complete canonical authority comment,
+exact PR/head/body/issue sets, and no raw phase evidence or extra authority evidence. Only ASCII case
+may differ from the positively established canonical repository spelling. It preserves the raw same-head
+race guard for all other malformed or conflicting evidence. The malformed receipt never becomes merge authority,
+prepared/merged-phase recovery, or approval. Foreign identities, incomplete snapshots, body drift,
+extra/missing fields, duplicate keys/blocks/comments, and any phase evidence refuse restoration.
+
+After this case-only restoration, keep the original comments and repair accounting unchanged and start
+a new run on the final head with the canonical repository spelling, fresh readiness/current-head CI and
+independent final review. Authenticate its newly posted receipt at step 2a before neutralization; the
+malformed historical receipt cannot be reused as approval. This is distinct from reusing an already
+valid receipt after a projection-convergence timeout. Preserve the body-edit identity, newly triggered
+`pr-contract`, projection quorum/final read and complete phase gates introduced by the ordinary sequence.
+
 Detect the state instead of relying on noticing it per head:
 
 ```bash
@@ -619,9 +648,12 @@ python3 scripts/resolve_neutralized_body_restoration.py \
   --pr-json <pr.json> --comments-json <comments.json> --repository <owner/repo>
 ```
 
+For case-only recovery also supply `--expected-run-id <run-id>` and
+`--expected-repair-budget-json <unchanged-accounting.json>`; omitting either refuses that proof.
+
 It is read-only and separates a positively safe state from an indeterminate one: `0` means no
 restoration is required, `2` means either the body outlived its receipt head or the exact-head
-transport-stranding proof above names the durable receipt's `restore_body_sha256` as the only
+transport-stranding or case-only proof above names the durable receipt's `restore_body_sha256` as the only
 accepted restore target, and `3` means
 the body still carries a `Verified-Closing-Issues` marker but no restore target can be proven —
 because the evidence is missing, untrusted, or conflicting, because the snapshot is incomplete, or

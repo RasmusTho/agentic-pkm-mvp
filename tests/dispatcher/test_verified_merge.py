@@ -1874,6 +1874,187 @@ def test_neutralized_body_transport_restores_authenticated_stranded_pr() -> None
     )
 
 
+def _repository_case_recovery_fixture():
+    context = _context()
+    context["repository"] = REPOSITORY.lower()
+    plan = prepare_verified_merge(
+        context=context, pr=_pr(), live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    pr = {
+        **_pr(str(plan["neutralized_body"])),
+        "merged": False,
+        "base": {"repo": {"full_name": REPOSITORY}},
+        "html_url": f"https://github.com/{REPOSITORY}/pull/3822",
+    }
+    return plan, pr, [_trusted_comment(str(plan["authority_receipt_comment"]))]
+
+
+def _case_recovery(comments, pr, **overrides):
+    return classify_neutralized_body_state(
+        comments, pr=pr, repository=REPOSITORY,
+        **{
+            "expected_run_id": _context()["run_id"],
+            "expected_repair_budget": _context()["repair_budget"],
+            **overrides,
+        },
+    )
+
+
+def test_neutralized_repository_case_mismatch_is_restoration_only() -> None:
+    plan, pr, comments = _repository_case_recovery_fixture()
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=pr, repository=REPOSITORY,
+    ) is None
+    result = _case_recovery(comments, pr)
+    assert result["status"] == "restoration_required"
+    restoration = result["restoration"]
+    assert restoration["reason"] == "neutralized-repository-case-mismatch"
+    assert restoration["repository"] == REPOSITORY
+    assert restoration["restore_body_sha256"] == plan["authority_receipt"]["body_sha256"]
+    assert restoration["head_sha"] == restoration["neutralized_head_sha"] == HEAD
+    assert restoration["matching_attempts"] == 1
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=pr, repository=REPOSITORY,
+    ) is None
+    assert resolve_verified_merge_phase(
+        comments, authority_receipt=plan["authority_receipt"], pr=pr,
+    ) is None
+
+
+@pytest.mark.parametrize("fault", [
+    "missing-repo", "foreign-repo", "lowercase-live-repo", "foreign-url",
+    "missing-url", "missing-state", "missing-merged", "merged", "merged-at",
+    "draft", "head", "body", "second-lf", "crlf", "title-closer", "pr-number",
+    "missing-comments", "untrusted", "extra-key", "missing-key", "two-blocks",
+    "extra-raw-marker", "duplicate-key", "conflicting", "duplicate-comment",
+    "foreign-receipt", "noncase-receipt", "governing", "closing", "supporting",
+    "run", "accounting", "missing-run", "missing-accounting",
+    "prepared", "merged-phase", "malformed-phase", "untrusted-phase",
+])
+def test_repository_case_recovery_rejects_unproven_or_inflight_evidence(fault) -> None:
+    plan, pr, comments = _repository_case_recovery_fixture()
+    receipt = copy.deepcopy(plan["authority_receipt"])
+    overrides = {}
+    if fault == "missing-repo":
+        pr.pop("base")
+    elif fault in {"foreign-repo", "lowercase-live-repo"}:
+        pr["base"]["repo"]["full_name"] = (
+            "other/agentic-pkm-mvp" if fault == "foreign-repo" else REPOSITORY.lower()
+        )
+    elif fault == "foreign-url":
+        pr["html_url"] = "https://github.com/other/repo/pull/3822"
+    elif fault == "missing-url":
+        pr.pop("html_url")
+    elif fault == "missing-state":
+        pr.pop("state")
+    elif fault == "missing-merged":
+        pr.pop("merged")
+    elif fault == "merged":
+        pr["merged"] = True
+    elif fault == "merged-at":
+        pr["merged_at"] = "2026-09-08T08:00:00Z"
+    elif fault == "draft":
+        pr["draft"] = True
+    elif fault == "head":
+        pr["head"]["sha"] = NEXT_HEAD
+    elif fault == "body":
+        pr["body"] += "\ndrift"
+    elif fault == "second-lf":
+        pr["body"] += "\n\n"
+    elif fault == "crlf":
+        pr["body"] = pr["body"].replace("\n", "\r\n")
+    elif fault == "title-closer":
+        pr["title"] = "Fixes #3820"
+    elif fault == "pr-number":
+        pr["number"] = 3999
+    elif fault == "missing-comments":
+        comments.clear()
+    elif fault == "untrusted":
+        comments[0]["author_association"] = "NONE"
+    elif fault == "two-blocks":
+        comments[0]["body"] += "\n" + comments[0]["body"]
+    elif fault == "extra-raw-marker":
+        comments.append(_trusted_comment("verified issue-set merge authority:\n" + HEAD))
+    elif fault == "duplicate-key":
+        comments[0]["body"] = comments[0]["body"].replace(
+            '"repository":', '"repository":"other/repo","repository":',
+        )
+    elif fault == "duplicate-comment":
+        comments.append(copy.deepcopy(comments[0]))
+    elif fault in {"prepared", "merged-phase", "malformed-phase", "untrusted-phase"}:
+        comments.append(_trusted_comment(
+            'verified issue-set merge phase:\n```json\n'
+            + json.dumps({"phase": fault, "head_sha": HEAD, "run_id": receipt["run_id"]})
+            + '\n```'
+        ))
+        if fault == "malformed-phase":
+            comments[-1]["body"] = "verified issue-set merge phase:\nmalformed"
+        if fault == "untrusted-phase":
+            comments[-1]["author_association"] = "NONE"
+    elif fault == "missing-run":
+        overrides["expected_run_id"] = None
+    elif fault == "missing-accounting":
+        overrides["expected_repair_budget"] = None
+    else:
+        if fault == "extra-key":
+            receipt["extra"] = True
+        elif fault == "missing-key":
+            receipt.pop("body_sha256")
+        elif fault == "conflicting":
+            receipt["body_sha256"] = "c" * 64
+        elif fault == "foreign-receipt":
+            receipt["repository"] = "other/agentic-pkm-mvp"
+        elif fault == "noncase-receipt":
+            receipt["repository"] = REPOSITORY.lower() + "-other"
+        elif fault == "governing":
+            receipt["governing_issue"] = 3999
+        elif fault == "closing":
+            receipt["closing_issues"] = [3820]
+        elif fault == "supporting":
+            receipt["live_supporting_issues"] = [3820, 3823]
+        elif fault == "run":
+            receipt["run_id"] = "different-run"
+        elif fault == "accounting":
+            receipt["repair_budget"] = {}
+        comment = _trusted_comment(
+            "verified issue-set merge authority:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n```"
+        )
+        comments = [*comments, comment] if fault == "conflicting" else [comment]
+    assert _case_recovery(comments, pr, **overrides)["status"] == "ambiguous_neutralized_body"
+
+
+def test_repository_case_recovery_preserves_trail_and_restarts_exact_authority() -> None:
+    plan, pr, comments = _repository_case_recovery_fixture()
+    snapshot = copy.deepcopy((plan, pr, comments))
+    restoration = _case_recovery(comments, pr)["restoration"]
+    assert restored_body_matches_authority(plan["original_body"], restoration=restoration)
+    assert not restored_body_matches_authority(plan["original_body"] + "drift", restoration=restoration)
+    assert (plan, pr, comments) == snapshot
+    restored = {**pr, "body": plan["original_body"]}
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=restored, repository=REPOSITORY,
+    ) is None
+    context = {**_context(), "run_id": "new-canonical-attempt"}
+    next_plan = prepare_verified_merge(
+        context=context, pr=restored, live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    next_comments = [*comments, _trusted_comment(str(next_plan["authority_receipt_comment"]))]
+    # Authenticate while the original canonical body is still live, before any effect.
+    assert resolve_verified_merge_authority_receipt(
+        next_comments, pr=restored, repository=REPOSITORY,
+        expected_run_id=context["run_id"], expected_repair_budget=context["repair_budget"],
+    ) == next_plan["authority_receipt"]
+    assert next_plan["authority_receipt"]["repair_budget"] == plan["authority_receipt"]["repair_budget"]
+    assert next_comments[:-1] == comments == snapshot[2]
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=restored, repository=REPOSITORY,
+        expected_run_id=context["run_id"], expected_repair_budget=context["repair_budget"],
+    ) is None
+
+
 def test_neutralized_body_restoration_cli_uses_production_resolver(
     tmp_path: Path,
 ) -> None:
@@ -1886,6 +2067,8 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
     pr_path = tmp_path / "pr.json"
     comments_path = tmp_path / "comments.json"
     output_path = tmp_path / "restoration.json"
+    budget_path = tmp_path / "budget.json"
+    budget_path.write_text(json.dumps(_context()["repair_budget"]), encoding="utf-8")
     comments_path.write_text(
         json.dumps([_trusted_comment(str(plan["authority_receipt_comment"]))]),
         encoding="utf-8",
@@ -1897,6 +2080,8 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
                 sys.executable,
                 "-m",
                 "scripts.resolve_neutralized_body_restoration",
+                "--expected-run-id", str(_context()["run_id"]),
+                "--expected-repair-budget-json", str(budget_path),
                 "--pr-json",
                 str(pr_path),
                 "--comments-json",
@@ -1962,6 +2147,29 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
         "restoration_required": False,
         "status": "ambiguous_neutralized_body",
     }
+
+
+    case_plan, case_pr, case_comments = _repository_case_recovery_fixture()
+    pr_path.write_text(json.dumps(case_pr), encoding="utf-8")
+    comments_path.write_text(json.dumps(case_comments), encoding="utf-8")
+    case_recovery = _run()
+    assert case_recovery.returncode == 2, case_recovery.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload == _case_recovery(case_comments, case_pr)
+    candidate_path = tmp_path / "candidate.md"
+    candidate_path.write_text(str(case_plan["original_body"]), encoding="utf-8")
+    verified = subprocess.run(
+        [sys.executable, "-m", "scripts.verify_restored_pr_body",
+         "--restoration-json", str(output_path),
+         "--restored-body-file", str(candidate_path)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert verified.returncode == 0, verified.stderr
+    pr_path.write_text(json.dumps({**case_pr, "body": case_plan["original_body"]}), encoding="utf-8")
+    assert _run().returncode == 0
+    pr_path.write_text(json.dumps(case_pr), encoding="utf-8")
+    budget_path.write_text("{}", encoding="utf-8")
+    assert _run().returncode == 3
 
 
 def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence() -> None:
