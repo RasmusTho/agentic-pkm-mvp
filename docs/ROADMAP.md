@@ -136,7 +136,7 @@ configuration nor those unready items create implementation issues in this hando
   - Canvas-session scaffolding is shipped in bounded form through #598/#599/#600/#601, and owner-doc promotion has landed via subsequent docs work: session logs, body-scoped co-authoring, governance-intent routing, and a gated API/CLI surface now exist behind `CANVAS_ENABLED`. Broader hybrid Panel/Chat behavior and richer Chat cognition remain separate follow-up work.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
-  - External-connectivity (MCP) line: Mimer-as-MCP-server first build candidate (Direction B), then runtime consumption of external MCP signal sources (Direction C) — sequencing and governance invariant in `External-connectivity (MCP) sequencing` above; evidence base `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`.
+  - External-connectivity (MCP) line: the bounded Mimer-as-MCP-client-adapter delivery (Direction B) is complete; remaining work is runtime consumption of external MCP signal sources (Direction C), plus separately gated broader clients, listener, and production-activation follow-ons — sequencing and governance invariant in `External-connectivity (MCP) sequencing` above; evidence base `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
