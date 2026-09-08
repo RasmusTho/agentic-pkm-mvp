@@ -9,8 +9,13 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
+import app.api.routes.active_context_selection as selection_routes
+import app.api.routes.companion as companion_module
+from app.api.app import app
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+from app.instance.first_vault_bootstrap import FirstVaultPreconditionStore
 from app.instance.default_vault import InstanceDefaultVaultService
 from app.instance.settings_rebind import (
     SettingsRebindActivation,
@@ -18,12 +23,14 @@ from app.instance.settings_rebind import (
 )
 from app.instance.vault_registry import KnownVaultRef
 from app.vault.manager import VaultManager
+from app.vault.app_local import AppLocalSettingsStore
 from app.workers import outbox_worker
 from app.watcher import registry as watcher_registry
 from app.watcher.settings_rebind import (
     load_settings_rebind_watcher_receipt,
 )
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests._mvr05b_bootstrap_harness import fresh_no_vault_instance
 from tests.integration.test_watcher_cross_process_rebind import (
     _event_paths,
     _fixture,
@@ -401,3 +408,94 @@ def test_compatibility_bridge_enables_legacy_without_scoped_activation(
     assert selected.active_vault_path == str(vault_b)
     assert record.candidate_binding_id == "binding-b"
     assert record.phase == "no_lifecycle"
+
+
+def test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-effect fault leaves no registry/default/compatibility or owner lease."""
+
+    runtime, _principal = fresh_no_vault_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md")
+    )
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    selection_routes.reset_selection_store_for_tests()
+    client = TestClient(app, raise_server_exceptions=False)
+    target = tmp_path / "atomic-failure"
+    issued = client.post(
+        "/api/companion/vault/initialize/bootstrap",
+        json={"path": str(target), "confirm": True},
+    )
+    assert issued.status_code == 200, issued.text
+
+    def fail_before_effect(*_args, **_kwargs):
+        raise RuntimeError("injected pre-effect failure")
+
+    monkeypatch.setattr(manager, "initialize_vault", fail_before_effect)
+    failed = client.post(
+        "/api/companion/vault/initialize",
+        json={
+            "path": str(target),
+            "confirm": True,
+            "bootstrap_token": issued.json()["bootstrap_token"],
+        },
+    )
+    assert failed.status_code == 500
+    snapshot = runtime.registry.load()
+    assert snapshot.registrations == {}
+    assert snapshot.default_vault_binding_id is None
+    assert snapshot.settings_rebind is None
+    assert runtime.ledger.load().leases == {}
+    assert not target.exists()
+    assert FirstVaultPreconditionStore(runtime.registry.path).load().state == "failed"
+
+
+def test_fresh_vault_initialize_returns_usable_scoped_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first production read uses the returned scoped selection, not last-active."""
+
+    runtime, _principal = fresh_no_vault_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.registry.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(runtime.ledger.root))
+    monkeypatch.setenv("PKM_ENVIRONMENT", "prod")
+    manager = VaultManager(
+        app_local_store=AppLocalSettingsStore(tmp_path / "app-local.md")
+    )
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+    selection_routes.reset_selection_store_for_tests()
+    client = TestClient(app)
+    target = tmp_path / "fresh-scoped"
+    bootstrap = client.post(
+        "/api/companion/vault/initialize/bootstrap",
+        json={"path": str(target), "confirm": True},
+    )
+    assert bootstrap.status_code == 200, bootstrap.text
+    initialized = client.post(
+        "/api/companion/vault/initialize",
+        json={
+            "path": str(target),
+            "confirm": True,
+            "bootstrap_token": bootstrap.json()["bootstrap_token"],
+        },
+    )
+    assert initialized.status_code == 200, initialized.text
+    selection_id = initialized.json()["context_selection_id"]
+    assert selection_id
+    binding_id = runtime.registry.load().default_vault_binding_id
+    scoped = client.get(
+        "/api/companion/active-context/selection",
+        headers={"X-Active-Context-Session": selection_id},
+    )
+    assert scoped.status_code == 200, scoped.text
+    assert scoped.json()["context"]["vault_binding_ids"] == [binding_id]
+    assert scoped.json()["context"]["principal_id"]
+    # The scoped selection is the immediate read authority; the registry's
+    # interaction-history field is deliberately not consulted or materialized.
+    assert runtime.registry.load().last_active_vault_ref is None

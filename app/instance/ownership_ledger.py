@@ -1014,6 +1014,32 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
+    def release_pending(
+        self,
+        vault_binding_id: str,
+        *,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> None:
+        """Remove a reservation that failed before any content effect.
+
+        A pre-effect failure is not a historical ownership transition.  Leaving a
+        pending lease behind would make a later authenticated bootstrap look like a
+        recovery even though no owner-native content evidence exists.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        with self._locked():
+            key = self._load_or_create_key_locked()
+            current = self._load_or_create_ledger_locked(key)
+            lease = current.leases.get(vault_binding_id)
+            if lease is None:
+                return
+            if lease.state != "pending":
+                raise LedgerError("only a pending ownership reservation can be released")
+            leases = dict(current.leases)
+            del leases[vault_binding_id]
+            self._write_ledger_locked(self._replace(current, leases=leases), key)
+
     def release_to_tombstone(
         self,
         vault_binding_id: str,
@@ -1401,13 +1427,33 @@ class OwnershipLedger:
             raise LedgerCollisionError("canonical content roots overlap across ownership domains")
 
     def _matches_root(self, lease: OwnershipLease, root: Path, key: _KeyMaterial) -> bool:
-        return lease.root_fingerprint == self._lease_for_root(
+        expected = self._lease_for_root(
             channel_id=lease.channel_id,
             vault_binding_id=lease.vault_binding_id,
             root=root,
             key=key,
             state=lease.state,
-        ).root_fingerprint
+        )
+        if lease.root_fingerprint == expected.root_fingerprint:
+            return True
+        # A first-vault reservation is allowed to target a not-yet-materialized
+        # path.  The owner-native initializer creates that directory before the
+        # recovery retry, changing the primary material from ``path:...`` to
+        # ``inode:...``.  Accept only the exact sealed canonical path's
+        # path-bound reservation; a different path or physical alias remains a
+        # collision.
+        try:
+            sealed_root = Path(self._open_root(lease.sealed_root, key)).expanduser().resolve(
+                strict=False
+            )
+        except (LedgerError, UnicodeError):
+            return False
+        path_fingerprint = _fingerprint(
+            f"path:{Path(root).expanduser().resolve(strict=False)}", key.secret
+        )
+        return sealed_root == Path(root).expanduser().resolve(strict=False) and hmac.compare_digest(
+            lease.root_fingerprint, path_fingerprint
+        )
 
     def _matches_complete_root_identity(
         self,

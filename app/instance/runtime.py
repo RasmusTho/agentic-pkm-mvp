@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Mapping
+from typing import TYPE_CHECKING, Callable, Iterator, Mapping
 from uuid import uuid4
 
 import yaml
@@ -399,6 +399,140 @@ class InstanceRegistryRuntime:
                 current=current,
                 first_default_provenance=provenance,
             )
+
+    def initialize_and_register_first_vault(
+        self,
+        path: Path,
+        *,
+        precondition: object,
+        initialize: Callable[[], object],
+        recover: Callable[[], object],
+    ) -> tuple[VaultRegistration, object]:
+        """Run the authenticated MVR-05B first-initialize transaction.
+
+        The precondition is revalidated while the producer transition lock is held.  A
+        pending ownership lease is durable before the owner-native content effect.  If the
+        process dies after that effect, a retry observes the settings identity and finishes
+        the existing binding; it never calls a destructive initializer a second time.
+        """
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+        from app.instance.first_vault_bootstrap import FirstVaultBootstrapError
+
+        with self._bootstrap_locked():
+            current = self.registry.load()
+            validator = getattr(precondition, "validate_for_runtime", None)
+            if validator is None:
+                raise FirstVaultBootstrapError("first-vault precondition has no runtime validator")
+            record = validator(current, path)
+            binding_id = getattr(record, "binding_id", None) or f"binding-{uuid4()}"
+
+            if current.registrations:
+                if set(current.registrations) != {binding_id}:
+                    raise RegistryDefaultConflict(
+                        "first-vault bootstrap found a different registry mutation"
+                    )
+                registration = current.registrations[binding_id]
+                if current.default_vault_binding_id != binding_id:
+                    raise RegistryDefaultConflict(
+                        "first-vault bootstrap found a default mismatch during recovery"
+                    )
+                self.ledger.activate(
+                    binding_id,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+                result = recover()
+                complete = getattr(precondition, "complete", None)
+                if complete is not None:
+                    complete(
+                        record,
+                        vault_id=registration.vault_id or "",
+                        local_instance_id=registration.local_instance_id or "",
+                    )
+                return registration, result
+
+            root_identity = resolve_filesystem_root_identity(path)
+            canonical_root = Path(root_identity.canonical_path)
+            pending = (
+                self.ledger.pending_registration(
+                    channel_id=self.layout.channel_id,
+                    root=canonical_root,
+                )
+                if self.ledger.path.is_file() and self.ledger.key_path.is_file()
+                else None
+            )
+            # If the process died after the ownership reservation but before the
+            # precondition record could persist its binding id, the ledger is the
+            # owner-native recovery evidence.  Adopt that exact pending id rather
+            # than creating a second reservation.
+            if pending is not None and getattr(record, "binding_id", None) is None:
+                binding_id = pending.vault_binding_id
+            if pending is not None and pending.vault_binding_id != binding_id:
+                raise RegistryError("first-vault bootstrap ownership reservation targets another binding")
+            if pending is None:
+                self.ledger.reserve(
+                    channel_id=self.layout.channel_id,
+                    vault_binding_id=binding_id,
+                    root=canonical_root,
+                    allow_same_channel_nested=False,
+                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                )
+            binder = getattr(precondition, "bind", None)
+            if binder is not None and getattr(record, "binding_id", None) != binding_id:
+                record = binder(record, binding_id)
+
+            content_complete = _first_vault_content_complete(path)
+            try:
+                result = recover() if content_complete else initialize()
+            except BaseException:
+                if _first_vault_content_complete(path):
+                    registration = self._new_registration(
+                        canonical_root,
+                        vault_binding_id=binding_id,
+                        provenance=DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+                    )
+                    getattr(precondition, "content_effected")(
+                        record,
+                        vault_id=registration.vault_id or "",
+                        local_instance_id=registration.local_instance_id or "",
+                    )
+                else:
+                    getattr(precondition, "fail")(record)
+                    self.ledger.release_pending(
+                        binding_id,
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                raise
+
+            if not _first_vault_content_complete(path):
+                raise RegistryError("first-vault initializer returned before content was complete")
+            registration = self._new_registration(
+                canonical_root,
+                vault_binding_id=binding_id,
+                provenance=DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+            )
+            record = getattr(precondition, "content_effected")(
+                record,
+                vault_id=registration.vault_id or "",
+                local_instance_id=registration.local_instance_id or "",
+            )
+            latest = self.registry.load()
+            self.registry.register(
+                registration,
+                expected_revision=latest.revision,
+                first_default_provenance=DEFAULT_PROVENANCE_FIRST_INITIALIZE,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+            self.ledger.activate(
+                binding_id,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+            getattr(precondition, "complete")(
+                record,
+                vault_id=registration.vault_id or "",
+                local_instance_id=registration.local_instance_id or "",
+            )
+            return registration, result
 
     def default_vault_service(self) -> InstanceDefaultVaultService:
         """Return the one service both production default producers share."""
@@ -807,6 +941,21 @@ class InstanceRegistryRuntime:
                 "provenance": provenance,
             },
         )
+
+
+def _first_vault_content_complete(path: Path) -> bool:
+    """Detect owner-native completion without importing the API route."""
+
+    settings = Path(path).expanduser().resolve(strict=False) / "settings"
+    required = (
+        "vault.md",
+        "paths.md",
+        "workflow.md",
+        "design-handoff.md",
+        "companion-ui.md",
+        "local.md",
+    )
+    return settings.is_dir() and all((settings / filename).is_file() for filename in required)
 
 
 def _load_active_registry_runtime(
