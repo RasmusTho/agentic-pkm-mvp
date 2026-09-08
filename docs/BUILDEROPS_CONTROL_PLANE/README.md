@@ -133,6 +133,12 @@ quarantine, private authenticated ingress, and readiness. `existing_runtime_reco
 explicit activation mode for a bounded single-writer repair; it does not claim that the current
 PR was deployed or that DevUI owner acceptance occurred.
 
+The deploy preflight refusal envelope is a separate contract,
+`builderops_vm_rebuild_activation_refusal.v1`, defined at
+[`config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json`](../../config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json).
+It is non-activating evidence (`activation_verdict: refused`, `mutation_performed: false`) and
+must never be consumed as a successful activation receipt.
+
 The deploy preflight also compares the configured BuilderOps and Product engine project listings.
 If `builderops-control-plane` is present on both engines, it refuses with a duplicate-writer result
 before image pull, database/service activation, readiness probing, or Tailscale configuration. The

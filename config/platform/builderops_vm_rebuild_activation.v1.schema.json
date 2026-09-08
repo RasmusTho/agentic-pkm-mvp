@@ -55,9 +55,11 @@
     "host_identity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["proxmox_node", "guest_ip", "host_key_fingerprint", "vm_running", "qemu_agent_ready"],
+      "required": ["proxmox_node", "proxmox_vm_name", "guest_hostname", "guest_ip", "host_key_fingerprint", "vm_running", "qemu_agent_ready"],
       "properties": {
         "proxmox_node": {"const": "tars"},
+        "proxmox_vm_name": {"const": "bob-1"},
+        "guest_hostname": {"const": "builder-system"},
         "guest_ip": {"const": "10.42.42.121"},
         "host_key_fingerprint": {"type": "string", "pattern": "^ssh-ed25519:SHA256:[A-Za-z0-9+/=]+$"},
         "vm_running": {"const": true},

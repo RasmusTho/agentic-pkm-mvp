@@ -482,9 +482,11 @@ The repository-side BuilderOps deploy wrapper reads the configured project listi
 Docker pull, Compose mutation, readiness probe, or Tailscale action. It refuses closed-loop
 operation when `builderops-control-plane` is present in both the dedicated `builderops-engine`
 context and the Product context, and it also refuses malformed or incomplete listings. The
-preflight records a redacted `builderops_vm_rebuild_activation.v1` refusal with
+preflight records a redacted `builderops_vm_rebuild_activation_refusal.v1` envelope with
 `mutation_performed: false`; it does not select a winner, stop a stack, or remove a competing
-writer. The contract is implemented by `scripts/lib/builderops_compose.sh` and
+writer. The refusal envelope is deliberately distinct from the successful
+`builderops_vm_rebuild_activation.v1` receipt and is defined by
+`config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json`. The contract is implemented by `scripts/lib/builderops_compose.sh` and
 `scripts/deploy_builderops.sh`, with the receipt shape defined in
 `docs/BUILDEROPS_CONTROL_PLANE/README.md`.
 

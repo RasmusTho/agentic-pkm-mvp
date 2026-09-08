@@ -213,11 +213,13 @@ def _validate_semantics(receipt: Mapping[str, Any]) -> None:
 
     host = _exact_mapping(
         receipt.get("host_identity"),
-        frozenset({"proxmox_node", "guest_ip", "host_key_fingerprint", "vm_running", "qemu_agent_ready"}),
+        frozenset({"proxmox_node", "proxmox_vm_name", "guest_hostname", "guest_ip", "host_key_fingerprint", "vm_running", "qemu_agent_ready"}),
         "host_identity",
     )
     if (
         host.get("proxmox_node") != "tars"
+        or host.get("proxmox_vm_name") != "bob-1"
+        or host.get("guest_hostname") != "builder-system"
         or host.get("guest_ip") != "10.42.42.121"
         or not isinstance(host.get("host_key_fingerprint"), str)
         or _SSH_FINGERPRINT.fullmatch(host["host_key_fingerprint"]) is None

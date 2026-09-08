@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import yaml
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -608,7 +609,11 @@ def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> N
     assert "curl " not in events
     assert "tailscale " not in events
     refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
-    assert refusal["receipt_type"] == "builderops_vm_rebuild_activation.v1"
+    assert refusal["receipt_type"] == "builderops_vm_rebuild_activation_refusal.v1"
+    refusal_schema = json.loads(
+        (ROOT / "config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json").read_text()
+    )
+    assert not list(Draft202012Validator(refusal_schema).iter_errors(refusal))
     assert refusal["activation_verdict"] == "refused"
     assert refusal["mutation_performed"] is False
     assert refusal["selected_engine"] == {

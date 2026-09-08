@@ -190,7 +190,7 @@ import sys
 from pathlib import Path
 
 payload = {
-    "receipt_type": "builderops_vm_rebuild_activation.v1",
+    "receipt_type": "builderops_vm_rebuild_activation_refusal.v1",
     "receipt_version": 1,
     "target_vm": {"vmid": 102, "name": "builder-system"},
     "observed_at": os.environ["OBSERVED_AT"],

@@ -44,6 +44,8 @@ def _evidence() -> dict[str, object]:
         },
         "host_identity": {
             "proxmox_node": "tars",
+            "proxmox_vm_name": "bob-1",
+            "guest_hostname": "builder-system",
             "guest_ip": "10.42.42.121",
             "host_key_fingerprint": "ssh-ed25519:SHA256:1Hjf4duEUo9aNPEcQxDEGJIGg1pUzD2lluE2sd9QVDE",
             "vm_running": True,
@@ -137,6 +139,8 @@ def test_activation_receipt_schema_is_closed() -> None:
         (("claims", "no_dual_writer_proven"), False),
         (("readiness", "unauthenticated_status"), 200),
         (("candidate_identity", "source_sha"), "0" * 40),
+        (("host_identity", "proxmox_vm_name"), "builder-system"),
+        (("host_identity", "guest_hostname"), "bob-1"),
     ],
 )
 def test_activation_receipt_refuses_gate_drift(path: tuple[str, str], value: object) -> None:
