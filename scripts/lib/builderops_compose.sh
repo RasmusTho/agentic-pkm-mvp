@@ -18,6 +18,11 @@ builderops_engine_id() {
   docker --context "${context}" info --format '{{.ID}}'
 }
 
+builderops_project_present() {
+  local projects="${1:?Compose project listing required}"
+  printf '%s' "${projects}" | grep -Eq '"Name"[[:space:]]*:[[:space:]]*"builderops-control-plane"'
+}
+
 builderops_assert_failure_domain() {
   local builder_context="${BUILDEROPS_DOCKER_CONTEXT:?BuilderOps Docker context is required}"
   local product_context="${PRODUCT_DOCKER_CONTEXT:?Product Docker context is required}"
@@ -39,6 +44,10 @@ builderops_assert_failure_domain() {
   if printf '%s' "${builder_projects}" | grep -Eq '"Name"[[:space:]]*:[[:space:]]*"pkm-'; then
     echo "Product project detected on BuilderOps engine" >&2
     return 72
+  fi
+  if builderops_project_present "${builder_projects}" && builderops_project_present "${product_projects}"; then
+    echo "duplicate BuilderOps project detected across Docker engines" >&2
+    return 74
   fi
   if printf '%s' "${product_projects}" | grep -Eq '"Name"[[:space:]]*:[[:space:]]*"builderops-control-plane"'; then
     echo "BuilderOps project detected on Product engine" >&2

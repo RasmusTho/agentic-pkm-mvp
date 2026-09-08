@@ -261,7 +261,11 @@ if [ "${1:-}" = "--context" ]; then context="$2"; shift 2; fi
 if [ "${1:-}" = info ]; then
   [ "$context" = builderops ] && printf 'builder-engine\n' || printf 'product-engine\n'
 elif [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
-  printf '[]\n'
+  if [ "$context" = builderops ]; then
+    printf '%s\n' "${FAKE_BUILDER_PROJECTS:-[]}"
+  else
+    printf '%s\n' "${FAKE_PRODUCT_PROJECTS:-[]}"
+  fi
 elif [ "${FAKE_FAIL_PULL:-0}" = 1 ]; then
   case " $* " in
     *" pull "*) exit 19 ;;
@@ -566,6 +570,35 @@ def test_deploy_refuses_unavailable_attestation_verifier_before_docker(
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "gh attestation verify" in events
     assert "docker " not in events
+
+
+def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_PRODUCT_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 74
+    assert "duplicate BuilderOps project detected across Docker engines" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "compose ls --format json" in events
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "tailscale " not in events
 
 
 def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None:

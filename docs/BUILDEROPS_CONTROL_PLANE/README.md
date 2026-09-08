@@ -122,6 +122,12 @@ Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid
 and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
 material is invalid. A live guest check without the named receipt remains only an observation.
 
+The deploy preflight also compares the configured BuilderOps and Product engine project listings.
+If `builderops-control-plane` is present on both engines, it refuses with a duplicate-writer result
+before image pull, database/service activation, readiness probing, or Tailscale configuration. The
+preflight does not choose or stop either stack; an operator must make that bounded decision and
+record the resulting single-writer evidence in `builderops_vm_rebuild_activation.v1`.
+
 The attestation prerequisite may run on VM 102 or a named access-controlled operator runner. The
 validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the runner records its
 observed version and command exit without recording credentials. The exact command and fail-closed
