@@ -326,7 +326,7 @@ jobs:
                 pull.last_edited_at === receipt.body_edit.edited_at &&
                 TRUSTED_ASSOCIATIONS.has(pull.latest_body_edit.editor_association) &&
                 hasExactFields(pull.body_edits_page_info, ["has_next_page"]) &&
-                pull.body_edits_page_info.has_next_page === false &&
+                typeof pull.body_edits_page_info.has_next_page === "boolean" &&
                 Array.isArray(pull.closing_issues) && arraysEqual(pull.closing_issues, []) &&
                 hasExactFields(pull.closing_issues_page_info, ["has_next_page"]) &&
                 pull.closing_issues_page_info.has_next_page === false &&

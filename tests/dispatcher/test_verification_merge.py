@@ -94,6 +94,12 @@ class RepositoryAuthority:
                     "fixed_commit_message": (
                         FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
                     ),
+                    "body_edit": {
+                        "node_id": "UCE_test_latest",
+                        "edited_at": "2026-09-08T05:00:00Z",
+                        "editor_login": "RasmusTho",
+                        "editor_association": "OWNER",
+                    },
                 }
             ]
             * 20
@@ -651,6 +657,12 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
     assert repository.last_merge["expected_head_sha"] == HEAD
     assert repository.last_merge["expected_base_sha"] == BASE
     assert repository.last_merge["expected_manifest_blob_sha"] == "blob-1"
+    assert repository.last_merge["expected_body_edit"] == {
+        "node_id": "UCE_test_latest",
+        "edited_at": "2026-09-08T05:00:00Z",
+        "editor_login": "RasmusTho",
+        "editor_association": "OWNER",
+    }
     assert repository.last_merge[
         "commit_title"
     ] == fixed_verified_merge_commit_title(3603)

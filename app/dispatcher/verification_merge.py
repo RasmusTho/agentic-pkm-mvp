@@ -130,6 +130,7 @@ class ProtectedRepositoryAuthority(Protocol):
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        expected_body_edit: Mapping[str, object],
         commit_title: str,
         commit_message: str,
         credential: object,
@@ -630,6 +631,7 @@ class VerificationMergeExecutor:
             credential_id=manifest.credential_id,
             rotation_generation=manifest.credential_generation,
         )
+        effect_body_edit: Mapping[str, object] | None = None
         if prepared_gate is not None:
             # Credential resolution is the last local work before the effect.
             # Re-read the authenticated prepared gate here so a body edit that
@@ -681,6 +683,23 @@ class VerificationMergeExecutor:
                 raise MergeAuthorityError(
                     "verified merge prepared authority changed at the effect boundary"
                 )
+            body_edit = effect_boundary_prepared_gate.get("body_edit")
+            if not isinstance(body_edit, Mapping):
+                self._terminal_no_effect(
+                    operation_key,
+                    evidence={
+                        "base_sha": base_sha,
+                        "head_sha": run.current_head_sha,
+                        "manifest_blob_sha": manifest.blob_sha,
+                        "verified_merge_prepared": dict(
+                            effect_boundary_prepared_gate
+                        ),
+                    },
+                )
+                raise MergeAuthorityError(
+                    "verified merge prepared authority has no body-edit identity"
+                )
+            effect_body_edit = dict(body_edit)
         if dry_run:
             readback: Mapping[str, object] = {
                 "merged": False,
@@ -707,6 +726,11 @@ class VerificationMergeExecutor:
                 expected_head_sha=run.current_head_sha,
                 expected_base_sha=base_sha,
                 expected_manifest_blob_sha=manifest.blob_sha,
+                expected_body_edit=(
+                    effect_body_edit
+                    if effect_body_edit is not None
+                    else {}
+                ),
                 commit_title=commit_title,
                 commit_message=commit_message,
                 credential=credential,

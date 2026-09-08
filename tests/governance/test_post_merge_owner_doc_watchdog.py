@@ -663,6 +663,27 @@ def test_watchdog_rejects_malformed_or_causally_invalid_pr_contract_start() -> N
     )
 
 
+def test_watchdog_accepts_paginated_older_body_edit_history() -> None:
+    authority_comment = _authority_comment()
+    authority = _receipt_payload(authority_comment)
+    phase_kwargs = projection_phase_kwargs(
+        authority, _pr(_neutralized_body(_body()))
+    )
+    convergence = json.loads(
+        json.dumps(phase_kwargs["projection_convergence_receipt"])
+    )
+    convergence["final_projection_observation"]["pull_request"][
+        "body_edits_page_info"
+    ]["has_next_page"] = True
+    unsigned = dict(convergence)
+    unsigned.pop("receipt_sha256")
+    convergence["receipt_sha256"] = _canonical_digest(unsigned)
+
+    assert _node(
+        "validConvergenceReceipt(inputs[0], inputs[1])", convergence, authority
+    )
+
+
 def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() -> None:
     authority = _authority_comment()
     merge_sha = "c" * 40
