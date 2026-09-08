@@ -977,6 +977,30 @@ def _load_active_registry_runtime(
     )
 
 
+def open_api_registry_runtime(
+    registry_path: Path,
+    *,
+    ownership_root: Path,
+    channel: str,
+) -> InstanceRegistryRuntime:
+    """Open the protected runtime for an already-bound API instance.
+
+    The API route consumes this factory instead of importing the protected instance-state
+    and ownership modules directly.  The runtime module remains the sanctioned importer and
+    the route receives only the production authority it needs.
+    """
+
+    return InstanceRegistryRuntime(
+        InstanceStateLayout(
+            root=registry_path.parent,
+            channel_id=channel,
+            registry_path=registry_path,
+        ),
+        OwnershipLedger(ownership_root),
+        initialize_layout=False,
+    )
+
+
 def _read_vault_identity(root: Path) -> tuple[str | None, str | None]:
     def frontmatter(path: Path) -> dict[str, object]:
         if not path.is_file():

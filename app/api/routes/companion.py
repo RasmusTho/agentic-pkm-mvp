@@ -132,9 +132,11 @@ from app.instance.first_vault_bootstrap import (
     FirstVaultBootstrapError,
     FirstVaultPreconditionStore,
 )
-from app.instance.instance_state import InstanceStateLayout
-from app.instance.ownership_ledger import OwnershipLedger
-from app.instance.runtime import InstanceRegistryRuntime, open_local_operator_principal_store
+from app.instance.runtime import (
+    InstanceRegistryRuntime,
+    open_api_registry_runtime,
+    open_local_operator_principal_store,
+)
 from app.instance.vault_registry import VaultRegistryStore
 from app.instance.local_operator_principal import PrincipalPreflightError
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
@@ -1247,14 +1249,10 @@ def _first_vault_runtime() -> tuple[InstanceRegistryRuntime, Path]:
     registry_path = Path(registry_value).expanduser().resolve(strict=False)
     if not registry_path.parent.is_dir():
         raise HTTPException(status_code=503, detail="instance registry state is not available")
-    runtime = InstanceRegistryRuntime(
-        InstanceStateLayout(
-            root=registry_path.parent,
-            channel_id=os.getenv("PKM_ENVIRONMENT", "dev"),
-            registry_path=registry_path,
-        ),
-        OwnershipLedger(Path(ownership_value).expanduser().resolve(strict=False)),
-        initialize_layout=False,
+    runtime = open_api_registry_runtime(
+        registry_path,
+        ownership_root=Path(ownership_value).expanduser().resolve(strict=False),
+        channel=os.getenv("PKM_ENVIRONMENT", "dev"),
     )
     return runtime, registry_path
 
