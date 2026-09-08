@@ -4172,6 +4172,17 @@ def _retry_at(value: object = None) -> str:
     return (now + delay).isoformat(timespec="microseconds")
 
 
+def _legacy_replay_capability_aliases(
+    capability_aliases: Mapping[str, str],
+) -> dict[str, str]:
+    """Bind pre-census placeholders only while replaying persisted evidence."""
+
+    return {
+        **capability_aliases,
+        "unknown-capability": capability_aliases.get("sol", "sol"),
+    }
+
+
 class VerificationConsumer:
     def __init__(
         self,
@@ -4972,15 +4983,9 @@ class VerificationConsumer:
             claimed.run_id,
             holder=self.holder,
             lease_id=lease_id,
-            capability_aliases={
-                **self.capability_aliases,
-                # Pre-census sanitization could only retain a safe placeholder
-                # for an event capability. It is evidence-only during replay;
-                # bind the resulting review attempt to the declared strongest
-                # compatibility key while preserving the placeholder in the
-                # durable terminal receipt.
-                "unknown-capability": self.capability_aliases.get("sol", "sol"),
-            },
+            capability_aliases=_legacy_replay_capability_aliases(
+                self.capability_aliases
+            ),
         )
         if events:
             try:
@@ -5919,6 +5924,9 @@ class VerificationConsumer:
                             claimed.run_id,
                             holder=self.holder,
                             lease_id=lease_id,
+                            capability_aliases=_legacy_replay_capability_aliases(
+                                self.capability_aliases
+                            ),
                         ).apply_events(repair_events, context=pack)
                     except ValueError as exc:
                         return self._terminal_event_application_failure(
@@ -5964,6 +5972,9 @@ class VerificationConsumer:
             claimed.run_id,
             holder=self.holder,
             lease_id=lease_id,
+            capability_aliases=_legacy_replay_capability_aliases(
+                self.capability_aliases
+            ),
         )
         if events:
             try:
