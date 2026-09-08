@@ -286,6 +286,53 @@ def test_legacy_nested_receipt_capability_replay_is_canonical_and_idempotent(
     assert attempts[0]["receipt"]["review_events"][0]["capability"] == "sol"
 
 
+def test_legacy_unknown_capability_placeholder_remains_readable(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    receipt = verified_attempt_receipt()
+    admitted = admit_verification_receipt(
+        state,
+        run.run_id,
+        "legacy-placeholder-session",
+        receipt,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+    assert state.record_attempt(
+        run.run_id,
+        "verification",
+        "legacy-placeholder-session",
+        "gpt-5.6-sol",
+        "xhigh",
+        {"head": run.head_sha},
+        "launched",
+        admitted,
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="legacy-placeholder-key",
+    ) == 1
+
+    with sqlite3.connect(state.store.db_path) as conn:
+        raw_receipt = json.loads(
+            conn.execute(
+                "SELECT receipt_json FROM verification_attempts WHERE run_id=?",
+                (run.run_id,),
+            ).fetchone()[0]
+        )
+        raw_receipt["review_events"][0]["capability"] = "unknown-capability"
+        conn.execute(
+            "UPDATE verification_attempts SET receipt_json=? WHERE run_id=?",
+            (json.dumps(raw_receipt, sort_keys=True), run.run_id),
+        )
+
+    attempts = state.attempts(run.run_id)
+    assert attempts[0]["capability"] == "sol"
+    assert attempts[0]["receipt"]["review_events"][0]["capability"] == (
+        "unknown-capability"
+    )
+
+
 def test_repair_progress_receipt_is_lease_fenced_and_replay_safe(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())

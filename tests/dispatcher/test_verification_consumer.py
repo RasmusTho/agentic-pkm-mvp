@@ -32,6 +32,7 @@ from app.dispatcher.verification_consumer import (
     GhCliVerificationSource,
     LaunchConfig,
     VerificationConsumer,
+    sanitize_verification_closer_receipt,
     verification_attempt_idempotency_key,
 )
 from app.dispatcher.verification_agent_loop import (
@@ -7854,6 +7855,18 @@ def test_receipt_projects_astra_model_to_sol_capability_before_ledger() -> None:
     )
 
     assert sanitized["review_events"][0]["capability"] == "sol"
+
+
+def test_receipt_allowlist_preserves_declared_spark_capability() -> None:
+    receipt = verified_attempt_receipt()
+    receipt["review_events"][0]["capability"] = "spark"
+
+    sanitized = sanitize_verification_closer_receipt(
+        receipt,
+        capability_aliases={"spark": "spark"},
+    )
+
+    assert sanitized["review_events"][0]["capability"] == "spark"
 
 
 def test_retry_verdict_receipt_is_diagnosable_without_raw_logs(tmp_path) -> None:

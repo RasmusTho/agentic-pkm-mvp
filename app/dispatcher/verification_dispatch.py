@@ -1406,11 +1406,12 @@ def _attempt(
     capability_aliases: Mapping[str, str],
 ) -> dict[str, object]:
     kind = str(row["attempt_kind"])
-    capability = capability_aliases.get(str(row["capability"]))
     if kind == REPAIR_INTENT_ATTEMPT_KIND and row["capability"] == "deterministic":
         capability = "deterministic"
-    if capability is None:
-        raise ValueError("persisted verification capability is not declared")
+    else:
+        capability = _canonicalize_persisted_capability(
+            row["capability"], capability_aliases
+        )
     return _canonicalize_persisted_attempt_receipt(
         _project_verification_receipt_authority({
         "attempt_id": row["attempt_id"],
@@ -1427,6 +1428,21 @@ def _attempt(
         }),
         capability_aliases,
     )
+
+
+def _canonicalize_persisted_capability(
+    value: object,
+    capability_aliases: Mapping[str, str],
+) -> str:
+    """Resolve current aliases while preserving the pre-alias safe placeholder."""
+
+    raw_capability = str(value)
+    if raw_capability == "unknown-capability":
+        return raw_capability
+    normalized = capability_aliases.get(raw_capability)
+    if normalized is None:
+        raise ValueError("persisted verification capability is not declared")
+    return normalized
 
 
 def _validated_attempt_identity(
@@ -1569,10 +1585,9 @@ def _canonicalize_persisted_attempt_receipt(
             normalized = dict(event)
             raw_capability = normalized.get("capability")
             if raw_capability is not None:
-                capability = capability_aliases.get(str(raw_capability))
-                if capability is None:
-                    raise ValueError("persisted verification receipt capability is not declared")
-                normalized["capability"] = capability
+                normalized["capability"] = _canonicalize_persisted_capability(
+                    raw_capability, capability_aliases
+                )
             normalized_events.append(normalized)
         canonical["review_events"] = normalized_events
     authority = attempt.get(_VERIFICATION_RECEIPT_AUTHORITY_FIELD)
