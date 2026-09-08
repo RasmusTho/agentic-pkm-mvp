@@ -886,6 +886,40 @@ def test_timed_out_merge_reconciles_before_retry() -> None:
     assert repository.calls == ["merge", "readback"]
 
 
+def test_real_merge_rechecks_prepared_authority_at_effect_boundary() -> None:
+    ledger, run, outbox = claimed_run()
+    prepared = {
+        "contract": "verified_merge_prepared_gate.v1",
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "neutralized_body_sha256": "a" * 64,
+        "authority_sha256": "b" * 64,
+        "phase_sha256": "c" * 64,
+        "closing_reference_count": 0,
+    }
+    repository = RepositoryAuthority(
+        prepared_gates=[
+            prepared,
+            prepared,
+            {**prepared, "body_edit": {"node_id": "raced-body-edit"}},
+        ]
+    )
+
+    with pytest.raises(
+        MergeAuthorityError, match="changed at the effect boundary"
+    ):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, Credentials()
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert repository.calls == []
+    assert outbox.state == "succeeded"
+
+
 def test_response_loss_reconciles_before_retry() -> None:
     ledger, run, outbox = claimed_run()
     repository = RepositoryAuthority(transport_error=True, merged=False)

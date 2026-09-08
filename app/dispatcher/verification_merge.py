@@ -630,6 +630,40 @@ class VerificationMergeExecutor:
             credential_id=manifest.credential_id,
             rotation_generation=manifest.credential_generation,
         )
+        if prepared_gate is not None:
+            # Credential resolution is the last local work before the effect.
+            # Re-read the authenticated prepared gate here so a body edit that
+            # races the outbox/credential path cannot reach the transport under
+            # the earlier closing-projection identity.
+            effect_boundary_prepared_gate = (
+                self.repository.verified_merge_prepared(
+                    canonical,
+                    run.pr_number,
+                    run_id=run.run_id,
+                    head_sha=run.current_head_sha,
+                    expected_repair_budget=repair_budget,
+                )
+            )
+            if (
+                effect_prepared_gate is None
+                or not self._same_prepared_gate(
+                    effect_prepared_gate, effect_boundary_prepared_gate
+                )
+            ):
+                self._terminal_no_effect(
+                    operation_key,
+                    evidence={
+                        "base_sha": base_sha,
+                        "head_sha": run.current_head_sha,
+                        "manifest_blob_sha": manifest.blob_sha,
+                        "verified_merge_prepared": dict(
+                            effect_boundary_prepared_gate
+                        ),
+                    },
+                )
+                raise MergeAuthorityError(
+                    "verified merge prepared authority changed at the effect boundary"
+                )
         if dry_run:
             readback: Mapping[str, object] = {
                 "merged": False,
