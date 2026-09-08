@@ -281,7 +281,7 @@ def _recall_node(
 ) -> AgentState:
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
-    sources: list[tuple[Path, str | None]] = []
+    sources: list[tuple[Path | None, str | None]] = []
     if state.active_context is not None:
         registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
         if not registry_path:
@@ -301,10 +301,15 @@ def _recall_node(
         ]
     else:
         vault_root = _active_recall_vault_root()
-        sources = [(vault_root, _active_recall_vault_id(vault_root))] if vault_root else []
+        active_vault_id = (
+            _active_recall_vault_id(vault_root) if active_scope is not None else None
+        )
+        # Preserve the legacy unbound seam: the retrieval helper may be replaced by
+        # an in-memory/test provider even when no filesystem vault is configured.
+        sources = [(vault_root, active_vault_id)]
 
-    candidate_sources: list[tuple[RecallCandidate, Path]] = []
-    provisional_sources: list[tuple[Any, Path]] = []
+    candidate_sources: list[tuple[RecallCandidate, Path | None]] = []
+    provisional_sources: list[tuple[Any, Path | None]] = []
     for vault_root, active_vault_id in sources:
         candidate_sources.extend(
             (candidate, vault_root)
@@ -316,7 +321,7 @@ def _recall_node(
                 active_vault_id=active_vault_id,
             )
         )
-        if active_scope is not None:
+        if active_scope is not None and vault_root is not None:
             provisional = retrieve_relevant_provisional(
                 state.query,
                 k=RECALL_TOP_K,
@@ -324,7 +329,10 @@ def _recall_node(
                 receipt_store=ProvisionalReceiptStore(),
                 active_scope_id=active_scope,
             )
-            provisional_sources.extend((candidate, vault_root) for candidate in provisional.candidates)
+            if provisional is not None:
+                provisional_sources.extend(
+                    (candidate, vault_root) for candidate in provisional.candidates
+                )
     candidate_sources.sort(key=lambda item: item[0].score, reverse=True)
     candidate_sources = candidate_sources[:RECALL_TOP_K]
     provisional_sources = provisional_sources[:RECALL_TOP_K]
@@ -642,7 +650,18 @@ def _answer_node(
             recalled=state.recalled,
             recalled_content=state.recalled_content,
         )
-        llm, route = llm_answer(state.query, context, ask_settings, llm_routing=llm_routing)
+        if llm_routing is None:
+            # Keep the long-standing seam compatible with callers/tests that replace
+            # ``llm_answer`` with the original three-argument callable. Scoped
+            # production requests provide an explicit route and use the branch below.
+            llm, route = llm_answer(state.query, context, ask_settings)
+        else:
+            llm, route = llm_answer(
+                state.query,
+                context,
+                ask_settings,
+                llm_routing=llm_routing,
+            )
         if route:
             state.llm_route = route
         if llm:
