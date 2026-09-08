@@ -599,6 +599,51 @@ def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> N
     assert " up " not in events
     assert "curl " not in events
     assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["receipt_type"] == "builderops_vm_rebuild_activation.v1"
+    assert refusal["activation_verdict"] == "refused"
+    assert refusal["mutation_performed"] is False
+    assert refusal["selected_engine"] == {
+        "context": "builderops",
+        "engine_id": "builder-engine",
+        "project": "builderops-control-plane",
+    }
+    assert refusal["observed_engine_ids"] == {
+        "builderops": "builder-engine",
+        "product": "product-engine",
+    }
+    assert "duplicate_builderops_engine_writers" in refusal["refusals"]
+    assert refusal["secret_material"] == "absent"
+    assert len(refusal["evidence_fingerprint"]) == 64
+
+
+def test_deploy_refuses_malformed_project_listing_before_docker_mutation(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = "not-json"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    assert "invalid or unavailable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["invalid_docker_project_listing", "no_mutation_performed"]
 
 
 def test_active_funnel_is_rejected_before_serve_mutation(tmp_path: Path) -> None:
