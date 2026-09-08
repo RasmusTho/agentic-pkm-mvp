@@ -276,7 +276,16 @@ elif [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
   if [ "$context" = builderops ]; then
     printf '%s\n' "${FAKE_BUILDER_PROJECTS:-[]}"
   else
-    printf '%s\n' "${FAKE_PRODUCT_PROJECTS:-[]}"
+    product_projects="${FAKE_PRODUCT_PROJECTS:-[]}"
+    if [ "${FAKE_PRODUCT_PROJECTS_AFTER_TARGET_MUTATION:-0}" = 1 ] \
+      && grep -q 'up -d --force-recreate api worker' "$FAKE_EVENT_LOG"; then
+      product_projects='[{"Name":"builderops-control-plane"}]'
+    fi
+    if [ "${FAKE_PRODUCT_PROJECTS_AFTER_ROLLBACK_MUTATION:-0}" = 1 ] \
+      && grep -q 'up -d --force-recreate db api worker' "$FAKE_EVENT_LOG"; then
+      product_projects='[{"Name":"builderops-control-plane"}]'
+    fi
+    printf '%s\n' "$product_projects"
   fi
 elif [ "${FAKE_FAIL_PULL:-0}" = 1 ]; then
   case " $* " in
@@ -512,6 +521,7 @@ def test_readiness_failure_reactivates_previous_live_release(tmp_path: Path) -> 
     root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
     pin_path = root / "config/deploy/builderops.env"
     before = pin_path.read_text(encoding="utf-8")
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
     env["FAKE_FAIL_READY_DIGEST"] = digest
 
     failed = subprocess.run(
@@ -768,6 +778,84 @@ def test_deployment_interlock_is_non_reentrant_and_fail_closed(tmp_path: Path) -
     finally:
         holder.wait(timeout=3)
     assert holder.returncode == 0
+
+
+def test_deployment_wrapper_rejects_forged_inherited_lock_proof(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    lock_path = tmp_path / "forged.lock"
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    env["BUILDEROPS_DEPLOYMENT_LOCK_FD"] = str(lock_fd)
+    env["BUILDEROPS_DEPLOYMENT_LOCK_PATH"] = str(lock_path)
+    try:
+        result = subprocess.run(
+            ["bash", "scripts/deploy_builderops.sh", "rollback"],
+            cwd=root,
+            env=env,
+            pass_fds=(lock_fd,),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        os.close(lock_fd)
+
+    assert result.returncode == 75
+    assert "interlock proof" in result.stderr
+    assert "--__builderops_deployment_lock_held" not in (
+        ROOT / "scripts/deploy_builderops.sh"
+    ).read_text(encoding="utf-8")
+
+
+def test_activation_refuses_writer_appearing_before_final_readback(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_PRODUCT_PROJECTS_AFTER_TARGET_MUTATION"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "up -d --force-recreate api worker" in events
+    assert "previous pin and live API/worker release restored" not in result.stderr
+
+
+def test_rollback_refuses_writer_appearing_after_restore_mutation(tmp_path: Path) -> None:
+    root, env, _source_sha, digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_FAIL_READY_DIGEST"] = digest
+    env["FAKE_PRODUCT_PROJECTS_AFTER_ROLLBACK_MUTATION"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "up -d --force-recreate db api worker" in events
 
 
 def test_deploy_refuses_failed_project_listing_with_partial_stdout(tmp_path: Path) -> None:

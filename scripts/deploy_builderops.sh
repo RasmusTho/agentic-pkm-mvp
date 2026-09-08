@@ -14,14 +14,21 @@ source "${ROOT}/scripts/lib/builderops_compose.sh"
 source "${ROOT}/scripts/builderops/preflight_app_password_secret.sh"
 
 # Keep the duplicate-writer snapshot and every subsequent pin/Compose/Tailscale
-# mutation in one host-local critical section. The private marker is an
-# internal re-entry argument, not a caller-controlled environment bypass.
-if [ "${1:-}" != "--__builderops_deployment_lock_held" ]; then
+# mutation in one host-local critical section. Re-entry is accepted only when
+# the lock helper passes an inherited descriptor whose lock is still held;
+# argv/environment markers alone cannot bypass the interlock.
+if [ -z "${BUILDEROPS_DEPLOYMENT_LOCK_FD:-}" ]; then
   exec python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
     --lock-path "${BUILDEROPS_DEPLOYMENT_LOCK_PATH:-${PIN_FILE}.lock}" \
-    -- bash "${BASH_SOURCE[0]}" --__builderops_deployment_lock_held "$@"
+    -- bash "${BASH_SOURCE[0]}" "$@"
 fi
-shift
+
+python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
+  --lock-path "${BUILDEROPS_DEPLOYMENT_LOCK_PATH:-${PIN_FILE}.lock}" \
+  --assert-held --fd "${BUILDEROPS_DEPLOYMENT_LOCK_FD}" || {
+  echo "BuilderOps deployment interlock proof is missing or invalid" >&2
+  exit 75
+}
 
 usage() {
   echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback" >&2
@@ -320,6 +327,7 @@ reactivate_previous_release() {
   builderops_compose "${ROOT}" pull db api worker || return
   builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
   wait_ready || return
+  builderops_assert_single_writer_after_activation || return
 }
 
 if ! activate_target; then
