@@ -16,19 +16,22 @@ def _assert_held(lock_path: Path, lock_fd: int) -> int:
 
     try:
         fd_stat = os.fstat(lock_fd)
-        path_stat = lock_path.stat()
+        probe_fd = os.open(lock_path, os.O_RDWR)
     except (OSError, ValueError) as exc:
         print(f"BuilderOps deployment interlock proof is invalid: {exc}", file=sys.stderr)
         return 75
-    if (fd_stat.st_dev, fd_stat.st_ino) != (path_stat.st_dev, path_stat.st_ino):
-        print("BuilderOps deployment interlock proof references the wrong file", file=sys.stderr)
-        return 75
-
-    # A separately opened descriptor must be unable to acquire the lock. This
-    # rejects a forged environment variable or argv marker that merely points
-    # at an open, unlocked file.
-    probe_fd = os.open(lock_path, os.O_RDWR)
     try:
+        probe_stat = os.fstat(probe_fd)
+        if (fd_stat.st_dev, fd_stat.st_ino) != (probe_stat.st_dev, probe_stat.st_ino):
+            print(
+                "BuilderOps deployment interlock proof references the wrong file",
+                file=sys.stderr,
+            )
+            return 75
+
+        # A separately opened descriptor must be unable to acquire the lock.
+        # This rejects a forged environment variable or argv marker that
+        # merely points at an open, unlocked file.
         try:
             fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
