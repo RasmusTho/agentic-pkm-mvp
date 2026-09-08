@@ -220,6 +220,7 @@ chmod +x "$FAKE_ROOT/python-fixture"
 
 export FAKE_ROOT
 export PYTHON="$FAKE_ROOT/python-fixture"
+export HEIMDAL_ARCHIVE_METADATA_FILE="$FAKE_ROOT/archive-metadata.json"
 export CUI_CHANNEL=prod
 export CUI_COMPOSE_PROJECT=pkm-prod
 export CUI_COMPOSE_FILES=docker-compose.yaml

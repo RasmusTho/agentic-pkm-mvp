@@ -83,21 +83,26 @@ variable, metadata field, log field, or receipt field.
 
 Production startup and deployment share `scripts/lib/heimdal_cold_volume_preflight.sh`. Its one
 effective-channel classifier treats a normalized prod channel, the prod Compose project, or an
-explicit prod Compose overlay as production. That gate
-only validates an already mounted archive and runs before generic startup or deploy mutation. It
-never creates or attaches an image. The direct full-system prod launcher, the Companion UI
-(including its warm-start path), `cold_boot` before host-state preparation or Compose teardown,
-`make prod-up`, both runtime-verification launchers, the prod wrapper, and the deploy action all invoke
-the same gate. Rollback remains reachable when the archive is unavailable so the previous-good
-service can be restored. HAR-04 remains responsible for any archive write, verified copy,
-representation activation, or hot retirement.
+explicit prod Compose overlay as production. HAR-03 is an opt-in production gate: when the
+channel-local `.env.prod.local` file has no `HEIMDAL_ARCHIVE_METADATA_FILE` declaration, archive is
+not configured yet and the preflight reports that state without blocking ordinary prod startup or
+deploy. Once the declaration exists, the gate only validates an already mounted archive and runs
+before generic startup or deploy mutation; it never creates or attaches an image. The direct
+full-system prod launcher, the Companion UI (including its warm-start path), `cold_boot` before
+host-state preparation or Compose teardown, `make prod-up`, both runtime-verification launchers,
+the prod wrapper, and the deploy action all invoke the same conditional gate. Rollback remains
+reachable when the configured archive is unavailable so the previous-good service can be restored.
+An unreadable or malformed channel config fails closed and is never treated as an absent
+declaration. Archive operations still fail closed without a verified binding. HAR-04 remains
+responsible for any archive write, verified copy, representation activation, or hot retirement.
 
-The channel-local `.env.<channel>.local` file is the sole metadata-path authority. Production never
-selects an ambient metadata path: an ambient `HEIMDAL_ARCHIVE_METADATA_FILE` is accepted only as an
-exact consistency copy of that file's single canonical absolute declaration. Aliases, symlinks,
-duplicate declarations, missing files, and cross-channel metadata refuse. The metadata document
-itself carries the explicit `dev`, `test`, or `prod` channel as part of every locked generation, so
-path authority cannot lend a dev/test archive identity to production.
+The channel-local `.env.<channel>.local` file is the sole metadata-path authority once archive is
+configured. Production never selects an ambient metadata path: an ambient
+`HEIMDAL_ARCHIVE_METADATA_FILE` is accepted only as an exact consistency copy of that file's single
+canonical absolute declaration. Aliases, symlinks, duplicate declarations, missing files, and
+cross-channel metadata refuse after opt-in. The metadata document itself carries the explicit `dev`,
+`test`, or `prod` channel as part of every locked generation, so path authority cannot lend a
+dev/test archive identity to production.
 
 ## Non-destructive operator runbook
 
@@ -162,7 +167,8 @@ path authority cannot lend a dev/test archive identity to production.
 
 ## Acceptance criteria
 
-- [x] Archive startup refuses an absent, locked, unencrypted, or identity-mismatched archive mount.
+- [x] When archive is configured, archive startup refuses an absent, locked, unencrypted, or
+      identity-mismatched archive mount.
       Verify: `tests/heimdal/test_local_archive_volume.py::test_archive_requires_mounted_encrypted_volume`
 - [x] The provisioner does not invoke reformat/erase operations and does not write raw blobs directly
       to the parent external volume.

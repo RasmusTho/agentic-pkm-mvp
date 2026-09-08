@@ -52,6 +52,7 @@ os.execv({python!r}, [{python!r}, *sys.argv[1:]])
     env.update(
         {
             "HAR03_ARCHIVE_GATE_FIXTURE_PATH": str(marker_path),
+            "HEIMDAL_ARCHIVE_METADATA_FILE": str(tmp_path / "archive-metadata.json"),
             "PYTHON": str(python_path),
         }
     )
