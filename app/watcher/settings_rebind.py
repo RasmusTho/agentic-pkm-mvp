@@ -182,7 +182,7 @@ class RebindScanReceipt:
 class SettingsRebindWatcherReceipt:
     desired_revision: int
     prior_binding_id: str
-    candidate_binding_id: str
+    candidate_binding_id: str | None
     stage: str
     buffer: tuple[BufferedObservation, ...]
     acknowledgement: RebindScanReceipt | None
@@ -270,7 +270,7 @@ class SettingsRebindWatcherReceipt:
             ),
             candidate_binding_id=_required_text(
                 value["candidateBindingId"], name="candidate binding"
-            ),
+            ) if value["candidateBindingId"] is not None else None,
             stage=stage,
             buffer=tuple(BufferedObservation.from_payload(item) for item in raw_buffer),
             acknowledgement=acknowledgement,
@@ -362,6 +362,8 @@ class DormantSettingsRebindReconciler:
         if snapshot.settings_rebind is None:
             raise RegistryError("settings rebind record is not installed")
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+        if record.phase == "cancelled":
+            return RebindCycle(record=record, mode="stable", receipt=None)
         if record.phase == "dormant":
             return RebindCycle(record=record, mode="dormant", receipt=None)
         if record.phase == "no_lifecycle":
@@ -416,8 +418,10 @@ class DormantSettingsRebindReconciler:
         self._assert_scan_success(summaries)
         # Validate policy before acknowledging or completing the handoff. A
         # completed receipt is an API-visible resume authority, so it must not
-        # be written for a candidate the watcher is forbidden to adopt.
-        self.candidate_vault_path(cycle.record)
+        # be written for a candidate the watcher is forbidden to adopt. A
+        # no-target handoff deliberately drains the old root and resumes idle.
+        if cycle.record.candidate_binding_id is not None:
+            self.candidate_vault_path(cycle.record)
         observations = self._observations(
             summaries,
             states=states,
@@ -501,10 +505,7 @@ class DormantSettingsRebindReconciler:
     def candidate_vault_path(self, record: SettingsRebindRecord) -> Path:
         """Resolve the committed candidate for the next watcher tick."""
 
-        candidate = self._required_binding(
-            record.candidate_binding_id,
-            name="candidate",
-        )
+        candidate = self._required_binding(record.candidate_binding_id, name="candidate")
         registration = self._registry.load().registrations.get(candidate)
         if registration is None:
             raise RegistryError("settings rebind candidate watcher binding is missing")
@@ -527,9 +528,7 @@ class DormantSettingsRebindReconciler:
             return None
         receipt = load_settings_rebind_watcher_receipt(receipt_path)
         expected_prior = self._required_binding(record.prior_binding_id, name="prior")
-        expected_candidate = self._required_binding(
-            record.candidate_binding_id, name="candidate"
-        )
+        expected_candidate = record.candidate_binding_id
         if (
             receipt.desired_revision != record.desired_revision
             or receipt.prior_binding_id != expected_prior
@@ -560,10 +559,8 @@ class DormantSettingsRebindReconciler:
         prior = DormantSettingsRebindReconciler._required_binding(
             record.prior_binding_id, name="prior"
         )
-        candidate = DormantSettingsRebindReconciler._required_binding(
-            record.candidate_binding_id, name="candidate"
-        )
-        if prior == candidate:
+        candidate = record.candidate_binding_id
+        if candidate is not None and prior == candidate:
             raise RegistryError(
                 "settings rebind watcher requires distinct old and candidate bindings"
             )

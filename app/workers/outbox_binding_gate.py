@@ -95,6 +95,34 @@ def worker_effect_window(
         return
     if row_binding not in {runtime.vault_binding_id, COMPATIBILITY_BINDING_ID}:
         raise OutboxBindingDeferred("outbox row belongs to another binding")
+    if row_binding == COMPATIBILITY_BINDING_ID and hasattr(runtime, "registry_store"):
+        from app.instance.settings_rebind import (
+            compatibility_ingress_window,
+            require_compatibility_binding_ready,
+        )
+
+        # Admission is shared with the foreground transition. Once the
+        # transition acquires exclusive mode, every admitted A effect has
+        # exited before the durable prepared/drained receipt is written.
+        with compatibility_ingress_window(runtime.registry_store):
+            try:
+                require_compatibility_binding_ready(
+                    runtime.registry_store,
+                    runtime.vault_binding_id,
+                )
+            except RegistryError as exc:
+                raise OutboxBindingDeferred(str(exc)) from exc
+            with _binding_effect_window(message, runtime):
+                yield
+        return
+    with _binding_effect_window(message, runtime):
+        yield
+
+
+@contextmanager
+def _binding_effect_window(
+    message: Mapping[str, Any], runtime: ScalarBindingRuntime
+) -> Iterator[None]:
     with runtime.effect_leases.shared_effect(
         runtime.vault_binding_id,
         channel_id=runtime.channel_id,

@@ -523,7 +523,16 @@ class VaultRegistryStore:
                     )
                     == existing
                 )
-                if not reload_only_advance and not completed_watcher_retirement:
+                cancelled_precommit = (
+                    existing.phase == "prepared"
+                    and requested.phase == "cancelled"
+                    and requested.lifecycle_posture == "watcher"
+                    and requested.applied_revision == existing.desired_revision
+                    and requested.reload_revision == existing.desired_revision
+                    and requested.scalar_drain_revision == existing.scalar_drain_revision
+                    and requested.prior_binding_id == existing.prior_binding_id
+                )
+                if not reload_only_advance and not completed_watcher_retirement and not cancelled_precommit:
                     raise RegistryError(
                         "settings rebind state cannot change without a revision advance"
                     )
@@ -882,7 +891,8 @@ class VaultRegistryStore:
         self,
         *,
         desired_revision: int,
-        selection: KnownVaultRef,
+        selection: KnownVaultRef | None,
+        default_change: tuple[str | None, str | None] | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Commit rebind state and last-active selection in one registry generation.
@@ -907,41 +917,46 @@ class VaultRegistryStore:
                     "settings rebind selection commit requires the matching prepared/no_lifecycle revision"
                 )
             candidate_id = rebind.candidate_binding_id
-            if candidate_id is None:
-                raise RegistryError("settings rebind selection commit has no candidate binding")
-            registration = current.registrations.get(candidate_id)
-            if registration is None:
-                raise RegistryError("settings rebind candidate binding is not registered")
-            try:
-                selection_path = Path(selection.path).expanduser().resolve(strict=True)
-                registration_path = Path(registration.path).expanduser().resolve(strict=True)
-            except OSError as exc:
-                raise RegistryError("settings rebind candidate path is unavailable") from exc
-            if (
-                selection.ref != registration.ref
-                or selection_path != registration_path
-                or (
-                    registration.vault_id is not None
-                    and selection.vault_id not in (None, registration.vault_id)
-                )
-                or (
-                    registration.local_instance_id is not None
-                    and selection.local_instance_id
-                    not in (None, registration.local_instance_id)
-                )
-            ):
-                raise RegistryError("settings rebind selection identity does not match candidate")
             registrations = copy.deepcopy(current.registrations)
-            registrations[candidate_id] = VaultRegistration(
-                vault_binding_id=registration.vault_binding_id,
-                ref=registration.ref,
-                path=registration.path,
-                vault_id=registration.vault_id,
-                local_instance_id=registration.local_instance_id,
-                vault_name=selection.vault_name,
-                last_opened_at=selection.last_opened_at,
-                extensions=copy.deepcopy(registration.extensions),
-            )
+            if candidate_id is None:
+                if selection is not None:
+                    raise RegistryError("no-target settings rebind cannot carry a selection")
+                registration = None
+            else:
+                registration = current.registrations.get(candidate_id)
+                if registration is None:
+                    raise RegistryError("settings rebind candidate binding is not registered")
+                if selection is None:
+                    raise RegistryError("selected settings rebind candidate is missing")
+                try:
+                    selection_path = Path(selection.path).expanduser().resolve(strict=True)
+                    registration_path = Path(registration.path).expanduser().resolve(strict=True)
+                except OSError as exc:
+                    raise RegistryError("settings rebind candidate path is unavailable") from exc
+                if (
+                    selection.ref != registration.ref
+                    or selection_path != registration_path
+                    or (
+                        registration.vault_id is not None
+                        and selection.vault_id not in (None, registration.vault_id)
+                    )
+                    or (
+                        registration.local_instance_id is not None
+                        and selection.local_instance_id
+                        not in (None, registration.local_instance_id)
+                    )
+                ):
+                    raise RegistryError("settings rebind selection identity does not match candidate")
+                registrations[candidate_id] = VaultRegistration(
+                    vault_binding_id=registration.vault_binding_id,
+                    ref=registration.ref,
+                    path=registration.path,
+                    vault_id=registration.vault_id,
+                    local_instance_id=registration.local_instance_id,
+                    vault_name=selection.vault_name,
+                    last_opened_at=selection.last_opened_at,
+                    extensions=copy.deepcopy(registration.extensions),
+                )
             committed = replace(
                 rebind,
                 applied_revision=rebind.desired_revision,
@@ -963,10 +978,24 @@ class VaultRegistryStore:
             updated = replace(
                 current,
                 revision=next_revision,
-                last_active_vault_ref=registration.ref,
+                last_active_vault_ref=(
+                    current.last_active_vault_ref
+                    if default_change is not None or registration is None
+                    else registration.ref
+                ),
                 registrations=registrations,
                 settings_rebind=committed.as_payload(),
                 extensions=extensions,
+                default_vault_binding_id=(
+                    default_change[0]
+                    if default_change is not None
+                    else current.default_vault_binding_id
+                ),
+                default_vault_provenance=(
+                    default_change[1]
+                    if default_change is not None
+                    else current.default_vault_provenance
+                ),
             )
             self._write_locked(updated)
             return updated

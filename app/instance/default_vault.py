@@ -359,12 +359,23 @@ class InstanceDefaultVaultService:
                 previous_vault_binding_id=before.default_vault_binding_id,
                 changed=False,
             )
-        updated = self._store.set_instance_default(
-            vault_binding_id,
-            provenance=provenance,
-            expected_revision=before.revision,
-            _capability=self._capability,
-        )
+        if before.settings_rebind is not None:
+            from app.instance._storage_boundary import _require_storage_mutation_capability
+            from app.instance.settings_rebind import SettingsRebindActivation
+
+            _require_storage_mutation_capability(self._capability)
+            SettingsRebindActivation.from_environment(self._store).activate_default(
+                binding_id=vault_binding_id,
+                provenance=None if vault_binding_id is None else provenance,
+            )
+            updated = self._store.load()
+        else:
+            updated = self._store.set_instance_default(
+                vault_binding_id,
+                provenance=provenance,
+                expected_revision=before.revision,
+                _capability=self._capability,
+            )
         if updated.last_active_vault_ref != before.last_active_vault_ref:
             raise RegistryError("default mutation must not change last-active history")
         receipt = DefaultVaultReceipt(

@@ -2485,7 +2485,10 @@ def run_registry_once(
     _adopt_idle_selected_binding(cfg, reconciler)
     rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
     if rebind_cycle is not None and rebind_cycle.mode == "stable":
-        cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+        if rebind_cycle.record.candidate_binding_id is None:
+            cfg.enable = False
+        else:
+            cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     rebind_observation_revision = (
         rebind_cycle.record.desired_revision
         if rebind_cycle is not None
@@ -2526,7 +2529,10 @@ def run_registry_once(
             states=states,
         )
         if receipt is not None and receipt.stage == "completed":
-            cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+            if rebind_cycle.record.candidate_binding_id is None:
+                cfg.enable = False
+            else:
+                cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -2557,7 +2563,10 @@ def run_registry_forever(
         # A fresh watcher process may still boot from the old environment
         # binding.  Resolve the completed durable candidate before startup
         # ingestion or the first scan, so restart cannot observe old-root work.
-        cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
+        if startup_rebind_cycle.record.candidate_binding_id is None:
+            cfg.enable = False
+        else:
+            cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
     # `watcher run` is the production entrypoint.  Compile its bound vault at
     # boot just as API and worker do; the registry config is authoritative for
     # this process and need not depend on VAULT_ROOT being set separately.
@@ -2621,7 +2630,10 @@ def run_registry_forever(
                 states=states,
             )
             if receipt is not None and receipt.stage == "completed":
-                cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+                if rebind_cycle.record.candidate_binding_id is None:
+                    cfg.enable = False
+                else:
+                    cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,

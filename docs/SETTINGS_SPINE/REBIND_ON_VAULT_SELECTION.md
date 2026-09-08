@@ -43,6 +43,12 @@ Those substrate and registry responsibilities are owned by MVR-01:
 - SETTINGS-05A owns the schema-specific `minimum_settings_rebind_runtime=1` floor. It records that
   floor before the first `settings_rebind.v1` record becomes authoritative, migrates every producer,
   and adds host/process preflight so an older writer cannot read or rewrite the new record.
+- The enabling child #5365 hardens the existing compatibility bridge without activating scoped
+  picker behavior: API/CLI default SET and CLEAR, legacy choose/open, the separately running watcher,
+  and the scalar worker share one cross-process ingress gate and durable handoff revision. A prepared
+  revision blocks stale compatibility effects until admitted A work is released; no-target CLEAR
+  preserves `last_active_vault_ref`, and pre-commit faults cancel back to A while post-commit faults
+  recover forward to B. #3860 remains the final MVR-05B integration and closure authority.
 
 ## What This Task Does
 
