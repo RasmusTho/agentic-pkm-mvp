@@ -5,9 +5,9 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-09-05
+Last reviewed: 2026-09-08
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, tests/runtime/test_startup_artifact_call_sites.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-05
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-08
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -264,6 +264,15 @@ TEST startup has two fail-closed Compose modes. With no selected vault, the univ
 keeps the watcher disabled and its vault path empty. With an explicit TEST vault, startup composes
 the selected-vault mount and then the TEST-only activation overlay, which binds the watcher to the
 same in-container `/app/vault` target regardless of inherited parent-shell watcher values.
+
+Fresh TEST bootstrap also supplies `LLM_PROVIDER=mock` when no explicit
+`TEST_LLM_PROVIDER` is configured. Before the MVR-05 instance-state deployment fence runs,
+`scripts/start_full_system.sh` starts only the `db` service and waits for its in-container
+`pg_isready` probe; a failed start or readiness timeout records a fail-closed startup reason and
+does not enter the fence. The fence and the later runtime startup remain unchanged after that
+precondition. Its bind-mounted quiescence and owner-inventory readers tolerate only a bounded
+visibility window for transiently truncated host projections, and a fresh registry may be
+materialized only from the authenticated owner receipt and matching ownership-ledger state.
 
 Use `docs/runbooks/UAT_PANEL_WATCHER.md` for the detailed walkthrough and `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` when you need the full reset semantics.
 

@@ -103,6 +103,18 @@ def test_derived_env_kills_the_six_symptoms(tmp_path: Path) -> None:
     assert channel_env_preflight(env, channel="test").ok
 
 
+def test_derived_env_defaults_to_mock_provider(tmp_path: Path) -> None:
+    env = derive_test_channel_env(repo_root=tmp_path, environ={})
+
+    assert env["LLM_PROVIDER"] == "mock"
+
+    overridden = derive_test_channel_env(
+        repo_root=tmp_path,
+        environ={"TEST_LLM_PROVIDER": "ollama"},
+    )
+    assert overridden["LLM_PROVIDER"] == "ollama"
+
+
 def test_explicit_vault_root_override_is_absolute(tmp_path: Path) -> None:
     # A relative override is resolved to an absolute path (no CWD leakage).
     env = derive_test_channel_env(repo_root=tmp_path, environ={}, vault_root="some-vault")

@@ -1549,6 +1549,8 @@ _LEGACY_INVENTORY_SOURCE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _LEGACY_OWNER_IDENTITY_RE = re.compile(r"^(?:inode:[0-9]+:[0-9]+|path:/.*)$")
 _MVR05_OWNER_INVENTORY_VISIBILITY_TIMEOUT_SECONDS = 1.0
 _MVR05_OWNER_INVENTORY_VISIBILITY_RETRY_SECONDS = 0.05
+_MVR05_QUIESCENCE_INVENTORY_VISIBILITY_TIMEOUT_SECONDS = 1.0
+_MVR05_QUIESCENCE_INVENTORY_VISIBILITY_RETRY_SECONDS = 0.05
 _DEPLOYMENT_LEASE_SCHEMA = "agentic-pkm.host-deployment-lease.v3"
 _DEPLOYMENT_COMPATIBILITY_BLOCK_SCHEMA = (
     "agentic-pkm.host-deployment-compatibility-block.v1"
@@ -1573,6 +1575,32 @@ def _any_deployment_lease_exists(host_global_root: Path) -> bool:
     return _deployment_lease_path(
         host_global_root
     ).exists() or _legacy_deployment_lease_path(host_global_root).exists()
+
+
+def _read_deployment_quiescence_inventory(
+    inventory_file: Path,
+) -> tuple[bytes, dict[str, object]]:
+    """Read a bind-mounted quiescence inventory after its publication converges.
+
+    The host producer publishes the inventory atomically, but Docker/Colima can
+    briefly expose the destination while the replacement is still propagating
+    into the container mount. Retry only parse failures; schema and authority
+    validation remain fail-closed in the caller once a complete JSON document
+    is visible.
+    """
+
+    deadline = time.monotonic() + _MVR05_QUIESCENCE_INVENTORY_VISIBILITY_TIMEOUT_SECONDS
+    while True:
+        try:
+            inventory_bytes = inventory_file.read_bytes()
+            inventory = json.loads(inventory_bytes)
+            if not isinstance(inventory, dict):
+                raise ValueError
+            return inventory_bytes, inventory
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_MVR05_QUIESCENCE_INVENTORY_VISIBILITY_RETRY_SECONDS)
 
 
 def _deployment_public_root(host_global_root: Path) -> Path:
@@ -2315,8 +2343,9 @@ def _prove_instance_state_quiescence(
             or inventory_metadata.st_mode & 0o777 != 0o600
         ):
             raise ValueError
-        inventory_bytes = inventory_file.read_bytes()
-        inventory = json.loads(inventory_bytes)
+        inventory_bytes, inventory = _read_deployment_quiescence_inventory(
+            inventory_file
+        )
         domains = inventory.get("domains")
         controller = lease.get("controller")
         inventory_controller = inventory.get("controller")
@@ -2444,7 +2473,16 @@ def _read_legacy_owner_inventory_bytes(
     """
 
     if expected_sha256 is None:
-        return inventory.read_bytes()
+        deadline = time.monotonic() + _MVR05_OWNER_INVENTORY_VISIBILITY_TIMEOUT_SECONDS
+        while True:
+            try:
+                payload = inventory.read_bytes()
+                json.loads(payload)
+                return payload
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(_MVR05_OWNER_INVENTORY_VISIBILITY_RETRY_SECONDS)
     if _LEGACY_INVENTORY_SOURCE_DIGEST_RE.fullmatch(expected_sha256) is None:
         raise InstanceStatePreflightError(
             "expected legacy-owner inventory digest is invalid"
@@ -2872,6 +2910,103 @@ def _converge_authenticated_legacy_ledger(
         raise InstanceStatePreflightError(
             f"registry/ledger consistency verification failed: {exc}"
         ) from exc
+
+
+def _materialize_authenticated_channel_registrations(
+    *,
+    channel: str,
+    registry: VaultRegistryStore,
+    ledger: OwnershipLedger,
+    owners: tuple[LegacyOwner, ...],
+) -> RegistrySnapshot:
+    """Materialize an empty registry from the already-authenticated owner receipt.
+
+    A fresh instance-state volume can outlive the legacy app-local settings file. In
+    that shape MVR-05 has enough fenced host evidence to retain an existing binding,
+    but no legacy export is available to populate the channel registry. Reusing only
+    binding IDs and canonical paths from the receipt keeps this recovery inside the
+    existing authority seam; it never invents a new host lease or reads foreign
+    configuration as an ownership source.
+    """
+
+    from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+    snapshot = registry.load()
+    if snapshot.registrations or snapshot.removal_tombstones or snapshot.transfer_lineage:
+        return snapshot
+    channel_owners = tuple(
+        owner
+        for owner in owners
+        if owner.channel_id == channel and owner.vault_binding_id
+    )
+    if not channel_owners:
+        return snapshot
+    for owner in channel_owners:
+        try:
+            resolved = ledger.resolve_live_owner_bindings(
+                (replace(owner, vault_binding_id=""),),
+                allow_legacy=True,
+            )
+        except LedgerError as exc:
+            raise InstanceStatePreflightError(
+                "authenticated owner does not match an active ownership lease"
+            ) from exc
+        if (
+            len(resolved) != 1
+            or resolved[0].vault_binding_id != owner.vault_binding_id
+        ):
+            raise InstanceStatePreflightError(
+                "authenticated owner does not match its ownership binding"
+            )
+    for owner in channel_owners:
+        root = str(owner.root.expanduser().resolve(strict=False))
+        registration = VaultRegistration(
+            vault_binding_id=owner.vault_binding_id,
+            ref=f"path:{root}",
+            path=root,
+            extensions={
+                "status": "initialized",
+                "contentEpoch": 1,
+                "provenance": "authenticated_legacy_owner_inventory",
+            },
+        )
+        snapshot = registry.register(
+            registration,
+            expected_revision=snapshot.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+    tombstone_paths: dict[str, str] = {}
+    with ledger._locked():
+        key = ledger._load_or_create_key_locked(allow_create=False)
+        current = ledger._load_or_create_ledger_locked(key, allow_create=False)
+        for binding_id, lease in current.tombstones.items():
+            if lease.channel_id != channel:
+                continue
+            root = str(
+                Path(ledger._open_root(lease.sealed_root, key))
+                .expanduser()
+                .resolve(strict=False)
+            )
+            tombstone_paths[binding_id] = root
+    if tombstone_paths:
+        tombstones = {
+            binding_id: RemovalTombstone(
+                vault_binding_id=binding_id,
+                ref=f"path:{root}",
+                path=root,
+                vault_id=None,
+                local_instance_id=None,
+                content_epoch=1,
+            )
+            for binding_id, root in tombstone_paths.items()
+        }
+        snapshot = registry.commit_state(
+            registrations=dict(snapshot.registrations),
+            removal_tombstones=tombstones,
+            expected_revision=snapshot.revision,
+            _capability=_STORAGE_MUTATION_CAPABILITY,
+        )
+    return snapshot
 
 
 def _prepare_legacy_registry_for_mvr05_floor(
@@ -3500,6 +3635,12 @@ def _finish_instance_state_deployment_locked(
         ]
     if len({owner.vault_binding_id for owner in owners}) != len(owners):
         raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
+    registry = _materialize_authenticated_channel_registrations(
+        channel=channel,
+        registry=store,
+        ledger=ledger,
+        owners=tuple(owners),
+    )
     try:
         ledger_snapshot = backup._require_registry_ledger_consistency(
             registry=registry,
