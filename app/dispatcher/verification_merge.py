@@ -788,36 +788,20 @@ class VerificationMergeExecutor:
             and isinstance(reconciliation_sequence, int)
             and not isinstance(reconciliation_sequence, bool)
         )
-        terminal_reconciliation = (
-            pending.get("outbox_status") == "succeeded"
-            and durable_reconciliation
-            and isinstance(reconciliation_evidence, Mapping)
-            and reconciliation_evidence.get("outcome")
-            in {"terminal_no_effect", "terminal_no_effect_after_recovery"}
-        )
         prepared_gate: Mapping[str, object] | None = None
         if not dry_run:
-            if terminal_reconciliation:
-                # A durable terminal no-effect receipt is already the
-                # authenticated recovery authority. Do not re-read the live
-                # prepared gate: the rejected body may intentionally remain
-                # invalid after the effect boundary has been fenced.
-                stored_prepared_gate = payload.get("verified_merge_prepared")
-                if not isinstance(stored_prepared_gate, Mapping):
-                    raise MergeAuthorityError(
-                        "terminal recovery prepared authority is unavailable"
-                    )
-                prepared_gate = stored_prepared_gate
-            else:
-                prepared_gate = self.repository.verified_merge_prepared(
-                    canonical,
-                    run.pr_number,
-                    run_id=run.run_id,
-                    head_sha=run.current_head_sha,
-                    expected_repair_budget=(
-                        self.ledger.repair_budget_projection(run.run_id)
-                    ),
+            # Recovery never replays the merge effect.  The prepared gate in
+            # the durable task-bound payload is sufficient to validate the
+            # recovery manifest; fenced readback below decides whether the
+            # original effect applied.  Re-reading the live gate here would
+            # strand an interrupted pre-transport intent when the rejected
+            # body remains invalid after the boundary was fenced.
+            stored_prepared_gate = payload.get("verified_merge_prepared")
+            if not isinstance(stored_prepared_gate, Mapping):
+                raise MergeAuthorityError(
+                    "recovery prepared authority is unavailable"
                 )
+            prepared_gate = stored_prepared_gate
         expected_payload: dict[str, object] = {
             "repository": canonical,
             "governing_issue": run.request.get("linked_issue"),
@@ -978,6 +962,29 @@ class VerificationMergeExecutor:
             or not self._same_manifest(manifest, current_manifest)
             or not self._required_gates_pass(current_gates)
         )
+        prepared_recovery_error: str | None = None
+        if not dry_run and not drifted:
+            try:
+                current_prepared_gate = self.repository.verified_merge_prepared(
+                    canonical,
+                    run.pr_number,
+                    run_id=run.run_id,
+                    head_sha=run.current_head_sha,
+                    expected_repair_budget=(
+                        self.ledger.repair_budget_projection(run.run_id)
+                    ),
+                )
+            except MergeAuthorityError as exc:
+                drifted = True
+                prepared_recovery_error = str(exc)
+            else:
+                if not self._same_prepared_gate(
+                    prepared_gate or {}, current_prepared_gate
+                ):
+                    drifted = True
+                    prepared_recovery_error = (
+                        "verified merge prepared authority changed during recovery"
+                    )
         self.ledger.finish_effect(
             operation_key,
             observed_applied=drifted,
@@ -986,6 +993,11 @@ class VerificationMergeExecutor:
                     "terminal_no_effect_after_recovery"
                     if drifted
                     else "retry_after_readback"
+                ),
+                **(
+                    {"verified_merge_prepared_error": prepared_recovery_error}
+                    if prepared_recovery_error is not None
+                    else {}
                 ),
                 **dict(readback),
             },

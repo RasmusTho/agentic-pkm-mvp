@@ -206,8 +206,13 @@ class Credentials:
 
 
 class RejectingBoundaryPreparedRepository(RepositoryAuthority):
-    def __init__(self, *, prepared_gates: list[dict[str, object]]) -> None:
-        super().__init__(prepared_gates=prepared_gates)
+    def __init__(
+        self,
+        *,
+        prepared_gates: list[dict[str, object]],
+        **kwargs,
+    ) -> None:
+        super().__init__(prepared_gates=prepared_gates, **kwargs)
         self.prepared_gate_calls = 0
 
     def verified_merge_prepared(self, *args, **kwargs):
@@ -338,6 +343,31 @@ class CrashAfterReconcileOutbox(Outbox):
             evidence=evidence,
         )
         raise SystemExit("simulated crash after durable reconciliation")
+
+
+class FailingReconcileOutbox(Outbox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fail_once = True
+
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
+        self.calls.append("reconcile")
+        if self.fail_once:
+            self.fail_once = False
+            raise RuntimeError("simulated reconciliation failure")
+        return super().reconcile(
+            claim,
+            observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown,
+            evidence=evidence,
+        )
 
 
 class BlockingReviewWinsIntentRaceClient(FakeBuilderOpsClient):
@@ -947,6 +977,7 @@ def test_rejected_effect_boundary_authority_terminalizes_no_effect() -> None:
     }
     repository = RejectingBoundaryPreparedRepository(
         prepared_gates=[prepared, prepared],
+        merged=False,
     )
     repository.manifest_blobs = iter(["blob-1", "blob-1", "blob-1"])
 
@@ -964,6 +995,47 @@ def test_rejected_effect_boundary_authority_terminalizes_no_effect() -> None:
 
     assert receipt.outcome == "terminal_no_effect"
     assert repository.prepared_gate_calls == 3
+
+
+def test_recovery_fences_unrecorded_boundary_rejection_before_live_gate() -> None:
+    ledger, run, original_outbox = claimed_run()
+    outbox = FailingReconcileOutbox(
+        run.run_id,
+        payload_loader=original_outbox.payload_loader,
+    )
+    ledger.effect_outbox = outbox
+    prepared = {
+        "contract": "verified_merge_prepared_gate.v1",
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "neutralized_body_sha256": "a" * 64,
+        "authority_sha256": "b" * 64,
+        "phase_sha256": "c" * 64,
+        "closing_reference_count": 0,
+    }
+    repository = RejectingBoundaryPreparedRepository(
+        prepared_gates=[prepared, prepared],
+        merged=False,
+    )
+    repository.manifest_blobs = iter(
+        ["blob-1", "blob-1", "blob-1", "blob-1"]
+    )
+    repository.base_reads = iter([BASE, BASE, BASE])
+    executor = VerificationMergeExecutor(ledger, outbox, repository, Credentials())
+
+    with pytest.raises(RuntimeError, match="reconciliation failure"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert outbox.state == "unknown"
+    receipt = executor.recover(run)
+
+    assert receipt.outcome == "terminal_no_effect"
+    assert repository.prepared_gate_calls == 4
+    assert "recover" in outbox.calls
 
 
 def test_response_loss_reconciles_before_retry() -> None:
