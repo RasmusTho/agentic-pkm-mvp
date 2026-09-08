@@ -266,15 +266,18 @@ if builderops_assert_failure_domain; then
   :
 else
   failure_domain_exit=$?
-  case "${failure_domain_exit}" in
-    70) failure_domain_reason="builderops_product_contexts_must_differ" ;;
-    71) failure_domain_reason="builderops_product_engines_must_differ" ;;
-    72) failure_domain_reason="product_project_on_builderops_engine" ;;
-    73) failure_domain_reason="builderops_project_on_product_engine" ;;
-    74) failure_domain_reason="duplicate_builderops_engine_writers" ;;
-    75) failure_domain_reason="invalid_docker_project_listing" ;;
-    *) failure_domain_reason="failure_domain_preflight_refused" ;;
-  esac
+  failure_domain_reason="${BUILDEROPS_FAILURE_DOMAIN_REASON:-}"
+  if [ -z "${failure_domain_reason}" ]; then
+    case "${failure_domain_exit}" in
+      70) failure_domain_reason="builderops_product_contexts_must_differ" ;;
+      71) failure_domain_reason="builderops_product_engines_must_differ" ;;
+      72) failure_domain_reason="product_project_on_builderops_engine" ;;
+      73) failure_domain_reason="builderops_project_on_product_engine" ;;
+      74) failure_domain_reason="duplicate_builderops_engine_writers" ;;
+      75) failure_domain_reason="invalid_docker_project_listing" ;;
+      *) failure_domain_reason="failure_domain_preflight_refused" ;;
+    esac
+  fi
   record_preflight_refusal "${failure_domain_reason}" "${failure_domain_exit}" "${target_sha}" "${target_digest}" "${target_postgres_digest}"
   exit "${failure_domain_exit}"
 fi

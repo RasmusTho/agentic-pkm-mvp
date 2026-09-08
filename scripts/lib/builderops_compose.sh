@@ -42,12 +42,21 @@ builderops_assert_failure_domain() {
   local product_context="${PRODUCT_DOCKER_CONTEXT:?Product Docker context is required}"
   local builder_id product_id builder_projects product_projects builder_project_state product_project_state
 
+  unset BUILDEROPS_FAILURE_DOMAIN_REASON
   [ "${builder_context}" != "${product_context}" ] || {
     echo "BuilderOps and Product Docker contexts must differ" >&2
     return 70
   }
-  builder_id="$(builderops_engine_id "${builder_context}")"
-  product_id="$(builderops_engine_id "${product_context}")"
+  builder_id="$(builderops_engine_id "${builder_context}")" || {
+    echo "BuilderOps Docker engine info is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_engine_info_unavailable"
+    return 75
+  }
+  product_id="$(builderops_engine_id "${product_context}")" || {
+    echo "Product Docker engine info is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="product_engine_info_unavailable"
+    return 75
+  }
   export BUILDEROPS_OBSERVED_BUILDER_ENGINE_ID="${builder_id}"
   export BUILDEROPS_OBSERVED_PRODUCT_ENGINE_ID="${product_id}"
   [ -n "${builder_id}" ] && [ -n "${product_id}" ] && [ "${builder_id}" != "${product_id}" ] || {
@@ -55,14 +64,24 @@ builderops_assert_failure_domain() {
     return 71
   }
 
-  builder_projects="$(docker --context "${builder_context}" compose ls --format json)"
-  product_projects="$(docker --context "${product_context}" compose ls --format json)"
+  builder_projects="$(docker --context "${builder_context}" compose ls --format json)" || {
+    echo "BuilderOps Docker Compose project listing is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_project_listing_unavailable"
+    return 75
+  }
+  product_projects="$(docker --context "${product_context}" compose ls --format json)" || {
+    echo "Product Docker Compose project listing is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="product_project_listing_unavailable"
+    return 75
+  }
   builder_project_state="$(builderops_project_listing_state "${builder_projects}")" || {
     echo "BuilderOps Docker Compose project listing is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="invalid_docker_project_listing"
     return 75
   }
   product_project_state="$(builderops_project_listing_state "${product_projects}")" || {
     echo "Product Docker Compose project listing is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="invalid_docker_project_listing"
     return 75
   }
   if printf '%s' "${builder_projects}" | grep -Eq '"Name"[[:space:]]*:[[:space:]]*"pkm-'; then
