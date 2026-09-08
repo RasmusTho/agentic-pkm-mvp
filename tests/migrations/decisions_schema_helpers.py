@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 @contextmanager
 def migrated_decisions_db(monkeypatch: pytest.MonkeyPatch):
     """Yield a fresh database upgraded through the live Alembic head."""
+    from app.db.decisions_schema import reset_decisions_schema_assertion_memo
     from app.db.dsn import resolve_dsn
 
     admin_dsn = resolve_dsn()
@@ -41,11 +42,13 @@ def migrated_decisions_db(monkeypatch: pytest.MonkeyPatch):
 
         monkeypatch.setenv("DATABASE_URL", dsn)
         monkeypatch.delenv("DB_DSN", raising=False)
+        reset_decisions_schema_assertion_memo()
         cfg = Config(str(REPO_ROOT / "alembic.ini"))
         cfg.set_main_option("script_location", str(REPO_ROOT / "app" / "alembic"))
         command.upgrade(cfg, "head")
         yield dsn
     finally:
+        reset_decisions_schema_assertion_memo()
         try:
             with psycopg.connect(admin_dsn, autocommit=True) as conn:
                 conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
