@@ -145,8 +145,7 @@ Each in-flight device connection owns one `OAuthWriterAdmission`. Normal complet
 unexpected failure, explicit cancellation/close, and a dropped pending connection release that
 admission exactly once; a pending poll retains it only while its connection remains live for reuse.
 Release is idempotent and the nonblocking cross-process admission continues to refuse a second
-writer until the first connection has released it. The dev CLI also cancels at its outer exit
-boundary so interrupted authorization cannot hold the descriptor until process restart.
+writer until the first connection has released it.
 
 A restart with a missing key degrades to `auth_key_missing` — visible, fail-closed, recoverable by
 re-provisioning the key; consent is not silently re-requested. In-flight device-flow sessions do not
