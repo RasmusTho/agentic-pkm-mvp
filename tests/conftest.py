@@ -214,6 +214,17 @@ def _reset_retrieval_tuning_cache():
     reset_retrieval_tuning_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_decisions_schema_assertion_memo():
+    """Keep schema-mutating tests fail-loud across process-global preflight memoization."""
+
+    from app.db.decisions_schema import reset_decisions_schema_assertion_memo
+
+    reset_decisions_schema_assertion_memo()
+    yield
+    reset_decisions_schema_assertion_memo()
+
+
 def pytest_addoption(parser) -> None:
     """Provide minimal timeout flags when pytest-timeout is unavailable."""
 
