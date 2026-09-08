@@ -18,6 +18,13 @@ builderops_engine_id() {
   docker --context "${context}" info --format '{{.ID}}'
 }
 
+builderops_valid_engine_id() {
+  local engine_id="${1:-}"
+  case "${engine_id}" in
+    ""|*[![:alnum:]_.:-]*) return 1 ;;
+  esac
+}
+
 builderops_project_listing_state() {
   local projects="${1:?Compose project listing required}"
   printf '%s' "${projects}" | python3 -c '
@@ -52,8 +59,18 @@ builderops_assert_failure_domain() {
     export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_engine_info_unavailable"
     return 75
   }
+  builderops_valid_engine_id "${builder_id}" || {
+    echo "BuilderOps Docker engine info is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_engine_info_unavailable"
+    return 75
+  }
   export BUILDEROPS_OBSERVED_BUILDER_ENGINE_ID="${builder_id}"
   product_id="$(builderops_engine_id "${product_context}")" || {
+    echo "Product Docker engine info is invalid or unavailable" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="product_engine_info_unavailable"
+    return 75
+  }
+  builderops_valid_engine_id "${product_id}" || {
     echo "Product Docker engine info is invalid or unavailable" >&2
     export BUILDEROPS_FAILURE_DOMAIN_REASON="product_engine_info_unavailable"
     return 75

@@ -263,6 +263,10 @@ printf 'docker %s\n' "$*" >> "$FAKE_EVENT_LOG"
 context=""
 if [ "${1:-}" = "--context" ]; then context="$2"; shift 2; fi
 if [ "${1:-}" = info ]; then
+  if [ "$context" = builderops ] && [ -n "${FAKE_ENGINE_INFO_OUTPUT:-}" ]; then
+    printf '%s' "$FAKE_ENGINE_INFO_OUTPUT"
+    exit 0
+  fi
   if [ "${FAKE_FAIL_INFO_CONTEXT:-}" = "$context" ]; then
     printf 'partial-engine\n'
     exit 17
@@ -700,6 +704,36 @@ def test_deploy_refuses_failed_engine_info_with_partial_stdout(tmp_path: Path) -
     assert " up " not in events
     assert "curl " not in events
     assert "tailscale " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["builderops_engine_info_unavailable", "no_mutation_performed"]
+
+
+def test_deploy_refuses_malformed_successful_engine_info_before_docker(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_ENGINE_INFO_OUTPUT"] = "builder-engine\npartial-engine"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    assert "engine info is invalid or unavailable" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " compose ls " not in events
+    assert " pull " not in events
+    assert " up " not in events
     refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
     assert refusal["refusals"] == ["builderops_engine_info_unavailable", "no_mutation_performed"]
 
