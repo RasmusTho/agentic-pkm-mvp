@@ -328,6 +328,31 @@ class DeviceConnection:
     def public_view(self) -> dict[str, Any]:
         return self.handle.public_view()
 
+    def cancel(self) -> None:
+        """Release this flow's writer admission without exposing secrets."""
+
+        admission = self._writer_admission
+        if admission is not None:
+            admission.release()
+
+    release = cancel
+    close = cancel
+
+    def __enter__(self) -> "DeviceConnection":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.cancel()
+
+    def __del__(self) -> None:
+        # Pending device polls intentionally retain admission for reuse.  A
+        # caller that abandons the connection releases it via this last-resort
+        # finalizer, while explicit cancel()/release()/close() remain preferred.
+        try:
+            self.cancel()
+        except BaseException:
+            pass
+
 
 def _bundle_from_response(data: dict[str, Any]) -> TokenBundle:
     access = data.get("access_token")
@@ -667,6 +692,12 @@ class YouTubeAccountBinder:
     def start_reconnect(self, binding_id: str) -> DeviceConnection:
         return self._start_connection(reconnect_binding_id=binding_id)
 
+    @staticmethod
+    def cancel_device_connection(connection: DeviceConnection) -> None:
+        """Cancel an in-flight device flow and release its admission."""
+
+        connection.cancel()
+
     def _start_connection(self, *, reconnect_binding_id: str | None) -> DeviceConnection:
         admission = self._store.acquire_writer_admission()
         try:
@@ -709,12 +740,12 @@ class YouTubeAccountBinder:
         except DeviceAuthorizationPending:
             raise
         except BaseException:
-            admission.release()
+            connection.release()
             raise
         try:
             return self._bind_from_bundle(bundle, connection.reconnect_binding_id)
         finally:
-            admission.release()
+            connection.release()
 
     def _bind_from_bundle(self, bundle: TokenBundle, reconnect_binding_id: str | None) -> dict[str, Any]:
         if not bundle.refresh_token:

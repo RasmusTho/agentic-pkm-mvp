@@ -181,6 +181,7 @@ def youtube_inbox_dev() -> None:
 
 @youtube_inbox_dev.command(name="connect", help="Connect one account with device OAuth.")
 def connect() -> None:
+    connection = None
     try:
         services = build_youtube_inbox_dev_services()
         connection = services.binder.start_device_connection()
@@ -201,6 +202,13 @@ def connect() -> None:
         raise
     except Exception as exc:
         raise _safe_cli_failure(exc) from None
+    finally:
+        # A cancelled CLI invocation must not leave the process-held writer
+        # admission behind.  DeviceConnection also finalizes dropped handles,
+        # but this deterministic boundary covers Ctrl-C and other exits.
+        cancel = getattr(connection, "cancel", None)
+        if callable(cancel):
+            cancel()
 
 
 def _services_for_binding(account_binding_id: str) -> YouTubeInboxDevServices:
