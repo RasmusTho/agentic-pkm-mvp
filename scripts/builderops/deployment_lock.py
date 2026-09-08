@@ -29,9 +29,28 @@ def _assert_held(lock_path: Path, lock_fd: int) -> int:
             )
             return 75
 
-        # A separately opened descriptor must be unable to acquire the lock.
-        # This rejects a forged environment variable or argv marker that
-        # merely points at an open, unlocked file.
+        # First prove that the path is already locked.  An unlocked descriptor
+        # must not be allowed to acquire the lock as part of its own proof.
+        try:
+            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            fcntl.flock(probe_fd, fcntl.LOCK_UN)
+            print("BuilderOps deployment interlock is not held", file=sys.stderr)
+            return 75
+
+        # Re-acquiring on the inherited open-file description succeeds only
+        # for the descriptor that owns the lock.  A separately opened fd for
+        # the same inode remains blocked by the other deployment.
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(
+                "BuilderOps deployment interlock descriptor does not own the lock",
+                file=sys.stderr,
+            )
+            return 75
         try:
             fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

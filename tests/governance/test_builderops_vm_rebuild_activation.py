@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import subprocess
@@ -19,12 +20,18 @@ from app.ops.builderops_vm_rebuild_activation import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
 def _evidence() -> dict[str, object]:
     return {
         "receipt_type": "builderops_vm_rebuild_activation.v1",
         "receipt_version": 1,
         "target_vm": {"vmid": 102, "name": "builder-system"},
-        "observed_at": "2026-09-08T18:56:44Z",
+        "observed_at": _now_iso(),
         "source_refs": sorted(
             [
                 "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract",
@@ -33,8 +40,10 @@ def _evidence() -> dict[str, object]:
                 "github:pr:5457",
                 "github:commit:6e8e62f36ea64c2ad0691028c99be39d2fce74d4",
                 "operator:sha256:" + "a" * 64,
+                "receipt:devsystem_vm102_component_inventory.v1:" + "b" * 64,
             ]
         ),
+        "component_inventory_digest": "b" * 64,
         "activation_mode": "existing_runtime_reconciled",
         "candidate_identity": {
             "source_sha": "6e8e62f36ea64c2ad0691028c99be39d2fce74d4",
@@ -162,6 +171,44 @@ def test_activation_receipt_refuses_secret_bearing_evidence() -> None:
 
     with pytest.raises(ActivationValidationError):
         build_activation_receipt(evidence)
+
+
+def test_activation_receipt_requires_inventory_digest_and_matching_receipt_ref() -> None:
+    missing = _evidence()
+    del missing["component_inventory_digest"]
+    with pytest.raises(ActivationValidationError):
+        build_activation_receipt(missing)
+
+    mismatched = _evidence()
+    mismatched["component_inventory_digest"] = "c" * 64
+    with pytest.raises(ActivationValidationError):
+        build_activation_receipt(mismatched)
+
+    wrong_type = _evidence()
+    wrong_type["source_refs"] = sorted(
+        ref.replace("devsystem_vm102_component_inventory.v1", "other_receipt")
+        if ref.startswith("receipt:devsystem_vm102_component_inventory.v1:")
+        else ref
+        for ref in wrong_type["source_refs"]  # type: ignore[index]
+    )
+    with pytest.raises(ActivationValidationError):
+        build_activation_receipt(wrong_type)
+
+
+def test_activation_receipt_rejects_stale_or_future_observed_at() -> None:
+    stale = _evidence()
+    stale["observed_at"] = (
+        datetime.now(timezone.utc) - timedelta(hours=24, seconds=1)
+    ).isoformat().replace("+00:00", "Z")
+    with pytest.raises(ActivationValidationError, match="stale"):
+        build_activation_receipt(stale)
+
+    future = _evidence()
+    future["observed_at"] = (
+        datetime.now(timezone.utc) + timedelta(minutes=5, seconds=1)
+    ).isoformat().replace("+00:00", "Z")
+    with pytest.raises(ActivationValidationError, match="future"):
+        build_activation_receipt(future)
 
 
 def test_activation_receipt_cli_is_operator_evidence_only(tmp_path: Path) -> None:

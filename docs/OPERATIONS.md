@@ -490,6 +490,12 @@ writer. The refusal envelope is deliberately distinct from the successful
 `scripts/deploy_builderops.sh`, with the receipt shape defined in
 `docs/BUILDEROPS_CONTROL_PLANE/README.md`.
 
+The successful activation receipt is admitted only with a matching
+`component_inventory_digest` and exactly one inventory-receipt source reference. Its
+`observed_at` must be within the 24-hour evidence window and no more than five minutes ahead of
+the verifier clock. Re-entry also validates the inherited lock descriptor itself; an unrelated
+open descriptor for the same lock path cannot authorize deployment mutation.
+
 This repository-side guard is not VM102 activation or health evidence. Live activation,
 single-writer proof, deploy, health, and owner read-back remain separate receipt-gated operations
 under #5056 and #5181.

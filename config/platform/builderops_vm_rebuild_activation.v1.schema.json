@@ -9,6 +9,7 @@
     "target_vm",
     "observed_at",
     "source_refs",
+    "component_inventory_digest",
     "activation_mode",
     "candidate_identity",
     "host_identity",
@@ -40,6 +41,7 @@
       "uniqueItems": true,
       "items": {"type": "string", "minLength": 1}
     },
+    "component_inventory_digest": {"$ref": "#/$defs/digest"},
     "activation_mode": {"enum": ["fresh_rebuild", "existing_runtime_reconciled"]},
     "candidate_identity": {
       "type": "object",

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -34,6 +34,9 @@ _SCHEMA_PATH = (
     _ROOT / "config" / "platform" / "builderops_vm_rebuild_activation.v1.schema.json"
 )
 _TARGET_VM: Final[dict[str, Any]] = {"vmid": 102, "name": "builder-system"}
+_MAX_EVIDENCE_AGE: Final = timedelta(hours=24)
+_MAX_CLOCK_SKEW: Final = timedelta(minutes=5)
+_INVENTORY_RECEIPT_TYPE: Final = "devsystem_vm102_component_inventory.v1"
 _REQUIRED_SOURCE_REFS: Final[frozenset[str]] = frozenset(
     {
         "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract",
@@ -80,6 +83,7 @@ _EVIDENCE_KEYS: Final[frozenset[str]] = frozenset(
         "target_vm",
         "observed_at",
         "source_refs",
+        "component_inventory_digest",
         "activation_mode",
         "candidate_identity",
         "host_identity",
@@ -156,9 +160,15 @@ def _validate_timestamp(value: Any) -> None:
         raise ActivationValidationError("observed_at must be an RFC 3339 timestamp") from exc
     if parsed.tzinfo is None:
         raise ActivationValidationError("observed_at must include a timezone")
+    observed = parsed.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if observed - now > _MAX_CLOCK_SKEW:
+        raise ActivationValidationError("observed_at is too far in the future")
+    if now - observed > _MAX_EVIDENCE_AGE:
+        raise ActivationValidationError("observed_at evidence is stale")
 
 
-def _validate_source_refs(value: Any) -> list[str]:
+def _validate_source_refs(value: Any, *, component_inventory_digest: str) -> list[str]:
     if (
         not isinstance(value, list)
         or not value
@@ -168,6 +178,16 @@ def _validate_source_refs(value: Any) -> list[str]:
         raise ActivationValidationError("source_refs are invalid")
     if not _REQUIRED_SOURCE_REFS.issubset(value):
         raise ActivationValidationError("source_refs must retain the normative anchors")
+    expected_inventory_ref = (
+        f"receipt:{_INVENTORY_RECEIPT_TYPE}:{component_inventory_digest}"
+    )
+    inventory_refs = [
+        ref for ref in value if ref.startswith(f"receipt:{_INVENTORY_RECEIPT_TYPE}:")
+    ]
+    if inventory_refs != [expected_inventory_ref]:
+        raise ActivationValidationError(
+            "source_refs must bind exactly one component inventory receipt"
+        )
     canonical = sorted(value)
     if value != canonical:
         raise ActivationValidationError("source_refs are not in canonical order")
@@ -188,7 +208,16 @@ def _validate_semantics(receipt: Mapping[str, Any]) -> None:
     if receipt.get("secret_material") != "absent":
         raise ActivationValidationError("activation receipt must declare secret_material=absent")
     _validate_timestamp(receipt.get("observed_at"))
-    _validate_source_refs(receipt.get("source_refs"))
+    inventory_digest = receipt.get("component_inventory_digest")
+    if (
+        not isinstance(inventory_digest, str)
+        or re.fullmatch(r"[a-f0-9]{64}", inventory_digest) is None
+        or inventory_digest == "0" * 64
+    ):
+        raise ActivationValidationError("component inventory digest is invalid")
+    _validate_source_refs(
+        receipt.get("source_refs"), component_inventory_digest=inventory_digest
+    )
 
     candidate = _exact_mapping(
         receipt.get("candidate_identity"),
@@ -357,7 +386,15 @@ def build_activation_receipt(evidence: Mapping[str, Any]) -> dict[str, Any]:
     plain = _plain_copy(evidence)
     if not isinstance(plain, dict) or set(plain) != _EVIDENCE_KEYS:
         raise ActivationValidationError("activation evidence fields are incomplete or contain extras")
-    receipt = {**plain, "source_refs": _validate_source_refs(plain.get("source_refs"))}
+    inventory_digest = plain.get("component_inventory_digest")
+    if not isinstance(inventory_digest, str):
+        raise ActivationValidationError("component inventory digest is invalid")
+    receipt = {
+        **plain,
+        "source_refs": _validate_source_refs(
+            plain.get("source_refs"), component_inventory_digest=inventory_digest
+        ),
+    }
     receipt["evidence_fingerprint"] = _digest(receipt)
     validate_activation_receipt(receipt)
     return receipt

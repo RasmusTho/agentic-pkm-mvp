@@ -25,7 +25,9 @@ For first database initialization only, deployment preflights the exact regular 
 The first-init handoff is fail-closed across crashes: a pending marker is durable before `initdb`, while a ready marker is written only after the app-role transaction commits. A restarted new cluster with a pending marker but no ready marker refuses to start instead of serving incomplete authorization state; an explicit, separately authorized recovery or rebuild is required. Existing clusters that predate this marker have no pending marker and are not modified by this guard.
 
 The deployment wrapper holds a host-local interlock from before the engine/project preflight through
-pin, Compose, Tailscale, and final verification. A busy interlock fails closed with no mutation.
+pin, Compose, Tailscale, and final verification. A busy interlock fails closed with no mutation;
+when a child re-enters through the wrapper it must prove that the inherited file descriptor itself
+owns the lock, not merely that some descriptor for the same path is locked.
 After activation it re-reads both engine identities and project listings and requires the BuilderOps
 project to be present, no Product project on the BuilderOps engine, and no BuilderOps project on the
 Product engine. A competing out-of-band writer therefore fails the post-operation gate; automatic

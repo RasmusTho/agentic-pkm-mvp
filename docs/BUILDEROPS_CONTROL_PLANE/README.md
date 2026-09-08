@@ -119,19 +119,22 @@ establishes that runnable baseline.
 Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid: 102`,
 `name: builder-system`), `observed_at`, `source_refs`, `candidate_identity` when applicable,
 `component_inventory_digest` when applicable, `evidence_fingerprint`, `secret_material: absent`,
-and an explicit `gaps`/`refusals` list. A receipt without the required evidence or with secret
-material is invalid. A live guest check without the named receipt remains only an observation.
+and an explicit `gaps`/`refusals` list. The activation receipt must carry the inventory digest
+and exactly one `receipt:devsystem_vm102_component_inventory.v1:<digest>` source reference;
+its observation must be no more than 24 hours old and no more than five minutes in the future.
+A receipt without the required evidence or with secret material is invalid. A live guest check
+without the named receipt remains only an observation.
 
 The normative `builderops_vm_rebuild_activation.v1` schema is closed at
 [`config/platform/builderops_vm_rebuild_activation.v1.schema.json`](../../config/platform/builderops_vm_rebuild_activation.v1.schema.json)
 and its pure producer/validator is
 [`app/ops/builderops_vm_rebuild_activation.py`](../../app/ops/builderops_vm_rebuild_activation.py).
 The producer consumes only a redacted operator evidence bundle; it performs no SSH, Proxmox,
-Docker, Vault, or network access. A successful receipt binds the VM identity, immutable candidate,
-dedicated engine/project, migration and epoch, post-reboot service fencing, no-dual-writer
-quarantine, private authenticated ingress, and readiness. `existing_runtime_reconciled` is an
-explicit activation mode for a bounded single-writer repair; it does not claim that the current
-PR was deployed or that DevUI owner acceptance occurred.
+Docker, Vault, or network access. A successful receipt binds the prerequisite inventory digest,
+the VM identity, immutable candidate, dedicated engine/project, migration and epoch, post-reboot
+service fencing, no-dual-writer quarantine, private authenticated ingress, and readiness.
+`existing_runtime_reconciled` is an explicit activation mode for a bounded single-writer repair;
+it does not claim that the current PR was deployed or that DevUI owner acceptance occurred.
 
 The deploy preflight refusal envelope is a separate contract,
 `builderops_vm_rebuild_activation_refusal.v1`, defined at

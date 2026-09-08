@@ -840,6 +840,59 @@ def test_deployment_wrapper_rejects_forged_inherited_lock_proof(tmp_path: Path) 
     ).read_text(encoding="utf-8")
 
 
+def test_deployment_wrapper_rejects_unlocked_descriptor_while_other_deployment_holds_lock(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "held.lock"
+    holder = subprocess.Popen(
+        [
+            "python3",
+            "scripts/builderops/deployment_lock.py",
+            "--lock-path",
+            str(lock_path),
+            "--",
+            "python3",
+            "-c",
+            "import time; time.sleep(1.2)",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    forged_fd = -1
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not lock_path.exists():
+            time.sleep(0.01)
+        if not lock_path.exists():
+            pytest.fail("deployment interlock was not created")
+        forged_fd = os.open(lock_path, os.O_RDWR)
+        result = subprocess.run(
+            [
+                "python3",
+                "scripts/builderops/deployment_lock.py",
+                "--lock-path",
+                str(lock_path),
+                "--assert-held",
+                "--fd",
+                str(forged_fd),
+            ],
+            cwd=ROOT,
+            pass_fds=(forged_fd,),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        if forged_fd != -1:
+            os.close(forged_fd)
+        holder.wait(timeout=3)
+
+    assert result.returncode == 75
+    assert "descriptor does not own" in result.stderr
+
+
 def test_activation_refuses_writer_appearing_before_final_readback(tmp_path: Path) -> None:
     root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
     env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
