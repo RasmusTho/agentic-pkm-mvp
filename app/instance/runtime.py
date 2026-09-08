@@ -326,6 +326,13 @@ class InstanceRegistryRuntime:
         with _producer_transition_locked(self.layout):
             yield
 
+    @contextmanager
+    def first_vault_bootstrap_lock(self) -> Iterator[None]:
+        """Serialize bootstrap issuance with the first-vault owner transaction."""
+
+        with self._bootstrap_locked():
+            yield
+
     def prepare_nested_registration(self, child_root: Path) -> VaultRegistration:
         del child_root
         raise CapabilityNotReadyError(
