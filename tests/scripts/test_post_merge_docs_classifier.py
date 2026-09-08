@@ -303,6 +303,8 @@ def test_human_exception_requires_authority_or_contradiction_evidence() -> None:
     "The owner decision is resolved.",
     "There is no strategic ambiguity.",
     "This repair improves owner decision presentation.",
+    "This is not awaiting an owner decision.",
+    "This is no longer pending owner authority.",
 ])
 def test_resolved_or_negated_owner_mentions_do_not_escalate(statement) -> None:
     result = classify(
@@ -311,6 +313,23 @@ def test_resolved_or_negated_owner_mentions_do_not_escalate(statement) -> None:
     )
     assert result.impact_classification == "no_change_likely"
     assert "Human Exception" not in result.recommended_next_action
+
+
+@pytest.mark.parametrize("statement", [
+    "Awaiting owner decision.",
+    "Pending owner decision.",
+    "Owner decision must be made.",
+    "Owner decision has not been resolved.",
+    "Owner authority has not yet been granted.",
+    "No longer pending owner decision for A; awaiting owner authority for B.",
+])
+def test_pending_owner_requirement_formulations_remain_visible(statement) -> None:
+    result = classify(
+        pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+        files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+    )
+    assert result.impact_classification == "human_exception_likely"
+    assert "Human Exception" in result.recommended_next_action
 
 
 @pytest.mark.parametrize("declaration,statement", [

@@ -134,4 +134,22 @@ def test_missing_check_evidence_alone_does_not_require_admin(auto_merge, protect
     assert packet.no_existing_pr_auto_merge_enabled is True
     requires_policy_action = not auto_merge or protection_status != 200
     assert packet.human_exception_required is requires_policy_action
-    assert bool(packet.exact_admin_settings_required) is requires_policy_action
+    assert packet.exact_admin_settings_required == []
+
+
+@pytest.mark.parametrize("check_payload", [
+    [],
+    {"check_runs": "unavailable"},
+    {"check_runs": [{"name": "pr-contract"}]},
+])
+def test_policy_action_with_incomplete_checks_withholds_exact_settings(check_payload) -> None:
+    packet = build_packet(
+        repo={"allow_auto_merge": False},
+        main_protection={},
+        main_protection_status=404,
+        check_runs_payload=check_payload,
+    )
+    assert packet.human_exception_required is True
+    assert packet.exact_admin_settings_required == []
+    assert any("lack observed evidence" in blocker for blocker in packet.unresolved_blockers)
+    assert "<observed required checks>" not in render_markdown(packet)

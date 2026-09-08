@@ -164,15 +164,18 @@ def _authority_evidence(body: str) -> list[str]:
         r"\b(?:does not|do not|did not|never)\s+(?:require|need)\s+"
         r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b"
         r"|\bno\s+(?:owner decision|owner authority|strategic decision)\s+"
-        r"(?:is\s+)?(?:needed|required)\b",
+        r"(?:is\s+)?(?:needed|required)\b"
+        r"|\b(?:not|no longer)\s+(?:awaiting|pending|waiting for)\s+"
+        r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b",
         "", body, flags=re.I,
     )
     requirement = re.search(
         r"\b(?:owner authority|owner decision|strategic decision)\s+"
         r"(?:(?:is|remains)\s+)?(?:still\s+)?"
         r"(?:ambiguous|unclear|unresolved|missing|pending|required|needed|"
-        r"not\s+(?:yet\s+)?(?:resolved|granted|approved))\b"
-        r"|\b(?:requires?|needs|awaits|waiting for|blocked (?:by|on))\s+"
+        r"(?:has\s+)?not\s+(?:yet\s+)?(?:been\s+)?(?:resolved|granted|approved)|"
+        r"must\s+be\s+(?:made|resolved|granted|approved))\b"
+        r"|\b(?:requires?|needs|awaits|awaiting|pending|waiting for|blocked (?:by|on))\s+"
         r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b"
         r"|\bstrategic ambiguity\s+(?:remains|persists|is unresolved)\b",
         text, re.I,

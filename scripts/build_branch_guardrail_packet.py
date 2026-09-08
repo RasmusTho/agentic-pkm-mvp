@@ -109,7 +109,11 @@ def _blockers(
 
 
 def _admin_settings(selected_checks: list[str]) -> list[str]:
-    checks = ", ".join(selected_checks) if selected_checks else "<observed required checks>"
+    # A real policy gate may coexist with a technical evidence gap. Keep that
+    # gate visible, but never present placeholders or a partial check set as exact.
+    if selected_checks != list(RECOMMENDED_CHECK_ORDER):
+        return []
+    checks = ", ".join(selected_checks)
     return [
         "Protect `main` with required status checks and strict up-to-date branches.",
         f"Set required status checks for `main`: {checks}.",
