@@ -9,18 +9,36 @@ import subprocess
 import sys
 import threading
 
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.app import app
+import app.api.routes.capture as capture_module
+from app.write_guard import WritesBlockedError
+from tests.api._vault_test_helpers import bind_initialized_vault
+
 SIDECAR = Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"
 
 
 def _entrypoint(tmp_path: Path) -> Path:
     venv = tmp_path / "venv"
-    subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-    pip = venv / "bin" / "pip"
     subprocess.run(
-        [str(pip), "install", "--requirement", str(SIDECAR / "requirements.txt")], check=True
+        [sys.executable, "-m", "venv", "--system-site-packages", str(venv)], check=True
     )
-    subprocess.run([str(pip), "install", "--no-deps", str(SIDECAR)], check=True)
-    return venv / "bin" / "mimer-mcp"
+    python = venv / "bin" / "python"
+    subprocess.run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-build-isolation",
+            str(SIDECAR),
+        ],
+        check=True,
+    )
+    return python
 
 
 def _call(
@@ -45,9 +63,9 @@ def _call(
     return json.loads(process.stdout.readline())
 
 
-def _start(entrypoint: Path, base_url: str) -> subprocess.Popen[str]:
+def _start(python: Path, base_url: str) -> subprocess.Popen[str]:
     process = subprocess.Popen(
-        [str(entrypoint), "--base-url", base_url],
+        [str(python), "-m", "mimer_mcp_sidecar", "--base-url", base_url],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -78,12 +96,31 @@ def _start(entrypoint: Path, base_url: str) -> subprocess.Popen[str]:
     return process
 
 
-def _payload(response: dict[str, object]) -> dict[str, object]:
+def _successful_result(response: dict[str, object]) -> dict[str, object]:
+    assert "error" not in response, response
     result = response["result"]
+    assert isinstance(result, dict)
+    assert result.get("isError") is False, response
+    return result
+
+
+def _payload(response: dict[str, object]) -> dict[str, object]:
+    result = _successful_result(response)
     return json.loads(result["content"][0]["text"])
 
 
-def _server() -> tuple[ThreadingHTTPServer, list[str]]:
+def _server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[ThreadingHTTPServer, list[str], Path]:
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    bind_initialized_vault(monkeypatch, vault, store_dir=tmp_path)
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "index-outbox.jsonl"))
+    inbox = vault / "Inbox" / "inbox.md"
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.write_text("# Test inbox\n\nA real runtime note.\n", encoding="utf-8")
+    api_client = TestClient(app, raise_server_exceptions=False)
     calls: list[str] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -96,77 +133,34 @@ def _server() -> tuple[ThreadingHTTPServer, list[str]]:
             self.end_headers()
             self.wfile.write(json.dumps(value).encode())
 
-        def do_GET(self) -> None:
+        def _forward(self, method: str, body: bytes | None = None) -> None:
             calls.append(self.path)
-            if self.path.startswith("/healthz"):
-                self._send({"status": "ok"})
-            elif self.path.startswith("/search"):
-                self._send({"results": [{"source_vault": "v", "note_path": "Inbox/inbox.md"}]})
-            elif self.path.startswith("/api/artifacts/note"):
-                self._send({"note_path": "Inbox/inbox.md", "content": "note"})
-            else:
-                self._send({"error": "forbidden"}, 404)
+            headers = {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower() in {"content-type", "x-trace-id"}
+            }
+            response = api_client.request(method, self.path, content=body, headers=headers)
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {"detail": response.text}
+            self._send(payload, response.status_code)
+
+        def do_GET(self) -> None:
+            self._forward("GET")
 
         def do_POST(self) -> None:
-            calls.append(self.path)
-            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
-            if self.path == "/api/ask":
-                self._send({"answer": "grounded", "sources": []})
-            elif self.path == "/api/companion/capture":
-                if body["text"] == "blocked":
-                    self._send({"detail": {"error": "writeguard_blocked"}}, 409)
-                    return
-                trace = self.headers["x-trace-id"]
-                stamp = "2026-09-05T00:00:00Z"
-                p = {
-                    "decision_id": "d",
-                    "action": "companion.capture.append",
-                    "write_class": "vault_capture_append",
-                    "actor": "companion.capture",
-                    "resource": "Inbox/inbox.md",
-                    "reason": "allowed",
-                    "issued_at": stamp,
-                    "source": "WriteGuard",
-                    "contract_version": "governed_write_protocol.v0",
-                }
-                t = {**p, "token_id": "t", "valid": True}
-                r = {
-                    **p,
-                    "receipt_id": "r",
-                    "decision_token_id": "t",
-                    "outcome": "applied",
-                    "operation": "append_note",
-                    "adapter": "fs_vault",
-                    "state_owner": "knowledge",
-                    "source_receipt_ref": "fs_vault:append_note:Inbox/inbox.md",
-                    "fallback_used": False,
-                    "recorded_at": stamp,
-                    "trace_id": trace,
-                }
-                self._send(
-                    {
-                        "outcome": "written",
-                        "note_path": "Inbox/inbox.md",
-                        "operation": "append_note",
-                        "adapter": "fs_vault",
-                        "captured_at": stamp,
-                        "trace_id": trace,
-                        "events_emitted": [],
-                        "governed_write": {
-                            "policy_decision": {**p, "status": "approved"},
-                            "decision_token": t,
-                            "authority_receipt": r,
-                        },
-                    }
-                )
-            else:
-                self._send({"error": "forbidden"}, 404)
+            length = int(self.headers.get("content-length", "0"))
+            self._forward("POST", self.rfile.read(length))
 
-    return ThreadingHTTPServer(("127.0.0.1", 0), Handler), calls
+    return ThreadingHTTPServer(("127.0.0.1", 0), Handler), calls, vault
 
 
-def test_composed_mimer_mcp_journey(tmp_path: Path) -> None:
-    runtime, calls = _server()
+def test_composed_mimer_mcp_journey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, calls, vault = _server(tmp_path, monkeypatch)
     thread = threading.Thread(target=runtime.serve_forever, daemon=True)
     thread.start()
     process = _start(_entrypoint(tmp_path), f"http://127.0.0.1:{runtime.server_port}")
@@ -194,11 +188,11 @@ def test_composed_mimer_mcp_journey(tmp_path: Path) -> None:
             (5, "mimer.read_note", {"note_path": "Inbox/inbox.md"}),
             (6, "mimer.ask", {"question": "q"}),
         ]:
-            assert "result" in _call(process, i, name, args)
+            _successful_result(_call(process, i, name, args))
         response = _call(process, 7, "mimer.capture", {"text": "once", "trace_id": "trace-accept"})
-        assert response["result"]["isError"] is False, response
         capture = _payload(response)
-        assert capture["result"]["governed_write"]["authority_receipt"]["receipt_id"] == "r"
+        receipt_id = capture["result"]["governed_write"]["authority_receipt"]["receipt_id"]
+        assert isinstance(receipt_id, str) and receipt_id
     finally:
         process.terminate()
         process.wait(timeout=10)
@@ -211,26 +205,37 @@ def test_composed_mimer_mcp_journey(tmp_path: Path) -> None:
         "/api/ask",
         "/api/companion/capture",
     }
+    assert "once" in (vault / "Inbox" / "inbox.md").read_text(encoding="utf-8")
 
 
-def test_composed_journey_preserves_write_boundary_and_failure(tmp_path: Path) -> None:
-    runtime, calls = _server()
+def test_composed_journey_preserves_write_boundary_and_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _blocked(action: str) -> None:
+        raise WritesBlockedError(state="safe_mode", reason="test lock", action=action)
+
+    monkeypatch.setattr(capture_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", _blocked)
+    runtime, calls, vault = _server(tmp_path, monkeypatch)
     thread = threading.Thread(target=runtime.serve_forever, daemon=True)
     thread.start()
     process = _start(_entrypoint(tmp_path), f"http://127.0.0.1:{runtime.server_port}")
     try:
         response = _call(process, 2, "mimer.capture", {"text": "blocked"})
         assert response["result"]["isError"] is True
+        assert response["result"]["content"]
         assert calls.count("/api/companion/capture") == 1
         process.stdin.close()
         process.wait(timeout=10)
     finally:
         runtime.shutdown()
         runtime.server_close()
+    assert "blocked" not in (vault / "Inbox" / "inbox.md").read_text(encoding="utf-8")
 
 
-def test_restart_recovers_without_capture_replay(tmp_path: Path) -> None:
-    runtime, calls = _server()
+def test_restart_recovers_without_capture_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime, calls, vault = _server(tmp_path, monkeypatch)
     thread = threading.Thread(target=runtime.serve_forever, daemon=True)
     thread.start()
     entry = _entrypoint(tmp_path)
@@ -240,7 +245,7 @@ def test_restart_recovers_without_capture_replay(tmp_path: Path) -> None:
     first.wait(timeout=10)
     second = _start(entry, f"http://127.0.0.1:{runtime.server_port}")
     try:
-        assert "result" in _call(second, 3, "mimer.health", {})
+        _successful_result(_call(second, 3, "mimer.health", {}))
         assert second.stdin and second.stdout
         second.stdin.write(
             json.dumps({"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}})
@@ -262,3 +267,4 @@ def test_restart_recovers_without_capture_replay(tmp_path: Path) -> None:
         second.wait(timeout=10)
         runtime.shutdown()
         runtime.server_close()
+    assert "once" in (vault / "Inbox" / "inbox.md").read_text(encoding="utf-8")
