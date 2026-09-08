@@ -152,6 +152,8 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
             raise SystemExit(0)
         if rest == ["stop", "watcher"]:
             raise SystemExit(int(os.environ.get("STARTUP_HARNESS_WATCHER_STOP_FAILURE", "0")))
+        if rest == ["start", "watcher"]:
+            raise SystemExit(0)
         if cmd == "up":
             raise SystemExit(0)
         if cmd == "logs":
@@ -191,6 +193,11 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
             elif service == "api" and "settings-rebind-no-lifecycle" in command:
                 registry_path = os.environ["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"]
                 check_only = "--check-only" in command
+                if (
+                    not check_only
+                    and os.environ.get("STARTUP_HARNESS_REBIND_RECONCILE_FAILURE") == "1"
+                ):
+                    raise SystemExit(1)
                 completed = subprocess.run(
                     [
                         sys.executable,
@@ -423,16 +430,21 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    ("stop_failure", "phase", "reload_revision"),
+    ("stop_failure", "phase", "reload_revision", "reconcile_failure"),
     [
-        (False, "prepared", 0),
-        (True, "prepared", 0),
-        (False, "committed", 0),
-        (False, "committed", 1),
+        (False, "prepared", 0, False),
+        (True, "prepared", 0, False),
+        (False, "committed", 0, False),
+        (False, "committed", 1, False),
+        (False, "prepared", 0, True),
     ],
 )
 def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
-    tmp_path: Path, stop_failure: bool, phase: str, reload_revision: int,
+    tmp_path: Path,
+    stop_failure: bool,
+    phase: str,
+    reload_revision: int,
+    reconcile_failure: bool,
 ) -> None:
     health = _deferred_index_health()
     health["ok"] = True
@@ -474,6 +486,7 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
     )
     env["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"] = str(runtime.registry.path)
     env["STARTUP_HARNESS_WATCHER_STOP_FAILURE"] = "1" if stop_failure else "0"
+    env["STARTUP_HARNESS_REBIND_RECONCILE_FAILURE"] = "1" if reconcile_failure else "0"
 
     result = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
@@ -517,6 +530,24 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
         assert runtime.open_settings_rebind_store().read() == prepared
         progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
         assert "settings-rebind-no-lifecycle --registry-path" not in progress
+        return
+
+    if reconcile_failure:
+        assert result.returncode != 0
+        assert "could not reconcile durable settings rebind lifecycle" in result.stderr
+        assert runtime.open_settings_rebind_store().read() == prepared
+        progress_lines = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        watcher_stop_index = next(
+            index for index, line in enumerate(progress_lines) if " stop watcher" in line
+        )
+        watcher_restart_index = next(
+            index
+            for index, line in enumerate(progress_lines)
+            if " start watcher" in line
+        )
+        assert watcher_stop_index < watcher_restart_index
         return
 
     assert result.returncode == 0, result.stderr + result.stdout

@@ -2048,6 +2048,14 @@ PY
       python -m app.instance.runtime settings-rebind-no-lifecycle \
       --registry-path /app/instance-state/agentic-pkm/vault-registry.md
   ); then
+    if ! run_docker_compose start watcher >/dev/null; then
+      EXIT_REASON="settings_rebind_watcher_restart_failed"
+      EXIT_CODE=1
+      export EXIT_REASON EXIT_CODE
+      write_startup_status 0 "$EXIT_REASON"
+      echo "ERROR: no-vault startup could not restart the watcher after settings rebind reconciliation failed" >&2
+      exit 1
+    fi
     EXIT_REASON="settings_rebind_no_lifecycle_failed"
     EXIT_CODE=1
     export EXIT_REASON EXIT_CODE
