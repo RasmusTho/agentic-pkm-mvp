@@ -192,12 +192,22 @@ def test_child_keeps_lease_if_wrapper_is_killed(lease_repo: Path) -> None:
     assert successor.returncode == 0
 
 
-def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed(
-    lease_repo: Path,
+def _assert_wrapper_group_crash_keeps_lease(
+    lease_repo: Path, *, execution_prefix: str, contender_delay: float = 0
 ) -> None:
     resource = _canonical_resource()
+    child_ready = lease_repo / f"{execution_prefix}-child-ready"
+    release_child = lease_repo / f"release-{execution_prefix}-child"
+    contender_ran = lease_repo / f"{execution_prefix}-contender-ran"
+    holder_child = (
+        "import sys, time; from pathlib import Path; "
+        f"ready = Path({str(child_ready)!r}); release = Path({str(release_child)!r}); "
+        "ready.touch(); deadline = time.monotonic() + 5; "
+        "\nwhile not release.exists() and time.monotonic() < deadline: time.sleep(0.02)"
+        "\nsys.exit(0 if release.exists() else 2)"
+    )
     holder = subprocess.Popen(
-        _lease_command(resource, "group-crash-holder", "import time; time.sleep(0.8)"),
+        _lease_command(resource, f"{execution_prefix}-holder", holder_child),
         cwd=lease_repo,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -218,26 +228,65 @@ def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed(
         holder.wait()
         pytest.fail("holder did not acquire the host lease")
 
-    os.killpg(holder.pid, signal.SIGKILL)
-    holder.wait(timeout=2)
-    contender = subprocess.run(
-        _lease_command(resource, "group-crash-contender", "pass"),
-        cwd=lease_repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert contender.returncode == 75
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if child_ready.exists():
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("protected child did not report readiness")
 
-    time.sleep(0.9)
-    successor = subprocess.run(
-        _lease_command(resource, "group-crash-successor", "pass"),
-        cwd=lease_repo,
-        capture_output=True,
-        text=True,
-        check=False,
+        os.killpg(holder.pid, signal.SIGKILL)
+        holder.wait(timeout=2)
+        if contender_delay:
+            time.sleep(contender_delay)
+        contender = subprocess.run(
+            _lease_command(
+                resource,
+                f"{execution_prefix}-contender",
+                f"from pathlib import Path; Path({str(contender_ran)!r}).touch()",
+            ),
+            cwd=lease_repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert contender.returncode == 75
+        assert not contender_ran.exists()
+    finally:
+        release_child.touch()
+        if holder.poll() is None:
+            os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait(timeout=2)
+        successor = subprocess.run(
+            _lease_command(resource, f"{execution_prefix}-successor", "pass", wait_seconds=3),
+            cwd=lease_repo,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=4,
+        )
+        assert successor.returncode == 0, successor.stderr
+
+
+def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed(
+    lease_repo: Path,
+) -> None:
+    _assert_wrapper_group_crash_keeps_lease(
+        lease_repo,
+        execution_prefix="group-crash",
     )
-    assert successor.returncode == 0
+
+
+def test_wrapper_group_crash_proof_survives_delayed_contender(
+    lease_repo: Path,
+) -> None:
+    _assert_wrapper_group_crash_keeps_lease(
+        lease_repo,
+        execution_prefix="delayed-group-crash",
+        contender_delay=1.0,
+    )
 
 
 @pytest.mark.parametrize("termination_signal", [signal.SIGTERM, signal.SIGINT])
