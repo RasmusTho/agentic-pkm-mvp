@@ -1,4 +1,4 @@
-State: Canonical hub client contract (owner rulings 2026-07-07, enacted via `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`; governed media and meeting lanes promoted 2026-08-01 after CDLM acceptance; MCP adapter posture accepted 2026-08-21 via ADR-0061). Current-state contract over shipped surfaces plus the explicitly accepted, not-yet-shipped MCP adapter boundary; every named gap is marked as follow-on work, not claimed solved.
+State: Canonical hub client contract (owner rulings 2026-07-07, enacted via `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`; governed media and meeting lanes promoted 2026-08-01 after CDLM acceptance; MCP adapter posture accepted 2026-08-21 via ADR-0061). Current-state contract over shipped surfaces plus the bounded, verified Mimer MCP adapter path delivered by PR #5351; general third-party-client support and production activation remain explicitly unclaimed.
 Doc role: Core SoT contract
 Authority: Canonical for how external clients attach to Mimer: the callable surface, the two durable mutation paths (governed HTTP API and direct filesystem), the accepted MCP protocol adapter posture, the authority envelope, and the concurrent-writer client discipline. Serves BOTH client families — Bifrost native shells (`RasmusTho/bifrost`, ADR-0050) and external app agents (Claude app, Codex app, and peers). Subordinate to `docs/INTEGRATION_FABRIC_CONTRACT.md` (class taxonomy + authority rule), `docs/AGENT-FLOWS.md` (participation modes and zones), `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (the decided multi-writer mechanism, supersedes ADR-0053, resolves #3114; VMW-01 through VMW-04 and INV-VW2 are delivered, while versionless-writer migration remains in #3570), and `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` / `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` (runtime write mechanics). ADR-0061 owns the MCP adapter decision. `docs/ARCHITECTURE.md` and `docs/STATUS.md` win on current runtime truth.
 Owner: Architecture spine (Rasmus)
@@ -38,11 +38,10 @@ A client under this contract operates in two modes simultaneously:
 ADR-0061 additionally admits an **MCP protocol adapter** under this same contract. Its standalone
 sidecar packaging and fixed v1 posture are:
 
-- **A2 topology:** a constituent-owned sidecar process with a required, tested boundary to the
-  governed HTTP API. Process separation alone is not enforcement: the downstream implementation
-  MUST provide dependency/import and filesystem/credential isolation, plus an explicit allowlist
-  for the five HTTP operations below. Until those tests pass, this is a binding implementation
-  invariant, not current runtime evidence.
+- **A2 topology:** a constituent-owned sidecar process with a tested boundary to the governed HTTP
+  API. The delivered composed receipt verifies dependency/import and filesystem/credential isolation
+  for the named hermetic journey, plus an explicit allowlist for the five HTTP operations below;
+  it does not generalize support to other clients or deployments.
 - **B1 wire transport:** stdio only, spawned by a local MCP client; **no network listener**.
 - **C1 trust posture:** the sidecar calls the existing loopback API and inherits the current
   loopback/LAN/tailnet posture; stdio adds no new authentication machinery.
@@ -465,7 +464,7 @@ Per the repo's architecture-artifact convention (binding classification against 
 | Admitting external app agents to the live writer set | **Extend** | Owner ruling 2026-07-07, enacted via ADR-0056; extends the writer set ADR-0055 governs (supersedes ADR-0053) to a new writer class; VMW-01 through VMW-04 and INV-VW2 are delivered, while #3570 preserves the progressive versionless-caller migration boundary |
 | Client write discipline W1–W8 | **Extend** | New client-side obligations; introduces no runtime mechanism, forks no `GOVERNED_WRITE_PROTOCOL`/`OBSIDIAN_KNOWLEDGE_PORT` semantics, and defers to ADR-0055's enactment for real enforcement |
 | Provenance frontmatter convention (§5) | **Extend** | New convention on a surface AGENT-FLOWS §4 names as best-effort; advisory to the runtime until F1/F2 land, anticipates ADR-0055 item 4 |
-| MCP admitted as an additional protocol adapter under A2/B1/C1, without a shipped server or new mutation path | **Extend** | Owner ruling 2026-08-21, enacted via ADR-0061; fixed five-operation surface delegates to the governed HTTP API; B2 + C2 remain deferred |
+| MCP admitted as an additional protocol adapter under A2/B1/C1, without a new mutation path | **Extend** | Owner ruling 2026-08-21, enacted via ADR-0061; the fixed five-operation `mimer-mcp` surface and one hermetic JSON-RPC stdio journey are verified by PR #5351 and the parent #3366 receipt; B2 + C2, arbitrary clients, and production activation remain deferred |
 
 No boundary reshape: ADR-0061 extends this client contract and supersedes the MCP-deferral wording
 in ADR-0047/ADR-0056 only as stated above. The authority envelope, two durable mutation paths, and
@@ -479,7 +478,7 @@ existing subsystem charters remain unchanged.
 - `docs/INTEGRATION_FABRIC_CONTRACT.md` — class taxonomy, contract fields, authority rule.
 - `docs/AGENT-FLOWS.md` §3/§4/§7/§10/§12/§13 — participation modes, observed writes, zones, provenance rules.
 - `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md` — the write machinery this contract rides.
-- ADR-0061 — accepted A2/B1/C1 external MCP client adapter; implementation and composed acceptance remain downstream.
+- ADR-0061 — accepted A2/B1/C1 external MCP client adapter; bounded implementation and composed acceptance are delivered by PR #5351, while arbitrary-client and production follow-ons remain downstream.
 - `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, ADR-0047 — the distinct internal ToolProvider/consumer-side remote-multiplex seam, whose remaining deferral is not changed by the external adapter decision.
 - `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md` — Bifrost topology design-of-record; Epic B #3020, B1 #3023/`bifrost#1`; ADR-0050.
 - `app/api/routes/{capture,search,ask,artifacts}.py`, `app/auth.py`, `app/knowledge/{adapters,write_ops}.py`, `app/components/concurrency.py`, `app/watcher/watcher.py` — implementation evidence (descriptive, not normative; `docs/ARCHITECTURE.md` owns runtime truth).

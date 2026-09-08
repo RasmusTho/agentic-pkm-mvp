@@ -18,6 +18,8 @@ from threading import RLock
 from time import time
 from typing import Any, Callable, Iterator, Mapping, Protocol
 
+from app.archival.contracts import ArtifactClass, LivenessState, PolicyProfile, TransitionStage
+
 from .contracts import (
     OperationItemOutcome,
     OperationOutcome,
@@ -83,6 +85,30 @@ class OwnerExecutionResult:
     @classmethod
     def failed(cls, warning: str) -> "OwnerExecutionResult":
         return cls(OperationStatus.NOT_ACKNOWLEDGED, warnings=(warning,))
+
+
+@dataclass(frozen=True)
+class ArchivalOperationReceipt:
+    """Small, redacted projection of an already validated GAF receipt."""
+
+    artifact_ref: str
+    receipt_ref: str
+    generation: int
+    artifact_class: ArtifactClass
+    policy: PolicyProfile
+    stage: TransitionStage
+    liveness: LivenessState
+    recovery_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.generation) is not int or self.generation < 0:
+            raise ValueError("archival receipt generation must be a non-negative integer")
+        for value in (self.artifact_ref, self.receipt_ref, self.recovery_ref):
+            if value is not None and (not isinstance(value, str) or not value or "/" in value or "\\" in value):
+                raise ValueError("archival receipt references must be opaque tokens")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"artifact_ref": self.artifact_ref, "receipt_ref": self.receipt_ref, "generation": self.generation, "artifact_class": self.artifact_class.value, "policy": self.policy.value, "stage": self.stage.value, "liveness": self.liveness.value, "recovery_ref": self.recovery_ref}
 
 
 @dataclass(frozen=True)
@@ -566,6 +592,7 @@ def _receipt(
             "state": state,
             "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
         },
+        extensions=_effect_receipt_extensions(effect_receipt),
     )
 
 
@@ -594,6 +621,21 @@ def _effect_receipt_ref(value: Mapping[str, Any] | None) -> str | None:
         return None
     receipt_id = value.get("receipt_id")
     return str(receipt_id) if _stable_nonempty_identity(receipt_id) else None
+
+
+def _effect_receipt_extensions(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """Preserve only the bounded, redacted owner projection in the receipt.
+
+    Effect receipts are otherwise opaque and must not be copied into the
+    generic kernel receipt. Archival handlers explicitly provide this safe
+    projection so generation, policy, stage, and liveness remain auditable.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    archival = value.get("archival")
+    if not isinstance(archival, Mapping):
+        return {}
+    return {"archival": dict(archival)}
 
 
 def _has_durable_owner_effect_receipt(result: OwnerExecutionResult) -> bool:
@@ -631,6 +673,7 @@ __all__ = [
     "InMemoryReceiptStore",
     "JsonReceiptStore",
     "OperationExecutionKernel",
+    "ArchivalOperationReceipt",
     "OwnerExecutionResult",
     "PolicyDecision",
     "ReceiptStore",

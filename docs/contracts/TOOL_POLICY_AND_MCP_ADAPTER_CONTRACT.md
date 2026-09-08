@@ -9,11 +9,12 @@ It is a current-state contract for tool descriptor completeness, allowed-argumen
 It does not claim rich descriptor versioning or future permission-model expansion as shipped.
 
 **Producer/consumer distinction:** the MCP boundary in this contract is Mimer's internal
-consumer-side ToolProvider and optional remote-multiplex seam. ADR-0061 separately accepts a future
-producer-side external Mimer client adapter: a constituent-owned stdio sidecar over the governed
-HTTP API. That sidecar is not shipped, does not reuse this registry or `app/mcp/vault_tools.py`, and
-does not change any ToolProvider validation, execution, fallback, or admission behavior documented
-here.
+consumer-side ToolProvider and optional remote-multiplex seam. ADR-0061 separately governs the
+producer-side external Mimer client adapter: the delivered `mimer-mcp` constituent-owned stdio
+sidecar over the governed HTTP API. PR #5351 verifies one hermetic JSON-RPC stdio-client journey;
+the sidecar does not reuse this registry or `app/mcp/vault_tools.py`, and does not change any
+ToolProvider validation, execution, fallback, or admission behavior documented here. General
+third-party-client support and production activation remain unclaimed.
 
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and the planner/orchestrator pipeline.
