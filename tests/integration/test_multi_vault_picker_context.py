@@ -18,14 +18,13 @@ from app.instance.settings_rebind import (
 )
 from app.instance.vault_registry import KnownVaultRef
 from app.vault.manager import VaultManager
-from app.workers.outbox_binding_gate import worker_effect_window
+from app.workers import outbox_worker
 from app.watcher import registry as watcher_registry
 from app.watcher.settings_rebind import (
     load_settings_rebind_watcher_receipt,
 )
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 from tests.integration.test_watcher_cross_process_rebind import (
-    _commit,
     _event_paths,
     _fixture,
     _record_reload,
@@ -143,12 +142,34 @@ def test_picker_rebind_drains_scalar_worker_before_binding_commit(
     results: list[SettingsRebindRecord] = []
     errors: list[BaseException] = []
 
+    message = _compatibility_message(worker_runtime.root)
+    dispatched: list[object] = []
+    acknowledged: list[str] = []
+    monkeypatch.setattr(
+        outbox_worker,
+        "resolve_scalar_binding_runtime",
+        lambda *, vault_root: worker_runtime,
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "poll_outbox_one",
+        lambda **_kwargs: message,
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "_dispatch_topic",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        outbox_worker,
+        "ack_outbox",
+        lambda message_id: acknowledged.append(str(message_id)),
+    )
+
     def admit_a() -> None:
         try:
-            with worker_effect_window(
-                _compatibility_message(worker_runtime.root), runtime=worker_runtime
-            ):
-                assert runtime.open_settings_rebind_store().read().candidate_binding_id == "binding-a"
+            result = outbox_worker.run_once(vault_root=worker_runtime.root)
+            assert result.state == "processed"
         except BaseException as exc:  # pragma: no cover - asserted below
             errors.append(exc)
 
@@ -181,6 +202,8 @@ def test_picker_rebind_drains_scalar_worker_before_binding_commit(
     assert not picker.is_alive()
     assert not errors
     assert len(results) == 1
+    assert len(dispatched) == 1
+    assert acknowledged == ["compatibility-row-1"]
     final = runtime.open_settings_rebind_store().read()
     assert final.candidate_binding_id == "binding-b"
     assert final.scalar_drain_revision == final.desired_revision
@@ -197,11 +220,58 @@ def test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_
     watcher_registry.run_registry_forever(config_path, max_ticks=1)
     between = vault_a / "direct-between-scan-and-commit.md"
     between.write_text("old root remains authoritative\n", encoding="utf-8")
-    _commit(runtime)
+    activation = SettingsRebindActivation.from_environment(runtime.registry)
+    commit_started = threading.Event()
+    commit_release = threading.Event()
+    commit_done = threading.Event()
+    activation_result: list[SettingsRebindRecord] = []
+    activation_errors: list[BaseException] = []
+    watcher_errors: list[BaseException] = []
+    original_commit = activation.store.commit_selection
+
+    def pause_before_commit(**kwargs: object) -> SettingsRebindRecord:
+        commit_started.set()
+        assert commit_release.wait(timeout=5)
+        result = original_commit(**kwargs)
+        commit_done.set()
+        return result
+
+    monkeypatch.setattr(activation.store, "commit_selection", pause_before_commit)
+
+    def activate_b() -> None:
+        try:
+            activation_result.append(
+                activation.activate(
+                    selection=_known_ref(runtime, "binding-b"),
+                    candidate_binding_id="binding-b",
+                    candidate_root=vault_b,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            activation_errors.append(exc)
+
+    picker = threading.Thread(target=activate_b)
+    picker.start()
+    assert commit_started.wait(timeout=5)
     (vault_b / "must-not-be-seen.md").write_text("candidate\n", encoding="utf-8")
 
-    watcher_registry.run_registry_forever(config_path, max_ticks=1)
-    watcher_registry.run_registry_forever(config_path, max_ticks=1)
+    def reconcile_after_commit() -> None:
+        try:
+            assert commit_done.wait(timeout=5)
+            watcher_registry.run_registry_forever(config_path, max_ticks=2)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            watcher_errors.append(exc)
+
+    watcher = threading.Thread(target=reconcile_after_commit)
+    watcher.start()
+    commit_release.set()
+    picker.join(timeout=5)
+    watcher.join(timeout=5)
+    assert not picker.is_alive()
+    assert not watcher.is_alive()
+    assert not activation_errors
+    assert not watcher_errors
+    assert len(activation_result) == 1
 
     receipt = load_settings_rebind_watcher_receipt(_revision_receipt_path(tmp_path, 1))
     assert receipt.stage == "completed"
@@ -216,8 +286,8 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
 ) -> None:
     """Pre-commit cancellation and post-commit retry both converge durably."""
 
-    runtime, _vault_a, vault_b, _config_path = _fixture(
-        tmp_path, monkeypatch, enabled=False, prepare=False
+    runtime, _vault_a, vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, enabled=True, prepare=False
     )
     monkeypatch.setattr(
         "app.settings.ingestion.ingest_settings",
@@ -226,12 +296,35 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
     registration = runtime.registry.load().registrations["binding-b"]
     activation = SettingsRebindActivation.from_environment(runtime.registry)
     tripped = False
+    commit_done = threading.Event()
+    watcher_errors: list[BaseException] = []
+    watcher_thread: threading.Thread | None = None
+    original_commit = activation.store.commit_selection
+
+    def mark_commit_done(**kwargs: object) -> SettingsRebindRecord:
+        result = original_commit(**kwargs)
+        commit_done.set()
+        return result
+
+    monkeypatch.setattr(activation.store, "commit_selection", mark_commit_done)
+
+    def reconcile_retry() -> None:
+        try:
+            watcher_registry.run_registry_once(config_path)
+            assert commit_done.wait(timeout=5)
+            watcher_registry.run_registry_once(config_path)
+            watcher_registry.run_registry_once(config_path)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            watcher_errors.append(exc)
 
     def fail_before_ack(stage: str) -> None:
-        nonlocal tripped
+        nonlocal tripped, watcher_thread
         if stage == "acknowledge" and not tripped:
             tripped = True
             raise RuntimeError("injected pre-commit fault")
+        if stage == "acknowledge" and watcher_thread is None:
+            watcher_thread = threading.Thread(target=reconcile_retry)
+            watcher_thread.start()
 
     monkeypatch.setattr("app.instance.settings_rebind._activation_fault_point", fail_before_ack)
     with pytest.raises(RuntimeError, match="pre-commit fault"):
@@ -245,7 +338,6 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
     assert cancelled.candidate_binding_id == "binding-a"
     assert runtime.registry.load().last_active_vault_ref is None
 
-    monkeypatch.setattr("app.instance.settings_rebind._activation_fault_point", lambda _stage: None)
     activation.activate(
         selection=KnownVaultRef(
             ref=registration.ref,
@@ -258,8 +350,12 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
         candidate_binding_id="binding-b",
         candidate_root=vault_b,
     )
+    assert watcher_thread is not None
+    watcher_thread.join(timeout=5)
+    assert not watcher_thread.is_alive()
+    assert not watcher_errors
     recovered = runtime.open_settings_rebind_store().read()
-    assert recovered.phase == "no_lifecycle"
+    assert recovered.phase == "committed"
     assert recovered.candidate_binding_id == "binding-b"
 
 

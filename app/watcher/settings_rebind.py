@@ -339,6 +339,12 @@ class DormantSettingsRebindReconciler:
         self._store = SettingsRebindStore(self._registry)
         self.state_dir = state_dir
 
+    @property
+    def registry(self) -> VaultRegistryStore:
+        """Expose the registry used to fence compatibility watcher ingress."""
+
+        return self._registry
+
     def current_record(self) -> SettingsRebindRecord:
         """Read the current durable rebind authority for loop reconciliation."""
 
