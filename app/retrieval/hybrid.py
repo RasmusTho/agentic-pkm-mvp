@@ -783,7 +783,14 @@ def _contain_rerank(
     """Apply the optional rerank hook, then enforce that it only reordered/dropped within the
     admitted set — reranking never reintroduces an excluded doc (spec AC1, second clause)."""
     admitted_ids = {item.get("doc_id") for item in admitted}
-    reranked = maybe_rerank(query, admitted, tuning=tuning)
+    # Preserve the legacy hook seam when no request-scoped tuning was resolved.
+    # Scoped requests take the explicit keyword so process-global tuning cannot
+    # override their immutable settings bundle.
+    reranked = (
+        maybe_rerank(query, admitted)
+        if tuning is None
+        else maybe_rerank(query, admitted, tuning=tuning)
+    )
     intruders = {item.get("doc_id") for item in reranked} - admitted_ids
     if intruders:
         raise AssertionError(
@@ -828,7 +835,11 @@ def scoped_hybrid_search(
         return ScopedRetrieval(results=[], denials=(), scope_policy_prefiltered=True, active_scope=scope)
 
     # 1) PREFILTER before ranking — eligibility decides membership, not similarity.
-    eligible_idx, excluded = _partition_by_scope(docs, scope, allowed_binding_ids)
+    if allowed_binding_ids is None:
+        # Keep the legacy two-argument seam for unbound callers and test spies.
+        eligible_idx, excluded = _partition_by_scope(docs, scope)
+    else:
+        eligible_idx, excluded = _partition_by_scope(docs, scope, allowed_binding_ids)
 
     # Content-free denials for relevant-but-excluded material (never a silent drop). The empty
     # eligible set is likewise no longer a silent early-exit.
