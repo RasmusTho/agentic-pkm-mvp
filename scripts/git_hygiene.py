@@ -1369,19 +1369,19 @@ _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE = re.compile(
     r"(?:^|[.!?]\s+)preserved\s+worktree\s*:", re.IGNORECASE
 )
 _DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
-    r"(?:^|[.!?]\s+)preserved\s+worktree\s*:\s*/", re.IGNORECASE
+    r"(?:^|[.!?]\s+)preserved\s+worktree\s*:\s*`?/", re.IGNORECASE
 )
 _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
     re.IGNORECASE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
-    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+/[^\s;`,]+\s+is\s+still\s+dirty\s+"
-    r"on\s+branch\s+[^\s;`,]+\s+at\s+head\s+[0-9a-f]{40,64}",
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?/[^\s;`,]+`?\s+"
+    r"is\s+still\s+dirty\s+on\s+branch\s+`?[^\s;`,]+`?\s+at\s+head\s+`?[0-9a-f]{40,64}`?",
     re.IGNORECASE,
 )
 _DISPATCHER_WORKTREE_BINDING_RE = re.compile(
-    r"\bworktree(?:\s*[:=]\s*|\s+)(?P<value>/[^\s;`,]+)",
+    r"\bworktree(?:\s*[:=]\s*|\s+)(?:`)?(?P<value>/[^\s;`,]+)",
     re.IGNORECASE,
 )
 _DISPATCHER_BRANCH_BINDING_RE = re.compile(

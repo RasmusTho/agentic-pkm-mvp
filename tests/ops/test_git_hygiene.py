@@ -5664,6 +5664,40 @@ def test_local_retirement_rejects_malformed_explicit_marker(
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
+def test_local_retirement_preserves_backticked_dedicated_binding(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5067",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5067,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "Maintenance reconciliation: while the dedicated worktree "
+                            f"`{tmp_path / 'old-checkout'}` is still dirty on branch "
+                            f"`old` at HEAD `{sha}`, with local changes."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work only when the dedicated binding is absent",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+
+
 def test_legacy_archive_retirement_ignores_historical_dispatcher_delivery_sha(
     tmp_path, monkeypatch
 ):
