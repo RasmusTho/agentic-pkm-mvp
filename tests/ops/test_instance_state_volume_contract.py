@@ -4933,6 +4933,68 @@ def test_start_full_system_starts_database_before_instance_state_deployment() ->
     assert "pg_isready" in start
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_reason"),
+    (
+        ("ready", None),
+        ("start-failure", "instance_state_database_start_failed"),
+        ("not-ready", "instance_state_database_not_ready"),
+    ),
+)
+def test_start_full_system_database_precondition_executes_and_fails_closed(
+    tmp_path, mode: str, expected_reason: str | None
+) -> None:
+    """Exercise the extracted precondition seam, including failure propagation."""
+
+    start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+    function_start = start.index("start_database_before_instance_state_deployment() {")
+    function_end = start.index("\n}\n\nrun_preflight", function_start) + 2
+    function_body = start[function_start:function_end]
+    trace_path = tmp_path / "trace.log"
+    harness = f"""
+set -u
+TRACE={trace_path!s}
+MODE={mode!s}
+POSTGRES_USER=app
+POSTGRES_DB=app_test
+POSTGRES_HEALTHCHECK_HOST=localhost
+write_startup_status() {{ printf 'status %s %s\\n' "$1" "$2" >> "$TRACE"; }}
+check_compose_port_conflicts() {{ printf 'conflicts %s\\n' "$*" >> "$TRACE"; }}
+run_docker_compose() {{
+  printf 'compose %s\\n' "$*" >> "$TRACE"
+  case "$MODE:$*" in
+    "start-failure:up -d db") return 1 ;;
+    "not-ready:exec -T db"*) return 1 ;;
+  esac
+  return 0
+}}
+sleep() {{ :; }}
+{function_body}
+start_database_before_instance_state_deployment
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    trace = trace_path.read_text(encoding="utf-8")
+
+    if expected_reason is None:
+        assert result.returncode == 0, result.stderr
+        assert trace.index("conflicts db") < trace.index("compose up -d db")
+        assert "compose exec -T db" in trace
+        assert "status" not in trace
+    else:
+        assert result.returncode != 0
+        assert f"status 0 {expected_reason}" in trace
+        if mode == "start-failure":
+            assert "compose exec -T db" not in trace
+        else:
+            assert "compose up -d db" in trace
+            assert "compose exec -T db" in trace
+
+
 def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore(tmp_path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     prod = _load_compose(repo_root / "docker-compose.prod.yml")
