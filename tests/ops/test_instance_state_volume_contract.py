@@ -4917,7 +4917,7 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     )["key_id"]
 
 
-def test_start_full_system_starts_database_before_instance_state_deployment() -> None:
+def test_start_full_system_starts_database_before_instance_state_deployment(tmp_path) -> None:
     start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
 
     database_precondition = start.index(
@@ -4931,6 +4931,36 @@ def test_start_full_system_starts_database_before_instance_state_deployment() ->
     assert "check_compose_port_conflicts db" in start
     assert "run_docker_compose up -d db" in start
     assert "pg_isready" in start
+
+    caller_start = start.index(
+        "\nif start_database_before_instance_state_deployment; then"
+    )
+    caller_end = start.index("\nstart_startup_watchdog", caller_start)
+    caller_body = start[caller_start:caller_end]
+    trace_path = tmp_path / "trace.log"
+    harness = f"""
+set -eu
+TRACE={trace_path!s}
+_pkm_resolved_channel=test
+STARTUP_TIMEOUT_SECONDS=1
+run_preflight() {{ :; }}
+ensure_prod_instance_state_volume() {{ :; }}
+start_database_before_instance_state_deployment() {{ printf 'database-precondition\\n' >> "$TRACE"; }}
+prepare_instance_state_deployment() {{ printf 'mvr05-fence\\n' >> "$TRACE"; }}
+start_startup_watchdog() {{ :; }}
+{caller_body}
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert trace_path.read_text(encoding="utf-8").splitlines() == [
+        "database-precondition",
+        "mvr05-fence",
+    ]
 
 
 @pytest.mark.parametrize(
