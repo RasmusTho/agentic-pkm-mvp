@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Any, Final
+import uuid
 
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -56,7 +57,6 @@ _SOURCE_REF = re.compile(
 )
 _SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _SOURCE_SHA = re.compile(r"^[a-f0-9]{40}$")
-_ENGINE_ID = re.compile(r"^[a-f0-9-]{36}$")
 _SSH_FINGERPRINT = re.compile(r"^ssh-ed25519:SHA256:[A-Za-z0-9+/=]+$")
 _RFC3339 = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
@@ -111,6 +111,16 @@ _CLAIMS: Final[dict[str, bool]] = {
 
 class ActivationValidationError(ValueError):
     """Raised when activation evidence or a receipt fails closed."""
+
+
+def _valid_engine_id(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError:
+        return False
+    return str(parsed) == value and parsed.int != 0
 
 
 def _canonical(value: Any) -> bytes:
@@ -265,8 +275,7 @@ def _validate_semantics(receipt: Mapping[str, Any]) -> None:
     if (
         dedicated.get("context") != "builderops"
         or dedicated.get("socket") != "unix:///run/docker-builderops.sock"
-        or not isinstance(dedicated.get("engine_id"), str)
-        or _ENGINE_ID.fullmatch(dedicated["engine_id"]) is None
+        or not _valid_engine_id(dedicated.get("engine_id"))
         or dedicated.get("project") != "builderops-control-plane"
         or not isinstance(dedicated.get("compose_config_fingerprint"), str)
         or _SHA256_DIGEST.fullmatch(dedicated["compose_config_fingerprint"]) is None
@@ -283,8 +292,7 @@ def _validate_semantics(receipt: Mapping[str, Any]) -> None:
     if (
         product.get("context") != "default"
         or product.get("socket") != "unix:///var/run/docker.sock"
-        or not isinstance(product.get("engine_id"), str)
-        or _ENGINE_ID.fullmatch(product["engine_id"]) is None
+        or not _valid_engine_id(product.get("engine_id"))
         or product["engine_id"] == dedicated["engine_id"]
         or product.get("projects") != []
         or product.get("duplicate_observed_before_quarantine") is not True

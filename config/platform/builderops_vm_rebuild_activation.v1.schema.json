@@ -168,6 +168,6 @@
   "$defs": {
     "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "sha256_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-    "engine_id": {"type": "string", "pattern": "^[a-f0-9-]{36}$"}
+    "engine_id": {"type": "string", "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
   }
 }

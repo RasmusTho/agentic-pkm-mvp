@@ -59,7 +59,7 @@
       "properties": {
         "context": {"const": "builderops"},
         "project": {"const": "builderops-control-plane"},
-        "engine_id": {"type": ["string", "null"]}
+        "engine_id": {"$ref": "#/$defs/nullable_engine_id"}
       }
     },
     "observed_engine_ids": {
@@ -67,8 +67,8 @@
       "additionalProperties": false,
       "required": ["builderops", "product"],
       "properties": {
-        "builderops": {"type": ["string", "null"]},
-        "product": {"type": ["string", "null"]}
+        "builderops": {"$ref": "#/$defs/nullable_engine_id"},
+        "product": {"$ref": "#/$defs/nullable_engine_id"}
       }
     },
     "activation_verdict": {"const": "refused"},
@@ -84,6 +84,10 @@
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-    "nullable_sha256_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"}
+    "nullable_sha256_digest": {"type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$"},
+    "nullable_engine_id": {
+      "type": ["string", "null"],
+      "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
   }
 }

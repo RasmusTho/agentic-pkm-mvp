@@ -142,6 +142,25 @@ def test_activation_receipt_schema_is_closed() -> None:
 
 
 @pytest.mark.parametrize(
+    "engine_id",
+    [
+        "builder-engine",
+        "f" * 36,
+        "00000000-0000-0000-0000-000000000000",
+        "799A3D86-54F6-4208-B71A-36AE3EEE61B6",
+    ],
+)
+def test_activation_receipt_rejects_noncanonical_engine_ids(engine_id: str) -> None:
+    evidence = _evidence()
+    evidence["dedicated_engine"] = {
+        **evidence["dedicated_engine"],  # type: ignore[dict-item]
+        "engine_id": engine_id,
+    }
+    with pytest.raises(ActivationValidationError):
+        build_activation_receipt(evidence)
+
+
+@pytest.mark.parametrize(
     "path, value",
     [
         (("product_engine", "projects"), ["builderops-control-plane"]),

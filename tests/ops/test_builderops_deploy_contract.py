@@ -272,7 +272,7 @@ if [ "${1:-}" = info ]; then
     printf 'partial-engine\n'
     exit 17
   fi
-  [ "$context" = builderops ] && printf 'builder-engine\n' || printf 'product-engine\n'
+  [ "$context" = builderops ] && printf '799a3d86-54f6-4208-b71a-36ae3eee61b6\n' || printf '2cae4764-d613-484d-b63d-0d353d5eab7c\n'
 elif [ "${1:-}" = compose ] && [ "${2:-}" = ls ]; then
   if [ "${FAKE_FAIL_PROJECT_LISTING_CONTEXT:-}" = "$context" ]; then
     printf '[{"Name":"partial-listing"}]\n'
@@ -368,7 +368,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert receipt["action"] == "deploy"
     assert receipt["project"] == "builderops-control-plane"
     assert receipt["engine_context"] == "builderops"
-    assert receipt["engine_id"] == "builder-engine"
+    assert receipt["engine_id"] == "799a3d86-54f6-4208-b71a-36ae3eee61b6"
     assert receipt["source_sha"] == source_sha
     assert receipt["image_digest"] == digest
     assert receipt["postgres_image_digest"] == postgres_digest
@@ -638,12 +638,12 @@ def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> N
     assert refusal["mutation_performed"] is False
     assert refusal["selected_engine"] == {
         "context": "builderops",
-        "engine_id": "builder-engine",
+        "engine_id": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
         "project": "builderops-control-plane",
     }
     assert refusal["observed_engine_ids"] == {
-        "builderops": "builder-engine",
-        "product": "product-engine",
+        "builderops": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
+        "product": "2cae4764-d613-484d-b63d-0d353d5eab7c",
     }
     assert "duplicate_builderops_engine_writers" in refusal["refusals"]
     assert refusal["secret_material"] == "absent"
@@ -766,10 +766,10 @@ def test_deploy_refusal_preserves_builder_engine_identity_when_product_read_fail
     assert result.returncode == 75
     refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
     assert refusal["observed_engine_ids"] == {
-        "builderops": "builder-engine",
+        "builderops": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
         "product": None,
     }
-    assert refusal["selected_engine"]["engine_id"] == "builder-engine"
+    assert refusal["selected_engine"]["engine_id"] == "799a3d86-54f6-4208-b71a-36ae3eee61b6"
 
 
 def test_deployment_interlock_is_non_reentrant_and_fail_closed(tmp_path: Path) -> None:

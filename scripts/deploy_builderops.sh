@@ -153,6 +153,10 @@ wait_ready() {
 record_receipt() {
   local action="${1}" source_sha="${2}" digest="${3}" postgres_digest="${4}" previous_digest="${5}" previous_postgres_digest="${6}" engine_id timestamp path
   engine_id="$(builderops_engine_id "${BUILDEROPS_DOCKER_CONTEXT}")"
+  builderops_valid_engine_id "${engine_id}" || {
+    echo "BuilderOps Docker engine info is invalid or unavailable while recording receipt" >&2
+    return 75
+  }
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "${RECEIPT_DIR}"
   path="${RECEIPT_DIR}/${timestamp}-${action}.json"
