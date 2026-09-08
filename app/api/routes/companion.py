@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -61,7 +61,7 @@ from app.agent_memory.posture_projection import (
     AgentMemoryPostureTarget,
     agent_memory_posture_for_artifacts,
 )
-from app.auth import require_loopback_or_api_key
+from app.auth import api_key_header, require_loopback_or_api_key, resolve_auth_subject
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -77,6 +77,7 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.events.panel import (
     NoteRef,
@@ -116,11 +117,28 @@ from app.vault.manager import (
     SETTINGS_DIR_NAME,
     MachineRole,
     VaultContext,
+    VaultInitializationResult,
     existing_init_target_entries,
     get_vault_manager,
     is_vault_root,
     nearest_enclosing_vault_root,
 )
+from app.instance.active_context_service import (
+    ActiveContextSelectionService,
+    ActiveContextServiceError,
+    resolve_principal,
+)
+from app.instance.first_vault_bootstrap import (
+    FirstVaultBootstrapError,
+    FirstVaultPreconditionStore,
+)
+from app.instance.runtime import (
+    InstanceRegistryRuntime,
+    open_api_registry_runtime,
+    open_local_operator_principal_store,
+)
+from app.instance.vault_registry import VaultRegistryStore
+from app.instance.local_operator_principal import PrincipalPreflightError
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.vault.settings_service import (
     SettingDefinition,
@@ -280,12 +298,24 @@ class VaultInitializeRequest(BaseModel):
     # populated (#2518). Default ``False`` so a non-empty target refuses with
     # 409 until the human confirms; an empty/new target ignores it.
     confirm: bool = False
+    # Fresh no-vault initialization carries the authenticated single-use
+    # precondition minted by ``/vault/initialize/bootstrap``.
+    bootstrap_token: str | None = None
 
 
 class VaultInitializeResponse(BaseModel):
     context: VaultContextResponse
     created_files: list[str]
     skipped_existing_files: list[str]
+    context_selection_id: str | None = None
+
+
+class VaultInitializeBootstrapResponse(BaseModel):
+    bootstrap_token: str
+    expires_at: float
+    target_fingerprint: str
+    registry_revision: int
+    compatibility_revision: int
 
 
 class VaultSettingDefinitionResponse(BaseModel):
@@ -1208,12 +1238,121 @@ def read_companion_now() -> list[dict]:
     return []
 
 
+def _first_vault_runtime() -> tuple[InstanceRegistryRuntime, Path]:
+    registry_value = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+    ownership_value = os.getenv("INSTANCE_OWNERSHIP_ROOT", "").strip()
+    if not registry_value or not ownership_value:
+        raise HTTPException(
+            status_code=503,
+            detail="first-vault bootstrap requires bound instance registry and ownership state",
+        )
+    registry_path = Path(registry_value).expanduser().resolve(strict=False)
+    if not registry_path.parent.is_dir():
+        raise HTTPException(status_code=503, detail="instance registry state is not available")
+    runtime = open_api_registry_runtime(
+        registry_path,
+        ownership_root=Path(ownership_value).expanduser().resolve(strict=False),
+        channel=os.getenv("PKM_ENVIRONMENT", "dev"),
+    )
+    return runtime, registry_path
+
+
+def _authenticated_principal_id(
+    request: Request,
+    api_key: str | None,
+    registry_path: Path,
+) -> str:
+    try:
+        subject = resolve_auth_subject(request, api_key)
+        record = open_local_operator_principal_store(registry_path).require()
+        return resolve_principal(
+            record,
+            subject,
+            presented_credential=api_key,
+        ).principal_id
+    except PrincipalPreflightError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _create_initialized_scoped_selection(
+    *,
+    request: Request,
+    api_key: str | None,
+    registry_path: Path,
+    binding_id: str,
+) -> str:
+    try:
+        subject = resolve_auth_subject(request, api_key)
+        principal_record = open_local_operator_principal_store(registry_path).require()
+        service = ActiveContextSelectionService(
+            registry_store=VaultRegistryStore(registry_path),
+            principal_record=principal_record,
+            selection_store=get_selection_store(),
+        )
+        derived = service.derive(subject, presented_credential=api_key)
+        raw_id, _record = service.create(derived=derived, binding_ids=[binding_id])
+        return raw_id
+    except PrincipalPreflightError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ActiveContextServiceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/vault/initialize/bootstrap",
+    response_model=VaultInitializeBootstrapResponse,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
+def create_vault_initialize_bootstrap(
+    req: VaultInitializeRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultInitializeBootstrapResponse:
+    """Mint the narrow precondition for the fresh no-vault initialize journey."""
+
+    if req.bootstrap_token:
+        raise HTTPException(status_code=400, detail="bootstrap endpoint does not accept a token")
+    runtime, registry_path = _first_vault_runtime()
+    principal_id = _authenticated_principal_id(request, api_key, registry_path)
+    store = FirstVaultPreconditionStore(registry_path)
+    with runtime.first_vault_bootstrap_lock():
+        ownership_in_progress = any(
+            lease.channel_id == runtime.layout.channel_id
+            and lease.state in {"pending", "active"}
+            for lease in runtime.ledger.load().leases.values()
+        )
+        try:
+            token, record = store.issue(
+                principal_id=principal_id,
+                path=Path(req.path),
+                vault_name=req.vault_name,
+                machine_role=req.machine_role,
+                remember=req.remember,
+                confirm=req.confirm,
+                snapshot=runtime.registry.load(),
+                ownership_in_progress=ownership_in_progress,
+            )
+        except FirstVaultBootstrapError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return VaultInitializeBootstrapResponse(
+        bootstrap_token=token,
+        expires_at=record.expires_at,
+        target_fingerprint=record.target_fingerprint,
+        registry_revision=record.registry_revision,
+        compatibility_revision=record.compatibility_revision,
+    )
+
+
 @router.post(
     "/vault/initialize",
     response_model=VaultInitializeResponse,
     dependencies=[Depends(require_loopback_or_api_key)],
 )
-def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeResponse:
+def initialize_companion_vault(
+    req: VaultInitializeRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultInitializeResponse:
     target = Path(req.path)
     # Personal-vault-write guard (#2518): initializing writes the settings
     # scaffold INTO the chosen folder. When that folder is already populated
@@ -1225,6 +1364,78 @@ def initialize_companion_vault(req: VaultInitializeRequest) -> VaultInitializeRe
     # governance/agent approval loop (#2475). Manager-direct callers (CLI,
     # test-channel bootstrap) are deliberate operator actions and bypass this
     # picker-facing gate.
+    runtime: InstanceRegistryRuntime | None = None
+    registry_path: Path | None = None
+    if req.bootstrap_token:
+        runtime, registry_path = _first_vault_runtime()
+    elif os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip():
+        runtime, registry_path = _first_vault_runtime()
+
+    if runtime is not None and registry_path is not None:
+        snapshot = runtime.registry.load()
+        if req.bootstrap_token or (
+            not snapshot.registrations and snapshot.default_vault_binding_id is None
+        ):
+            principal_id = _authenticated_principal_id(request, api_key, registry_path)
+            if not req.bootstrap_token:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "vault_init_bootstrap_required",
+                        "message": "Fresh no-vault initialization requires an authenticated bootstrap precondition.",
+                    },
+                )
+            store = FirstVaultPreconditionStore(registry_path)
+            try:
+                record = store.require(
+                    req.bootstrap_token,
+                    principal_id=principal_id,
+                    path=target,
+                    vault_name=req.vault_name,
+                    machine_role=req.machine_role,
+                    remember=req.remember,
+                    confirm=req.confirm,
+                    snapshot=snapshot,
+                )
+                manager = get_vault_manager()
+
+                def initialize() -> VaultInitializationResult:
+                    return manager.initialize_vault(
+                        target,
+                        vault_name=req.vault_name,
+                        machine_role=req.machine_role,
+                        remember=req.remember,
+                    )
+
+                def recover() -> VaultInitializationResult:
+                    context = manager.select_vault(target, remember=req.remember)
+                    return VaultInitializationResult(context=context)
+
+                registration, result = runtime.initialize_and_register_first_vault(
+                    target,
+                    precondition=store.runtime_view(record),
+                    initialize=initialize,
+                    recover=recover,
+                )
+                # The selection store is intentionally process-ephemeral. An exact retry
+                # after the durable first-vault commit therefore mints a fresh scoped
+                # selection after recovery; it never repeats content or registry effects.
+                context_selection_id = _create_initialized_scoped_selection(
+                    request=request,
+                    api_key=api_key,
+                    registry_path=registry_path,
+                    binding_id=registration.vault_binding_id,
+                )
+                return VaultInitializeResponse(
+                    context=_vault_context_response(result.context),
+                    created_files=list(result.created_files),
+                    skipped_existing_files=list(result.skipped_existing_files),
+                    context_selection_id=context_selection_id,
+                )
+            except FirstVaultBootstrapError as exc:
+                status_code = 403 if "principal" in str(exc) else 409
+                raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
     if not req.confirm:
         existing = existing_init_target_entries(target)
         if existing:
