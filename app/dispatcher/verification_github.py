@@ -547,11 +547,24 @@ class GitHubProtectedRepositoryAuthority:
             raise MergeAuthorityError(
                 "real merge neutralized body digest did not converge"
             )
+        body_edit_before_projection = self._current_body_edit(
+            canonical, pr_number
+        )
+        closing_references = self._closing_issue_references(
+            canonical, pr_number
+        )
+        body_edit_after_projection = self._current_body_edit(
+            canonical, pr_number
+        )
+        if body_edit_after_projection != body_edit_before_projection:
+            raise MergeAuthorityError(
+                "GitHub body edit changed during final closing projection read"
+            )
         phase = resolve_verified_merge_phase(
             comments,
             authority_receipt=authority,
             pr=pull,
-            current_body_edit=self._current_body_edit(canonical, pr_number),
+            current_body_edit=body_edit_after_projection,
         )
         if (
             phase is None
@@ -559,7 +572,7 @@ class GitHubProtectedRepositoryAuthority:
             or phase.get("closed_issues") != []
             or phase.get("reopened_unauthorized_issues") != []
             or phase.get("merge_commit_sha") is not None
-            or self._closing_issue_references(canonical, pr_number)
+            or closing_references
         ):
             raise MergeAuthorityError(
                 "real merge requires empty closers and a continuous prepared phase"
@@ -586,6 +599,7 @@ class GitHubProtectedRepositoryAuthority:
             "neutralized_body_sha256": observed_body_sha256,
             "authority_sha256": digest(authority),
             "phase_sha256": digest(phase),
+            "body_edit": dict(body_edit_after_projection),
             "closing_reference_count": 0,
             "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
             "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
