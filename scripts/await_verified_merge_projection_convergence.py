@@ -49,7 +49,9 @@ query($owner: String!, $name: String!, $number: Int!) {
       title
       body
       lastEditedAt
-      userContentEdits(last: 1) {
+      # GitHub returns this connection newest-first; first: 1 is the latest
+      # body edit, while last: 1 returns the oldest edit in live data.
+      userContentEdits(first: 1) {
         nodes { id editedAt editor { login } }
         pageInfo { hasNextPage }
       }

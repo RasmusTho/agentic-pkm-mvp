@@ -211,7 +211,7 @@ def test_verified_merge_uses_authenticated_closing_projection_convergence() -> N
 
     for fragment in (
         "closingIssuesReferences(first: 11)",
-        "userContentEdits(last: 1)",
+        "userContentEdits(first: 1)",
         "rateLimit { cost remaining resetAt }",
         '"status": "failed_closed"',
         "return 2 if failure == \"timeout\" else 3",
