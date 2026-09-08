@@ -916,6 +916,36 @@ def test_pending_delivered_receipt_replay_is_idempotent(tmp_path) -> None:
     ]
 
 
+def test_pending_delivered_replay_preserves_legacy_unknown_capability(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    launcher = DeliveredLauncher()
+    consumer = VerificationConsumer(
+        state, PostMergeTerminalReadOutageTruth(), Auth(), launcher, "host"
+    )
+    first = consumer.consume(request())
+    _corrupt_pending_delivered_receipt(
+        state,
+        first.run_id,
+        lambda pending: pending["review_events"][0].update(
+            {"capability": "unknown-capability"}
+        ),
+    )
+
+    final = consumer.consume(request())
+
+    assert final.status == "completed"
+    assert final.terminal_receipt["review_events"][0]["capability"] == (
+        "unknown-capability"
+    )
+    assert [row["kind"] for row in state.attempts(final.run_id)] == [
+        "verification",
+        "review",
+        "review",
+    ]
+
+
 def test_delivered_receipt_rejects_unattributed_unauthorized_issue_closure(
     tmp_path,
 ) -> None:

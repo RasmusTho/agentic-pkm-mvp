@@ -1575,6 +1575,26 @@ def _canonicalize_persisted_attempt_receipt(
     if not isinstance(receipt, Mapping):
         return attempt
     canonical = dict(receipt)
+    authority = attempt.get(_VERIFICATION_RECEIPT_AUTHORITY_FIELD)
+    if authority is not None:
+        if not isinstance(authority, str):
+            raise ValueError("persisted verification receipt authority is malformed")
+        if authority != _progress_digest(canonical):
+            # During the short compatibility window before batch authority was
+            # projected over event metadata, the digest covered the receipt
+            # before producer-reserved batch fields were attached. Accept that
+            # authenticated legacy shape only when the reserved fields are
+            # present, then derive the current authority below.
+            without_batch_metadata = {
+                key: value
+                for key, value in canonical.items()
+                if key not in _EVENT_BATCH_RECEIPT_FIELDS
+            }
+            if (
+                not _EVENT_BATCH_RECEIPT_FIELDS.intersection(canonical)
+                or authority != _progress_digest(without_batch_metadata)
+            ):
+                raise ValueError("persisted verification receipt authority mismatch")
     events = canonical.get("review_events")
     if isinstance(events, list):
         normalized_events: list[object] = []
@@ -1590,7 +1610,6 @@ def _canonicalize_persisted_attempt_receipt(
                 )
             normalized_events.append(normalized)
         canonical["review_events"] = normalized_events
-    authority = attempt.get(_VERIFICATION_RECEIPT_AUTHORITY_FIELD)
     if isinstance(authority, str):
         canonical.pop(_VERIFICATION_RECEIPT_AUTHORITY_FIELD, None)
         normalized_authority = _progress_digest(canonical)

@@ -614,6 +614,7 @@ def load_and_validate_verification_closer_receipt(
     trusted_evidence_urls: frozenset[str],
     repair_budget_policy: str | None = None,
     capability_aliases: Mapping[str, str] | None = None,
+    allow_legacy_capability_placeholder: bool = False,
 ) -> Mapping[str, object]:
     """Validate untrusted launcher output against the canonical receipt contract."""
 
@@ -652,6 +653,7 @@ def load_and_validate_verification_closer_receipt(
         trusted_repository=trusted_repository,
         trusted_evidence_urls=trusted_evidence_urls,
         capability_aliases=capability_aliases,
+        allow_legacy_capability_placeholder=allow_legacy_capability_placeholder,
     )
     try:
         validate_verification_closer_receipt(
@@ -2304,6 +2306,7 @@ def _sanitize_review_event(
     event: Mapping[str, object],
     *,
     capability_aliases: Mapping[str, str] | None = None,
+    allow_legacy_capability_placeholder: bool = False,
 ) -> dict[str, object]:
     finding = event.get("finding_id")
     mechanism = event.get("mechanism_id")
@@ -2311,12 +2314,16 @@ def _sanitize_review_event(
     mechanism_paths = event.get("mechanism_path_sha256")
     reported_capability = str(event["capability"])
     if capability_aliases is not None:
-        normalized_capability = capability_aliases.get(reported_capability)
-        if normalized_capability is None:
-            raise ReceiptContractError(
-                "verification receipt capability is not declared"
-            )
-        reported_capability = normalized_capability
+        if not (
+            allow_legacy_capability_placeholder
+            and reported_capability == "unknown-capability"
+        ):
+            normalized_capability = capability_aliases.get(reported_capability)
+            if normalized_capability is None:
+                raise ReceiptContractError(
+                    "verification receipt capability is not declared"
+                )
+            reported_capability = normalized_capability
     return {
         "kind": event["kind"],
         "session_id": _pseudonymous_receipt_identifier(
@@ -2463,6 +2470,7 @@ def sanitize_verification_closer_receipt(
     trusted_repository: str | None = None,
     trusted_evidence_urls: frozenset[str] | None = None,
     capability_aliases: Mapping[str, str] | None = None,
+    allow_legacy_capability_placeholder: bool = False,
 ) -> dict[str, object]:
     """Project one schema-valid coordinator receipt onto its durable-safe form."""
 
@@ -2487,7 +2495,11 @@ def sanitize_verification_closer_receipt(
         "review_events": (
             [
                 _sanitize_review_event(
-                    event, capability_aliases=capability_aliases
+                    event,
+                    capability_aliases=capability_aliases,
+                    allow_legacy_capability_placeholder=(
+                        allow_legacy_capability_placeholder
+                    ),
                 )
                 for event in raw_events[:_MAX_RECEIPT_LIST_ITEMS]
                 if isinstance(event, Mapping)
@@ -4728,6 +4740,7 @@ class VerificationConsumer:
                 trusted_evidence_urls=_trusted_evidence_urls(run),
                 repair_budget_policy=run.repair_budget_policy,
                 capability_aliases=self.capability_aliases,
+                allow_legacy_capability_placeholder=True,
             )
         except ReceiptContractError as exc:
             try:
@@ -4959,6 +4972,15 @@ class VerificationConsumer:
             claimed.run_id,
             holder=self.holder,
             lease_id=lease_id,
+            capability_aliases={
+                **self.capability_aliases,
+                # Pre-census sanitization could only retain a safe placeholder
+                # for an event capability. It is evidence-only during replay;
+                # bind the resulting review attempt to the declared strongest
+                # compatibility key while preserving the placeholder in the
+                # durable terminal receipt.
+                "unknown-capability": self.capability_aliases.get("sol", "sol"),
+            },
         )
         if events:
             try:
@@ -5380,6 +5402,7 @@ class VerificationConsumer:
                     trusted_evidence_urls=_trusted_evidence_urls(claimed),
                     repair_budget_policy=claimed.repair_budget_policy,
                     capability_aliases=self.capability_aliases,
+                    allow_legacy_capability_placeholder=True,
                 )
             else:
                 begin_effect = getattr(self.ledger, "begin_effect", None)

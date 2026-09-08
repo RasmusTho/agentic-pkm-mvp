@@ -321,6 +321,10 @@ def test_legacy_unknown_capability_placeholder_remains_readable(tmp_path) -> Non
             ).fetchone()[0]
         )
         raw_receipt["review_events"][0]["capability"] = "unknown-capability"
+        raw_receipt.pop("verification_receipt_sha256")
+        raw_receipt["verification_receipt_sha256"] = (
+            verification_dispatch._progress_digest(raw_receipt)
+        )
         conn.execute(
             "UPDATE verification_attempts SET receipt_json=? WHERE run_id=?",
             (json.dumps(raw_receipt, sort_keys=True), run.run_id),
@@ -331,6 +335,52 @@ def test_legacy_unknown_capability_placeholder_remains_readable(tmp_path) -> Non
     assert attempts[0]["receipt"]["review_events"][0]["capability"] == (
         "unknown-capability"
     )
+
+
+def test_persisted_receipt_authority_is_verified_before_alias_normalization(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    receipt = verified_attempt_receipt()
+    admitted = admit_verification_receipt(
+        state,
+        run.run_id,
+        "authority-integrity-session",
+        receipt,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+    assert state.record_attempt(
+        run.run_id,
+        "verification",
+        "authority-integrity-session",
+        "gpt-5.6-sol",
+        "xhigh",
+        {"head": run.head_sha},
+        "launched",
+        admitted,
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="authority-integrity-key",
+    ) == 1
+
+    with sqlite3.connect(state.store.db_path) as conn:
+        raw_receipt = json.loads(
+            conn.execute(
+                "SELECT receipt_json FROM verification_attempts WHERE run_id=?",
+                (run.run_id,),
+            ).fetchone()[0]
+        )
+        raw_receipt["summary"] = "tampered after persistence"
+        conn.execute(
+            "UPDATE verification_attempts SET receipt_json=? WHERE run_id=?",
+            (json.dumps(raw_receipt, sort_keys=True), run.run_id),
+        )
+
+    with pytest.raises(ValueError, match="authority mismatch"):
+        state.attempts(run.run_id)
 
 
 def test_repair_progress_receipt_is_lease_fenced_and_replay_safe(tmp_path) -> None:
