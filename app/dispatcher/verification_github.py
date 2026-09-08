@@ -173,6 +173,7 @@ class ConditionalMergeTransport(Protocol):
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        expected_body_edit: Mapping[str, object],
         commit_title: str,
         commit_message: str,
         credential: object,
@@ -376,6 +377,75 @@ class GitHubProtectedRepositoryAuthority:
             "GitHub merge-authority comments exceed bounded scan"
         )
 
+    def _current_body_edit(
+        self, repository: str, pr_number: int
+    ) -> Mapping[str, object]:
+        """Read the live, trusted body-edit identity for a prepared gate."""
+
+        owner, name = RepoRef.parse(repository).canonical.split("/", 1)
+        response = self._graphql(
+            """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  userContentEdits(first: 1) {
+                    nodes { id editedAt editor { login } }
+                    pageInfo { hasNextPage }
+                  }
+                }
+              }
+            }
+            """,
+            {"owner": owner, "name": name, "number": pr_number},
+        )
+        data = response["data"]
+        repository_row = data.get("repository")
+        pull = (
+            repository_row.get("pullRequest")
+            if isinstance(repository_row, Mapping)
+            else None
+        )
+        edits = pull.get("userContentEdits") if isinstance(pull, Mapping) else None
+        nodes = edits.get("nodes") if isinstance(edits, Mapping) else None
+        page_info = edits.get("pageInfo") if isinstance(edits, Mapping) else None
+        if (
+            not isinstance(nodes, list)
+            or len(nodes) != 1
+            or not isinstance(nodes[0], Mapping)
+            or not isinstance(page_info, Mapping)
+            or not isinstance(page_info.get("hasNextPage"), bool)
+        ):
+            raise MergeAuthorityError("GitHub body-edit evidence is incomplete")
+        edit = nodes[0]
+        editor = edit.get("editor")
+        login = editor.get("login") if isinstance(editor, Mapping) else None
+        if (
+            not isinstance(edit.get("id"), str)
+            or not edit.get("id")
+            or not isinstance(edit.get("editedAt"), str)
+            or not edit.get("editedAt")
+            or not isinstance(login, str)
+            or not login
+        ):
+            raise MergeAuthorityError("GitHub body-edit identity is malformed")
+        if login.casefold() == owner.casefold():
+            association = "OWNER"
+        else:
+            permission = self._get(
+                f"/repos/{repository}/collaborators/{login}/permission"
+            ).get("permission")
+            if permission not in {"admin", "maintain", "write"}:
+                raise MergeAuthorityError(
+                    "GitHub body editor is not an authenticated collaborator"
+                )
+            association = "COLLABORATOR"
+        return {
+            "node_id": edit["id"],
+            "edited_at": edit["editedAt"],
+            "editor_login": login,
+            "editor_association": association,
+        }
+
     def _closing_issue_references(
         self, repository: str, pr_number: int
     ) -> Sequence[Mapping[str, Any]]:
@@ -478,10 +548,24 @@ class GitHubProtectedRepositoryAuthority:
             raise MergeAuthorityError(
                 "real merge neutralized body digest did not converge"
             )
+        body_edit_before_projection = self._current_body_edit(
+            canonical, pr_number
+        )
+        closing_references = self._closing_issue_references(
+            canonical, pr_number
+        )
+        body_edit_after_projection = self._current_body_edit(
+            canonical, pr_number
+        )
+        if body_edit_after_projection != body_edit_before_projection:
+            raise MergeAuthorityError(
+                "GitHub body edit changed during final closing projection read"
+            )
         phase = resolve_verified_merge_phase(
             comments,
             authority_receipt=authority,
             pr=pull,
+            current_body_edit=body_edit_after_projection,
         )
         if (
             phase is None
@@ -489,7 +573,7 @@ class GitHubProtectedRepositoryAuthority:
             or phase.get("closed_issues") != []
             or phase.get("reopened_unauthorized_issues") != []
             or phase.get("merge_commit_sha") is not None
-            or self._closing_issue_references(canonical, pr_number)
+            or closing_references
         ):
             raise MergeAuthorityError(
                 "real merge requires empty closers and a continuous prepared phase"
@@ -516,6 +600,7 @@ class GitHubProtectedRepositoryAuthority:
             "neutralized_body_sha256": observed_body_sha256,
             "authority_sha256": digest(authority),
             "phase_sha256": digest(phase),
+            "body_edit": dict(body_edit_after_projection),
             "closing_reference_count": 0,
             "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
             "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
@@ -930,6 +1015,7 @@ class GitHubProtectedRepositoryAuthority:
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        expected_body_edit: Mapping[str, object],
         commit_title: str,
         commit_message: str,
         credential: object,
@@ -944,6 +1030,7 @@ class GitHubProtectedRepositoryAuthority:
             expected_head_sha=expected_head_sha,
             expected_base_sha=expected_base_sha,
             expected_manifest_blob_sha=expected_manifest_blob_sha,
+            expected_body_edit=expected_body_edit,
             commit_title=commit_title,
             commit_message=commit_message,
             credential=credential,

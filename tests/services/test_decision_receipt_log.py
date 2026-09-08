@@ -175,6 +175,30 @@ def test_reverse_identity_query_checks_alias_without_retained_row() -> None:
     assert "requested_alias_exists" in cur.execute.call_args.args[0]
 
 
+def test_decisions_schema_assertion_memo_has_a_reset_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schema-mutating tests can restore the first-call fail-loud assertion."""
+    import app.db.decisions_schema as schema
+
+    calls: list[object] = []
+    def fake_uncached(conn: object) -> None:
+        calls.append(conn)
+        if len(calls) == 2:
+            raise RuntimeError("stale schema")
+
+    monkeypatch.setattr(schema, "_assert_decisions_schema_uncached", fake_uncached)
+    schema.reset_decisions_schema_assertion_memo()
+    try:
+        schema.assert_decisions_schema("first")
+        schema.assert_decisions_schema("second")
+        assert calls == ["first"]
+        schema.reset_decisions_schema_assertion_memo()
+        with pytest.raises(RuntimeError, match="stale schema"):
+            schema.assert_decisions_schema("after-reset")
+        assert calls == ["first", "after-reset"]
+    finally:
+        schema.reset_decisions_schema_assertion_memo()
+
+
 # ---------------------------------------------------------------------------
 # AC2 — a blocked WriteGuard defers/raises loudly; no DB-only decision recorded
 # ---------------------------------------------------------------------------

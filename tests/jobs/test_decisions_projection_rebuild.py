@@ -29,6 +29,22 @@ from app.receipts.decision_receipt_log import append_decision_receipt
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_projection_and_receipt_share_identity_join() -> None:
+    """Both consumers reach the one neutral identity-join seam."""
+    import app.jobs.decisions_projection as projection
+    import app.objects.identity as identity
+    import app.receipts.decision_receipt_log as receipt_log
+
+    assert projection.vault_uuid_to_canonical_id_map_with_connection is (
+        identity.vault_uuid_to_canonical_id_map_with_connection
+    )
+    assert receipt_log.retained_vault_uuid_with_connection is (
+        identity.retained_vault_uuid_with_connection
+    )
+    assert "FROM store_objects canonical" in identity._CANONICAL_RETAINED_IDENTITY_FROM_SQL
+    assert "LEFT JOIN objects legacy" in identity._CANONICAL_RETAINED_IDENTITY_FROM_SQL
+
+
 # ---------------------------------------------------------------------------
 # not-pg: pure re-link resolution logic
 # ---------------------------------------------------------------------------

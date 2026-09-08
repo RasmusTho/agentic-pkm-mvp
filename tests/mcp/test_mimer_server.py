@@ -148,7 +148,7 @@ def test_loopback_factory_disables_environment_proxy_trust(monkeypatch: pytest.M
     assert seen["trust_env"] is False
 
 
-def test_model_backed_operations_use_runtime_aligned_timeouts() -> None:
+def test_model_backed_operations_use_configured_outer_read_deadline() -> None:
     seen: dict[str, dict[str, Any]] = {}
 
     class _TimeoutRecordingClient:
@@ -160,15 +160,17 @@ def test_model_backed_operations_use_runtime_aligned_timeouts() -> None:
             seen[path] = kwargs
             return _Response(200, {})
 
-    operations = _GovernedMimerHttpOperations(_TimeoutRecordingClient())
+    operations = _GovernedMimerHttpOperations(
+        _TimeoutRecordingClient(), runtime_read_deadline_seconds=90.0
+    )
     operations.ask(question="where?", trace_id="ask-trace")
     operations.capture(text="remember this", trace_id="capture-trace")
     operations.retrieve(query="where?", trace_id="retrieve-trace")
     operations.read_note(note_path="inbox.md", artifact_id=None, trace_id="note-trace")
     operations.health(trace_id="health-trace")
 
-    assert seen["/api/ask"]["timeout"].read == 60.0
-    assert seen["/api/companion/capture"]["timeout"].read == 60.0
+    assert seen["/api/ask"]["timeout"].read == 90.0
+    assert seen["/api/companion/capture"]["timeout"].read == 90.0
     assert seen["/search"]["timeout"].read == 10.0
     assert seen["/api/artifacts/note"]["timeout"].read == 10.0
     assert seen["/healthz"]["timeout"].read == 10.0
@@ -206,7 +208,21 @@ def test_model_backed_operations_use_runtime_aligned_timeouts() -> None:
         server_thread.join(timeout=1)
 
 
-def test_stalled_capture_uses_runtime_deadline_and_surfaces_ambiguity(
+def test_runtime_read_deadline_rejects_bounds_that_can_expire_first() -> None:
+    class _TimeoutRecordingClient:
+        def post(self, path: str, **kwargs: Any) -> _Response:
+            return _Response(200, {})
+
+        def get(self, path: str, **kwargs: Any) -> _Response:
+            return _Response(200, {})
+
+    with pytest.raises(ValueError, match="longer than 60 seconds"):
+        _GovernedMimerHttpOperations(
+            _TimeoutRecordingClient(), runtime_read_deadline_seconds=60.0
+        )
+
+
+def test_capture_stall_is_ambiguous_and_non_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(

@@ -106,13 +106,28 @@ class VerificationAgentLoop:
         *,
         holder: str,
         lease_id: str,
-        strongest_capability: str = "gpt-5.6-sol",
+        capability_aliases: Mapping[str, str] | None = None,
+        # ``sol`` is the provider-neutral strongest-capability compatibility key.
+        # The declared census binds it to the current strong-reasoning target; this
+        # ledger must not pin a carrier-specific model id.
+        strongest_capability: str = "sol",
     ) -> None:
         self.ledger = ledger
         self.run_id = run_id
         self.holder = holder
         self.lease_id = lease_id
-        self.strongest_capability = strongest_capability
+        if capability_aliases is None:
+            capability_aliases = getattr(ledger, "capability_aliases", None)
+        if not isinstance(capability_aliases, Mapping):
+            raise ValueError("verification ledger has no declared capability binding")
+        self.capability_aliases = dict(capability_aliases)
+        self.strongest_capability = self._capability_key(strongest_capability)
+
+    def _capability_key(self, value: str) -> str:
+        capability = self.capability_aliases.get(value)
+        if capability is None:
+            raise ValueError("verification capability is not declared")
+        return capability
 
     def _head(self) -> str:
         run = self.ledger.get(self.run_id)
@@ -162,6 +177,7 @@ class VerificationAgentLoop:
     ) -> int:
         if not finding_id:
             raise ValueError("repair requires a stable finding id")
+        capability = self._capability_key(capability)
         attempts = self.ledger.attempts(self.run_id)
         repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
         if repairs:
@@ -176,7 +192,7 @@ class VerificationAgentLoop:
                 raise ValueError("each additional repair requires a fresh blocking review")
         if strongest and (
             capability != self.strongest_capability
-            or reasoning_effort not in {"high", "xhigh"}
+            or reasoning_effort not in {"high", "xhigh", "max"}
         ):
             raise ValueError("escalated repair must use the configured strongest capability")
         progress_receipt = self._progress_receipt(
@@ -242,6 +258,7 @@ class VerificationAgentLoop:
             and row["receipt"].get("reviewed_attempt_id") == latest["attempt_id"]
         ]
         normalized = outcome.lower()
+        capability = self._capability_key(capability)
         if normalized not in {"blocking", "clean"}:
             raise ValueError("review outcome must be blocking or clean")
         mechanism_paths = (
@@ -338,7 +355,11 @@ class VerificationAgentLoop:
             planned: list[dict[str, object]] = []
             for index, event in enumerate(events):
                 session_id = str(event["session_id"])
-                capability = str(event["capability"])
+                raw_capability = str(event["capability"])
+                legacy_capability_placeholder = (
+                    raw_capability == "unknown-capability"
+                )
+                capability = self._capability_key(raw_capability)
                 reasoning_effort = str(event["reasoning_effort"])
                 outcome = str(event["outcome"])
                 attempt_id = attempt_id_for(index)
@@ -367,10 +388,17 @@ class VerificationAgentLoop:
                             raise ValueError(
                                 "each additional repair requires a fresh blocking review"
                             )
-                    strongest = bool(event.get("strongest", False))
+                    # A pre-census placeholder may be replayed for continuity,
+                    # but it cannot prove that the configured strongest
+                    # capability actually ran. Downgrade only the derived
+                    # ledger classification; the original receipt remains
+                    # untouched for forensic compatibility readback.
+                    strongest = bool(event.get("strongest", False)) and not (
+                        legacy_capability_placeholder
+                    )
                     if strongest and (
                         capability != self.strongest_capability
-                        or reasoning_effort not in {"high", "xhigh"}
+                        or reasoning_effort not in {"high", "xhigh", "max"}
                     ):
                         raise ValueError(
                             "escalated repair must use the configured strongest capability"
@@ -518,6 +546,23 @@ class VerificationAgentLoop:
             len(events),
             head_sha,
             plan,
+            replay_events=[
+                {
+                    "kind": event.get("kind"),
+                    "session_id": str(event["session_id"]),
+                    "capability": self._capability_key(str(event["capability"])),
+                    "reasoning_effort": str(event["reasoning_effort"]),
+                    "outcome": (
+                        str(event["outcome"]).lower()
+                        if event.get("kind") == "review"
+                        else str(event["outcome"])
+                    ),
+                    "finding_id": event.get("finding_id"),
+                    "failure_domain": event.get("failure_domain"),
+                    "mechanism_id": event.get("mechanism_id"),
+                }
+                for event in events
+            ],
             holder=self.holder,
             lease_id=self.lease_id,
         )
