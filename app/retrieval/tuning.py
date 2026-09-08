@@ -104,8 +104,9 @@ def _env(key: str) -> str:
     return os.getenv(key, "").strip()
 
 
-def _resolve_retrieval_tuning(bundle: SettingsBundle) -> RetrievalTuning:
-    base = _base_tuning(bundle)
+def resolve_retrieval_tuning(base: RetrievalTuning) -> RetrievalTuning:
+    """Resolve compatibility environment overrides over an explicit base."""
+
     data = base.model_dump()
 
     fusion_raw = _env("RETRIEVAL_FUSION")
@@ -168,6 +169,10 @@ def _resolve_retrieval_tuning(bundle: SettingsBundle) -> RetrievalTuning:
     return resolved
 
 
+def _resolve_retrieval_tuning(bundle: SettingsBundle) -> RetrievalTuning:
+    return resolve_retrieval_tuning(_base_tuning(bundle))
+
+
 def get_retrieval_tuning() -> RetrievalTuning:
     """Return the process-cached, env-overridden :class:`RetrievalTuning`.
 
@@ -188,6 +193,7 @@ def get_retrieval_tuning() -> RetrievalTuning:
 __all__ = [
     "RetrievalTuningError",
     "RetrievalStrategyNotImplementedError",
+    "resolve_retrieval_tuning",
     "get_retrieval_tuning",
     "reset_retrieval_tuning_cache",
 ]

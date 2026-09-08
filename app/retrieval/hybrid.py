@@ -18,6 +18,7 @@ from app.components.embeddings import get_embedding_identity
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.tuning import get_retrieval_tuning
+from app.settings.models import RetrievalTuning
 
 _logger = logging.getLogger(__name__)
 
@@ -371,14 +372,25 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     index = get_vector_index()
     # Capture the generation BEFORE reading rows: a write racing the rebuild
     # then triggers the next generation check instead of being missed.
-    generation = index.generation()
+    all_rows_for_bindings = getattr(index, "all_rows_for_bindings", None)
+    generation_for_bindings = getattr(index, "generation_for_bindings", None)
+    generation = (
+        generation_for_bindings(None)
+        if callable(generation_for_bindings)
+        else index.generation()
+    )
     active_identity = get_embedding_identity()
 
     docs: list[dict] = []
     missing_embeddings = 0
     mixed_identity_count = 0
     mixed_identity_tuples: set[tuple[Any, Any, Any, Any]] = set()
-    for row in index.all_rows():
+    rows = (
+        all_rows_for_bindings(None)
+        if callable(all_rows_for_bindings)
+        else index.all_rows()
+    )
+    for row in rows:
         row_identity = (
             row.get("provider"),
             row.get("model"),
@@ -394,7 +406,13 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
         if any(value is not None for value in row_identity) and row_identity != active_identity_tuple:
             mixed_identity_count += 1
             mixed_identity_tuples.add(row_identity)
-        payload = row.get("payload") or {}
+        payload = dict(row.get("payload") or {})
+        # The durable column is the binding authority. A payload copy cannot
+        # manufacture provenance for a legacy row or override a moved row.
+        if "vault_binding_id" in row:
+            payload.pop("vault_binding_id", None)
+            if row.get("vault_binding_id"):
+                payload["vault_binding_id"] = row["vault_binding_id"]
         text = _row_text(payload)
         if not text:
             continue
@@ -645,6 +663,7 @@ def _rank_eligible(
     k: int,
     language: Optional[str],
     query_vector: list[float] | None,
+    tuning: RetrievalTuning | None = None,
 ) -> List[dict]:
     """Score, normalize, and rank ONLY the eligible docs, then package result dicts.
 
@@ -691,7 +710,7 @@ def _rank_eligible(
     # ADR-0059 D3 (#3404/#3407): fusion strategy and weights come from the process-resolved
     # RetrievalTuning config instead of a literal. "linear" reproduces today's formula exactly
     # (parity-tested); "rrf" is the weighted-RRF alternative, dark by default.
-    tuning = get_retrieval_tuning()
+    tuning = tuning or get_retrieval_tuning()
     if tuning.fusion == "rrf":
         combined = _weighted_rrf_combined(bm25_raw, emb_raw, overlap_bonus, tuning)
     else:
@@ -767,6 +786,7 @@ def scoped_hybrid_search(
     query_vector: list[float] | None = None,
     scope: str | None = None,
     allowed_binding_ids: set[str] | None = None,
+    tuning: RetrievalTuning | None = None,
 ) -> ScopedRetrieval:
     """Scope-prefiltered retrieval with content-free denials — the structured entrypoint.
 
@@ -813,7 +833,13 @@ def scoped_hybrid_search(
 
     # 2) RANK only the eligible set (candidate set + normalization restricted to eligible-only).
     results = _rank_eligible(
-        query, docs, eligible_idx, k=k, language=language, query_vector=query_vector
+        query,
+        docs,
+        eligible_idx,
+        k=k,
+        language=language,
+        query_vector=query_vector,
+        tuning=tuning,
     )
 
     # 3) Rerank within the admitted set only (never reintroduces an exclusion).

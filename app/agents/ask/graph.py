@@ -41,6 +41,9 @@ from app.agents.ask.orientation import (
     is_return_orientation_question,
 )
 from app.retrieval.capability import RetrievalRequest, retrieve
+from app.instance.context_bound_read import resolve_context_read_roots
+from app.instance.vault_registry import VaultRegistryStore
+from app.settings.models import LLMRoutingSettings, RetrievalTuning
 from app.vault.manager import get_vault_manager
 
 logger = logging.getLogger(__name__)
@@ -87,7 +90,13 @@ def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> Re
     )
 
 
-def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
+def _retrieve_node(
+    state: AgentState,
+    *,
+    k: int,
+    ask_settings,
+    retrieval_tuning: RetrievalTuning | None = None,
+) -> AgentState:
     response = retrieve(
         RetrievalRequest(
             query=state.query,
@@ -98,6 +107,7 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
             scope=_active_scope(state),
             active_context=state.active_context,
             settings_bundle_digest=state.settings_bundle_digest,
+            retrieval_tuning=retrieval_tuning,
         )
     )
     enriched: list[RetrievedHit] = []
@@ -269,31 +279,56 @@ def _recall_node(
     consuming_authority: ConsumingAuthority = ConsumingAuthority.READ_ONLY,
     citation_reference: str | None = None,
 ) -> AgentState:
-    vault_root = _active_recall_vault_root()
     # The same scope retrieval used for this turn (#2921), under the same precedence rule.
     active_scope = _active_scope(state)
-    active_vault_id = (
-        _active_recall_vault_id(vault_root) if active_scope is not None else None
-    )
-    candidates = retrieve_relevant_promoted(
-        state.query,
-        k=RECALL_TOP_K,
-        vault_root=vault_root,
-        active_scope_id=active_scope,
-        active_vault_id=active_vault_id,
-    )
-    provisional = (
-        retrieve_relevant_provisional(
-            state.query,
-            k=RECALL_TOP_K,
-            vault_root=vault_root,
-            receipt_store=ProvisionalReceiptStore(),
-            active_scope_id=active_scope,
+    sources: list[tuple[Path, str | None]] = []
+    if state.active_context is not None:
+        registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
+        if not registry_path:
+            raise RuntimeError("instance registry is not bound for scoped ASK recall")
+        roots = resolve_context_read_roots(
+            state.active_context,
+            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         )
-        if vault_root is not None and active_scope is not None
-        else None
-    )
-    if not candidates and (provisional is None or not provisional.candidates):
+        binding_by_id = {
+            binding.vault_binding_id: binding
+            for binding in state.active_context.source_bindings
+        }
+        sources = [
+            (source.root, binding_by_id[source.vault_binding_id].vault_id)
+            for source in roots
+            if source.vault_binding_id in binding_by_id
+        ]
+    else:
+        vault_root = _active_recall_vault_root()
+        sources = [(vault_root, _active_recall_vault_id(vault_root))] if vault_root else []
+
+    candidate_sources: list[tuple[RecallCandidate, Path]] = []
+    provisional_sources: list[tuple[Any, Path]] = []
+    for vault_root, active_vault_id in sources:
+        candidate_sources.extend(
+            (candidate, vault_root)
+            for candidate in retrieve_relevant_promoted(
+                state.query,
+                k=RECALL_TOP_K,
+                vault_root=vault_root,
+                active_scope_id=active_scope,
+                active_vault_id=active_vault_id,
+            )
+        )
+        if active_scope is not None:
+            provisional = retrieve_relevant_provisional(
+                state.query,
+                k=RECALL_TOP_K,
+                vault_root=vault_root,
+                receipt_store=ProvisionalReceiptStore(),
+                active_scope_id=active_scope,
+            )
+            provisional_sources.extend((candidate, vault_root) for candidate in provisional.candidates)
+    candidate_sources.sort(key=lambda item: item[0].score, reverse=True)
+    candidate_sources = candidate_sources[:RECALL_TOP_K]
+    provisional_sources = provisional_sources[:RECALL_TOP_K]
+    if not candidate_sources and not provisional_sources:
         state.recalled = []
         state.recalled_content = {}
         state.recalled_context_items = []
@@ -310,14 +345,14 @@ def _recall_node(
     proposal_context_items: list[dict[str, Any]] = []
     reasoning = list(state.reasoning or [])
     receipt_path = _recall_receipt_path()
-    for candidate in candidates:
+    for candidate, candidate_root in candidate_sources:
         guarded = activate_guarded_recall(
             candidate.promoted,
             use_right=RecallUseRight.ACTIVATABLE,
             activation_reason=ActivationReason.CONTEXTUAL_RELEVANCE,
             why_now=candidate.reason,
             receipt_path=receipt_path,
-            source_artifact_path=_source_artifact_path(candidate, vault_root),
+            source_artifact_path=_source_artifact_path(candidate, candidate_root),
             applied_scope_id=candidate.applied_scope_id,
         )
         if guarded.may_answer:
@@ -329,7 +364,7 @@ def _recall_node(
                 f"recall:{guarded.memory_id}:{guarded.explanation.title}:{candidate.reason}"
             )
 
-    for candidate in provisional.candidates if provisional is not None else ():
+    for candidate, _candidate_root in provisional_sources:
         use_right = {
             ConsumingAuthority.READ_ONLY: RecallUseRight.ACTIVATABLE,
             ConsumingAuthority.PROPOSAL: RecallUseRight.CITED_PROPOSAL,
@@ -559,7 +594,12 @@ def _capture_provenance_shadow(
     )
 
 
-def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
+def _answer_node(
+    state: AgentState,
+    *,
+    ask_settings,
+    llm_routing: LLMRoutingSettings | None = None,
+) -> AgentState:
     if not state.hits and not state.recalled:
         # Preserve the fallback only when neither retrieval nor recall produced context.
         state.answer = "No results found."
@@ -602,7 +642,7 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
             recalled=state.recalled,
             recalled_content=state.recalled_content,
         )
-        llm, route = llm_answer(state.query, context, ask_settings)
+        llm, route = llm_answer(state.query, context, ask_settings, llm_routing=llm_routing)
         if route:
             state.llm_route = route
         if llm:
@@ -644,16 +684,33 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     return state
 
 
-def build_ask_graph(ask_settings=None):
+def build_ask_graph(
+    ask_settings=None,
+    *,
+    retrieval_tuning: RetrievalTuning | None = None,
+    llm_routing: LLMRoutingSettings | None = None,
+):
     ask_settings = ask_settings or get_ask_settings()
     graph = StateGraph(AgentState)
     graph.add_node(
-        "retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings)
+        "retrieve",
+        lambda s: _retrieve_node(
+            s,
+            k=TOP_K_INITIAL,
+            ask_settings=ask_settings,
+            retrieval_tuning=retrieval_tuning,
+        ),
     )
     graph.add_node("orientation", _orientation_node)
     graph.add_node("rerank", lambda s: _rerank_node(s, ask_settings=ask_settings))
     graph.add_node("recall", lambda s: _recall_node(s, ask_settings=ask_settings))
-    graph.add_node("answer", lambda s: _answer_node(s, ask_settings=ask_settings))
+    graph.add_node(
+        "answer", lambda s: _answer_node(
+            s,
+            ask_settings=ask_settings,
+            llm_routing=llm_routing,
+        )
+    )
 
     graph.add_edge(START, "retrieve")
     graph.add_edge("retrieve", "orientation")
@@ -671,6 +728,8 @@ def run_ask_graph(
     active_scope: Optional[str] = None,
     active_context=None,
     settings_bundle_digest: Optional[str] = None,
+    retrieval_tuning: RetrievalTuning | None = None,
+    llm_routing: LLMRoutingSettings | None = None,
 ) -> AgentState:
     """Run one ASK turn.
 
@@ -680,7 +739,11 @@ def run_ask_graph(
     same scope.
     """
     ask_settings = ask_settings or get_ask_settings()
-    compiled = build_ask_graph(ask_settings)
+    compiled = build_ask_graph(
+        ask_settings,
+        retrieval_tuning=retrieval_tuning,
+        llm_routing=llm_routing,
+    )
     resolved_scope = (active_scope or "").strip() or _resolve_domain_scope()
     initial = AgentState(
         trace_id=trace_id,

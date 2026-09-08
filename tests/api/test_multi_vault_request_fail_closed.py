@@ -75,8 +75,8 @@ def test_invalid_override_fails_closed_without_falling_back_to_session(
     assert "stale-override" not in response.text
 
 
-def test_backend_read_enabling_preserves_dormant_producers(instance, client) -> None:
-    """Scoped backend reads work while the legacy client journey remains separate."""
+def test_backend_read_enabling_preserves_dormant_producers(instance, client, monkeypatch) -> None:
+    """All scoped read producers work while legacy/picker writes remain dormant."""
 
     _runtime, first = instance
     session = _create(client, first.vault_binding_id)
@@ -87,9 +87,41 @@ def test_backend_read_enabling_preserves_dormant_producers(instance, client) -> 
     assert scoped.status_code == 200, scoped.text
     assert scoped.json()["context_generation"] == 1
 
+    search = client.get(
+        "/search/scoped?q=backend",
+        headers={"X-Active-Context-Session": session["context_selection_id"]},
+    )
+    assert search.status_code == 200, search.text
+    assert "results" in search.json()
+
+    import app.agents.ask.graph as ask_graph
+
+    monkeypatch.setattr(
+        ask_graph,
+        "get_vault_manager",
+        lambda: pytest.fail("scoped ASK must not consult the global vault manager"),
+    )
+    ask = client.post(
+        "/api/ask/scoped",
+        json={"question": "backend"},
+        headers={"X-Active-Context-Session": session["context_selection_id"]},
+    )
+    assert ask.status_code == 200, ask.text
+    assert "answer" in ask.json()
+
     # The shipped legacy route still uses its existing global-selection adapter;
     # enabling the backend carrier never silently activates the picker or rewires
     # that producer into the scoped route.
     legacy = client.get("/api/companion/vault/notes")
     assert legacy.status_code == 200, legacy.text
     assert "context_generation" not in legacy.json()
+
+    # No scoped read implicitly activates the not-ready removal/relocation /
+    # transfer producers. Those capabilities remain outside this bounded
+    # backend read slice and are still represented only by the registry's
+    # dormant state, not a new client journey.
+    assert not any(
+        route.path.endswith("/remove") or route.path.endswith("/relocate") or route.path.endswith("/transfer")
+        for route in client.app.routes
+        if hasattr(route, "path")
+    )

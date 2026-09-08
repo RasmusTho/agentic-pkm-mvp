@@ -12,6 +12,7 @@ from app.retrieval.hybrid import (
 )
 from app.retrieval.context_cache import runtime_context_cache_identity
 from app.vault.active_context_v1 import ActiveContextSetV1
+from app.settings.models import RetrievalTuning
 
 ViewFreshnessState = Literal["fresh", "stale", "partial", "unknown"]
 
@@ -68,6 +69,7 @@ class RetrievalRequest:
     active_context: ActiveContextSetV1 | None = None
     #: Effective per-binding settings provenance for scoped retrieval.
     settings_bundle_digest: str | None = None
+    retrieval_tuning: RetrievalTuning | None = None
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,7 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
             if request.active_context is not None
             else None
         ),
+        tuning=request.retrieval_tuning,
     )
     raw_hits = scoped.results
     diagnostics: dict[str, Any] = {

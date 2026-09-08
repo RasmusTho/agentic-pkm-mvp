@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.components.llm.fabric import ChatClient, LLMBackendTimeout
 from app.components.llm.router import LLMRoute
+from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.reasoning_route import resolve_effective_reasoning_route
 from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
@@ -50,6 +51,7 @@ def _call_chat(
     agent: str | None,
     kind: str | None,
     trace_id: str | None,
+    llm_routing: LLMRoutingSettings | None = None,
 ) -> str:
     try:
         response, _ = _call_chat_with_route(
@@ -58,6 +60,7 @@ def _call_chat(
             agent=agent,
             kind=kind,
             trace_id=trace_id,
+            llm_routing=llm_routing,
         )
     except ReasoningRouteExecutionError as exc:
         # Every provider-neutral reasoning caller, not only CLAIMS, records
@@ -84,10 +87,12 @@ def _call_chat_with_route(
     agent: str | None,
     kind: str | None,
     trace_id: str | None,
+    llm_routing: LLMRoutingSettings | None = None,
 ) -> tuple[str, dict[str, object]]:
     # All provider-neutral reasoning paths use the same effective resolver as
     # settings-explain and failure tracing.
-    route = resolve_effective_reasoning_route()
+    settings = SettingsBundle(llm_routing=llm_routing) if llm_routing is not None else None
+    route = resolve_effective_reasoning_route(settings=settings)
     client = ChatClient(route)
     try:
         response = client.chat(
@@ -241,6 +246,7 @@ def run_reasoning(
     answer_style: str | None = None,
     agent: str | None = None,
     kind: str | None = None,
+    llm_routing: LLMRoutingSettings | None = None,
 ) -> ReasoningRun:
     agent_name = agent or "reasoning"
     kind_name = kind or f"reasoning.{mode.value}"
@@ -528,9 +534,11 @@ def run_reasoning(
         )
     if mode == ReasoningMode.ASK_ANSWER:
         backend = _reasoning_backend()
-        provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
-        provider = "mock" if provider in {"", "fake"} else provider
-        is_mock_provider = provider == "mock"
+        scoped_settings = (
+            SettingsBundle(llm_routing=llm_routing) if llm_routing is not None else None
+        )
+        route = resolve_effective_reasoning_route(settings=scoped_settings)
+        is_mock_provider = route.provider == "mock"
         if not question:
             return ReasoningRun(
                 mode=mode,
@@ -569,6 +577,7 @@ def run_reasoning(
                 agent=agent_name,
                 kind=kind_name,
                 trace_id=trace_id,
+                llm_routing=llm_routing,
             )
             answer_text = (raw or "").strip()
         except LLMBackendTimeout:

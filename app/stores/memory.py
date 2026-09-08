@@ -261,8 +261,17 @@ class MemoryVectorIndex(VectorIndex):
                 "provider": entry.identity.provider if entry.identity else None,
                 "dim": entry.identity.dim if entry.identity else None,
                 "normalize": entry.identity.normalize if entry.identity else None,
+                "vault_binding_id": entry.payload.get("vault_binding_id"),
             }
             for entry in sorted(self._entries.values(), key=lambda e: e.seq)
+        ]
+
+    def all_rows_for_bindings(self, binding_ids: Iterable[str] | None = None) -> list[dict]:
+        allowed = set(binding_ids) if binding_ids is not None else None
+        return [
+            row
+            for row in self.all_rows()
+            if allowed is None or row.get("vault_binding_id") in allowed
         ]
 
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list:

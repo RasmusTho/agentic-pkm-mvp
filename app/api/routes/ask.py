@@ -241,28 +241,35 @@ async def ask_scoped(
     req: AskRequest,
     request: Request,
     context: ActiveContextSetV1 = Depends(require_scoped_read_context),
-) -> AskResponse:
+) -> AskResponse | JSONResponse:
     """Carrier-bound ASK read for migrated multi-vault clients."""
 
     registry_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
     if not registry_path:
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     try:
-        settings = resolve_context_settings(
-            context,
-            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
-        )
         with context_bound_effect_window(
             context,
             registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
         ):
-            return _run_ask(
+            settings = resolve_context_settings(
+                context,
+                registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+            )
+            response = _run_ask(
                 req,
                 request,
                 active_scope=context.scope,
                 active_context=context,
                 settings_bundle_digest=settings.cache_bundle_digest,
+                ask_settings=settings.ask_settings,
+                retrieval_tuning=settings.retrieval_tuning,
+                llm_routing=settings.llm_routing,
             )
+            # Serialize while the effect lease is still held. Response-model
+            # serialization after this block would create a stale-data
+            # publication gap during revoke/relocation.
+            return JSONResponse(content=response.model_dump(mode="json"))
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
@@ -274,11 +281,14 @@ def _run_ask(
     active_scope: str | None,
     active_context: ActiveContextSetV1 | None,
     settings_bundle_digest: str | None = None,
+    ask_settings=None,
+    retrieval_tuning=None,
+    llm_routing=None,
 ) -> AskResponse:
     if not _HYBRID_WARMED:
         _ensure_hybrid_store_loaded()
     start = time.perf_counter()
-    ask_settings = get_ask_settings()
+    ask_settings = ask_settings or get_ask_settings()
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
         graph_kwargs = {
@@ -289,6 +299,10 @@ def _run_ask(
             graph_kwargs["active_context"] = active_context
         if settings_bundle_digest is not None:
             graph_kwargs["settings_bundle_digest"] = settings_bundle_digest
+        if retrieval_tuning is not None:
+            graph_kwargs["retrieval_tuning"] = retrieval_tuning
+        if llm_routing is not None:
+            graph_kwargs["llm_routing"] = llm_routing
         state = run_ask_graph(req.question, trace_id=trace_id, **graph_kwargs)
     except LLMBackendTimeout as exc:
         record_ask_error()

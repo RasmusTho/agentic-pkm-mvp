@@ -415,6 +415,7 @@ class ActiveContextSelectionResolver:
         self._registry_revision = registry_revision
         self._authorizer = authorizer
         self._instance_identity = instance_identity
+        self._lock = threading.RLock()
         #: (context_id, generation) -> the underlying identity last seen at that generation.
         #: Keying on the generation as well as the context is what separates the two kinds
         #: of change: a deliberate session switch mints a new generation and therefore a new
@@ -428,6 +429,28 @@ class ActiveContextSelectionResolver:
         self._rotations: dict[str, int] = {}
 
     def resolve(
+        self,
+        *,
+        selection: ContextSelectionRecord | None,
+        principal: PrincipalContext,
+        action: str,
+        write_class: str,
+        required_permission: str,
+        default_binding_id: str | None = None,
+    ) -> ResolutionResult:
+        """Resolve and publish one snapshot atomically with drift bookkeeping."""
+
+        with self._lock:
+            return self._resolve_unlocked(
+                selection=selection,
+                principal=principal,
+                action=action,
+                write_class=write_class,
+                required_permission=required_permission,
+                default_binding_id=default_binding_id,
+            )
+
+    def _resolve_unlocked(
         self,
         *,
         selection: ContextSelectionRecord | None,

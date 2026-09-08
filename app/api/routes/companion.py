@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
@@ -2277,7 +2277,7 @@ def list_vault_notes(
 def list_scoped_vault_notes(
     q: str = Query("", description="Optional search filter by title or path"),
     context: ActiveContextSetV1 = Depends(require_scoped_read_context),
-) -> ScopedVaultNoteListResponse:
+) -> ScopedVaultNoteListResponse | JSONResponse:
     """Read each selected binding without consulting the global vault manager."""
 
     registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
@@ -2309,13 +2309,16 @@ def list_scoped_vault_notes(
                         break
                 if len(notes) >= _BROWSE_MAX_NOTES:
                     break
+            response = ScopedVaultNoteListResponse(
+                notes=notes,
+                context_generation=context.generation,
+                total_count=len(notes),
+            )
+            # Serialize before releasing the shared effect lease; otherwise a
+            # revocation can complete between filesystem read and publication.
+            return JSONResponse(content=response.model_dump(mode="json"))
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
-    return ScopedVaultNoteListResponse(
-        notes=notes,
-        context_generation=context.generation,
-        total_count=len(notes),
-    )
 
 
 def _validate_workspace_note_path(note_path_raw: str) -> str:

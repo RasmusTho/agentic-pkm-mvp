@@ -135,7 +135,13 @@ def build_ask_context(
     return assembled
 
 
-def llm_answer(question: str, context: str, ask_settings: AskSettings) -> tuple[str | None, dict[str, Any] | None]:
+def llm_answer(
+    question: str,
+    context: str,
+    ask_settings: AskSettings,
+    *,
+    llm_routing=None,
+) -> tuple[str | None, dict[str, Any] | None]:
     try:
         run = run_reasoning(
             ReasoningMode.ASK_ANSWER,
@@ -146,6 +152,7 @@ def llm_answer(question: str, context: str, ask_settings: AskSettings) -> tuple[
             answer_style=ask_settings.answer_style,
             agent="ask.api",
             kind="ask.answer",
+            llm_routing=llm_routing,
         )
     except LLMBackendTimeout:
         raise

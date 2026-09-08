@@ -10,14 +10,6 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.api.routes import active_context_selection as selection_routes
-from app.api.routes.active_context_selection import build_selection_service
-from app.instance.active_context_service import (
-    ACTION_SELECTION_INSPECT,
-    PERMISSION_SELECTION_READ,
-    WRITE_CLASS_READ,
-)
-from app.instance.context_bound_read import context_bound_read_window
-from app.instance.vault_registry import VaultRegistryStore
 from app.instance.local_operator_principal import SUBJECT_LOOPBACK
 from tests._mvr03_principal_harness import principal_store, provisioned_instance
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -54,7 +46,7 @@ def _create(client: TestClient, binding_id: str) -> dict:
     return response.json()
 
 
-def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client) -> None:
+def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client, monkeypatch) -> None:
     """Two real scoped API reads hold shared fences concurrently and stay isolated."""
 
     runtime, first, second = instance
@@ -69,57 +61,41 @@ def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client) -
     second_session = _create(client, second.vault_binding_id)
 
     entered = Barrier(2)
-    ready = (Event(), Event())
-    release = Event()
-    registry_store = VaultRegistryStore(runtime.layout.registry_path)
+    from app.api.routes import companion as companion_routes
 
-    def resolve(session: dict):
-        service = build_selection_service(selection_routes.get_selection_store())
-        derived = service.derive("trusted_loopback")
-        return service.resolve_request_context(
-            derived=derived,
-            session_bearer=session["context_selection_id"],
-            override_bearer=None,
-            action=ACTION_SELECTION_INSPECT,
-            write_class=WRITE_CLASS_READ,
-            required_permission=PERMISSION_SELECTION_READ,
-        ).snapshot
+    original = companion_routes._list_vault_notes
 
-    contexts = [resolve(first_session), resolve(second_session)]
+    def paused(root, q=""):
+        entered.wait(timeout=5)
+        return original(root, q=q)
 
-    def read(context, ready_event):
-        with context_bound_read_window(context, registry_store=registry_store) as roots:
-            ready_event.set()
-            entered.wait(timeout=5)
-            assert release.wait(timeout=5)
-            return [
-                (
-                    root.vault_binding_id,
-                    sorted(path.name for path in root.root.glob("only-*.md")),
-                )
-                for root in roots
-            ]
+    # Synchronize inside the actual scoped route after it has acquired its
+    # binding effect lease. This proves API-session isolation, not only a
+    # helper-level filesystem projection.
+    monkeypatch.setattr(companion_routes, "_list_vault_notes", paused)
+
+    def read(session: dict):
+        response = client.get(
+            "/api/companion/vault/notes/scoped",
+            headers={"X-Active-Context-Session": session["context_selection_id"]},
+        )
+        assert response.status_code == 200, response.text
+        return [
+            (note["vault_binding_id"], note["path"])
+            for note in response.json()["notes"]
+            if note["path"].startswith("only-")
+        ]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(read, contexts[0], ready[0]),
-            pool.submit(read, contexts[1], ready[1]),
+            pool.submit(read, first_session),
+            pool.submit(read, second_session),
         ]
-        # If the principal fence were exclusive, one request would never reach
-        # this barrier. Shared principal reads are required for real sessions.
-        if not all(event.wait(timeout=5) for event in ready):
-            release.set()
-            # Surface the worker's actual production-path failure instead of
-            # masking it as a concurrency timeout.
-            for future in futures:
-                future.result(timeout=5)
-            pytest.fail("both scoped reads missed the effect window")
-        release.set()
         responses = [future.result(timeout=5) for future in futures]
 
     assert responses == [
-        [(first.vault_binding_id, ["only-first.md"])],
-        [(second.vault_binding_id, ["only-second.md"])],
+        [(first.vault_binding_id, "only-first.md")],
+        [(second.vault_binding_id, "only-second.md")],
     ]
     assert runtime.registry.load().default_vault_binding_id == first.vault_binding_id
 

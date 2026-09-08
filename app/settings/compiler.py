@@ -414,6 +414,7 @@ def compile_all(
     auto_heal: bool | None = None,
     vault_dir: Path | None = None,
     vault_root: Path | None = None,
+    publish: bool = True,
 ) -> SettingsBundle:
     if vault_dir is not None and vault_root is not None:
         raise ValueError("pass vault_dir or vault_root, not both")
@@ -613,6 +614,9 @@ def compile_all(
     # channel-scoped VAULT_ROOT_DEV/TEST could silently retain its default
     # auto-exec policy while the rest of the bundle came from this vault.
     watcher_settings = load_watcher_settings(vault_root=resolved_vault_root)
+
+    if not publish:
+        return bundle
 
     staged_runtime = _new_staged_runtime_dir()
     try:

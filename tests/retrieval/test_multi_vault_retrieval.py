@@ -1,3 +1,4 @@
+from app.retrieval import hybrid
 from app.retrieval.capability import RetrievalRequest, retrieve
 from tests.retrieval.test_retrieval_capability import _patch_embeddings, _scoped_context
 from app.retrieval.hybrid import get_store
@@ -5,32 +6,42 @@ from app.retrieval.hybrid import get_store
 
 def test_production_retrieval_preserves_binding_provenance(monkeypatch) -> None:
     _patch_embeddings(monkeypatch)
-    get_store().set_documents(
-        [
-            {
-                "doc_id": "wrong-binding",
-                "text": "needle needle needle needle",
-                "payload": {
-                    "domain": "core",
+    class DurableIndex:
+        def generation_for_bindings(self, _binding_ids=None):
+            return "durable-generation-1"
+
+        def all_rows_for_bindings(self, _binding_ids=None):
+            return [
+                {
+                    "object_id": "wrong-binding",
+                    "text": "needle needle needle needle",
+                    "payload": {"domain": "core", "text": "needle needle needle needle"},
                     "vault_binding_id": "binding-b",
+                    "embedding": [0.1, 0.1, 0.1],
                 },
-            },
-            {
-                "doc_id": "legacy-unbound",
-                "text": "needle needle",
-                "payload": {"domain": "core"},
-            },
-            {
-                "doc_id": "a",
-                "text": "needle",
-                "payload": {
-                    "domain": "core",
+                {
+                    "object_id": "legacy-unbound",
+                    "text": "needle needle",
+                    "payload": {"domain": "core", "text": "needle needle"},
+                    "vault_binding_id": None,
+                    "embedding": [0.1, 0.1, 0.1],
+                },
+                {
+                    "object_id": "a",
+                    "text": "needle",
+                    "payload": {
+                        "domain": "core",
+                        "text": "needle",
+                        "settings_bundle": "vault-a",
+                    },
                     "vault_binding_id": "binding-a",
-                    "settings_bundle": "vault-a",
+                    "embedding": [0.1, 0.1, 0.1],
                 },
-            },
-        ]
-    )
+            ]
+
+    monkeypatch.setattr("app.stores.get_vector_index", lambda: DurableIndex())
+    hybrid.reset_durable_rebuild_state()
+    hybrid.rebuild_from_durable_index(force=True)
     try:
         response = retrieve(
             RetrievalRequest(
