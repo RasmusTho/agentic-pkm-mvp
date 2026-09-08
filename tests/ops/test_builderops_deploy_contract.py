@@ -5,8 +5,10 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
+import pytest
 import yaml
 from jsonschema import Draft202012Validator
 
@@ -186,6 +188,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     root = tmp_path / "repo"
     for relative in (
         "scripts/lib/builderops_compose.sh",
+        "scripts/builderops/deployment_lock.py",
         "scripts/deploy_builderops.sh",
         "scripts/builderops/preflight_app_password_secret.sh",
         "scripts/builderops/configure_tailnet_tls.sh",
@@ -331,6 +334,7 @@ fi
 
 def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) -> None:
     root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
     deploy = subprocess.run(
         [
             "bash",
@@ -404,6 +408,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
 def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
     root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
     env["FAKE_SECRET_STAT"] = "0:400"
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
 
     result = subprocess.run(
         ["bash", "scripts/deploy_builderops.sh", "deploy", env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]],
@@ -687,6 +692,82 @@ def test_deploy_refuses_failed_engine_info_with_partial_stdout(tmp_path: Path) -
     assert "tailscale " not in events
     refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
     assert refusal["refusals"] == ["builderops_engine_info_unavailable", "no_mutation_performed"]
+
+
+def test_deploy_refusal_preserves_builder_engine_identity_when_product_read_fails(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_FAIL_INFO_CONTEXT"] = "default"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["observed_engine_ids"] == {
+        "builderops": "builder-engine",
+        "product": None,
+    }
+    assert refusal["selected_engine"]["engine_id"] == "builder-engine"
+
+
+def test_deployment_interlock_is_non_reentrant_and_fail_closed(tmp_path: Path) -> None:
+    lock_path = tmp_path / "builderops-deployment.lock"
+    holder = subprocess.Popen(
+        [
+            "python3",
+            "scripts/builderops/deployment_lock.py",
+            "--lock-path",
+            str(lock_path),
+            "--",
+            "python3",
+            "-c",
+            "import time; time.sleep(0.8)",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not lock_path.exists():
+            time.sleep(0.01)
+        if not lock_path.exists():
+            pytest.fail("deployment interlock was not created")
+        contender = subprocess.run(
+            [
+                "python3",
+                "scripts/builderops/deployment_lock.py",
+                "--lock-path",
+                str(lock_path),
+                "--",
+                "python3",
+                "-c",
+                "pass",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert contender.returncode == 75
+        assert "interlock is busy" in contender.stderr
+    finally:
+        holder.wait(timeout=3)
+    assert holder.returncode == 0
 
 
 def test_deploy_refuses_failed_project_listing_with_partial_stdout(tmp_path: Path) -> None:

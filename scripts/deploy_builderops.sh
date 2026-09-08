@@ -13,6 +13,16 @@ source "${ROOT}/scripts/lib/builderops_compose.sh"
 # shellcheck source=builderops/preflight_app_password_secret.sh
 source "${ROOT}/scripts/builderops/preflight_app_password_secret.sh"
 
+# Keep the duplicate-writer snapshot and every subsequent pin/Compose/Tailscale
+# mutation in one host-local critical section. The private marker is an
+# internal re-entry argument, not a caller-controlled environment bypass.
+if [ "${1:-}" != "--__builderops_deployment_lock_held" ]; then
+  exec python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
+    --lock-path "${BUILDEROPS_DEPLOYMENT_LOCK_PATH:-${PIN_FILE}.lock}" \
+    -- bash "${BASH_SOURCE[0]}" --__builderops_deployment_lock_held "$@"
+fi
+shift
+
 usage() {
   echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback" >&2
   exit 2
@@ -297,9 +307,14 @@ activate_target() {
   builderops_compose "${ROOT}" up -d --force-recreate api worker || return
   wait_ready || return
   "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" || return
+  builderops_assert_single_writer_after_activation || return
 }
 
 reactivate_previous_release() {
+  # Never restore a previous BuilderOps release while a competing Product or
+  # BuilderOps writer is visible. The original failure remains actionable and
+  # the operator must resolve the writer boundary before another mutation.
+  builderops_assert_failure_domain || return
   builderops_preflight_app_password_secret || return
   cp "${pin_backup}" "${PIN_FILE}" || return
   builderops_compose "${ROOT}" pull db api worker || return

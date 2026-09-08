@@ -52,12 +52,12 @@ builderops_assert_failure_domain() {
     export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_engine_info_unavailable"
     return 75
   }
+  export BUILDEROPS_OBSERVED_BUILDER_ENGINE_ID="${builder_id}"
   product_id="$(builderops_engine_id "${product_context}")" || {
     echo "Product Docker engine info is invalid or unavailable" >&2
     export BUILDEROPS_FAILURE_DOMAIN_REASON="product_engine_info_unavailable"
     return 75
   }
-  export BUILDEROPS_OBSERVED_BUILDER_ENGINE_ID="${builder_id}"
   export BUILDEROPS_OBSERVED_PRODUCT_ENGINE_ID="${product_id}"
   [ -n "${builder_id}" ] && [ -n "${product_id}" ] && [ "${builder_id}" != "${product_id}" ] || {
     echo "BuilderOps and Product must use distinct container engines" >&2
@@ -96,4 +96,30 @@ builderops_assert_failure_domain() {
     echo "BuilderOps project detected on Product engine" >&2
     return 73
   fi
+}
+
+builderops_assert_single_writer_after_activation() {
+  local builder_context="${BUILDEROPS_DOCKER_CONTEXT:?BuilderOps Docker context is required}"
+  local builder_projects builder_project_state
+
+  # Re-read both engine identities and project listings after the service
+  # mutation. The deployment interlock prevents concurrent governed deploys;
+  # this second read also fails closed if an out-of-band writer appeared while
+  # the target was being activated.
+  builderops_assert_failure_domain || return $?
+  builder_projects="$(docker --context "${builder_context}" compose ls --format json)" || {
+    echo "BuilderOps Docker Compose project listing is invalid or unavailable after activation" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_project_listing_unavailable_after_activation"
+    return 75
+  }
+  builder_project_state="$(builderops_project_listing_state "${builder_projects}")" || {
+    echo "BuilderOps Docker Compose project listing is invalid or unavailable after activation" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="invalid_docker_project_listing_after_activation"
+    return 75
+  }
+  [ "${builder_project_state}" = present ] || {
+    echo "BuilderOps project is absent after activation" >&2
+    export BUILDEROPS_FAILURE_DOMAIN_REASON="builderops_project_missing_after_activation"
+    return 75
+  }
 }
