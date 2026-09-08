@@ -772,6 +772,37 @@ def test_supporting_workflows_do_not_park_followup_work() -> None:
     assert "follow-up\nagent run using" not in retro
 
 
+def test_maintenance_incompleteness_does_not_imply_human_authority() -> None:
+    skill = _read(".codex/skills/issue-maintenance-change-control/SKILL.md")
+    malformed = _section_between(
+        skill, "### Action: Malformed or Stale Open Issue", "### Maintenance path versus hot path",
+    )
+    for invariant in (
+        "Escalation Classifier", "technical incompleteness alone", "current lifecycle owner",
+        "agent:blocked", "owner-decision-brief", "independent authority category",
+    ):
+        assert invariant in malformed, invariant
+    assert "**Add needs-human label:**" not in malformed
+    table = _section_between(skill, "## Quick Reference: Maintenance State Corrections", "## When splitting")
+    assert "Malformed/stale open | Execute Malformed/Stale | +agent:needs-human" not in table
+    assert "Delivered but open | Execute Delivered Open | +agent:needs-human" not in table
+    assert "after classifier" in table
+    assert "set to needs-human if ambiguous" not in skill
+    child = _section_between(skill, "### Child Slice Issues", "## Quick Reference")
+    assert "`agent:blocked` or `agent:needs-human`" not in child
+
+
+def test_sbs_readiness_routes_technical_incompleteness_through_maintenance() -> None:
+    doc = _read("docs/architecture/SBS_OPERATING_MODEL.md")
+    readiness = _section_between(doc, "## 5. Definition of Ready", "## 6. Definition of Done")
+    for invariant in ("non-ready", "issue-maintenance-change-control", "Escalation Classifier", "independent authority category"):
+        assert invariant in readiness, invariant
+    assert "cannot resolve these is `agent:needs-human`" not in readiness
+    lifecycle = _section_between(doc, "## 7. Issue lifecycle expectations", "## 8. PR lifecycle expectations")
+    assert "unreadiness alone" in lifecycle
+    assert "otherwise `agent:needs-human` or `agent:blocked`" not in lifecycle
+
+
 def test_promotion_continuation_requires_observed_effect_before_rollback() -> None:
     skill = _read(".codex/skills/execute-promotion/SKILL.md")
     continuation = " ".join(skill.split("## Workflow continuation", 1)[1].split())
