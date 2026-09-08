@@ -1,3 +1,9 @@
+---
+uuid: 77777777-7777-4777-8777-777777777777
+title: Golden Vault Test Seed
+review_state: provisional
+---
+
 # Golden Vault Test Seed
 
 This directory contains deterministic test data for Quality Wave Phase B (golden vault + seeded snapshots).

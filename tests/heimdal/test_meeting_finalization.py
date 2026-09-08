@@ -222,6 +222,31 @@ def test_receipt_store_scopes_equal_session_state_by_binding(tmp_path: Path) -> 
     }
 
 
+def test_close_session_finalization_failure_hides_exception_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = f"mtg-{uuid4()}"
+    sentinel = "postgresql://operator:secret@localhost:15432/app"
+
+    def fail_finalization(*_: Any, **__: Any) -> dict[str, Any]:
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(meeting_finalization, "finalize_session", fail_finalization)
+    assert _open_session(client, session_id).status_code == 200
+
+    closed = _close(client, session_id, 0)
+
+    assert closed.status_code == 200
+    response = closed.json()
+    assert response["closed"] is True
+    assert response["trace_id"]
+    assert response["finalization"] == {
+        "status": "failed",
+        "error": "RuntimeError",
+    }
+    assert sentinel not in closed.text
+
+
 def test_gapped_close_is_legible_everywhere(
     client: TestClient, vault: Path
 ) -> None:

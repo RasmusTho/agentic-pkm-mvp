@@ -510,7 +510,29 @@ class VaultRegistryStore:
                     and requested.reload_revision != existing.reload_revision
                     and replace(requested, reload_revision=existing.reload_revision) == existing
                 )
-                if not reload_only_advance:
+                completed_watcher_retirement = (
+                    existing.phase == "committed"
+                    and existing.reload_revision == existing.desired_revision
+                    and requested.phase == "no_lifecycle"
+                    and requested.lifecycle_posture == "no_lifecycle"
+                    and requested.reload_revision == existing.reload_revision
+                    and replace(
+                        requested,
+                        phase="committed",
+                        lifecycle_posture="watcher",
+                    )
+                    == existing
+                )
+                cancelled_precommit = (
+                    existing.phase == "prepared"
+                    and requested.phase == "cancelled"
+                    and requested.lifecycle_posture == "watcher"
+                    and requested.applied_revision == existing.desired_revision
+                    and requested.reload_revision == existing.desired_revision
+                    and requested.scalar_drain_revision == existing.scalar_drain_revision
+                    and requested.prior_binding_id == existing.prior_binding_id
+                )
+                if not reload_only_advance and not completed_watcher_retirement and not cancelled_precommit:
                     raise RegistryError(
                         "settings rebind state cannot change without a revision advance"
                     )
@@ -633,7 +655,9 @@ class VaultRegistryStore:
                 payloads[name] = source.read_bytes()
             return payloads
 
-    def load_or_migrate(self) -> RegistrySnapshot:
+    def load_or_migrate(
+        self, *, binding_by_ref: Mapping[str, str] | None = None
+    ) -> RegistrySnapshot:
         legacy_upgrade = self._is_owned_legacy_source()
         with self._locked(allow_legacy_directory_upgrade=legacy_upgrade):
             if not self.path.exists():
@@ -656,7 +680,10 @@ class VaultRegistryStore:
                 return self._snapshot_from_frontmatter(document.frontmatter)
             if schema != APP_LOCAL_SCHEMA:
                 raise RegistryMigrationError(f"unsupported registry migration schema: {schema or '<missing>'}")
-            migrated = self._migrate_legacy_frontmatter(document.frontmatter)
+            migrated = self._migrate_legacy_frontmatter(
+                document.frontmatter,
+                existing_binding_by_ref=binding_by_ref,
+            )
             self._write_locked(migrated)
             return migrated
 
@@ -864,7 +891,8 @@ class VaultRegistryStore:
         self,
         *,
         desired_revision: int,
-        selection: KnownVaultRef,
+        selection: KnownVaultRef | None,
+        default_change: tuple[str | None, str | None] | None = None,
         _capability: _StorageMutationCapability | None = None,
     ) -> RegistrySnapshot:
         """Commit rebind state and last-active selection in one registry generation.
@@ -889,41 +917,46 @@ class VaultRegistryStore:
                     "settings rebind selection commit requires the matching prepared/no_lifecycle revision"
                 )
             candidate_id = rebind.candidate_binding_id
-            if candidate_id is None:
-                raise RegistryError("settings rebind selection commit has no candidate binding")
-            registration = current.registrations.get(candidate_id)
-            if registration is None:
-                raise RegistryError("settings rebind candidate binding is not registered")
-            try:
-                selection_path = Path(selection.path).expanduser().resolve(strict=True)
-                registration_path = Path(registration.path).expanduser().resolve(strict=True)
-            except OSError as exc:
-                raise RegistryError("settings rebind candidate path is unavailable") from exc
-            if (
-                selection.ref != registration.ref
-                or selection_path != registration_path
-                or (
-                    registration.vault_id is not None
-                    and selection.vault_id not in (None, registration.vault_id)
-                )
-                or (
-                    registration.local_instance_id is not None
-                    and selection.local_instance_id
-                    not in (None, registration.local_instance_id)
-                )
-            ):
-                raise RegistryError("settings rebind selection identity does not match candidate")
             registrations = copy.deepcopy(current.registrations)
-            registrations[candidate_id] = VaultRegistration(
-                vault_binding_id=registration.vault_binding_id,
-                ref=registration.ref,
-                path=registration.path,
-                vault_id=registration.vault_id,
-                local_instance_id=registration.local_instance_id,
-                vault_name=selection.vault_name,
-                last_opened_at=selection.last_opened_at,
-                extensions=copy.deepcopy(registration.extensions),
-            )
+            if candidate_id is None:
+                if selection is not None:
+                    raise RegistryError("no-target settings rebind cannot carry a selection")
+                registration = None
+            else:
+                registration = current.registrations.get(candidate_id)
+                if registration is None:
+                    raise RegistryError("settings rebind candidate binding is not registered")
+                if selection is None:
+                    raise RegistryError("selected settings rebind candidate is missing")
+                try:
+                    selection_path = Path(selection.path).expanduser().resolve(strict=True)
+                    registration_path = Path(registration.path).expanduser().resolve(strict=True)
+                except OSError as exc:
+                    raise RegistryError("settings rebind candidate path is unavailable") from exc
+                if (
+                    selection.ref != registration.ref
+                    or selection_path != registration_path
+                    or (
+                        registration.vault_id is not None
+                        and selection.vault_id not in (None, registration.vault_id)
+                    )
+                    or (
+                        registration.local_instance_id is not None
+                        and selection.local_instance_id
+                        not in (None, registration.local_instance_id)
+                    )
+                ):
+                    raise RegistryError("settings rebind selection identity does not match candidate")
+                registrations[candidate_id] = VaultRegistration(
+                    vault_binding_id=registration.vault_binding_id,
+                    ref=registration.ref,
+                    path=registration.path,
+                    vault_id=registration.vault_id,
+                    local_instance_id=registration.local_instance_id,
+                    vault_name=selection.vault_name,
+                    last_opened_at=selection.last_opened_at,
+                    extensions=copy.deepcopy(registration.extensions),
+                )
             committed = replace(
                 rebind,
                 applied_revision=rebind.desired_revision,
@@ -945,10 +978,24 @@ class VaultRegistryStore:
             updated = replace(
                 current,
                 revision=next_revision,
-                last_active_vault_ref=registration.ref,
+                last_active_vault_ref=(
+                    current.last_active_vault_ref
+                    if default_change is not None or registration is None
+                    else registration.ref
+                ),
                 registrations=registrations,
                 settings_rebind=committed.as_payload(),
                 extensions=extensions,
+                default_vault_binding_id=(
+                    default_change[0]
+                    if default_change is not None
+                    else current.default_vault_binding_id
+                ),
+                default_vault_provenance=(
+                    default_change[1]
+                    if default_change is not None
+                    else current.default_vault_provenance
+                ),
             )
             self._write_locked(updated)
             return updated
@@ -1701,7 +1748,9 @@ class VaultRegistryStore:
         )
 
     @contextmanager
-    def _locked(self, *, allow_legacy_directory_upgrade: bool = False) -> Iterator[None]:
+    def _locked(
+        self, *, allow_legacy_directory_upgrade: bool = False, recover_transactions: bool = True,
+    ) -> Iterator[None]:
         if allow_legacy_directory_upgrade:
             _upgrade_owned_legacy_directory(self.path.parent)
         else:
@@ -1722,8 +1771,11 @@ class VaultRegistryStore:
         with os.fdopen(descriptor, "a+b", closefd=True) as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
-                self._recover_transaction_locked()
-                self._ensure_rollback_export_locked()
+                if recover_transactions:
+                    self._recover_transaction_locked()
+                    self._ensure_rollback_export_locked()
+                elif os.path.lexists(self.transaction_path):
+                    raise RegistryError("registry transaction requires normal recovery")
                 yield
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
@@ -2249,7 +2301,12 @@ class VaultRegistryStore:
             default_vault_provenance=default_provenance,
         )
 
-    def _migrate_legacy_frontmatter(self, frontmatter: Mapping[str, Any]) -> RegistrySnapshot:
+    def _migrate_legacy_frontmatter(
+        self,
+        frontmatter: Mapping[str, Any],
+        *,
+        existing_binding_by_ref: Mapping[str, str] | None = None,
+    ) -> RegistrySnapshot:
         app_install_id = _optional_str(frontmatter.get("appInstallId"))
         if app_install_id is None:
             raise RegistryMigrationError("legacy appInstallId is missing")
@@ -2273,6 +2330,29 @@ class VaultRegistryStore:
             raw_candidates,
             last_active_ref=_optional_str(frontmatter.get("lastActiveVaultRef")),
         )
+        resolved_bindings: dict[str, str] = {}
+        for raw_ref, raw_binding_id in (existing_binding_by_ref or {}).items():
+            normalized_ref = _optional_str(raw_ref)
+            binding = _optional_str(raw_binding_id)
+            if normalized_ref is None or binding is None:
+                raise RegistryMigrationError(
+                    "legacy migration binding correlation is malformed"
+                )
+            canonical_ref = aliases.get(normalized_ref, normalized_ref)
+            if canonical_ref not in candidates:
+                raise RegistryMigrationError(
+                    "legacy migration binding correlation names an unknown registration"
+                )
+            previous = resolved_bindings.get(canonical_ref)
+            if previous is not None and previous != binding:
+                raise RegistryMigrationError(
+                    "conflicting legacy migration binding correlations"
+                )
+            resolved_bindings[canonical_ref] = binding
+        if len(set(resolved_bindings.values())) != len(resolved_bindings):
+            raise RegistryMigrationError(
+                "one legacy migration binding identity matches multiple registrations"
+            )
         rebind_key = next(
             (key for key in ("settingsRebind", "settingsRebindV1", "settings_rebind.v1") if key in frontmatter),
             None,
@@ -2280,7 +2360,7 @@ class VaultRegistryStore:
         raw_rebind = copy.deepcopy(frontmatter.get(rebind_key)) if rebind_key else None
         if raw_rebind is not None and not isinstance(raw_rebind, dict):
             raise RegistryMigrationError("settings_rebind.v1 must be a mapping")
-        binding_by_ref: dict[str, str] = {}
+        provisional_by_ref: dict[str, str] = {}
         rewritten_rebind = copy.deepcopy(raw_rebind)
         if rewritten_rebind is not None:
             for key in ("prior", "candidate", "applied"):
@@ -2293,17 +2373,21 @@ class VaultRegistryStore:
                 if binding_id is None:
                     raise RegistryMigrationError(f"settings rebind {key} has no provisional vaultBindingId")
                 matched_ref = _resolve_legacy_reference(value, candidates, aliases)
-                previous = binding_by_ref.get(matched_ref)
+                previous = provisional_by_ref.get(matched_ref)
                 if previous is not None and previous != binding_id:
                     raise RegistryMigrationError("conflicting provisional binding identities")
-                if binding_id in binding_by_ref.values() and previous != binding_id:
+                if binding_id in provisional_by_ref.values() and previous != binding_id:
                     raise RegistryMigrationError("one provisional binding identity matches multiple registrations")
-                binding_by_ref[matched_ref] = binding_id
+                provisional_by_ref[matched_ref] = binding_id
                 value["ref"] = matched_ref
-                value["vaultBindingId"] = binding_id
+                value["vaultBindingId"] = resolved_bindings.get(matched_ref) or binding_id
         registrations: dict[str, VaultRegistration] = {}
         for ref, raw in candidates.items():
-            binding_id = binding_by_ref.get(ref) or f"binding-{uuid4()}"
+            binding_id = (
+                resolved_bindings.get(ref)
+                or provisional_by_ref.get(ref)
+                or f"binding-{uuid4()}"
+            )
             if binding_id in registrations:
                 raise RegistryMigrationError(f"duplicate vault_binding_id during migration: {binding_id}")
             registrations[binding_id] = VaultRegistration(

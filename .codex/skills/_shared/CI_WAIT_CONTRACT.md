@@ -142,6 +142,10 @@ Sleep between iterations with `sleep 90` (or longer); do not drop below 60s.
 
 ## When GraphQL is already at 0
 
+A wait timeout or CI-pending receipt is intermediate evidence under
+`.codex/skills/README.md :: Workflow continuation`. Continue the owning diagnosis, authorized
+recovery, and bounded wait; suspend delivery only after its documented stop-loss assessment.
+
 REST core almost always still has quota, so check-run waiting and most mutations proceed unaffected.
 Only fall back to a scheduled wake-up until the `rate_limit` reset epoch if **REST core** is also at 0.
 See `reference_gh_rate_limit_routing` for the full read/write/merge REST routing table.

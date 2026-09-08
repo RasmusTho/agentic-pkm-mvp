@@ -14,6 +14,13 @@ The goal is to produce an executable implementation plan and, when requested, de
 
 This skill is a coordinator. It does not replace `issue-to-code`, `verification-and-closure`, `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`.
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: coordination` for deterministic intake, readiness,
+dispatch planning, and receipt reconciliation. It passes only that provider-neutral intent into the
+shared resolver; it never branches on a Codex/Claude model ID. Worker skills declare their own intent
+and remain responsible for their issue-local implementation or verification route.
+
 For larger `type:bug` sets, the coordinator capability, session isolation, serial default, and
 independent-wave exception are canonical in `AGENTS.md :: Transition-period bug-delivery policy`.
 Apply that policy before the generic independent-issue fast lane or delivery-mode parallel rules.
@@ -194,7 +201,7 @@ Delivery rules:
   Product/Runtime issues must route SBS impact through the Product owner docs and SBS operating
   procedure; Builder System issues route through the Builder System boundary/artifact map; boundary
   issues name both sides.
-- Route the serial-vs-parallel dispatch and slot-count decision through `AGENTS.md :: Total Cost of Development` (parallelization and coordination are TCD cost terms); per-issue model and reasoning routing is owned by `issue-to-code`. Run every parallel sub-agent under `AGENTS.md :: Parallel-agent execution` — isolated worktree per issue, never the shared root; reconcile claim races on evidence rather than re-implementing.
+- Route the serial-vs-parallel dispatch and slot-count decision through `AGENTS.md :: Total Cost of Development` (parallelization and coordination are TCD cost terms); per-issue model and reasoning routing is owned by `issue-to-code`. When a capability profile exposes selectable models, carry only a provider-neutral selection intent into the shared census/resolver: choose the lowest adequate intelligence for the task and use deeper capability only when expected avoided cost justifies it. Internal Yggdrasil reasoning and external Codex harnesses consume the same binding, and skills must not create model-specific workflow branches. Run every parallel sub-agent under `AGENTS.md :: Parallel-agent execution` — isolated worktree per issue, never the shared root; reconcile claim races on evidence rather than re-implementing.
 - Per-issue budgets and stop-loss follow `AGENTS.md :: Proportional delivery`: each dispatched issue carries its own 2-CI-repair-round budget, never rebound to reset accounting; prefer the fewest slices that ship the value. Tier 1/2 light-path work has issue-local helper budget zero; complex work may receive budget one only under `AGENTS.md :: Parallel-agent execution`.
 - Do not claim the whole epic or entire Kanban pool up front.
 - Do not claim more issues than there are ready sub-agent execution slots.
@@ -455,7 +462,7 @@ If the work spans multiple sub-agents:
 - pass owner docs and Source Anchors as exact references for the worker to load, not copied full-doc
   content or the full parent narrative
 - include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
-- if the handoff touches `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
+- select the handoff's validation plan from `docs/development/DEV_WORKFLOW.md :: Validation baseline` for its actual changed paths
 - if the handoff adds or changes tests, require robust guard coverage up front: name the intended success path and the relevant negative or completeness path, and make enforcement tests exercise the production call site rather than a helper in isolation
 - require each sub-agent to report lifecycle actions, PR link, validation, doc writeback, and closure state
 - require each issue agent to report the canonical `context_cost` values when the runtime exposes
@@ -506,3 +513,14 @@ mutated.
 ## Capturing Learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+In delivery mode, require each issue owner to execute publication, conditional integration, and
+`verification-and-closure`. Resume a worker that returns only a published PR, pending checks, or a
+verification queue entry; do not treat its handoff as delivery. Follow any required executor to
+reconciled delivery or documented stop-loss before relinquishing ownership. Continue other
+independent authorized work when one slice is blocked; plan-only mode ends at its requested verified
+plan.

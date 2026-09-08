@@ -149,6 +149,33 @@ Required automation:
 - PR closed -> `Status=Done` when the PR is terminal and no longer active
 - issue and PR Project items are reconciled by repo-side workflow so merged PR cards and closed Issue cards do not drift
 
+### Legacy Project migration
+
+When a legacy same-named Project still contains repository cards, migrate membership into the
+governed organization Project with the reconciliation helper. The migration is dry-run by default,
+filters out drafts and content from other repositories, preserves the source Project, and derives
+destination `Status` from live Issue/PR truth rather than copying a stale source column:
+
+```bash
+python3 scripts/reconcile_project_status.py \
+  --repo RasmusTho/agentic-pkm-mvp \
+  --owner Yggdrasil-PKM \
+  --migrate-from-owner RasmusTho
+
+python3 scripts/reconcile_project_status.py \
+  --repo RasmusTho/agentic-pkm-mvp \
+  --owner Yggdrasil-PKM \
+  --migrate-from-owner RasmusTho \
+  --apply
+```
+
+The interactive GitHub credential used for a private personal source Project must have Project
+read/write scope and organization access. Apply is idempotent and fails unless its final receipt
+reports both `missing_after=0` and `status_drift_after=0`. Only after that receipt may the legacy
+Project's auto-add workflow be disabled and the legacy Project closed or retained as read-only
+history. `Review` is the only source-Project status preserved as an operator override; this remains
+retry-safe when an earlier attempt added the destination card but stopped before updating its status.
+
 Interpretation note:
 - These automation targets describe the intended Project projection.
 - They should be treated as best-effort synchronization, not as a repository-local hard guarantee when the Project lives on a personal account or another platform surface with limited automation credentials.

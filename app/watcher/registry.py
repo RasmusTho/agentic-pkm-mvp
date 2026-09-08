@@ -66,6 +66,7 @@ from app.watcher.settings_delta import (
     is_settings_source_path,
     settings_delta_state_values,
 )
+from app.instance.settings_rebind import compatibility_ingress_window
 from app.watcher.settings_rebind import DormantSettingsRebindReconciler
 from app.watcher.state import WatcherState
 from scripts.yaml_roundtrip import load_frontmatter
@@ -143,31 +144,38 @@ def _scan_markdown_many(
     if summary is None:
         summary = {}
     seen: set[Path] = set()
-    for scan_root in scan_roots:
-        for path in iter_vault_markdown_files(
-            vault_root, subtree_root=scan_root, include_settings=True
+
+    def _iter_paths() -> Iterable[Path]:
+        for scan_root in scan_roots:
+            try:
+                yield from iter_vault_markdown_files(
+                    vault_root, subtree_root=scan_root, include_settings=True
+                )
+            except OSError:
+                _mark_scan_incomplete(summary, reason="traversal")
+
+    for path in _iter_paths():
+        try:
+            rel = path.relative_to(vault_root)
+        except Exception:
+            _mark_scan_incomplete(summary, reason="relative_path")
+            continue
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        # Settings sources are a runtime control surface, not ordinary
+        # watcher content.  Always include them even when a user narrows
+        # the note scope, otherwise an edit silently cannot take effect.
+        if rel in seen or (
+            not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel)
         ):
-            try:
-                rel = path.relative_to(vault_root)
-            except Exception:
-                _mark_scan_incomplete(summary, reason="relative_path")
-                continue
-            if any(part.startswith(".") for part in rel.parts):
-                continue
-            # Settings sources are a runtime control surface, not ordinary
-            # watcher content.  Always include them even when a user narrows
-            # the note scope, otherwise an edit silently cannot take effect.
-            if rel in seen or (
-                not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel)
-            ):
-                continue
-            try:
-                mtime = path.stat().st_mtime
-            except Exception:
-                _mark_scan_incomplete(summary, reason="stat")
-                continue
-            seen.add(rel)
-            yield rel, mtime, path
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            _mark_scan_incomplete(summary, reason="stat")
+            continue
+        seen.add(rel)
+        yield rel, mtime, path
 
 
 def _mark_scan_incomplete(
@@ -360,6 +368,19 @@ def _single_registry_writer(func: Callable[..., Any]) -> Callable[..., Any]:
             return func(config_path, *args, _loaded_config=cfg, **kwargs)
 
     return locked_entrypoint
+
+
+@contextmanager
+def _compatibility_watcher_window(
+    reconciler: DormantSettingsRebindReconciler | None,
+) -> Iterator[None]:
+    """Fence the complete watcher tick against foreground compatibility commit."""
+
+    if reconciler is None:
+        yield
+        return
+    with compatibility_ingress_window(reconciler.registry):
+        yield
 
 
 def _emit_registry_watcher_run_event(
@@ -2467,6 +2488,67 @@ def _run_spec_tick(
     return _finalize_spec_tick(cfg, state, summary, tick_start, scan_roots[0] if scan_roots else None, spec.name)
 
 
+def _run_registry_cycle(
+    cfg: RegistryConfig,
+    reconciler: DormantSettingsRebindReconciler | None,
+    *,
+    states: Mapping[str, WatcherState],
+    now: float,
+    briefing_cadence: BriefingTickCadence,
+    process_panel_notes_inline: bool,
+) -> dict[str, dict[str, object]]:
+    """Run one complete compatibility-aware watcher cycle under the ingress fence."""
+
+    with _compatibility_watcher_window(reconciler):
+        _adopt_idle_selected_binding(cfg, reconciler)
+        rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
+        if rebind_cycle is not None and rebind_cycle.mode == "stable":
+            if rebind_cycle.record.candidate_binding_id is None:
+                cfg.enable = False
+            else:
+                cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+        rebind_observation_revision = (
+            rebind_cycle.record.desired_revision
+            if rebind_cycle is not None
+            and rebind_cycle.mode in {"prepared", "committed"}
+            else None
+        )
+        handled_settings_sources: set[Path] = set()
+        settings_source_reload_results: dict[str, object] = {}
+        summaries = {
+            spec.name: _run_spec_tick(
+                cfg,
+                spec,
+                states[spec.name],
+                now=now,
+                states=states,
+                process_panel_notes_inline=process_panel_notes_inline,
+                handled_settings_sources=handled_settings_sources,
+                settings_source_reload_results=settings_source_reload_results,
+                retain_unemitted_observations=rebind_observation_revision,
+            )
+            for spec in cfg.specs
+        }
+        summaries["briefing"] = _run_briefing_tick(
+            cfg,
+            now=now,
+            cadence=briefing_cadence,
+        )
+        summaries["journal_review"] = _run_journal_review_tick(cfg)
+        if reconciler is not None and rebind_cycle is not None:
+            receipt = reconciler.finish_cycle(
+                rebind_cycle,
+                summaries=summaries,
+                states=states,
+            )
+            if receipt is not None and receipt.stage == "completed":
+                if rebind_cycle.record.candidate_binding_id is None:
+                    cfg.enable = False
+                else:
+                    cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
+        return summaries
+
+
 @_single_registry_writer
 def run_registry_once(
     config_path: Path,
@@ -2475,51 +2557,19 @@ def run_registry_once(
 ) -> dict[str, dict[str, object]]:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
-    _adopt_idle_selected_binding(cfg, reconciler)
-    rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
-    if rebind_cycle is not None and rebind_cycle.mode == "stable":
-        cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
-    rebind_observation_revision = (
-        rebind_cycle.record.desired_revision
-        if rebind_cycle is not None
-        and rebind_cycle.mode in {"prepared", "committed"}
-        else None
-    )
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs
     }
     now = time.time()
-    handled_settings_sources: set[Path] = set()
-    settings_source_reload_results: dict[str, object] = {}
-    summaries = {
-        spec.name: _run_spec_tick(
-            cfg,
-            spec,
-            states[spec.name],
-            now=now,
-            states=states,
-            process_panel_notes_inline=True,
-            handled_settings_sources=handled_settings_sources,
-            settings_source_reload_results=settings_source_reload_results,
-            retain_unemitted_observations=rebind_observation_revision,
-        )
-        for spec in cfg.specs
-    }
-    summaries["briefing"] = _run_briefing_tick(
+    summaries = _run_registry_cycle(
         cfg,
+        reconciler,
+        states=states,
         now=now,
-        cadence=BriefingTickCadence(),
+        briefing_cadence=BriefingTickCadence(),
+        process_panel_notes_inline=True,
     )
-    summaries["journal_review"] = _run_journal_review_tick(cfg)
-    if reconciler is not None and rebind_cycle is not None:
-        receipt = reconciler.finish_cycle(
-            rebind_cycle,
-            summaries=summaries,
-            states=states,
-        )
-        if receipt is not None and receipt.stage == "completed":
-            cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -2544,25 +2594,31 @@ def run_registry_forever(
 ) -> None:
     cfg = _loaded_config or load_registry_config(config_path)
     reconciler = DormantSettingsRebindReconciler.from_config(cfg)
-    _adopt_idle_selected_binding(cfg, reconciler)
-    startup_rebind_cycle = reconciler.begin_cycle(cfg) if reconciler is not None else None
-    if startup_rebind_cycle is not None and startup_rebind_cycle.mode == "stable":
-        # A fresh watcher process may still boot from the old environment
-        # binding.  Resolve the completed durable candidate before startup
-        # ingestion or the first scan, so restart cannot observe old-root work.
-        cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
-    # `watcher run` is the production entrypoint.  Compile its bound vault at
-    # boot just as API and worker do; the registry config is authoritative for
-    # this process and need not depend on VAULT_ROOT being set separately.
-    try:
-        from app.settings.ingestion import ingest_settings
-
-        ingest_settings(
-            reason="registry_watcher_startup",
-            vault_root=cfg.vault_path,
+    with _compatibility_watcher_window(reconciler):
+        _adopt_idle_selected_binding(cfg, reconciler)
+        startup_rebind_cycle = (
+            reconciler.begin_cycle(cfg) if reconciler is not None else None
         )
-    except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
-        logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
+        if startup_rebind_cycle is not None and startup_rebind_cycle.mode == "stable":
+            # A fresh watcher process may still boot from the old environment
+            # binding.  Resolve the completed durable candidate before startup
+            # ingestion or the first scan, so restart cannot observe old-root work.
+            if startup_rebind_cycle.record.candidate_binding_id is None:
+                cfg.enable = False
+            else:
+                cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
+        # `watcher run` is the production entrypoint.  Compile its bound vault at
+        # boot just as API and worker do; the registry config is authoritative for
+        # this process and need not depend on VAULT_ROOT being set separately.
+        try:
+            from app.settings.ingestion import ingest_settings
+
+            ingest_settings(
+                reason="registry_watcher_startup",
+                vault_root=cfg.vault_path,
+            )
+        except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
+            logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
     states = {
         spec.name: _load_registry_state(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs
@@ -2572,49 +2628,15 @@ def run_registry_forever(
 
     tick = 0
     while True:
-        if tick != 0:
-            _adopt_idle_selected_binding(cfg, reconciler)
-        rebind_cycle = (
-            startup_rebind_cycle
-            if tick == 0
-            else (reconciler.begin_cycle(cfg) if reconciler is not None else None)
-        )
-        rebind_observation_revision = (
-            rebind_cycle.record.desired_revision
-            if rebind_cycle is not None
-            and rebind_cycle.mode in {"prepared", "committed"}
-            else None
-        )
         now = time.time()
-        handled_settings_sources: set[Path] = set()
-        settings_source_reload_results: dict[str, object] = {}
-        summaries = {
-            spec.name: _run_spec_tick(
-                cfg,
-                spec,
-                states[spec.name],
-                now=now,
-                states=states,
-                handled_settings_sources=handled_settings_sources,
-                settings_source_reload_results=settings_source_reload_results,
-                retain_unemitted_observations=rebind_observation_revision,
-            )
-            for spec in cfg.specs
-        }
-        summaries["briefing"] = _run_briefing_tick(
+        summaries = _run_registry_cycle(
             cfg,
+            reconciler,
+            states=states,
             now=now,
-            cadence=briefing_cadence,
+            briefing_cadence=briefing_cadence,
+            process_panel_notes_inline=False,
         )
-        summaries["journal_review"] = _run_journal_review_tick(cfg)
-        if reconciler is not None and rebind_cycle is not None:
-            receipt = reconciler.finish_cycle(
-                rebind_cycle,
-                summaries=summaries,
-                states=states,
-            )
-            if receipt is not None and receipt.stage == "completed":
-                cfg.vault_path = reconciler.candidate_vault_path(rebind_cycle.record)
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,

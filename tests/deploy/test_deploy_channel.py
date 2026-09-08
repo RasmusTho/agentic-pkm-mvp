@@ -2575,6 +2575,18 @@ services:
       HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
 """
 
+# Reproduces the retained base-service layout-note shape from the #5364 fix:
+# an unset shell interpolation shadows the generated runtime env value.
+_LAYOUT_NOTE_CLOBBER_OVERLAY = """\
+services:
+  api:
+    env_file:
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    environment:
+      VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
+"""
+
 #: The fixed shape (commit f95a6811): no `environment:` override at all for
 #: the host-specific key -- it rides the env_file chain untouched.
 _HEIMDAL_FIXED_OVERLAY = """\
@@ -2617,7 +2629,9 @@ def _configure_dev_test_environment_clobber_preflight(
     runtime_dir = root / ("tmp-test" if channel == "test" else "tmp")
     runtime_dir.mkdir(exist_ok=True)
     (runtime_dir / "runtime.env").write_text(
-        "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n", encoding="utf-8"
+        "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n"
+        "VAULT_LAYOUT_NOTE_REL=custom/vault.layout.md\n",
+        encoding="utf-8",
     )
     # Ambient interpolation sources this preflight must resolve against must
     # match what the real Compose invocation would see -- neither key is
@@ -2630,24 +2644,25 @@ def _configure_dev_test_environment_clobber_preflight(
 def test_dev_deploy_preflight_rejects_environment_override_clobbering_env_file(
     tmp_path: Path,
 ) -> None:
-    """AC1 (#4230): a dev-channel deploy fails loud, before pin write or
-    migration execution, when a CHANNEL_SERVICES service's `environment:`
-    override resolves blank while its env_file chain supplies a non-empty
-    value for the same key -- the exact shape that crash-looped
-    heimdal-capture-watch on every dev-channel deploy before commit
-    f95a6811 deleted the offending `environment:` entries.
+    """AC2 (#5376): a dev deploy rejects a blank layout-note override before
+    pin write or migration execution when the generated runtime env supplies
+    the same key.
     """
     root, env, sha = _deploy_harness(tmp_path)
     _configure_dev_test_environment_clobber_preflight(
-        root, env, tmp_path, channel="dev", overlay_content=_HEIMDAL_CLOBBER_OVERLAY
+        root,
+        env,
+        tmp_path,
+        channel="dev",
+        overlay_content=_LAYOUT_NOTE_CLOBBER_OVERLAY,
     )
 
     result = _run_deploy(root, env, sha, channel="dev")
 
     assert result.returncode != 0
     assert "dev/test environment clobber preflight: blocked violation_count=1" in result.stdout
-    assert "heimdal-capture-watch" in result.stderr
-    assert "HEIMDAL_CAPTURE_WATCH_DIR" in result.stderr
+    assert "api" in result.stderr
+    assert "VAULT_LAYOUT_NOTE_REL" in result.stderr
     # No pin mutation: the pin file is never created/written before the block.
     assert not (root / "config/deploy/dev.env").exists()
     assert not (root / "config/deploy/dev.previous.env").exists()

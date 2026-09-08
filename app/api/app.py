@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.config.llm import ensure_provider
 from app.index.doctor import diagnose_index
 from app.middleware.trace import TraceIdMiddleware
 from app.observability import configure_metrics, setup_logging
@@ -410,6 +411,10 @@ def _create_app() -> FastAPI:
     return application
 
 
+# Product owns its provider-policy preflight here rather than in ``app``'s
+# namespace initializer.  BuilderOps can therefore import its own entrypoints
+# from this source tree without resolving Product configuration.
+ensure_provider()
 app = _create_app()
 
 

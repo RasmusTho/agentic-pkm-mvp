@@ -15,7 +15,7 @@ Review cadence: event-driven (task merge, artifact-class change, retention/revoc
 
 Source of truth: this directory for the promoted target capability; GitHub parent/child Issues become execution and validation authority when filed
 
-Last reviewed: 2026-08-22 against `origin/main` `f568e457f2bad7e15997fc405615f3deffda8abb`
+Last reviewed: 2026-09-07 against `origin/main` `c9331da086efa32a5d501def6f858e9be4de2b22`
 
 # Governed Archival Flow
 
@@ -45,6 +45,11 @@ This target-state specification follows the [RSC-01 continuity classification](.
 - The accepted artifact-classification, HKA ArtifactContract, PDM StorePort, retention-surface, and
   media-original docs already define ownership distinctions. GAF-01 reconciles and operationalizes
   them; it does not create a competing artifact ontology.
+- The owner/architecture decision recorded by #5325 on 2026-09-07 defers the HKA
+  recovery/profile boundary used by GAF-05 (#5067); it is a no-build posture until a concrete
+  recovery need and an owner-native, explicitly bounded authority/profile proposal exist. This
+  does not change HKA/GOV/PDM authority, create a recovery store or journal, or claim any recovery
+  implementation.
 
 ## SBS Classification
 

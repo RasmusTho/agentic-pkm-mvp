@@ -323,6 +323,21 @@ The implementation agent must stop point-fixing and build one convergence packet
 - all prior findings and attempted fixes bound to the same mechanism key; and
 - a test matrix mapping each invariant, transition, crash point, and race to focused proof.
 
+The matrix is evidence for the bounded mechanism, not a request for more gates or hypothetical
+scope. For each applicable row, name the production entrypoint, relevant initial state, injected
+failure or transition, and observable postcondition. An existing test may cover several rows; a
+matching test name, header string, or mocked helper result alone does not prove the claimed path.
+For a repair, explain which property changed and which focused assertion would detect the prior
+failure before repeating expensive proof. Reuse unaffected rows.
+
+Choose cases from the actual lifecycle and deployment: fresh and retained schema/payload states,
+restart and compensation ordering, downstream consumers of changed identity, and replacement or
+replay races only where that mechanism supports them. State supported writer cardinality and trust
+assumptions before adding concurrency machinery. The personal deployment does not imply distributed
+writers or hostile in-process code. Do not invent a new test class or expand the Issue for an
+inapplicable case. This clarifies the existing matrix; it adds no new receipt, reviewer round,
+execution flag, or automatic full-suite requirement.
+
 ### Dormant-capability proof placement
 
 For a dormant capability, the slice that makes storage, schema, or sealing changes proves only
@@ -509,8 +524,8 @@ Convergence policy:
   fresh re-review demonstrate measurable progress.
 - A repeated blocking finding or a round without progress triggers TCD-based capability escalation
   and a bounded replan with the complete prior evidence; it does not trigger an owner interruption
-  by count. A strongest-capability repair uses the configured strongest capability with high or
-  xhigh reasoning.
+  by count. A strongest-capability repair uses the configured strongest capability with high, xhigh,
+  or max reasoning.
 - P2/P3 findings do not enter this loop, consume attempts, trigger capability
   escalation, or require another review round.
 - One clean independent final review on the current head SHA is sufficient for every full-path PR,
@@ -551,7 +566,32 @@ repair counter is updated. A retry counter alone must never select
 | `auto_repair` | The failure is repo-local, reversible, inside the issue's declared scope, and has a deterministic validation target. | Create or continue the bounded repair path, then run fresh validation/review. |
 | `auto_backoff` | Authentication, rate limit, or an external tool is temporarily unavailable and no mutation has occurred. | Retain the request, record a receipt, and retry with bounded backoff. |
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
-| `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
+| `needs_owner` | Continuing needs new authority for an irreversible/external effect, a security/privacy/cost commitment, a reserved production/release operator action, or resolution of still-contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
+
+Before selecting a route, apply `.codex/skills/decision-quality/SKILL.md :: Current mandate and
+delegated choices`. Distinguish missing technical evidence from missing authorization. An effect's
+production/external classification does not require another ask when valid authority for that exact
+effect already exists; independently required operator acknowledgments remain binding. A later
+same-owner instruction that validly revises an earlier restriction is not unresolved contradictory
+authority. Never infer that revision from a label, generated plan, silence, or technical convenience.
+
+The route governs the affected operation, not automatic session termination. Honor immediate-stop
+boundaries (including prohibited follow-on reads), continue other authorized evidence/recovery work,
+and return to the owning workflow after revalidation. Exhaust accessible technical preparation
+before a human ask; do not turn unresolved machine facts into owner choices or repeat an already
+answered request. Session suspension still follows
+`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
+
+Advisory readiness, CI failure context, PR evidence packs, and post-merge docs reports follow the
+same separation. `human_exception_required` and `human_exception_likely` are routing signals for
+fresh classification, not escalation or execution authority. Unknown or malformed input, a technical
+`agent:blocked` hold, missing logs, conflicting checkboxes, or shipped-vs-target drift retain their
+readiness/refusal and evidence gaps without asserting a human decision. Explicit human-only/operator
+requirements, CODEOWNER hints, human-labelled evidence, and unresolved authority requirements remain
+visible for the owning workflow to verify. Negated, resolved, or merely mentioned owner decisions
+do not establish an unresolved requirement; a separate unresolved requirement must not be hidden by
+settled text elsewhere. These advisory tools neither authenticate delegation nor waive a gate, and
+their false human flag never means the operation is safe or authorized.
 
 Repair history applies only to blocking failures and is partitioned by stable failure
 mechanism and failure domain. The closed domains are review/code correctness,

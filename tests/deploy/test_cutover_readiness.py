@@ -7,10 +7,14 @@ from app.release_channels.cutover_readiness import (
     _resolve_db_revision,
     check_cutover_readiness,
 )
+from app.release_channels.channel_isolation_preflight import (
+    check_environment_env_file_clobber,
+)
 
 
 TARGET_SHA = "314632235404cae1c51dc92b5f37174aa02b5fb0"
 OTHER_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_base_fixture(root: Path, *, include_all_services: bool = True) -> None:
@@ -207,6 +211,27 @@ def test_list_style_base_environment_merges_with_mapping_overlay(tmp_path: Path)
     )
 
     assert result.ok, result.summary()
+
+
+def test_runtime_env_layout_note_selector_is_preserved(tmp_path: Path) -> None:
+    """A generated layout-note selector must survive the base Compose model."""
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        "VAULT_LAYOUT_NOTE_REL=custom/vault.layout.md\n", encoding="utf-8"
+    )
+
+    for channel in ("dev", "test"):
+        result = check_environment_env_file_clobber(
+            REPO_ROOT / f"docker-compose.{channel}.yml",
+            channel,
+            environ={"WATCHER_RUNTIME_ENV_FILE": str(runtime_env)},
+            load_dotenv=False,
+        )
+
+        assert result.ok, (
+            f"{channel} Compose model clobbered the generated layout-note "
+            f"selector:\n{result.summary()}"
+        )
 
 
 def test_pending_forward_only_migrations_listed_and_gated(tmp_path: Path) -> None:

@@ -184,8 +184,9 @@ false-green coordination evidence.
 Classifier output is advisory coordination evidence only:
 - `wait`: pending checks are still within the bounded threshold; keep waiting with the REST/backoff
   path.
-- `stalled`: queued or in-progress checks exceeded the threshold; record a CI-pending handoff or
-  consider an explicit rerun workflow if one owns that action.
+- `stalled`: queued or in-progress checks exceeded the threshold; execute the owning diagnosis and
+  authorized recovery workflow. A threshold alone does not justify a terminal CI-pending handoff;
+  apply `GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss` before suspending delivery.
 - `flaky_or_external_failure`: latest failed conclusions point to infrastructure-style behavior
   such as timeout/cancel/stale; rerun guidance is advisory and does not make the check acceptable.
 - `actionable_failure`: latest failed checks need repair or failure-context collection, not waiting.
@@ -224,6 +225,8 @@ bucket list cannot override this canonical routing.
 - record PR number, issue number(s), current head SHA, lane, risk, checks run, review classification, and next handoff
 - record BuilderOps routing: records/projections/receipts created, or `none` with a short reason
 - include enough traceability to prove the current delivery state without replaying the full procedure
+- execute that next workflow under `.codex/skills/README.md :: Workflow continuation`; the receipt
+  is intermediate until verification-and-closure observes merge and reconciliation or records stop-loss
 
 5. Issue/PR lifecycle and post-merge proof placement
 - a closing slice Issue may require only `Verify:` evidence that is available before its PR merges;
@@ -294,14 +297,13 @@ Placement: prefer placing the `## Direct Repair` block first in the PR body (bef
 
 ## Governance Lane vs Direct Repair for Workflow Files
 
-The Governance lane checkbox (`- [x] Governance lane`) has a narrow allowed-file set in `issue-pr-governance.yml`. It covers `docs/`, `.codex/skills/`, and a small set of exact files. It does **not** cover `.github/workflows/*.yml` files broadly — only `issue-pr-governance.yml` itself is in the exact-file allowlist.
-
-Rule: any PR that changes `.github/workflows/` files other than `issue-pr-governance.yml` must use **Direct Repair** (not the Governance lane checkbox). Direct Repair bypasses the file restriction and is the correct path for bounded CI/workflow repairs.
-
-Summary:
-- `issue-pr-governance.yml` change → Governance lane or Direct Repair both work
-- Any other `.github/workflows/*.yml` change → Direct Repair required
-- `docs/**` or `.codex/skills/**` change → Governance lane or Direct Repair both work
+Select the lane from the current enforced `governanceAllowedExact` and
+`governanceAllowedPrefixes` in `.github/workflows/issue-pr-governance.yml`, mirrored by
+`DEV_WORKFLOW.md :: Governance lane`. Both `issue-pr-governance.yml` and `ci-smoke.yaml` are
+admitted governance surfaces. A bounded governance repair within that allowlist may use the
+Governance lane; it does not need a Direct Repair detour. Other workflow files still require
+an applicable lane, such as bounded Direct Repair. Judge the actual changed-file set rather than
+applying an outdated blanket prohibition to all workflow files.
 
 ## Escalation Triggers
 
@@ -320,6 +322,9 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 ## Safety Invariants
 
 - current SHA truth before merge
+- before neutralization, derive and preserve the canonical case-sensitive repository identity from
+  live GitHub REST evidence and independently authenticate the just-posted exact receipt against the
+  original live body/head/issue sets/run/unchanged accounting. Failed readback permits no body effect
 - issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
   publishes the neutralized body in the LF-less canonical transport form, revalidates the live
   body/head/closing links with at most one stored terminal LF, rejects a second LF, CR/CRLF, or any
@@ -337,6 +342,11 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
   change while the body is still neutralized requires restoring the canonical body before further
   repair work; an exact-head body stranded by the historical extra-LF transport is restoration-only
   and requires the unique authenticated body/receipt proof before the original body may be restored
+- exact case-only repository metadata recovery is restoration-only: complete canonical live PR
+  identity, one trusted canonical receipt, exact run/accounting/body/issue binding and absence of
+  phase or extra authority evidence may name the unique original body. The malformed receipt remains
+  invalid merge authority; retain its history and accounting and authenticate a new canonical run
+  through every ordinary CI, review, body-edit/projection and phase gate before any merge
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

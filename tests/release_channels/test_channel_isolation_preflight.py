@@ -1600,11 +1600,18 @@ def test_blank_override_with_no_env_file_value_is_not_flagged(tmp_path: Path) ->
     )
 
 
-def test_real_dev_compose_passes_environment_clobber_preflight() -> None:
-    """Regression guard: the committed docker-compose.dev.yml must never
-    reintroduce the pre-f95a6811 heimdal-capture-watch clobber shape (or any
-    analogous shape for another CHANNEL_SERVICES key)."""
-    result = check_environment_env_file_clobber(DEV_COMPOSE, "dev", environ={})
+def test_real_dev_compose_passes_environment_clobber_preflight(tmp_path: Path) -> None:
+    """The real dev model preserves a generated layout-note selector."""
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        "VAULT_LAYOUT_NOTE_REL=custom/vault.layout.md\n", encoding="utf-8"
+    )
+    result = check_environment_env_file_clobber(
+        DEV_COMPOSE,
+        "dev",
+        environ={"WATCHER_RUNTIME_ENV_FILE": str(runtime_env)},
+        load_dotenv=False,
+    )
 
     assert result.ok, (
         f"docker-compose.dev.yml has a blank environment: override shadowing "
@@ -1612,10 +1619,18 @@ def test_real_dev_compose_passes_environment_clobber_preflight() -> None:
     )
 
 
-def test_real_test_compose_passes_environment_clobber_preflight() -> None:
-    """Regression guard mirroring the dev-channel check above, for the test
-    channel's committed docker-compose.test.yml."""
-    result = check_environment_env_file_clobber(TEST_COMPOSE, "test", environ={})
+def test_real_test_compose_passes_environment_clobber_preflight(tmp_path: Path) -> None:
+    """The real test model preserves a generated layout-note selector."""
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text(
+        "VAULT_LAYOUT_NOTE_REL=custom/vault.layout.md\n", encoding="utf-8"
+    )
+    result = check_environment_env_file_clobber(
+        TEST_COMPOSE,
+        "test",
+        environ={"WATCHER_RUNTIME_ENV_FILE": str(runtime_env)},
+        load_dotenv=False,
+    )
 
     assert result.ok, (
         f"docker-compose.test.yml has a blank environment: override shadowing "

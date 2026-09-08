@@ -9,6 +9,14 @@ You are a builder agent implementing GitHub backlog work in a repo-first, docs-a
 
 ## Repository target
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: general_delivery` as its provider-neutral default.
+The carrier may be Codex or Claude; the shared execution resolver binds the intent to a configured
+target. An Issue may explicitly require `strong_reasoning` or `verification` when its contract and
+risk evidence justify that choice. This skill never names a provider-specific model ID, reasoning
+ladder, or carrier command as workflow logic.
+
 Set `REPO` to the explicitly intended `owner/repo` before any GitHub lifecycle command. A
 checkout remote is only a convenience for deriving that value; it is not authority to act on the
 hub by default. Every direct `gh issue` command in this skill carries `--repo "$REPO"`. For
@@ -399,13 +407,23 @@ scope; it never adds steps to the implementation hot path.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
 - Scale validation and PR-body machinery to the risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Risk tiers`: Tier 1 (docs/skills/governance text) runs lightweight docs/governance checks only; Tier 2 (code slices, tests) runs the repo-standard gates below; Tier 3 (migrations, release channels, prod, boundary moves) keeps the full fail-closed machinery. Read `:: Delivery budgets and stop-loss` only when a repair budget is actually in play.
 - Route model family, reasoning effort, and escalation/de-escalation per `AGENTS.md :: Total Cost of Development`. The risk tier above, plus the artifact class, environment/channel risk, and stop conditions from the pre-implementation classification check, are the routing inputs — do not restate the policy here.
+- TCD model selection is provider-neutral and cost/performance-driven: choose the lowest declared
+  intelligence that adequately handles the task, and use deeper capability when its expected
+  avoided human/rework/defect/delay cost justifies the increment. A capability profile may expose
+  an explicit model selection, but internal Yggdrasil reasoning and external harnesses (including
+  the Codex launcher) must pass it through the shared provider census/execution resolver. Skills,
+  prompts, and worker-role prose must not add model-specific workflow branches. Omitting a model
+  preserves the configured fallback for compatibility; an undeclared or non-selectable request
+  fails closed.
 - When this Issue came from `deliver-issue-set`, honor the pack's fresh-context and helper-budget
   decision unless current issue-local evidence justifies recomputing it. Record the canonical
   `context_cost` values when exposed by the runtime; otherwise use a named proxy or
   `unknown(reason)` rather than inventing token counts.
 - For a `type:bug` Issue dispatched from a larger bug set, also apply `AGENTS.md :: Transition-period
-  bug-delivery policy`: own one end-to-end Codex task/session and isolated worktree, normally Terra
-  / medium, with escalation only through the existing TCD or protected P0/P1/high-risk triggers.
+  bug-delivery policy`: own one end-to-end Codex task/session and isolated worktree. The normal
+  provider-neutral intent is `general_delivery` (Luna/xhigh); use `strong_reasoning` or
+  `verification` only when the governing risk/acceptance contract justifies it, and keep Terra as
+  an explicit compatibility fallback rather than a default.
 - Apply `AGENTS.md :: Proportional delivery`: build the most boring solution that satisfies the
   ACs — no new gate, receipt, registry, config surface, or abstraction without an explicit
   contract demand. Spend at most 2 CI-repair rounds per failure mechanism; when the budget is
@@ -423,7 +441,7 @@ scope; it never adds steps to the implementation hot path.
   static checks precede this review; the governing contract's affected-subsystem validation follows
   it. High-risk classification does not independently expand validation to a repo-wide full suite.
   This cheap design/correctness gate does not replace the final current-SHA CI or review gate.
-- For any PR that changes files under `app/`, `tests/`, or `companion-ui/companion-app/`, run the repo-standard lint gate, currently `ruff check app tests companion-ui/companion-app` (matches `.github/workflows/ci-smoke.yaml`), before merge and include the lint output or explicit tooling limitation in the PR body.
+- Select validation from `docs/development/DEV_WORKFLOW.md :: Validation baseline` for the actual diff; the lint step is not the entire code-validation baseline. Record the checks run and any tooling limitation. Reuse applicable existing tests rather than adding tests solely to restate a reversible documentation change.
 - After two formal independent `CHANGES_REQUESTED` review rounds on one PR, apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate` through the shared production gate before another expensive proof or publication cycle. Every publication declares `--publication-mode new|existing`; an existing-PR invocation supplies `--pr-scope-revalidation`, repository, PR, and the applicable contract authority (governing Issue for issue-backed work, invocation-lane-matched authenticated PR body for issue-free docs/governance/direct-repair) so the gate re-derives content-bound live GitHub review history and rejects omitted, foreign, stale, partial, or non-durable receipt evidence.
 - Keep docs-only validation lightweight: docs-only PRs should run appropriate docs/governance checks, not the full code/test smoke by default.
 - Do not collapse parent feature validation and owner-doc promotion into one slice PR by default.
@@ -524,8 +542,11 @@ When continuing through anchor drift:
 16. Run `.codex/skills/publish-pr/SKILL.md` to create or update the implementation PR linked to the governing Issue unless a concrete blocker or explicit user instruction prevents it.
 17. For a normal PR, hand off to `docs/development/PR_HOT_PATH.md :: Mandatory Hot-Path Gates` through `pr-integration` only as needed. Read `:: Escalation Triggers` to decide whether a trigger applies; read `:: CI Status Handling` only once CI is attached and a check is failing or stuck.
 18. If any hot-path trigger applies, read the matching procedure section in `docs/development/PR_ESCALATION_PATHS.md` (whole-file read only when the trigger is unclassified) and use it.
-19. **Execute Action: Request Review** only when review is explicitly requested.
-20. If the slice merges and this is not the final child slice, keep the parent issue open for later acceptance.
+19. Immediately execute `verification-and-closure`: run the applicable current-head CI/review gates,
+    repair through `pr-integration` when needed, merge, reconcile exact Issues, and finish required
+    post-merge receipts. **Execute Action: Request Review** only when review is explicitly requested;
+    this does not waive independent review required by the delivery tier.
+20. After verified slice merge, if this is not the final child slice, keep the parent issue open for later acceptance.
 21. If this is the final child slice, route post-merge parent closure through `docs/development/PARENT_ISSUE_CLOSURE.md`.
 
 ## PR handoff requirements
@@ -575,3 +596,12 @@ If blocked:
 - recommend Issue maintenance when the task contract itself needs correction
 
 Do not block solely because an exact anchor label is absent if the governing doc passages still make the bounded task clear.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+After publication, execute `pr-integration` only for triggered repair, then
+`verification-and-closure` through merge and exact lifecycle reconciliation. Return verified
+delivery evidence to the issue-set caller, which continues the next authorized slice. A published PR
+or requested review is not a terminal handoff.

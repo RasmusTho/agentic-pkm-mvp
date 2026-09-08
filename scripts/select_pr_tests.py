@@ -47,6 +47,10 @@ FULL_SUITE_EXACT = {
     # subsystems. Never narrow their coverage to a single feature owner.
     "app/cli.py",
     "app/cli/__init__.py",
+    # The top-level package initializer is a shared import seam. A change
+    # here can alter every runtime package's boot behavior, so require the
+    # broad non-PG lane rather than guessing one subsystem owner.
+    "app/__init__.py",
     "app/config/paths.py",
     # Canonical runtime DSN resolution. `app/db/db.py::_psycopg_dsn` (already a
     # FULL_SUITE_PREFIX via app/db/) resolves every connection through this
@@ -238,7 +242,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "builder_system",
         (
-            "app/builderops/",
+        "app/builderops/",
             "app/dispatcher/",
             # The design-packet resolver is Builder System/CES projection
             # machinery. Keep this ownership exact: sibling app/governance
@@ -266,6 +270,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # BuilderOps store-access inventory fitness. Keep this exact file
             # owned without widening builder_system to all architecture tests.
             "tests/architecture/test_builderops_store_boundary.py",
+            "tests/architecture/test_builderops_package_independence.py",
+            "tests/ops/test_builderops_package_smoke.py",
             # pr-contract/BuilderOps-routing hot-path governance fitness
             # (#4343): a pure change to this one test file has no non-test
             # governance/docs path alongside it, so `_is_governance_only`
@@ -275,6 +281,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # is owned above, without widening builder_system to all
             # architecture tests.
             "tests/architecture/test_pr_hot_path_governance.py",
+            # Durable-table and producer inventory fitness belongs to the
+            # Builder System architecture gate. Own this exact file so a
+            # count/contract repair cannot fail closed as an unowned PR.
+            "tests/architecture/test_multi_vault_projection_inventory.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -289,7 +299,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/proxmox",
             "tests/governance",
             "tests/architecture/test_builderops_store_boundary.py",
+            "tests/architecture/test_builderops_package_independence.py",
+            "tests/ops/test_builderops_package_smoke.py",
             "tests/architecture/test_pr_hot_path_governance.py",
+            "tests/architecture/test_multi_vault_projection_inventory.py",
         ),
     ),
     (
@@ -402,6 +415,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/mcp/test_mimer_sidecar_semantic_parity.py",
             "tests/mcp/test_mimer_server_transport.py",
             "tests/mcp/test_mimer_server_security.py",
+            "tests/mcp/test_mimer_server_smoke.py",
             "tests/architecture/test_mimer_mcp_server_boundaries.py",
             "tests/architecture/test_mimer_mcp_sidecar_isolation.py",
             "tests/architecture/test_requirements_consistency.py",
@@ -411,6 +425,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/mcp/test_mimer_sidecar_semantic_parity.py",
             "tests/mcp/test_mimer_server_transport.py",
             "tests/mcp/test_mimer_server_security.py",
+            "tests/mcp/test_mimer_server_smoke.py",
             "tests/architecture/test_mimer_mcp_server_boundaries.py",
             "tests/architecture/test_mimer_mcp_sidecar_isolation.py",
             "tests/architecture/test_requirements_consistency.py",
@@ -890,6 +905,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "outbox_worker",
         (
             "app/workers/outbox_worker.py",
+            # The binding gate is the worker's admission/effect-window seam;
+            # keep its rebind regressions on the same worker-owned test lane.
+            "app/workers/outbox_binding_gate.py",
             # Opt-in /metrics endpoint for the outbox worker; its coverage
             # lives in tests/workers/test_worker_metrics.py.
             "app/workers/metrics.py",

@@ -4,7 +4,6 @@ from dataclasses import fields
 
 from app.archival.contracts import ArtifactClass, Liveness, LivenessState, OpaqueReference, PolicyProfile, TransitionStage
 from app.operations import InMemoryReceiptStore, OperationContext, OperationExecutionKernel, OperationRequest, OperationStatus, PolicyDecision
-from app.operations.execution_kernel import ArchivalOperationReceipt, OwnerExecutionResult
 from app.operations.archival_operations import ARCHIVE_OPERATION_ID, RESTORE_OPERATION_ID, ArchivalOperationServerConfig, build_archival_operation_handlers
 from app.heimdal.raw_read_gate import OperationTargetProof
 from app.heimdal.local_archive import ArchiveDegradedError
@@ -44,7 +43,8 @@ def test_archival_outcomes_preserve_liveness_generation_policy_and_receipts(monk
     outcome = _kernel(config).execute(_request(RESTORE_OPERATION_ID), _delegation(RESTORE_OPERATION_ID))
     assert outcome.status is OperationStatus.SUCCEEDED
     assert outcome.receipt is not None
-    assert outcome.receipt["archival"] == {"artifact_ref": "raw-1", "receipt_ref": "receipt-1", "generation": 7, "artifact_class": "source", "policy": "raw_evidence", "stage": "restored", "liveness": "active", "recovery_ref": None}
+    assert outcome.receipt.payload["effect_id"] == "receipt-1"
+    assert outcome.receipt.payload["effect_receipt_ref"] == "receipt-1"
 
 
 def test_archival_failures_are_typed_and_recoverable(monkeypatch) -> None:
@@ -56,12 +56,6 @@ def test_archival_failures_are_typed_and_recoverable(monkeypatch) -> None:
     assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="stale", version=6), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.CONFLICTED
     monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: (_ for _ in ()).throw(RuntimeError()))
     assert kernel.execute(_request(ARCHIVE_OPERATION_ID, request_id="unknown"), _delegation(ARCHIVE_OPERATION_ID)).status is OperationStatus.RECOVERY_REQUIRED
-
-
-def test_non_archival_handlers_cannot_persist_an_archival_projection() -> None:
-    request = _request("artifact.move", request_id="wrong")
-    kernel = OperationExecutionKernel(context_resolver=lambda _context: True, policy_evaluator=lambda _request, _delegation: PolicyDecision.allowed("policy-1"), handlers={"artifact.move": lambda _request: OwnerExecutionResult(OperationStatus.SUCCEEDED, archival_receipt=ArchivalOperationReceipt("artifact", "receipt", 0, ArtifactClass.SOURCE, PolicyProfile.RAW_EVIDENCE, TransitionStage.RETIRED, LivenessState.ACTIVE))}, receipt_store=InMemoryReceiptStore(), version_checker=lambda _request: True, token_validator=lambda _request, _decision: True)
-    assert kernel.execute(request, _delegation("artifact.move")).status is OperationStatus.NOT_ACKNOWLEDGED
 
 
 def test_operation_target_proof_has_only_safe_metadata() -> None:
@@ -96,4 +90,4 @@ def test_definite_pre_effect_retention_refusal_is_rejected(monkeypatch) -> None:
     outcome = _kernel(config).execute(_request(ARCHIVE_OPERATION_ID, request_id="retention"), _delegation(ARCHIVE_OPERATION_ID))
     assert outcome.status is OperationStatus.REJECTED
     assert outcome.warnings == ("record_outside_archive_window",)
-    assert outcome.receipt is not None and outcome.receipt["recovery"] is None
+    assert outcome.receipt is not None and outcome.receipt.payload["recovery"] is None

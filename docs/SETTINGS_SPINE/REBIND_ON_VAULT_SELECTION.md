@@ -43,6 +43,12 @@ Those substrate and registry responsibilities are owned by MVR-01:
 - SETTINGS-05A owns the schema-specific `minimum_settings_rebind_runtime=1` floor. It records that
   floor before the first `settings_rebind.v1` record becomes authoritative, migrates every producer,
   and adds host/process preflight so an older writer cannot read or rewrite the new record.
+- The enabling child #5365 hardens the existing compatibility bridge without activating scoped
+  picker behavior: API/CLI default SET and CLEAR, legacy choose/open, the separately running watcher,
+  and the scalar worker share one cross-process ingress gate and durable handoff revision. A prepared
+  revision blocks stale compatibility effects until admitted A work is released; no-target CLEAR
+  preserves `last_active_vault_ref`, and pre-commit faults cancel back to A while post-commit faults
+  recover forward to B. #3860 remains the final MVR-05B integration and closure authority.
 
 ## What This Task Does
 
@@ -201,6 +207,8 @@ deliveries precisely because production initiation stays fail-closed until C.
 - Verify the diff contains no activation of picker/API rebind initiation.
 
 ### SETTINGS-05B validation
+
+- Fail-closed acknowledgement regressions: `tests/ops/test_start_full_runtime_health.py::test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement`, `tests/watcher/test_registry.py`, and `tests/integration/test_watcher_cross_process_rebind.py::test_drained_rebind_requires_resumed_old_root_scan_before_completion` cover failed watcher stop, incomplete traversal, and retry after a resumed old-root scan. These are local contract proofs, not deployment or owner acceptance.
 
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py -k "dormant or reconciler"`
 - Verify the production picker/API remains capability-sealed.

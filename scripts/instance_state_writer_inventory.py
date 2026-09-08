@@ -25,6 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+# The deployment wrapper executes this file directly.  In that mode Python
+# puts scripts/ on sys.path, not the repository root, while established-ledger
+# enrichment imports the app package below.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 try:
     from scripts.compose_env import compose_env_value as _compose_env_value
 except ModuleNotFoundError:
@@ -685,7 +692,12 @@ def _docker_copy_file(container_id: str, path: str) -> bytes | None:
             return None
         raise InventoryError("docker legacy owner source enumeration failed")
     try:
-        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|*") as archive:
+        # ``docker cp ... -`` returns a complete tar stream in stdout.  The
+        # payload is already bounded by the subprocess capture, so use the
+        # seekable BytesIO reader after validating the archive members.  The
+        # streaming reader cannot extract a member after the member scan has
+        # advanced past it (notably on Docker Desktop/Colima tar output).
+        with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:*") as archive:
             members = [member for member in archive if member.isfile()]
             if len(members) != 1 or members[0].size > 4 * 1024 * 1024:
                 raise InventoryError("docker legacy owner source is invalid")
@@ -1047,7 +1059,9 @@ def _config_legacy_owner_sources(
     return owners, sorted(fingerprints)
 
 
-def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[str, frozenset[str]]:
+def _owner_identity_material(
+    root: Path, *, domain: str, source: str
+) -> tuple[str, frozenset[str], tuple[str, ...]]:
     resolved = root.expanduser().resolve(strict=False)
     # A stable digest of the resolved path, not the path itself: enough to
     # correlate the same offending root across two runs of the inventory
@@ -1067,9 +1081,10 @@ def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[s
         )
     primary = f"inode:{metadata.st_dev}:{metadata.st_ino}"
     ancestors: set[str] = set()
+    legacy_ancestors: list[str] = []
     for ancestor in resolved.parents:
         try:
-            os.stat(ancestor)
+            ancestor_metadata = os.stat(ancestor)
         except OSError as exc:
             raise InventoryError(
                 "legacy owner ancestor identity is unavailable: "
@@ -1078,32 +1093,43 @@ def _owner_identity_material(root: Path, *, domain: str, source: str) -> tuple[s
         # Root identity is inode-bound, but the parent chain is path-bound so
         # the authenticated lease remains portable across container mounts.
         ancestors.add(f"path:{ancestor}")
-    return primary, frozenset(ancestors)
+        # Keep the host namespace's v1 material only as migration evidence.
+        # It is private receipt data and is never used for current v2 identity.
+        legacy_ancestors.append(
+            f"inode:{ancestor_metadata.st_dev}:{ancestor_metadata.st_ino}"
+        )
+    return primary, frozenset(ancestors), tuple(legacy_ancestors)
 
 
 def _normalize_legacy_owners(
     records: list[LegacyOwnerRecord],
-) -> tuple[list[LegacyOwnerRecord], list[dict[str, str]]]:
-    normalized: dict[tuple[str, str], tuple[LegacyOwnerRecord, frozenset[str]]] = {}
+) -> tuple[list[LegacyOwnerRecord], list[dict[str, object]]]:
+    normalized: dict[
+        tuple[str, str], tuple[LegacyOwnerRecord, frozenset[str], tuple[str, ...]]
+    ] = {}
     for record in records:
         if record.channel_id not in DOMAINS:
             raise InventoryError(
                 f"legacy owner domain is invalid: domain={record.channel_id} source={record.source}"
             )
         root = Path(record.root).expanduser().resolve(strict=False)
-        primary, ancestors = _owner_identity_material(
+        primary, ancestors, legacy_ancestors = _owner_identity_material(
             root, domain=record.channel_id, source=record.source
         )
         normalized.setdefault(
             (record.channel_id, primary),
-            (LegacyOwnerRecord(record.channel_id, str(root), source=record.source), ancestors),
+            (
+                LegacyOwnerRecord(record.channel_id, str(root), source=record.source),
+                ancestors,
+                legacy_ancestors,
+            ),
         )
     values = [
-        (record, primary, ancestors)
-        for (_, primary), (record, ancestors) in normalized.items()
+        (record, primary, ancestors, legacy_ancestors)
+        for (_, primary), (record, ancestors, legacy_ancestors) in normalized.items()
     ]
-    for index, (left, left_primary, left_ancestors) in enumerate(values):
-        for right, right_primary, right_ancestors in values[index + 1 :]:
+    for index, (left, left_primary, left_ancestors, _) in enumerate(values):
+        for right, right_primary, right_ancestors, _ in values[index + 1 :]:
             if left.channel_id == right.channel_id:
                 continue
             if (
@@ -1129,13 +1155,125 @@ def _normalize_legacy_owners(
                 "root": record.root,
                 "identity": primary,
                 "ancestor_identities": sorted(ancestors),
+                "legacy_ancestor_identities": list(legacy_ancestors),
             }
-            for record, primary, ancestors in ordered
+            for record, primary, ancestors, legacy_ancestors in ordered
         ],
     )
 
 
-def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str, object]:
+def _enrich_established_owner_bindings(
+    owners: list[LegacyOwnerRecord],
+    owner_identities: list[dict[str, object]],
+    *,
+    ownership_root: Path | None = None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Attach authenticated binding IDs when the host ledger is established.
+
+    The first legacy bootstrap intentionally runs before a host ledger exists,
+    so it must remain able to emit path/identity-only candidates.  Once the
+    protected ledger exists, however, an established registration's remount
+    receipt must carry the exact binding ID already authenticated by that
+    ledger.  Resolve only through the ledger's HMAC identity seam; never mint
+    an ID from a path or copy one from caller-controlled environment.
+    """
+
+    owner_rows = [
+        {"channel_id": record.channel_id, "root": record.root}
+        for record in owners
+    ]
+    if ownership_root is None:
+        ownership_root_text = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", "").strip()
+        if not ownership_root_text:
+            return owner_rows, owner_identities
+        ownership_root = Path(ownership_root_text)
+    if not ownership_root.is_absolute():
+        raise InventoryError("established ownership ledger root must be absolute")
+    ownership_root = ownership_root.expanduser().resolve(strict=False)
+    ledger_path = ownership_root / "ownership-ledger.json"
+    key_path = ownership_root / "ownership-key.json"
+    if not ledger_path.exists() and not key_path.exists():
+        return owner_rows, owner_identities
+    if not ledger_path.is_file() or not key_path.is_file():
+        raise InventoryError("established ownership ledger artifacts are incomplete")
+
+    try:
+        from app.instance.ownership_ledger import LegacyOwner, LedgerError, OwnershipLedger
+
+        identity_by_owner = {
+            (str(item.get("channel_id") or ""), str(item.get("root") or "")): item
+            for item in owner_identities
+            if isinstance(item, dict)
+        }
+        candidates: list[LegacyOwner] = []
+        for record in owners:
+            identity = identity_by_owner.get((record.channel_id, record.root))
+            if identity is None:
+                raise InventoryError("legacy owner identity enrichment is incomplete")
+            candidates.append(
+                LegacyOwner(
+                    record.channel_id,
+                    "",
+                    Path(record.root),
+                    str(identity.get("identity") or "") or None,
+                    tuple(str(value) for value in identity.get("ancestor_identities", [])),
+                    tuple(
+                        str(value)
+                        for value in identity.get("legacy_ancestor_identities", [])
+                    ),
+                )
+            )
+        resolved = OwnershipLedger(ownership_root).resolve_live_owner_bindings(
+            candidates,
+            skip_unadopted=True,
+            # Fenced deployment convergence owns the v1 -> v2 transition;
+            # this producer must be able to read v1 long enough to emit the
+            # authenticated receipt that convergence consumes.
+            allow_legacy=True,
+        )
+    except InventoryError:
+        raise
+    except LedgerError as exc:
+        raise InventoryError(
+            "established ownership ledger could not authenticate owner bindings"
+        ) from exc
+
+    binding_by_owner = {
+        (owner.channel_id, str(owner.root.expanduser().resolve(strict=False))): owner.vault_binding_id
+        for owner in resolved
+        if owner.vault_binding_id
+    }
+    enriched_rows: list[dict[str, object]] = []
+    for row in owner_rows:
+        binding_id = binding_by_owner.get(
+            (
+                str(row["channel_id"]),
+                str(Path(str(row["root"])).expanduser().resolve(strict=False)),
+            )
+        )
+        if binding_id:
+            row = row | {"vault_binding_id": binding_id}
+        enriched_rows.append(row)
+
+    enriched_identities: list[dict[str, object]] = []
+    for identity in owner_identities:
+        key = (
+            str(identity.get("channel_id") or ""),
+            str(Path(str(identity.get("root") or "")).expanduser().resolve(strict=False)),
+        )
+        binding_id = binding_by_owner.get(key)
+        enriched_identities.append(
+            identity | ({"vault_binding_id": binding_id} if binding_id else {})
+        )
+    return enriched_rows, enriched_identities
+
+
+def _legacy_owner_snapshot(
+    repo_root: Path,
+    *,
+    active_channel: str,
+    ownership_root: Path | None = None,
+) -> dict[str, object]:
     if active_channel not in {"dev", "test", "prod"}:
         raise InventoryError("legacy owner active channel is invalid")
     docker_owners, docker_fingerprints = _docker_legacy_owner_sources()
@@ -1143,11 +1281,9 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
         repo_root, active_channel=active_channel
     )
     owners, owner_identities = _normalize_legacy_owners(docker_owners + config_owners)
-    # `source` is diagnostic-only context for InventoryError messages; keep the
-    # persisted receipt schema unchanged so existing consumers are unaffected.
-    owner_rows = [
-        {"channel_id": record.channel_id, "root": record.root} for record in owners
-    ]
+    owner_rows, owner_identities = _enrich_established_owner_bindings(
+        owners, owner_identities, ownership_root=ownership_root
+    )
     source_evidence = {
         "docker": docker_fingerprints,
         "config": config_fingerprints,
@@ -1168,13 +1304,23 @@ def _legacy_owner_snapshot(repo_root: Path, *, active_channel: str) -> dict[str,
     }
 
 
-def produce_legacy_owners(*, repo_root: Path, active_channel: str, output: Path) -> None:
-    first = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+def produce_legacy_owners(
+    *,
+    repo_root: Path,
+    active_channel: str,
+    output: Path,
+    ownership_root: Path | None = None,
+) -> None:
+    first = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
     _test_sync(
         "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_READY_FD",
         "INSTANCE_STATE_OWNER_INVENTORY_TEST_BETWEEN_CONTINUE_FD",
     )
-    second = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    second = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
     if first != second:
         raise InventoryError("legacy owner sources are incomplete or racing")
     _write_inventory(
@@ -1191,7 +1337,12 @@ def produce_legacy_owners(*, repo_root: Path, active_channel: str, output: Path)
 
 
 def validate_legacy_owners(
-    *, repo_root: Path, active_channel: str, inventory: Path, output: Path
+    *,
+    repo_root: Path,
+    active_channel: str,
+    inventory: Path,
+    output: Path,
+    ownership_root: Path | None = None,
 ) -> None:
     try:
         metadata = inventory.lstat()
@@ -1216,8 +1367,12 @@ def validate_legacy_owners(
         or not isinstance(baseline.get("owners"), list)
     ):
         raise InventoryError("legacy owner baseline inventory is invalid")
-    first = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
-    second = _legacy_owner_snapshot(repo_root, active_channel=active_channel)
+    first = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
+    second = _legacy_owner_snapshot(
+        repo_root, active_channel=active_channel, ownership_root=ownership_root
+    )
     if (
         first != second
         or baseline.get("source_digest") != first["source_digest"]
@@ -1561,11 +1716,13 @@ def main(argv: list[str] | None = None) -> int:
     produce.add_argument("--repo-root", type=Path, required=True)
     produce.add_argument("--active-channel", required=True)
     produce.add_argument("--output", type=Path, required=True)
+    produce.add_argument("--host-global-root", type=Path)
     validate = subparsers.add_parser("validate-legacy-owners")
     validate.add_argument("--repo-root", type=Path, required=True)
     validate.add_argument("--active-channel", required=True)
     validate.add_argument("--inventory", type=Path, required=True)
     validate.add_argument("--output", type=Path, required=True)
+    validate.add_argument("--host-global-root", type=Path)
     fence_plan = subparsers.add_parser("compose-fence-plan")
     fence_plan.add_argument("--compose-path", type=Path, required=True)
     fence_plan.add_argument("--receipt-output", type=Path)
@@ -1589,6 +1746,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_root=args.repo_root,
                 active_channel=args.active_channel,
                 output=args.output,
+                ownership_root=args.host_global_root,
             )
             return 0
         if args.command == "validate-legacy-owners":
@@ -1597,6 +1755,7 @@ def main(argv: list[str] | None = None) -> int:
                 active_channel=args.active_channel,
                 inventory=args.inventory,
                 output=args.output,
+                ownership_root=args.host_global_root,
             )
             return 0
         if args.command == "compose-fence-plan":

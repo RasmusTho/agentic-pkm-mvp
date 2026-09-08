@@ -12,10 +12,16 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypeGuard
 
+from app.builderops.execution_routing import capability_aliases_for_channel
+from app.components.settings.providers_loader import load_provider_census
 from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS
-from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    verification_run_id_for_canary,
+)
 from app.dispatcher.store import (
     SqliteStore,
     recognized_ambiguous_v1_closure_request,
@@ -68,6 +74,35 @@ _REQUEST_FIELDS = (
     *_REQUEST_FIELDS_V2[:6],
     "final_review_rounds",
     *_REQUEST_FIELDS_V2[6:],
+)
+_REQUEST_FIELDS_WITH_CANARY = (*_REQUEST_FIELDS, "canary_identity")
+_CANARY_IDENTITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "repository",
+        "issue_number",
+        "pr_number",
+        "head_sha",
+        "verification_run_id",
+        "route_lineage_id",
+        "route_decision_id",
+        "route_decision_hash",
+        "semantic_hashes",
+        "attempts",
+        "receipt_hash",
+    }
+)
+_CANARY_ATTEMPT_IDENTITY_FIELDS = frozenset(
+    {
+        "attempt_id",
+        "attempt_hash",
+        "attempt_number",
+        "repository",
+        "route_lineage_id",
+        "route_decision_id",
+        "route_decision_hash",
+        "semantic_hashes",
+    }
 )
 _NESTED_REQUEST_FIELDS = {
     "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
@@ -519,6 +554,8 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
         if version == LEGACY_CONTRACT_VERSION
         else _REQUEST_FIELDS_V2
         if version == PREVIOUS_CONTRACT_VERSION
+        else _REQUEST_FIELDS_WITH_CANARY
+        if version == CONTRACT_VERSION and "canary_identity" in request
         else _REQUEST_FIELDS
     )
     projected = _closed_projection(request, fields=fields, location="request")
@@ -536,6 +573,79 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
     if isinstance(closing_issues, list):
         projected["closing_issues"] = list(closing_issues)
     return projected
+
+
+def _validate_canary_identity(
+    request: Mapping[str, object],
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int,
+    head_sha: str,
+    idempotency_key: str,
+) -> None:
+    value = request.get("canary_identity")
+    if value is None:
+        return
+    if not isinstance(value, Mapping) or set(value) != _CANARY_IDENTITY_FIELDS:
+        raise ValueError("verification request canary identity is malformed")
+    if (
+        value.get("schema_version") != "builder_execution_routing_canary.v1"
+        or not isinstance(value.get("repository"), str)
+        or value.get("repository", "").casefold() != repository.casefold()
+        or not _positive_int(value.get("issue_number"))
+        or not _positive_int(value.get("pr_number"))
+        or value.get("issue_number") != issue_number
+        or value.get("pr_number") != pr_number
+        or value.get("head_sha") != head_sha
+        or value.get("verification_run_id")
+        != verification_run_id_for_canary(repository, pr_number, "verification")
+        or not isinstance(value.get("route_lineage_id"), str)
+        or not value.get("route_lineage_id")
+        or not isinstance(value.get("route_decision_id"), str)
+        or not value.get("route_decision_id")
+        or not isinstance(value.get("route_decision_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["route_decision_hash"]) is None
+        or not isinstance(value.get("receipt_hash"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["receipt_hash"]) is None
+    ):
+        raise ValueError("verification request canary identity is malformed")
+    semantic_hashes = value.get("semantic_hashes")
+    if (
+        not isinstance(semantic_hashes, Mapping)
+        or set(semantic_hashes)
+        != {"context_pack_hash", "authority_hash", "verification_profile_hash"}
+        or any(
+            not isinstance(semantic_hashes.get(key), str)
+            or re.fullmatch(r"[0-9a-f]{64}", semantic_hashes[key]) is None
+            for key in semantic_hashes
+        )
+    ):
+        raise ValueError("verification request canary identity is malformed")
+    attempts = value.get("attempts")
+    if not isinstance(attempts, list) or not 1 <= len(attempts) <= 2:
+        raise ValueError("verification request canary identity is malformed")
+    for expected_number, attempt in enumerate(attempts, start=1):
+        if (
+            not isinstance(attempt, Mapping)
+            or set(attempt) != _CANARY_ATTEMPT_IDENTITY_FIELDS
+        ):
+            raise ValueError("verification request canary identity is malformed")
+        attempt_hashes = attempt.get("semantic_hashes")
+        if (
+            not _positive_int(attempt.get("attempt_number"))
+            or attempt.get("attempt_number") != expected_number
+            or not isinstance(attempt.get("attempt_id"), str)
+            or not attempt.get("attempt_id")
+            or not isinstance(attempt.get("attempt_hash"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", attempt["attempt_hash"]) is None
+            or attempt.get("repository") != value.get("repository")
+            or attempt.get("route_lineage_id") != value.get("route_lineage_id")
+            or attempt.get("route_decision_id") != value.get("route_decision_id")
+            or attempt.get("route_decision_hash") != value.get("route_decision_hash")
+            or attempt_hashes != semantic_hashes
+        ):
+            raise ValueError("verification request canary identity is malformed")
 
 
 def _required_string(request: Mapping[str, object], field: str) -> str:
@@ -684,6 +794,14 @@ def _validate_request(
     expected = hashlib.sha256(_json(identity).encode()).hexdigest()
     if strings["idempotency_key"] != expected:
         raise ValueError("verification request idempotency key does not match identity")
+    _validate_canary_identity(
+        request,
+        repository=repository,
+        issue_number=linked_issue,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        idempotency_key=strings["idempotency_key"],
+    )
 
 
 def _validated_stored_request(value: str | None) -> dict[str, object]:
@@ -701,12 +819,22 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     request = _validated_stored_request(row["request_json"])
     idempotency_key = request["idempotency_key"]
     assert isinstance(idempotency_key, str)
+    expected_run_id = (
+        verification_run_id_for_canary(
+            str(request["repository"]),
+            _required_positive_int(request, "pr_number"),
+            _required_string(request, "stage"),
+        )
+        if request.get("contract_version") == CONTRACT_VERSION
+        and "canary_identity" in request
+        else f"vrun-{idempotency_key[:16]}"
+    )
     legacy_recovery_audit = _validated_legacy_recovery_audit(row)
     current_head_sha = row["current_head_sha"]
     verified_head_sha = row["verified_head_sha"]
     if (
         (
-            row["run_id"] != f"vrun-{idempotency_key[:16]}"
+            row["run_id"] != expected_run_id
             and legacy_recovery_audit is None
         )
         or row["idempotency_key"] != request["idempotency_key"]
@@ -1273,20 +1401,48 @@ def _run(row: sqlite3.Row) -> VerificationRun:
     )
 
 
-def _attempt(row: sqlite3.Row) -> dict[str, object]:
-    return _project_verification_receipt_authority({
+def _attempt(
+    row: sqlite3.Row,
+    capability_aliases: Mapping[str, str],
+) -> dict[str, object]:
+    kind = str(row["attempt_kind"])
+    if kind == REPAIR_INTENT_ATTEMPT_KIND and row["capability"] == "deterministic":
+        capability = "deterministic"
+    else:
+        capability = _canonicalize_persisted_capability(
+            row["capability"], capability_aliases
+        )
+    return _canonicalize_persisted_attempt_receipt(
+        _project_verification_receipt_authority({
         "attempt_id": row["attempt_id"],
-        "kind": row["attempt_kind"],
+        "kind": kind,
         "ordinal": row["ordinal"],
         "session_id": row["session_id"],
-        "capability": row["capability"],
+        "capability": capability,
         "reasoning_effort": row["reasoning_effort"],
         "outcome": row["outcome"],
         "finding_id": row["finding_id"],
         "failure_domain": row["failure_domain"],
         "mechanism_id": row["mechanism_id"],
         "receipt": _load(row["receipt_json"]),
-    })
+        }),
+        capability_aliases,
+    )
+
+
+def _canonicalize_persisted_capability(
+    value: object,
+    capability_aliases: Mapping[str, str],
+) -> str:
+    """Resolve current aliases while preserving the pre-alias safe placeholder."""
+
+    raw_capability = str(value)
+    if raw_capability == "unknown-capability":
+        return raw_capability
+    normalized = capability_aliases.get(raw_capability)
+    if normalized is None:
+        raise ValueError("persisted verification capability is not declared")
+    return normalized
 
 
 def _validated_attempt_identity(
@@ -1400,6 +1556,111 @@ def _persisted_attempt_receipt(
         if authority is not None
         else receipt
     )
+
+
+def _canonicalize_persisted_attempt_receipt(
+    attempt: dict[str, object],
+    capability_aliases: Mapping[str, str],
+) -> dict[str, object]:
+    """Rebind legacy nested receipt identities before replay comparison.
+
+    Older verification rows stored carrier model IDs inside ``review_events``
+    and computed their receipt authority digest over those IDs.  The durable
+    attempt identity is now provider-neutral, so readback must normalize the
+    nested events and recompute the derived authority digest before exact or
+    semantic replay is evaluated.
+    """
+
+    receipt = attempt.get("receipt")
+    if not isinstance(receipt, Mapping):
+        return attempt
+    canonical = dict(receipt)
+    authority = attempt.get(_VERIFICATION_RECEIPT_AUTHORITY_FIELD)
+    if authority is not None:
+        if not isinstance(authority, str):
+            raise ValueError("persisted verification receipt authority is malformed")
+        if authority != _progress_digest(canonical):
+            # During the short compatibility window before batch authority was
+            # projected over event metadata, the digest covered the receipt
+            # before producer-reserved batch fields were attached. Accept that
+            # authenticated legacy shape only when the reserved fields are
+            # present, then derive the current authority below.
+            without_batch_metadata = {
+                key: value
+                for key, value in canonical.items()
+                if key not in _EVENT_BATCH_RECEIPT_FIELDS
+            }
+            if (
+                not _EVENT_BATCH_RECEIPT_FIELDS.intersection(canonical)
+                or authority != _progress_digest(without_batch_metadata)
+            ):
+                raise ValueError("persisted verification receipt authority mismatch")
+    events = canonical.get("review_events")
+    if isinstance(events, list):
+        normalized_events: list[object] = []
+        for event in events:
+            if not isinstance(event, Mapping):
+                normalized_events.append(event)
+                continue
+            normalized = dict(event)
+            raw_capability = normalized.get("capability")
+            if raw_capability is not None:
+                normalized["capability"] = _canonicalize_persisted_capability(
+                    raw_capability, capability_aliases
+                )
+            normalized_events.append(normalized)
+        canonical["review_events"] = normalized_events
+    if isinstance(authority, str):
+        canonical.pop(_VERIFICATION_RECEIPT_AUTHORITY_FIELD, None)
+        normalized_authority = _progress_digest(canonical)
+        attempt[_VERIFICATION_RECEIPT_AUTHORITY_FIELD] = normalized_authority
+    attempt["receipt"] = canonical
+    return attempt
+
+
+def _canonicalize_receipt_for_replay(
+    receipt: Mapping[str, object] | None,
+    capability_aliases: Mapping[str, str],
+) -> Mapping[str, object] | None:
+    """Normalize a newly admitted receipt to the same form as readback."""
+
+    if receipt is None:
+        return None
+    projected = _project_verification_receipt_authority({"receipt": dict(receipt)})
+    canonical = _canonicalize_persisted_attempt_receipt(
+        projected,
+        capability_aliases,
+    )
+    return _persisted_attempt_receipt(canonical)
+
+
+def _find_semantic_replay(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    kind: str,
+    session_id: str,
+    capability: str,
+    reasoning_effort: str,
+    outcome: str,
+    expected_receipt: Mapping[str, object] | None,
+    expected_containment: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    """Bridge pre-census idempotency keys without admitting a second attempt."""
+
+    matches = [
+        row
+        for row in attempts
+        if row.get("kind") == kind
+        and row.get("session_id") == session_id
+        and row.get("capability") == capability
+        and row.get("reasoning_effort") == reasoning_effort
+        and row.get("outcome") == outcome
+        and _persisted_attempt_receipt(row) == expected_receipt
+        and row.get("containment") == expected_containment
+    ]
+    if len(matches) > 1:
+        raise ValueError("verification attempt replay is ambiguous")
+    return matches[0] if matches else None
 
 
 def _reject_reserved_event_batch_metadata(
@@ -1517,6 +1778,91 @@ def _is_exact_event_batch_replay(
     if seen_indexes != set(range(batch_size)):
         raise ValueError("verification event batch is partially persisted")
     return True
+
+
+def _event_batch_projection(row: Mapping[str, object]) -> tuple[object, ...]:
+    kind = row.get("kind")
+    if kind in REPAIR_ATTEMPT_KINDS:
+        kind = "repair"
+    return (
+        kind,
+        row.get("session_id"),
+        row.get("capability"),
+        row.get("reasoning_effort"),
+        row.get("outcome"),
+        row.get("finding_id"),
+        row.get("failure_domain"),
+        row.get("mechanism_id"),
+    )
+
+
+def _is_semantic_event_batch_replay(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    replay_events: Sequence[Mapping[str, object]],
+    batch_size: int,
+    attempt_id_for_batch: Callable[[str, int], str],
+) -> bool:
+    """Recognize a legacy batch after provider-alias canonicalization.
+
+    Pre-census batches hashed carrier model IDs into their batch identity.
+    Readback now exposes provider-neutral capabilities, so the newly computed
+    batch id can differ even though the durable event rows are identical.
+    Match the authenticated batch metadata and event projection while keeping
+    the original batch id and attempt ids authoritative.
+    """
+
+    if len(replay_events) != batch_size:
+        return False
+    expected = [_event_batch_projection(event) for event in replay_events]
+    grouped: dict[str, list[Mapping[str, object]]] = {}
+    for row in attempts:
+        receipt = row.get("receipt")
+        batch_id = (
+            receipt.get("event_batch_id")
+            if isinstance(receipt, Mapping)
+            else None
+        )
+        if isinstance(batch_id, str):
+            grouped.setdefault(batch_id, []).append(row)
+
+    for batch_id, rows in grouped.items():
+        indexed: dict[int, Mapping[str, object]] = {}
+        for row in rows:
+            receipt = row.get("receipt")
+            if not isinstance(receipt, Mapping):
+                continue
+            index = receipt.get("event_batch_index")
+            size = receipt.get("event_batch_size")
+            if (
+                isinstance(index, int)
+                and not isinstance(index, bool)
+                and isinstance(size, int)
+                and not isinstance(size, bool)
+                and size == batch_size
+            ):
+                indexed[index] = row
+        if not indexed:
+            continue
+        semantic_match = all(
+            index in indexed
+            and 0 <= index < batch_size
+            and _event_batch_projection(indexed[index]) == expected[index]
+            for index in indexed
+        )
+        if not semantic_match:
+            continue
+        if len(indexed) != batch_size or set(indexed) != set(range(batch_size)):
+            raise ValueError("verification event batch is partially persisted")
+        if not _is_exact_event_batch_replay(
+            attempts,
+            batch_id=batch_id,
+            batch_size=batch_size,
+            attempt_id_for=lambda index: attempt_id_for_batch(batch_id, index),
+        ):
+            raise ValueError("verification event batch is partially persisted")
+        return True
+    return False
 
 
 def _progress_digest(value: object) -> str:
@@ -2105,10 +2451,25 @@ class VerificationDispatchLedger:
 
     def __init__(self, store: SqliteStore) -> None:
         self.store = store
+        census_path = Path(__file__).resolve().parents[2] / "docs/settings/models/providers.yaml"
+        self.capability_aliases: Mapping[str, str] = capability_aliases_for_channel(
+            load_provider_census(census_path), channel="dev"
+        )
         self._verification_receipt_admissions = (
             _VerificationReceiptAdmissionRegistry()
         )
         self.store.initialize()
+
+    def _canonical_capability(self, kind: str, capability: str) -> str:
+        # Progress intents are deterministic coordinator observations, not
+        # model executions. All model-backed attempt kinds must resolve through
+        # the declared provider-neutral capability aliases before persistence.
+        if kind == REPAIR_INTENT_ATTEMPT_KIND and capability == "deterministic":
+            return capability
+        normalized = self.capability_aliases.get(capability)
+        if normalized is None:
+            raise ValueError("verification capability is not declared")
+        return normalized
 
     def _admit_validated_verification_receipt(
         self,
@@ -2189,7 +2550,16 @@ class VerificationDispatchLedger:
         request = _canonical_request_projection(request)
         _validate_request(request)
         now = _now()
-        run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
+        run_id = (
+            verification_run_id_for_canary(
+                str(request["repository"]),
+                _required_positive_int(request, "pr_number"),
+                _required_string(request, "stage"),
+            )
+            if request.get("contract_version") == CONTRACT_VERSION
+            and "canary_identity" in request
+            else f"vrun-{str(request['idempotency_key'])[:16]}"
+        )
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
             inert_audits = list(conn.execute(
@@ -2988,6 +3358,7 @@ class VerificationDispatchLedger:
         }
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
+        capability = self._canonical_capability(kind, capability)
         _reject_reserved_event_batch_metadata(receipt)
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
         attempt_id = (
@@ -3031,13 +3402,18 @@ class VerificationDispatchLedger:
                 receipt=receipt,
                 producer_authorized=producer_authorized,
             )
+            persisted_receipt = _canonicalize_receipt_for_replay(
+                persisted_receipt,
+                self.capability_aliases,
+            )
+            attempts = self._attempts(conn, run_id)
             if idempotency_key:
                 existing = conn.execute(
                     "SELECT * FROM verification_attempts WHERE attempt_id=?",
                     (attempt_id,),
                 ).fetchone()
                 if existing is not None:
-                    row = _attempt(existing)
+                    row = _attempt(existing, self.capability_aliases)
                     if (
                         row["kind"] != kind
                         or row["session_id"] != session_id
@@ -3061,7 +3437,30 @@ class VerificationDispatchLedger:
                     if kind == "verification":
                         self._verification_receipt_admissions.retire(receipt)
                     return replay_ordinal
-            attempts = self._attempts(conn, run_id)
+                replay = _find_semantic_replay(
+                    attempts,
+                    kind=kind,
+                    session_id=session_id,
+                    capability=capability,
+                    reasoning_effort=reasoning_effort,
+                    outcome=outcome,
+                    expected_receipt=(
+                        dict(persisted_receipt)
+                        if persisted_receipt is not None
+                        else None
+                    ),
+                    expected_containment=None,
+                )
+                if replay is not None:
+                    replay_ordinal = replay.get("ordinal")
+                    if not isinstance(replay_ordinal, int) or isinstance(
+                        replay_ordinal, bool
+                    ):
+                        raise ValueError("verification attempt replay ordinal is malformed")
+                    conn.commit()
+                    if kind == "verification":
+                        self._verification_receipt_admissions.retire(receipt)
+                    return replay_ordinal
             _validate_review_session_reuse(
                 attempts,
                 kind=kind,
@@ -3114,6 +3513,7 @@ class VerificationDispatchLedger:
             Sequence[Mapping[str, object]],
         ],
         *,
+        replay_events: Sequence[Mapping[str, object]] | None = None,
         holder: str,
         lease_id: str,
     ) -> int:
@@ -3155,12 +3555,25 @@ class VerificationDispatchLedger:
                 "WHERE run_id=? ORDER BY created_at, attempt_id",
                 (run_id,),
             ).fetchall()
-            attempts = [_attempt(row) for row in rows]
+            attempts = [_attempt(row, self.capability_aliases) for row in rows]
             if _is_exact_event_batch_replay(
                 attempts,
                 batch_id=batch_id,
                 batch_size=batch_size,
                 attempt_id_for=attempt_id,
+            ):
+                conn.commit()
+                return 0
+            if replay_events is not None and _is_semantic_event_batch_replay(
+                attempts,
+                replay_events=replay_events,
+                batch_size=batch_size,
+                attempt_id_for_batch=lambda legacy_batch_id, index: (
+                    "vattempt-"
+                    + hashlib.sha256(
+                        f"{run_id}:{legacy_batch_id}:{index}".encode()
+                    ).hexdigest()[:16]
+                ),
             ):
                 conn.commit()
                 return 0
@@ -3180,6 +3593,9 @@ class VerificationDispatchLedger:
                 _reject_reserved_event_batch_metadata(item_receipt)
                 item_kind = str(item["kind"])
                 item_session_id = str(item["session_id"])
+                item_capability = self._canonical_capability(
+                    item_kind, str(item["capability"])
+                )
                 producer_authorized = False
                 if item_kind == "verification":
                     producer_authorized = (
@@ -3225,6 +3641,7 @@ class VerificationDispatchLedger:
                 projected = dict(item)
                 projected.update(
                     {
+                        "capability": item_capability,
                         "finding_id": finding_id,
                         "failure_domain": failure_domain,
                         "mechanism_id": mechanism_id,
@@ -3245,6 +3662,10 @@ class VerificationDispatchLedger:
                         "event_batch_index": index,
                         "event_batch_size": batch_size,
                     }
+                )
+                canonical_receipt = _canonicalize_receipt_for_replay(
+                    receipt,
+                    self.capability_aliases,
                 )
                 conn.execute(
                     """
@@ -3268,7 +3689,9 @@ class VerificationDispatchLedger:
                         item["finding_id"],
                         item["failure_domain"],
                         item["mechanism_id"],
-                        _json(receipt),
+                        _json(dict(canonical_receipt))
+                        if canonical_receipt is not None
+                        else None,
                         (batch_started + timedelta(microseconds=index)).isoformat(
                             timespec="microseconds"
                         ),
@@ -3286,7 +3709,7 @@ class VerificationDispatchLedger:
             "SELECT * FROM verification_attempts WHERE run_id=? ORDER BY created_at, attempt_id",
             (run_id,),
         ).fetchall()
-        return [_attempt(row) for row in rows]
+        return [_attempt(row, self.capability_aliases) for row in rows]
 
     def attempts(self, run_id: str) -> builtins.list[dict[str, object]]:
         with self.store._connect() as conn:

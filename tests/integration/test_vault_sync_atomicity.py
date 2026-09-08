@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,14 @@ from psycopg.conninfo import make_conninfo
 
 from app.db.dsn import resolve_dsn
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+
+
+def test_atomicity_fixture_uses_owned_store_bootstrap() -> None:
+    """The isolated fixture delegates store schema ownership to ``app.stores.pg``."""
+    fixture_source = inspect.getsource(_configure_isolated_pg_test)
+
+    assert "pg_store._ensure_tables()" in fixture_source
+    assert "CREATE TABLE store_objects" not in fixture_source
 
 
 def _pg_base_dsn() -> str:

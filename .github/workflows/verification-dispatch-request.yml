@@ -190,6 +190,10 @@ jobs:
         id: build
         if: steps.snapshots.outputs.full_path == 'true'
         run: |
+          # This workflow produces the ordinary verification request.  A
+          # canary request is owner-controlled local evidence and must be
+          # explicitly bound by the request builder/CLI; this artifact-only
+          # workflow must never invent or infer canary identity from CI.
           test -f verification-dispatch/pr.json || printf '{}\n' \
             > verification-dispatch/pr.json
           test -f verification-dispatch/issue.json || printf '{}\n' \

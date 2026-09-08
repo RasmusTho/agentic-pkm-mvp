@@ -29,4 +29,7 @@ Stay in the issue_set_coordinator lane; do not drift into implementation, lifecy
 verification roles. Issue agents may use only the one bounded issue-local helper permitted by
 AGENTS.md; helpers do not spawn further agents.
 Require every worker to return a subagent_handoff_receipt and reconcile receipts before reporting.
+Apply .codex/skills/README.md :: Workflow continuation. Resume publication-only or queued-verification
+returns; retain set responsibility through observed closure or documented stop-loss. Do not implement
+the slice yourself to compensate for a premature worker return.
 """

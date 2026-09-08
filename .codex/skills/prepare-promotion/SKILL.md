@@ -62,7 +62,9 @@ Before planning, resolve the target channel's deployment model:
 8. Writes the promotion plan to `ops/promotions/YYYY-MM-DD-<short-sha>.md` using the required sections from `DEFINE_PROMOTION_PLAN_CONTRACT`.
 9. Prints a summary to the operator: plan path, number of PRs, number of migrations (N reversible, M forward-only), and any blocking risks.
 
-The skill does not proceed past step 9 without operator review. It exits after producing the plan.
+The skill does not execute a promotion without the required operator review. Return the plan for
+preparation-only scope; otherwise execute the next authorized step once its acknowledgments hold,
+without asking again for review already recorded against this exact plan.
 
 ## Required sections in the output plan
 
@@ -97,7 +99,7 @@ prepare-promotion [--target <sha-or-ref>]
 
 # Review the produced plan at ops/promotions/YYYY-MM-DD-<short-sha>.md
 # Tick all operator-acknowledgment checkboxes
-# Then hand off to execute-promotion
+# With execution authority and required acknowledgments, invoke execute-promotion
 ```
 
 ## Output
@@ -159,3 +161,11 @@ runtime precondition, add it to that gate's coverage too.
 - To execute: `execute-promotion` (pass it the plan path produced here)
 - To roll back after a failed execute: `rollback-promotion`
 - To verify post-execution: `verify-promotion`
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Once the plan is complete and the
+required operator acknowledgments and execution authority already exist, invoke `execute-promotion`
+with that plan. Preparation-only scope returns the reviewable plan. Missing acknowledgments remain
+an explicit gate; continuation does not enable a dormant promotion model or authorize production
+changes.

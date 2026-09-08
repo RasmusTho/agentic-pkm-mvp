@@ -6,13 +6,15 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import re
-from typing import Any
+from typing import Any, Callable
 
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.builderops.execution_routing_receipts import (
     CanaryReceiptEvidenceError,
     ReceiptStore,
+    load_canary_receipt_for_verification_request,
     record_acceptance_observation,
+    validate_canary_receipt_request_binding,
 )
 from app.dispatcher.verification_consumer import VerificationConsumer
 from app.dispatcher.verification_dispatch import (
@@ -205,6 +207,7 @@ class HostFencedVerificationCycle:
         holder: str,
         containment_receipt_required: bool = False,
         canary_receipt_store: ReceiptStore | None = None,
+        canary_receipt_store_factory: Callable[[], ReceiptStore] | None = None,
     ) -> None:
         if consumer.ledger is not ledger or not consumer.host_fenced_merge:
             raise ValueError(
@@ -227,6 +230,7 @@ class HostFencedVerificationCycle:
         self.holder = holder
         self.containment_receipt_required = containment_receipt_required
         self.canary_receipt_store = canary_receipt_store
+        self.canary_receipt_store_factory = canary_receipt_store_factory
 
     def run_dry_cycle(
         self,
@@ -234,9 +238,20 @@ class HostFencedVerificationCycle:
         *,
         canary_receipt: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
+        canary_receipt = self._resolve_canary_receipt(request, canary_receipt)
         run = self.consumer.consume(request)
-        self._observe_canary(run, canary_receipt)
-        return self._finish_ready_dry_cycle(run.run_id)
+        receipt = self._finish_ready_dry_cycle(run.run_id)
+        if (
+            canary_receipt is not None
+            and receipt.get("terminal_outcome") == "dry_run_no_merge"
+        ):
+            completed_run = self.ledger.get(run.run_id)
+            if completed_run is None:
+                raise CanaryReceiptEvidenceError(
+                    "verification run disappeared before canary acceptance"
+                )
+            self._observe_canary(completed_run, canary_receipt)
+        return receipt
 
     def recover_dry_cycle(
         self,
@@ -247,17 +262,20 @@ class HostFencedVerificationCycle:
         run = self.ledger.get(run_id)
         if run is None:
             raise ValueError("verification cycle run is unavailable")
+        canary_receipt = self._resolve_canary_receipt(
+            run.request, canary_receipt
+        )
         if run.status == "completed":
-            self._observe_canary(run, canary_receipt)
             receipt = run.terminal_receipt
-            return self._validated_receipt(
+            validated = self._validated_receipt(
                 run, receipt, allowed_outcomes={"dry_run_no_merge"}
             )
-        if run.status == "backoff":
             self._observe_canary(run, canary_receipt)
-            receipt = run.terminal_receipt
+            return validated
+        if run.status == "backoff":
+            retry_receipt = run.terminal_receipt
             return self._validated_receipt(
-                run, receipt, allowed_outcomes={"retry_after_readback"}
+                run, retry_receipt, allowed_outcomes={"retry_after_readback"}
             )
         if self._lease_is_live(run):
             raise VerificationSubscriptionBusy(
@@ -266,7 +284,6 @@ class HostFencedVerificationCycle:
         pending = self.ledger.pending_effect_binding(run_id)
         merge_ready = self.ledger.merge_ready_receipt(run_id)
         if merge_ready is not None:
-            self._observe_canary(run, canary_receipt)
             if (
                 self.containment_receipt_required
                 and "containment" not in merge_ready
@@ -294,11 +311,56 @@ class HostFencedVerificationCycle:
             merge_receipt = self.merge_executor.recover(
                 run, dry_run=True
             )
-            return self._settle(run_id, merge_receipt)
+            settled_receipt = self._settle(run_id, merge_receipt)
+            if (
+                canary_receipt is not None
+                and settled_receipt.get("terminal_outcome") == "dry_run_no_merge"
+            ):
+                completed_run = self.ledger.get(run_id)
+                if completed_run is None:
+                    raise CanaryReceiptEvidenceError(
+                        "verification run disappeared before canary acceptance"
+                    )
+                self._observe_canary(completed_run, canary_receipt)
+            return settled_receipt
         if merge_ready is None:
             run = self.consumer.recover(run_id)
-            self._observe_canary(run, canary_receipt)
-        return self._finish_ready_dry_cycle(run.run_id)
+        final_receipt = self._finish_ready_dry_cycle(run.run_id)
+        if (
+            canary_receipt is not None
+            and final_receipt.get("terminal_outcome") == "dry_run_no_merge"
+        ):
+            completed_run = self.ledger.get(run.run_id)
+            if completed_run is None:
+                raise CanaryReceiptEvidenceError(
+                    "verification run disappeared before canary acceptance"
+                )
+            self._observe_canary(completed_run, canary_receipt)
+        return final_receipt
+
+    def _resolve_canary_receipt(
+        self,
+        request: Mapping[str, object],
+        canary_receipt: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        """Use an explicit receipt or rebuild it from durable request lineage."""
+
+        if canary_receipt is not None:
+            validate_canary_receipt_request_binding(canary_receipt, request)
+            return canary_receipt
+        if request.get("canary_identity") is None:
+            return None
+        if self.canary_receipt_store is None:
+            if self.canary_receipt_store_factory is None:
+                raise CanaryReceiptEvidenceError(
+                    "canary acceptance requires the BuilderOps receipt store"
+                )
+            self.canary_receipt_store = self.canary_receipt_store_factory()
+        resolved = load_canary_receipt_for_verification_request(
+            self.canary_receipt_store, request
+        )
+        validate_canary_receipt_request_binding(resolved, request)
+        return resolved
 
     def _observe_canary(
         self,
@@ -310,9 +372,11 @@ class HostFencedVerificationCycle:
         if canary_receipt is None:
             return
         if self.canary_receipt_store is None:
-            raise CanaryReceiptEvidenceError(
-                "canary acceptance requires the BuilderOps receipt store"
-            )
+            if self.canary_receipt_store_factory is None:
+                raise CanaryReceiptEvidenceError(
+                    "canary acceptance requires the BuilderOps receipt store"
+                )
+            self.canary_receipt_store = self.canary_receipt_store_factory()
         linked_issue = run.request.get("linked_issue")
         if (
             not isinstance(linked_issue, int)
@@ -355,6 +419,7 @@ class HostFencedVerificationCycle:
             head_sha=run.current_head_sha,
             governing_issue=linked_issue,
             run_id=run.run_id,
+            verification_request=run.request,
             not_accepted_reason=reason,
         )
 

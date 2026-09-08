@@ -59,7 +59,7 @@ unless a more specific workflow signal type is clearly better.
 Suggested command shape (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`):
 
 ```bash
-python -m app.cli builderops create-learning-signal \
+python -m app.builderops builderops create-learning-signal \
   --summary "<short divergence summary>" \
   --content "Issue/context: #<issue> (<slice title>)
 Source: <skill name or human>
@@ -75,6 +75,11 @@ Upstream artifact: <path or section>" \
 
 Use JSON `--source-ref` values when a source needs a `locator`, URL, or non-file authority surface.
 Source refs are provenance only; they do not transfer authority.
+
+Use the dedicated `app.builderops` entrypoint above so unrelated Product CLI dependencies do not
+block capture. Preserve the configured store binding; never substitute an empty temporary store to
+make a command succeed. If a write times out or returns an ambiguous result, read back the same
+idempotency key before retrying or creating a fallback.
 
 If the BuilderOps write is genuinely unavailable, append an explicit compatibility fallback entry to
 `docs/learning-log.md` in this shape:
@@ -100,3 +105,10 @@ Invoke before continuing only when the divergence needs immediate upstream repai
 1. BuilderOps `LearningSignal` id and JSON summary, or the explicit compatibility fallback entry
 2. Upstream artifact named
 3. Continue with interrupted task
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After capturing the signal, resume the
+interrupted workflow. If immediate upstream repair is required and authorized, invoke its owning
+docs/governance or issue workflow, then resume. Capturing a signal does not require starting a
+retrospective or parking active delivery.

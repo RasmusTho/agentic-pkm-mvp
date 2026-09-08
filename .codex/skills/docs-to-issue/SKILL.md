@@ -157,4 +157,11 @@ For each created Issue, include:
 
 If no Issue should be created, say so explicitly and explain why.
 
-If the item should become a parent feature issue plus child slices, say that explicitly and hand off to `feature-breakdown` instead of creating a flat backlog shape. Parent feature issues are validation hubs, not direct pickup issues.
+If the item should become a parent feature issue plus child slices, invoke `feature-breakdown` instead of creating a flat backlog shape. Parent feature issues are validation hubs, not direct pickup issues.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Invoke `feature-breakdown` for a
+parent/child shape. When delivery is in scope, continue from ready issues through `issue-to-code` or
+`deliver-issue-set`; repair readiness through `issue-maintenance-change-control`. Backlog-only scope
+returns the verified issue receipts.

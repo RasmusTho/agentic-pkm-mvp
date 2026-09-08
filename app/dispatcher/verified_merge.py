@@ -36,6 +36,15 @@ VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 VERIFIED_MERGE_READINESS_CONTRACT = "verified_issue_set_merge_readiness.v1"
 ISSUE_FREE_REVIEWED_LANE_RECEIPT_CONTRACT = "issue_free_reviewed_lane_receipt.v1"
 ISSUE_FREE_REVIEWED_LANE_RECEIPT_MARKER = "issue-free reviewed lane receipt:"
+VERIFIED_MERGE_PROJECTION_CONVERGENCE_CONTRACT = (
+    "verified-merge-closing-projection-convergence.v1"
+)
+VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER = (
+    "verified merge closing projection convergence:"
+)
+VERIFIED_MERGE_PROJECTION_RESTORATION_CONTRACT = (
+    "verified-merge-closing-projection-restoration.v1"
+)
 FIXED_VERIFIED_MERGE_COMMIT_MESSAGE = (
     "Exact-head delivery; issue closure is performed explicitly from the "
     "authenticated issue-set receipt."
@@ -103,13 +112,91 @@ _PHASE_RECEIPT_FIELDS: Final = frozenset(
         "body_sha256",
         "closed_issues",
         "contract",
+        "final_projection_observation_sha256",
         "head_sha",
         "merge_commit_sha",
         "phase",
         "pr_number",
+        "projection_convergence_sha256",
         "reopened_unauthorized_issues",
         "repository",
         "run_id",
+    }
+)
+_LEGACY_PHASE_RECEIPT_FIELDS: Final = _PHASE_RECEIPT_FIELDS - {
+    "final_projection_observation_sha256",
+    "projection_convergence_sha256",
+}
+_PROJECTION_CONVERGENCE_RECEIPT_FIELDS: Final = frozenset(
+    {
+        "authority_sha256",
+        "base_ref",
+        "body_edit",
+        "contract",
+        "default_branch_sha",
+        "final_projection_observation",
+        "head_sha",
+        "head_ref",
+        "neutralized_body_sha256",
+        "observation_policy",
+        "observations",
+        "pr_contract",
+        "pr_number",
+        "pull_request_node_id",
+        "receipt_sha256",
+        "repository",
+        "run_id",
+        "title",
+    }
+)
+_PROJECTION_PR_CONTRACT_FIELDS: Final = frozenset(
+    {
+        "authority_sha256",
+        "base_ref",
+        "body_edit",
+        "check_run_id",
+        "check_suite_id",
+        "completed_at",
+        "conclusion",
+        "created_at",
+        "default_branch",
+        "default_branch_sha",
+        "event",
+        "head_ref",
+        "head_sha",
+        "name",
+        "neutralized_body_sha256",
+        "pr_number",
+        "pull_request_node_id",
+        "repository",
+        "started_at",
+        "status",
+        "title",
+        "workflow_run_id",
+    }
+)
+_PROJECTION_OBSERVATION_FIELDS: Final = frozenset(
+    {"errors", "observed_at", "pull_request", "rate_limit", "repository"}
+)
+_PROJECTION_REPOSITORY_FIELDS: Final = frozenset(
+    {"default_branch", "default_branch_sha", "name_with_owner"}
+)
+_PROJECTION_PULL_REQUEST_FIELDS: Final = frozenset(
+    {
+        "base_ref",
+        "body",
+        "body_edits_page_info",
+        "closing_issues",
+        "closing_issues_page_info",
+        "draft",
+        "head_ref",
+        "head_sha",
+        "last_edited_at",
+        "latest_body_edit",
+        "node_id",
+        "number",
+        "state",
+        "title",
     }
 )
 
@@ -274,15 +361,37 @@ def _legacy_terminal_lf_provenance(comment: Mapping[str, object]) -> bool:
 
 
 def _canonical_digest(value: Mapping[str, object]) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _json_fence(payload: str) -> str:
+    """Return a Markdown fence that cannot occur in the JSON payload.
+
+    The durable projection receipt embeds the neutralized PR body. That body
+    may itself contain Markdown fences, so a fixed triple-backtick wrapper
+    would make a valid receipt unparsable during crash recovery.
+    """
+
+    longest_payload_run = max(
+        (len(match.group()) for match in re.finditer(r"`+", payload)),
+        default=0,
+    )
+    return "`" * max(3, longest_payload_run + 1)
 
 
 def _comment_receipt_entries(
     comments: Sequence[Mapping[str, object]], marker: str
 ) -> list[tuple[Mapping[str, object], Mapping[str, object]]]:
     pattern = re.compile(
-        re.escape(marker) + r"\s*```json\s*([\s\S]*?)\s*```",
+        re.escape(marker)
+        + r"[\t ]*\r?\n(?P<fence>`{3,})json[\t ]*\r?\n"
+        + r"(?P<payload>[\s\S]*?)\r?\n(?P=fence)(?!`)",
         re.MULTILINE,
     )
     receipts: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
@@ -292,11 +401,11 @@ def _comment_receipt_entries(
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        matches = pattern.findall(body)
+        matches = list(pattern.finditer(body))
         if len(matches) != 1:
             continue
         try:
-            value = json.loads(matches[0])
+            value = json.loads(matches[0].group("payload"))
         except json.JSONDecodeError:
             continue
         if isinstance(value, Mapping):
@@ -308,6 +417,26 @@ def _comment_receipts(
     comments: Sequence[Mapping[str, object]], marker: str
 ) -> list[Mapping[str, object]]:
     return [receipt for receipt, _ in _comment_receipt_entries(comments, marker)]
+
+
+def _trusted_structural_marker_occurrences(
+    comments: Sequence[Mapping[str, object]], marker: str
+) -> int:
+    """Count trusted marker headings outside fenced receipt payloads."""
+
+    fenced_block = re.compile(r"```[^\r\n]*\r?\n[\s\S]*?```")
+    heading = re.compile(
+        rf"^{re.escape(marker)}[\t ]*(?:\r?\n|$)", re.MULTILINE
+    )
+    total = 0
+    for comment in comments:
+        if comment.get("author_association") not in _TRUSTED_AUTHOR_ASSOCIATIONS:
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        total += len(heading.findall(fenced_block.sub("", body)))
+    return total
 
 
 def _comment_authenticates_legacy_authority(
@@ -714,12 +843,96 @@ def _resolve_same_head_stranded_transport(
     }
 
 
+def _resolve_repository_case_restoration(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    expected_run_id: str | None,
+    expected_repair_budget: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Prove only a restore target for one otherwise exact case-mistyped receipt.
+
+    The supplied repository must agree byte-for-byte with canonical live REST
+    base-repository and PR identities. Never pass a corrected receipt to a merge
+    consumer: validation below uses the original receipt's spelling solely to
+    authenticate its remaining fields for this read-only recovery result.
+    """
+    base = pr.get("base")
+    live_repository = base.get("repo") if isinstance(base, Mapping) else None
+    title = pr.get("title")
+    if (
+        not isinstance(live_repository, Mapping)
+        or live_repository.get("full_name") != repository
+        or pr.get("html_url") != f"https://github.com/{repository}/pull/{pr.get('number')}"
+        or pr.get("merged") is not False
+        or "merged_at" not in pr
+        or pr.get("draft") is not False
+        or not isinstance(title, str)
+        or has_closing_issue_attempt(title)
+        or not expected_run_id
+        or expected_repair_budget is None
+    ):
+        return None
+    # Inspect raw evidence before parsing. A malformed/duplicate/untrusted
+    # authority or phase must not disappear through the ordinary parser and
+    # thereby permit restoration to race an unproven merge attempt.
+    authority_comments = []
+    for comment in comments:
+        text = comment.get("body")
+        if not isinstance(text, str):
+            return None
+        if VERIFIED_MERGE_PHASE_MARKER in text:
+            return None
+        if VERIFIED_MERGE_AUTHORITY_MARKER in text:
+            authority_comments.append(comment)
+    if len(authority_comments) != 1:
+        return None
+    entries = _comment_receipt_entries(authority_comments, VERIFIED_MERGE_AUTHORITY_MARKER)
+    if len(entries) != 1:
+        return None
+    receipt, comment = entries[0]
+    stored_repository = receipt.get("repository")
+    # Require the existing producer's complete canonical comment. This rejects
+    # extra blocks/markers, duplicate JSON keys, and hidden conflicting payloads.
+    receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    if (
+        comment.get("body") != f"{VERIFIED_MERGE_AUTHORITY_MARKER}\n```json\n{receipt_json}\n```"
+        or not isinstance(stored_repository, str)
+        or not stored_repository.isascii()
+        or not repository.isascii()
+        or stored_repository == repository
+        or stored_repository.lower() != repository.lower()
+        or receipt.get("repair_budget") != expected_repair_budget
+        or not _valid_authority_receipt(
+            receipt, pr=pr, repository=stored_repository,
+            expected_run_id=expected_run_id,
+        )
+    ):
+        return None
+    return {
+        "closing_issues": receipt["closing_issues"],
+        "contract": NEUTRALIZED_BODY_RESTORATION_CONTRACT,
+        "governing_issue": receipt["governing_issue"],
+        "head_sha": receipt["head_sha"],
+        "matching_attempts": 1,
+        "neutralized_body_sha256": receipt["neutralized_body_sha256"],
+        "neutralized_head_sha": receipt["head_sha"],
+        "pr_number": receipt["pr_number"],
+        "reason": "neutralized-repository-case-mismatch",
+        "repository": repository,
+        "restore_body_sha256": receipt["body_sha256"],
+        "run_id": receipt["run_id"],
+    }
+
+
 def resolve_neutralized_body_restoration(
     comments: Sequence[Mapping[str, object]],
     *,
     pr: Mapping[str, object],
     repository: str,
     expected_run_id: str | None = None,
+    expected_repair_budget: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     """Surface a neutralized PR body stranded by its head or GitHub transport.
 
@@ -780,6 +993,13 @@ def resolve_neutralized_body_restoration(
     )
     if stranded_transport is not None:
         return stranded_transport
+    case_restoration = _resolve_repository_case_restoration(
+        comments, pr=pr, repository=repository,
+        expected_run_id=expected_run_id,
+        expected_repair_budget=expected_repair_budget,
+    )
+    if case_restoration is not None:
+        return case_restoration
     # Any trusted authority evidence naming the live head means a merge for this
     # attempt may still be in flight, so an older head must never name a restore
     # target that could race it. Scan the raw comment text rather than only
@@ -857,6 +1077,7 @@ def classify_neutralized_body_state(
     pr: Mapping[str, object],
     repository: str,
     expected_run_id: str | None = None,
+    expected_repair_budget: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Separate a positively safe body state from an indeterminate one.
 
@@ -890,6 +1111,7 @@ def classify_neutralized_body_state(
         pr=pr,
         repository=repository,
         expected_run_id=expected_run_id,
+        expected_repair_budget=expected_repair_budget,
     )
     merge_state = _resolve_merge_state(pr)
     if restoration is not None:
@@ -1016,12 +1238,807 @@ def resolve_post_merge_issue_authority(
     return resolve_issue_authority(pr.get("body"))
 
 
+def resume_verified_merge_projection_convergence(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    pr: Mapping[str, object],
+    repository: str,
+    expected_run_id: str | None = None,
+    expected_repair_budget: Mapping[str, object] | None = None,
+) -> dict[str, object] | None:
+    """Reuse one immutable same-head authority before any phase exists.
+
+    The result deliberately has no authority-comment body.  Recovery callers
+    must continue from the already durable receipt instead of posting another
+    same-head authority record.
+    """
+
+    trusted_authority_comments = [
+        comment
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_AUTHORITY_MARKER in cast(str, comment["body"])
+    ]
+    trusted_phase_comments = [
+        comment
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_PHASE_MARKER in cast(str, comment["body"])
+    ]
+    if len(trusted_authority_comments) != 1 or trusted_phase_comments:
+        return None
+    entries = _comment_receipt_entries(
+        trusted_authority_comments, VERIFIED_MERGE_AUTHORITY_MARKER
+    )
+    if len(entries) != 1:
+        return None
+    authority_receipt = resolve_verified_merge_authority_receipt(
+        comments,
+        pr=pr,
+        repository=repository,
+        expected_run_id=expected_run_id,
+        expected_repair_budget=expected_repair_budget,
+    )
+    if authority_receipt is None:
+        return None
+    return {
+        "authority_receipt": authority_receipt,
+        "authority_receipt_comment": None,
+        "authority_receipt_reused": True,
+    }
+
+
+def plan_projection_convergence_failure_restoration(
+    *,
+    authority_receipt: Mapping[str, object],
+    pr: Mapping[str, object],
+    canonical_body: str,
+    failure: str,
+) -> dict[str, object]:
+    """Plan the sole allowed write after convergence timeout or refusal."""
+
+    head = pr.get("head")
+    body = pr.get("body")
+    canonical_authority = resolve_issue_authority(canonical_body)
+    neutralized_authority = resolve_neutralized_issue_authority(body)
+    if (
+        set(authority_receipt) != _AUTHORITY_RECEIPT_FIELDS
+        or authority_receipt.get("contract")
+        != VERIFIED_MERGE_AUTHORITY_CONTRACT
+        or failure not in {"timeout", "failed_convergence"}
+        or pr.get("number") != authority_receipt.get("pr_number")
+        or pr.get("state") != "open"
+        or pr.get("merged_at") is not None
+        or not isinstance(head, Mapping)
+        or head.get("sha") != authority_receipt.get("head_sha")
+        or not isinstance(body, str)
+        or not verified_merge_body_matches_digest(
+            body, authority_receipt.get("neutralized_body_sha256")
+        )
+        or not verified_merge_body_matches_digest(
+            canonical_body, authority_receipt.get("body_sha256")
+        )
+        or canonical_authority is None
+        or neutralized_authority is None
+        or canonical_authority != neutralized_authority
+        or canonical_authority.governing_issue
+        != authority_receipt.get("governing_issue")
+        or list(canonical_authority.closing_issues)
+        != authority_receipt.get("closing_issues")
+    ):
+        raise ValueError(
+            "verified merge projection convergence restoration is malformed"
+        )
+    return {
+        "authority_sha256": _canonical_digest(authority_receipt),
+        "contract": VERIFIED_MERGE_PROJECTION_RESTORATION_CONTRACT,
+        "failure": failure,
+        "head_sha": authority_receipt["head_sha"],
+        "pr_number": authority_receipt["pr_number"],
+        "repository": authority_receipt["repository"],
+        "restore_body": canonical_body,
+        "restore_body_sha256": authority_receipt["body_sha256"],
+        "run_id": authority_receipt["run_id"],
+        "status": "restore_body_only",
+    }
+
+
+def _valid_projection_pr_contract(
+    pr_contract: Mapping[str, object],
+    *,
+    authority_receipt: Mapping[str, object],
+) -> bool:
+    body_edit = pr_contract.get("body_edit")
+    authority_digest = _canonical_digest(authority_receipt)
+    if (
+        set(pr_contract) != _PROJECTION_PR_CONTRACT_FIELDS
+        or pr_contract.get("name") != "pr-contract"
+        or pr_contract.get("event") != "pull_request"
+        or pr_contract.get("head_sha") != authority_receipt.get("head_sha")
+        or pr_contract.get("status") != "completed"
+        or pr_contract.get("conclusion") != "success"
+        or pr_contract.get("authority_sha256") != authority_digest
+        or pr_contract.get("neutralized_body_sha256")
+        != authority_receipt.get("neutralized_body_sha256")
+        or pr_contract.get("repository")
+        != authority_receipt.get("repository")
+        or pr_contract.get("pr_number") != authority_receipt.get("pr_number")
+        or not isinstance(pr_contract.get("pull_request_node_id"), str)
+        or not pr_contract.get("pull_request_node_id")
+        or not isinstance(pr_contract.get("head_ref"), str)
+        or not pr_contract.get("head_ref")
+        or pr_contract.get("base_ref") != "main"
+        or pr_contract.get("default_branch") != "main"
+        or not isinstance(pr_contract.get("default_branch_sha"), str)
+        or _SHA_PATTERN.fullmatch(
+            cast(str, pr_contract.get("default_branch_sha"))
+        )
+        is None
+        or not isinstance(pr_contract.get("title"), str)
+        or not pr_contract.get("title")
+        or has_closing_issue_attempt(cast(str, pr_contract.get("title")))
+        or any(
+            not _positive_int(pr_contract.get(field))
+            for field in ("workflow_run_id", "check_run_id", "check_suite_id")
+        )
+        or not isinstance(body_edit, Mapping)
+        or set(body_edit)
+        != {
+            "edited_at",
+            "editor_association",
+            "editor_login",
+            "node_id",
+        }
+        or body_edit.get("editor_association")
+        not in _TRUSTED_AUTHOR_ASSOCIATIONS
+        or not isinstance(body_edit.get("node_id"), str)
+        or not body_edit.get("node_id")
+        or not isinstance(body_edit.get("editor_login"), str)
+        or not body_edit.get("editor_login")
+    ):
+        return False
+    try:
+        edit_at = datetime.strptime(
+            cast(str, body_edit["edited_at"]), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+        created_at, started_at, completed_at = (
+            datetime.strptime(
+                cast(str, pr_contract[field]), "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+            for field in ("created_at", "started_at", "completed_at")
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return edit_at <= created_at <= started_at <= completed_at
+
+
+def _validated_projection_observation(
+    *,
+    authority_receipt: Mapping[str, object],
+    pr_contract: Mapping[str, object],
+    observation: Mapping[str, object],
+    allow_legacy_terminal_lf: bool,
+    require_empty: bool,
+) -> tuple[dict[str, object], datetime, tuple[object, ...]]:
+    repository = observation.get("repository")
+    pr = observation.get("pull_request")
+    observed_at = observation.get("observed_at")
+    rate_limit = observation.get("rate_limit")
+    latest_body_edit = (
+        pr.get("latest_body_edit") if isinstance(pr, Mapping) else None
+    )
+    body_edits_page_info = (
+        pr.get("body_edits_page_info") if isinstance(pr, Mapping) else None
+    )
+    closing_issues_page_info = (
+        pr.get("closing_issues_page_info") if isinstance(pr, Mapping) else None
+    )
+    closing_issues = pr.get("closing_issues") if isinstance(pr, Mapping) else None
+    if (
+        set(observation) != _PROJECTION_OBSERVATION_FIELDS
+        or observation.get("errors") != []
+        or not isinstance(rate_limit, Mapping)
+        or set(rate_limit)
+        != {"cost", "kill_switch_active", "remaining", "reset_at"}
+        or not isinstance(rate_limit.get("cost"), int)
+        or isinstance(rate_limit.get("cost"), bool)
+        or cast(int, rate_limit.get("cost")) < 0
+        or rate_limit.get("kill_switch_active") is not False
+        or not isinstance(rate_limit.get("remaining"), int)
+        or isinstance(rate_limit.get("remaining"), bool)
+        or cast(int, rate_limit.get("remaining")) < 0
+        or not isinstance(rate_limit.get("reset_at"), str)
+        or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(
+            cast(str, rate_limit.get("reset_at"))
+        )
+        is None
+        or not isinstance(repository, Mapping)
+        or set(repository) != _PROJECTION_REPOSITORY_FIELDS
+        or repository.get("name_with_owner")
+        != authority_receipt.get("repository")
+        or repository.get("default_branch") != "main"
+        or not isinstance(repository.get("default_branch_sha"), str)
+        or _SHA_PATTERN.fullmatch(
+            cast(str, repository.get("default_branch_sha"))
+        )
+        is None
+        or not isinstance(pr, Mapping)
+        or set(pr) != _PROJECTION_PULL_REQUEST_FIELDS
+        or not isinstance(pr.get("node_id"), str)
+        or not pr.get("node_id")
+        or pr.get("number") != authority_receipt.get("pr_number")
+        or pr.get("head_sha") != authority_receipt.get("head_sha")
+        or not isinstance(pr.get("head_ref"), str)
+        or not pr.get("head_ref")
+        or pr.get("base_ref") != "main"
+        or pr.get("state") != "OPEN"
+        or pr.get("draft") is not False
+        or not isinstance(pr.get("title"), str)
+        or not pr.get("title")
+        or has_closing_issue_attempt(cast(str, pr.get("title")))
+        or not isinstance(pr.get("body"), str)
+        or not verified_merge_body_matches_digest(
+            cast(str, pr["body"]),
+            authority_receipt.get("neutralized_body_sha256"),
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+        or not isinstance(pr.get("last_edited_at"), str)
+        or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(
+            cast(str, pr.get("last_edited_at"))
+        )
+        is None
+        or not isinstance(latest_body_edit, Mapping)
+        or not isinstance(latest_body_edit.get("node_id"), str)
+        or not latest_body_edit.get("node_id")
+        or latest_body_edit.get("edited_at") != pr.get("last_edited_at")
+        or not isinstance(latest_body_edit.get("editor_login"), str)
+        or not latest_body_edit.get("editor_login")
+        or latest_body_edit.get("editor_association")
+        not in _TRUSTED_AUTHOR_ASSOCIATIONS
+        or not isinstance(body_edits_page_info, Mapping)
+        or not isinstance(body_edits_page_info.get("has_next_page"), bool)
+        or not isinstance(closing_issues, list)
+        or any(
+            not isinstance(item, Mapping)
+            or not _positive_int(item.get("number"))
+            or item.get("repository") != authority_receipt.get("repository")
+            for item in closing_issues
+        )
+        or len(closing_issues) > MAX_CLOSING_ISSUES
+        or (require_empty and closing_issues != [])
+        or not isinstance(closing_issues_page_info, Mapping)
+        or closing_issues_page_info.get("has_next_page") is not False
+        or not isinstance(observed_at, str)
+        or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(observed_at) is None
+    ):
+        raise ValueError("verified merge projection convergence is malformed")
+    observed_time = datetime.strptime(observed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    edit_time = datetime.strptime(
+        cast(str, latest_body_edit["edited_at"]), "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=timezone.utc)
+    identity = (
+        repository["name_with_owner"],
+        repository["default_branch"],
+        repository["default_branch_sha"],
+        pr["node_id"],
+        pr["number"],
+        pr["head_sha"],
+        pr["head_ref"],
+        pr["base_ref"],
+        pr["title"],
+        latest_body_edit["node_id"],
+        latest_body_edit["edited_at"],
+        latest_body_edit["editor_login"],
+        latest_body_edit["editor_association"],
+    )
+    if (
+        pr_contract.get("repository") != repository["name_with_owner"]
+        or pr_contract.get("pr_number") != pr["number"]
+        or pr_contract.get("pull_request_node_id") != pr["node_id"]
+        or pr_contract.get("title") != pr["title"]
+        or pr_contract.get("head_ref") != pr["head_ref"]
+        or pr_contract.get("base_ref") != pr["base_ref"]
+        or pr_contract.get("default_branch") != repository["default_branch"]
+        or pr_contract.get("default_branch_sha")
+        != repository["default_branch_sha"]
+        or pr_contract.get("body_edit") != latest_body_edit
+    ):
+        raise ValueError("verified merge projection convergence is malformed")
+    completed_at = pr_contract.get("completed_at")
+    created_at = pr_contract.get("created_at")
+    if (
+        not isinstance(completed_at, str)
+        or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(completed_at) is None
+        or not isinstance(created_at, str)
+        or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(created_at) is None
+        or datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        < edit_time
+        or datetime.strptime(completed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+        > observed_time
+        or edit_time >= observed_time
+    ):
+        raise ValueError("verified merge projection convergence is malformed")
+    receipt_row: dict[str, object] = {
+        "base_ref": pr["base_ref"],
+        "closing_issues": [
+            dict(cast(Mapping[str, object], item)) for item in closing_issues
+        ],
+        "default_branch_sha": repository["default_branch_sha"],
+        "latest_body_edit": dict(latest_body_edit),
+        "neutralized_body_sha256": authority_receipt["neutralized_body_sha256"],
+        "observed_at": observed_at,
+        "head_ref": pr["head_ref"],
+        "pull_request_node_id": pr["node_id"],
+        "rate_limit": dict(rate_limit),
+        "title": pr["title"],
+    }
+    receipt_row["snapshot_sha256"] = _canonical_digest(observation)
+    return receipt_row, observed_time, identity
+
+
+def validate_verified_merge_projection_observation(
+    *,
+    authority_receipt: Mapping[str, object],
+    pr_contract: Mapping[str, object],
+    observation: Mapping[str, object],
+    authority_comment: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Validate one complete snapshot while convergence is still pending."""
+
+    allow_legacy_terminal_lf = bool(
+        authority_comment is not None
+        and _comment_authenticates_legacy_authority(
+            authority_comment, authority_receipt
+        )
+    )
+    row, _observed_time, identity = _validated_projection_observation(
+        authority_receipt=authority_receipt,
+        pr_contract=pr_contract,
+        observation=observation,
+        allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        require_empty=False,
+    )
+    return {
+        "empty": row["closing_issues"] == [],
+        "identity_sha256": _canonical_digest({"identity": list(identity)}),
+        "observation": row,
+    }
+
+
+def build_verified_merge_projection_convergence(
+    *,
+    authority_receipt: Mapping[str, object],
+    authority_comment: Mapping[str, object] | None = None,
+    pr_contract: Mapping[str, object],
+    observations: Sequence[Mapping[str, object]],
+    final_projection_observation: Mapping[str, object],
+    minimum_backoff_seconds: int,
+) -> dict[str, object]:
+    """Bind two empty GitHub closing projections to post-edit PR-contract proof."""
+
+    authority_digest = _canonical_digest(authority_receipt)
+    allow_legacy_terminal_lf = bool(
+        authority_comment is not None
+        and _comment_authenticates_legacy_authority(
+            authority_comment, authority_receipt
+        )
+    )
+    if (
+        set(authority_receipt) != _AUTHORITY_RECEIPT_FIELDS
+        or authority_receipt.get("contract")
+        != VERIFIED_MERGE_AUTHORITY_CONTRACT
+        or not _positive_int(minimum_backoff_seconds)
+        or len(observations) != 2
+        or not _valid_projection_pr_contract(
+            pr_contract, authority_receipt=authority_receipt
+        )
+    ):
+        raise ValueError("verified merge projection convergence is malformed")
+
+    receipt_observations: list[dict[str, object]] = []
+    observed_times: list[datetime] = []
+    projection_identity: tuple[object, ...] | None = None
+    for observation in observations:
+        row, observed_time, identity = _validated_projection_observation(
+            authority_receipt=authority_receipt,
+            pr_contract=pr_contract,
+            observation=observation,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            require_empty=True,
+        )
+        if projection_identity is None:
+            projection_identity = identity
+        elif identity != projection_identity:
+            raise ValueError("verified merge projection convergence is malformed")
+        observed_times.append(observed_time)
+        receipt_observations.append(row)
+
+    if (observed_times[1] - observed_times[0]).total_seconds() < minimum_backoff_seconds:
+        raise ValueError("verified merge projection convergence is malformed")
+
+    receipt: dict[str, object] = {
+        "authority_sha256": authority_digest,
+        "base_ref": receipt_observations[0]["base_ref"],
+        "body_edit": dict(
+            cast(
+                Mapping[str, object],
+                receipt_observations[0]["latest_body_edit"],
+            )
+        ),
+        "contract": VERIFIED_MERGE_PROJECTION_CONVERGENCE_CONTRACT,
+        "default_branch_sha": receipt_observations[0]["default_branch_sha"],
+        "final_projection_observation": dict(final_projection_observation),
+        "head_sha": authority_receipt["head_sha"],
+        "head_ref": receipt_observations[0]["head_ref"],
+        "neutralized_body_sha256": authority_receipt[
+            "neutralized_body_sha256"
+        ],
+        "observation_policy": {
+            "minimum_backoff_seconds": minimum_backoff_seconds,
+            "required_empty_observations": 2,
+        },
+        "observations": receipt_observations,
+        "pr_contract": dict(pr_contract),
+        "pr_number": authority_receipt["pr_number"],
+        "pull_request_node_id": receipt_observations[0][
+            "pull_request_node_id"
+        ],
+        "repository": authority_receipt["repository"],
+        "run_id": authority_receipt["run_id"],
+        "title": receipt_observations[0]["title"],
+    }
+    if not _final_projection_observation_matches(
+        final_projection_observation,
+        authority_receipt=authority_receipt,
+        convergence_receipt=receipt,
+        allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+    ):
+        raise ValueError("verified merge projection convergence is malformed")
+    receipt["receipt_sha256"] = _canonical_digest(receipt)
+    receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    fence = _json_fence(receipt_json)
+    return {
+        "convergence_receipt": receipt,
+        "convergence_receipt_comment": (
+            f"{VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER}\n"
+            f"{fence}json\n{receipt_json}\n{fence}"
+        ),
+    }
+
+
+def _projection_convergence_matches_authority(
+    receipt: object,
+    *,
+    authority_receipt: Mapping[str, object],
+    allow_legacy_terminal_lf: bool = False,
+) -> bool:
+    if not isinstance(receipt, Mapping) or set(receipt) != (
+        _PROJECTION_CONVERGENCE_RECEIPT_FIELDS
+    ):
+        return False
+    stored_digest = receipt.get("receipt_sha256")
+    digest_input = dict(receipt)
+    digest_input.pop("receipt_sha256", None)
+    policy = receipt.get("observation_policy")
+    observations = receipt.get("observations")
+    pr_contract = receipt.get("pr_contract")
+    body_edit = receipt.get("body_edit")
+    if (
+        receipt.get("contract")
+        != VERIFIED_MERGE_PROJECTION_CONVERGENCE_CONTRACT
+        or not isinstance(stored_digest, str)
+        or _DIGEST_PATTERN.fullmatch(stored_digest) is None
+        or _canonical_digest(digest_input) != stored_digest
+        or receipt.get("authority_sha256")
+        != _canonical_digest(authority_receipt)
+        or receipt.get("repository") != authority_receipt.get("repository")
+        or receipt.get("pr_number") != authority_receipt.get("pr_number")
+        or receipt.get("head_sha") != authority_receipt.get("head_sha")
+        or not isinstance(receipt.get("head_ref"), str)
+        or not receipt.get("head_ref")
+        or receipt.get("base_ref") != "main"
+        or receipt.get("run_id") != authority_receipt.get("run_id")
+        or receipt.get("neutralized_body_sha256")
+        != authority_receipt.get("neutralized_body_sha256")
+        or not isinstance(policy, Mapping)
+        or set(policy) != {
+            "minimum_backoff_seconds",
+            "required_empty_observations",
+        }
+        or not _positive_int(policy.get("minimum_backoff_seconds"))
+        or policy.get("required_empty_observations") != 2
+        or not isinstance(observations, list)
+        or len(observations) != 2
+        or not isinstance(pr_contract, Mapping)
+        or not _valid_projection_pr_contract(
+            pr_contract, authority_receipt=authority_receipt
+        )
+        or pr_contract.get("repository") != receipt.get("repository")
+        or pr_contract.get("pr_number") != receipt.get("pr_number")
+        or pr_contract.get("pull_request_node_id")
+        != receipt.get("pull_request_node_id")
+        or pr_contract.get("head_ref") != receipt.get("head_ref")
+        or pr_contract.get("base_ref") != receipt.get("base_ref")
+        or pr_contract.get("title") != receipt.get("title")
+        or pr_contract.get("default_branch") != "main"
+        or pr_contract.get("default_branch_sha")
+        != receipt.get("default_branch_sha")
+        or pr_contract.get("body_edit") != body_edit
+        or not isinstance(body_edit, Mapping)
+        or body_edit.get("editor_association")
+        not in _TRUSTED_AUTHOR_ASSOCIATIONS
+    ):
+        return False
+    try:
+        completed_at = datetime.strptime(
+            cast(str, pr_contract["completed_at"]), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+        edit_at = datetime.strptime(
+            cast(str, body_edit["edited_at"]), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+        created_at = datetime.strptime(
+            cast(str, pr_contract["created_at"]), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+        observed_times = [
+            datetime.strptime(
+                cast(str, cast(Mapping[str, object], row)["observed_at"]),
+                "%Y-%m-%dT%H:%M:%SZ",
+            ).replace(tzinfo=timezone.utc)
+            for row in observations
+        ]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not (edit_at <= created_at <= completed_at <= observed_times[0]):
+        return False
+    if (
+        observed_times[1] - observed_times[0]
+    ).total_seconds() < cast(int, policy["minimum_backoff_seconds"]):
+        return False
+    expected_observation_fields = {
+        "closing_issues",
+        "base_ref",
+        "default_branch_sha",
+        "latest_body_edit",
+        "neutralized_body_sha256",
+        "observed_at",
+        "head_ref",
+        "pull_request_node_id",
+        "rate_limit",
+        "snapshot_sha256",
+        "title",
+    }
+    for row in observations:
+        rate_limit = row.get("rate_limit") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(row, Mapping)
+            or set(row) != expected_observation_fields
+            or row.get("closing_issues") != []
+            or row.get("base_ref") != receipt.get("base_ref")
+            or row.get("default_branch_sha")
+            != receipt.get("default_branch_sha")
+            or row.get("latest_body_edit") != body_edit
+            or row.get("neutralized_body_sha256")
+            != receipt.get("neutralized_body_sha256")
+            or row.get("pull_request_node_id")
+            != receipt.get("pull_request_node_id")
+            or row.get("head_ref") != receipt.get("head_ref")
+            or row.get("title") != receipt.get("title")
+            or not isinstance(row.get("snapshot_sha256"), str)
+            or _DIGEST_PATTERN.fullmatch(
+                cast(str, row.get("snapshot_sha256"))
+            )
+            is None
+            or not isinstance(rate_limit, Mapping)
+            or set(rate_limit)
+            != {"cost", "kill_switch_active", "remaining", "reset_at"}
+            or not isinstance(rate_limit.get("cost"), int)
+            or isinstance(rate_limit.get("cost"), bool)
+            or cast(int, rate_limit.get("cost")) < 0
+            or rate_limit.get("kill_switch_active") is not False
+            or not isinstance(rate_limit.get("remaining"), int)
+            or isinstance(rate_limit.get("remaining"), bool)
+            or cast(int, rate_limit.get("remaining")) < 0
+            or not isinstance(rate_limit.get("reset_at"), str)
+            or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(
+                cast(str, rate_limit.get("reset_at"))
+            )
+            is None
+        ):
+            return False
+    if not _final_projection_observation_matches(
+        receipt.get("final_projection_observation"),
+        authority_receipt=authority_receipt,
+        convergence_receipt=receipt,
+        allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+    ):
+        return False
+    return True
+
+
+def _authenticated_projection_convergence_receipts(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+) -> list[Mapping[str, object]] | None:
+    """Return all authenticated convergence receipts, including audit history."""
+
+    trusted_attempts = [
+        comment
+        for comment in comments
+        if comment.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS
+        and isinstance(comment.get("body"), str)
+        and VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+        in cast(str, comment["body"])
+    ]
+    marker_attempts = _trusted_structural_marker_occurrences(
+        comments, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+    )
+    if marker_attempts == 0:
+        return []
+    entries = _comment_receipt_entries(
+        trusted_attempts, VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER
+    )
+    if len(entries) != marker_attempts:
+        return None
+    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
+        comments, authority_receipt
+    )
+    receipts = [receipt for receipt, _comment in entries]
+    if any(
+        not _projection_convergence_matches_authority(
+            receipt,
+            authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        )
+        for receipt in receipts
+    ):
+        return None
+    return receipts
+
+
+def resolve_verified_merge_projection_convergence_receipt(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+    pr_contract: Mapping[str, object] | None = None,
+) -> dict[str, object] | None:
+    """Resolve one trusted convergence receipt, optionally for one body edit.
+
+    A body-only ABA edit can leave an older, otherwise authentic receipt on the
+    PR.  That receipt remains immutable audit evidence, but it is not current
+    convergence authority.  Callers with a live ``pr-contract`` therefore
+    select exactly one receipt bound to that contract instead of treating the
+    historical receipt as a duplicate or reusable proof.
+    """
+
+    receipts = _authenticated_projection_convergence_receipts(
+        comments, authority_receipt=authority_receipt
+    )
+    if not receipts:
+        return None
+    if pr_contract is not None:
+        receipts = [
+            receipt
+            for receipt in receipts
+            if receipt.get("pr_contract") == pr_contract
+            and receipt.get("body_edit") == pr_contract.get("body_edit")
+        ]
+    elif len(receipts) > 1:
+        edit_times = [
+            cast(Mapping[str, object], receipt["body_edit"]).get("edited_at")
+            for receipt in receipts
+        ]
+        if not all(isinstance(edit_at, str) for edit_at in edit_times):
+            return None
+        latest_edit_at = max(cast(list[str], edit_times))
+        receipts = [
+            receipt
+            for receipt in receipts
+            if cast(Mapping[str, object], receipt["body_edit"]).get("edited_at")
+            == latest_edit_at
+        ]
+    if len(receipts) != 1:
+        return None
+    return dict(receipts[0])
+
+
+def projection_convergence_receipts_authenticate_authority(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+) -> bool:
+    """Return whether every trusted convergence comment is authentic history."""
+
+    return (
+        _authenticated_projection_convergence_receipts(
+            comments, authority_receipt=authority_receipt
+        )
+        is not None
+    )
+
+
+def _final_projection_observation_matches(
+    observation: object,
+    *,
+    authority_receipt: Mapping[str, object],
+    convergence_receipt: Mapping[str, object],
+    allow_legacy_terminal_lf: bool = False,
+) -> bool:
+    if not isinstance(observation, Mapping):
+        return False
+    observations = convergence_receipt.get("observations")
+    pr_contract = convergence_receipt.get("pr_contract")
+    if (
+        not isinstance(observations, list)
+        or len(observations) != 2
+        or not isinstance(pr_contract, Mapping)
+    ):
+        return False
+    try:
+        row, observed_at, identity = _validated_projection_observation(
+            authority_receipt=authority_receipt,
+            pr_contract=pr_contract,
+            observation=observation,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            require_empty=True,
+        )
+        quorum_at = datetime.strptime(
+            cast(str, cast(Mapping[str, object], observations[-1])["observed_at"]),
+            "%Y-%m-%dT%H:%M:%SZ",
+        ).replace(tzinfo=timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return False
+    expected_identity = (
+        convergence_receipt.get("repository"),
+        "main",
+        convergence_receipt.get("default_branch_sha"),
+        convergence_receipt.get("pull_request_node_id"),
+        convergence_receipt.get("pr_number"),
+        convergence_receipt.get("head_sha"),
+        convergence_receipt.get("head_ref"),
+        convergence_receipt.get("base_ref"),
+        convergence_receipt.get("title"),
+        cast(Mapping[str, object], convergence_receipt.get("body_edit", {})).get(
+            "node_id"
+        ),
+        cast(Mapping[str, object], convergence_receipt.get("body_edit", {})).get(
+            "edited_at"
+        ),
+        cast(Mapping[str, object], convergence_receipt.get("body_edit", {})).get(
+            "editor_login"
+        ),
+        cast(Mapping[str, object], convergence_receipt.get("body_edit", {})).get(
+            "editor_association"
+        ),
+    )
+    return bool(
+        observed_at > quorum_at
+        and row["default_branch_sha"]
+        == convergence_receipt.get("default_branch_sha")
+        and row["pull_request_node_id"]
+        == convergence_receipt.get("pull_request_node_id")
+        and row["latest_body_edit"] == convergence_receipt.get("body_edit")
+        and row["title"] == convergence_receipt.get("title")
+        and identity == expected_identity
+    )
+
+
 def build_verified_merge_phase(
     *,
     authority_receipt: Mapping[str, object],
     phase: str,
     pr: Mapping[str, object],
     authority_comment: Mapping[str, object] | None = None,
+    projection_convergence_receipt: Mapping[str, object] | None = None,
+    final_projection_observation: Mapping[str, object] | None = None,
     closed_issues: Sequence[int] = (),
     reopened_unauthorized_issues: Sequence[int] = (),
 ) -> dict[str, object]:
@@ -1029,6 +2046,46 @@ def build_verified_merge_phase(
 
     if set(authority_receipt) != _AUTHORITY_RECEIPT_FIELDS or phase not in _PHASES:
         raise ValueError("verified merge phase authority is malformed")
+    projection_convergence_sha256: object = None
+    final_projection_observation_sha256: object = None
+    allow_legacy_terminal_lf = bool(
+        authority_comment is not None
+        and _comment_authenticates_legacy_authority(
+            authority_comment, authority_receipt
+        )
+    )
+    if phase == "prepared":
+        if not _projection_convergence_matches_authority(
+            projection_convergence_receipt,
+            authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        ) or not _final_projection_observation_matches(
+            final_projection_observation,
+            authority_receipt=authority_receipt,
+            convergence_receipt=cast(
+                Mapping[str, object], projection_convergence_receipt
+            ),
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        ):
+            raise ValueError(
+                "verified merge prepared phase projection convergence is malformed"
+            )
+        projection_convergence_sha256 = cast(
+            Mapping[str, object], projection_convergence_receipt
+        ).get("receipt_sha256")
+        final_projection_observation_sha256 = _canonical_digest(
+            cast(Mapping[str, object], final_projection_observation)
+        )
+    else:
+        if not _projection_convergence_matches_authority(
+            projection_convergence_receipt,
+            authority_receipt=authority_receipt,
+            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+        ):
+            raise ValueError("verified merge projection convergence is malformed")
+        projection_convergence_sha256 = cast(
+            Mapping[str, object], projection_convergence_receipt
+        ).get("receipt_sha256")
     body = pr.get("body")
     head = pr.get("head")
     merge_commit_sha = pr.get("merge_commit_sha")
@@ -1052,12 +2109,6 @@ def build_verified_merge_phase(
         authority_receipt.get("body_sha256")
         if phase == "restored"
         else authority_receipt.get("neutralized_body_sha256")
-    )
-    allow_legacy_terminal_lf = bool(
-        authority_comment is not None
-        and _comment_authenticates_legacy_authority(
-            authority_comment, authority_receipt
-        )
     )
     if (
         not isinstance(body, str)
@@ -1105,10 +2156,14 @@ def build_verified_merge_phase(
         "body_sha256": expected_body_digest,
         "closed_issues": list(closed),
         "contract": VERIFIED_MERGE_PHASE_CONTRACT,
+        "final_projection_observation_sha256": (
+            final_projection_observation_sha256
+        ),
         "head_sha": authority_receipt["head_sha"],
         "merge_commit_sha": merge_commit_sha if merged_phase else None,
         "phase": phase,
         "pr_number": authority_receipt["pr_number"],
+        "projection_convergence_sha256": projection_convergence_sha256,
         "reopened_unauthorized_issues": list(reopened),
         "repository": authority_receipt["repository"],
         "run_id": authority_receipt["run_id"],
@@ -1128,27 +2183,138 @@ def resolve_verified_merge_phase(
     authority_receipt: Mapping[str, object],
     pr: Mapping[str, object],
     allow_merged_body_drift: bool = False,
+    current_body_edit: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
-    """Resolve the highest continuous, non-conflicting durable merge phase."""
+    """Resolve the highest continuous durable phase for one live receipt chain.
+
+    Convergence receipts are immutable audit history.  An open PR with more
+    than one current-schema receipt therefore needs the live body-edit identity
+    to select its active chain; timestamp ordering is not a body-edit fence.
+    Once merged, recovery can instead select one and only one chain that
+    reaches the immutable delivered merge identity.
+    """
 
     authority_digest = _canonical_digest(authority_receipt)
     expected_closing = authority_receipt.get("closing_issues")
-    valid_by_phase: dict[str, list[dict[str, object]]] = {
-        phase: [] for phase in _PHASES
-    }
-    for candidate in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER):
-        phase = candidate.get("phase")
+    durable_convergence_receipts = _authenticated_projection_convergence_receipts(
+        comments, authority_receipt=authority_receipt
+    )
+    if durable_convergence_receipts is None:
+        return None
+    convergence_by_digest: dict[str, Mapping[str, object]] = {}
+    for receipt in durable_convergence_receipts:
+        receipt_digest = receipt.get("receipt_sha256")
         if (
-            set(candidate) != _PHASE_RECEIPT_FIELDS
-            or candidate.get("contract") != VERIFIED_MERGE_PHASE_CONTRACT
-            or phase not in _PHASES
-            or candidate.get("authority_sha256") != authority_digest
-            or candidate.get("repository") != authority_receipt.get("repository")
-            or candidate.get("pr_number") != authority_receipt.get("pr_number")
-            or candidate.get("head_sha") != authority_receipt.get("head_sha")
-            or candidate.get("run_id") != authority_receipt.get("run_id")
+            not isinstance(receipt_digest, str)
+            or receipt_digest in convergence_by_digest
         ):
+            # An ambiguous comment POST must not be silently coalesced into
+            # one usable authority chain.  The watchdog applies the same
+            # multiplicity rule after merge.
+            return None
+        convergence_by_digest[receipt_digest] = receipt
+    active_convergence_digest: str | None = None
+    if current_body_edit is not None:
+        matching_receipts = [
+            receipt
+            for receipt in convergence_by_digest.values()
+            if receipt.get("body_edit") == current_body_edit
+        ]
+        if len(matching_receipts) != 1:
+            return None
+        active_convergence_digest = cast(
+            str, matching_receipts[0]["receipt_sha256"]
+        )
+    elif len(convergence_by_digest) > 1 and not _complete_merged_identity(pr):
+        # Pre-merge authority must bind to the latest authenticated body edit.
+        return None
+
+    valid_by_chain: dict[str, dict[str, list[dict[str, object]]]] = {}
+
+    def candidates_for(chain: str) -> dict[str, list[dict[str, object]]]:
+        return valid_by_chain.setdefault(
+            chain, {phase: [] for phase in _PHASES}
+        )
+
+    invalid_current_projection_phase = False
+    phase_attempts = _trusted_structural_marker_occurrences(
+        comments, VERIFIED_MERGE_PHASE_MARKER
+    )
+    phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
+    if len(phase_receipts) != phase_attempts:
+        return None
+    for candidate in phase_receipts:
+        phase = candidate.get("phase")
+        candidate_fields = frozenset(candidate)
+        current_schema = candidate_fields == _PHASE_RECEIPT_FIELDS
+        legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
+        same_authority_identity = (
+            candidate.get("authority_sha256") == authority_digest
+        )
+        matching_identity = (
+            same_authority_identity
+            and candidate.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
+            and phase in _PHASES
+        )
+        if not matching_identity:
+            if same_authority_identity and (
+                current_schema
+                or candidate_fields
+                & (_PHASE_RECEIPT_FIELDS - _LEGACY_PHASE_RECEIPT_FIELDS)
+            ):
+                invalid_current_projection_phase = True
             continue
+        if not (current_schema or legacy_schema):
+            if candidate_fields & (
+                _PHASE_RECEIPT_FIELDS - _LEGACY_PHASE_RECEIPT_FIELDS
+            ):
+                invalid_current_projection_phase = True
+            continue
+        convergence_digest = candidate.get("projection_convergence_sha256")
+        final_observation_digest = candidate.get(
+            "final_projection_observation_sha256"
+        )
+        if current_schema:
+            matched_convergence = (
+                convergence_by_digest.get(convergence_digest)
+                if isinstance(convergence_digest, str)
+                else None
+            )
+            matched_final_observation = (
+                matched_convergence.get("final_projection_observation")
+                if matched_convergence is not None
+                else None
+            )
+            matched_final_observation_digest = (
+                _canonical_digest(matched_final_observation)
+                if isinstance(matched_final_observation, Mapping)
+                else None
+            )
+            if (
+                not isinstance(convergence_digest, str)
+                or _DIGEST_PATTERN.fullmatch(convergence_digest) is None
+                or matched_convergence is None
+                or (
+                    phase == "prepared"
+                    and (
+                        not isinstance(final_observation_digest, str)
+                        or _DIGEST_PATTERN.fullmatch(final_observation_digest)
+                        is None
+                        or final_observation_digest
+                        != matched_final_observation_digest
+                    )
+                )
+                or (phase != "prepared" and final_observation_digest is not None)
+            ):
+                invalid_current_projection_phase = True
+                continue
+            if (
+                active_convergence_digest is not None
+                and convergence_digest != active_convergence_digest
+            ):
+                # Authentic historical phase receipts remain audit evidence,
+                # but cannot compete with the live body-edit contract.
+                continue
         expected_digest = (
             authority_receipt.get("body_sha256")
             if phase == "restored"
@@ -1170,9 +2336,15 @@ def resolve_verified_merge_phase(
                 allow_empty=True,
             )
         except ValueError:
+            if current_schema:
+                invalid_current_projection_phase = True
             continue
         if (
             candidate.get("body_sha256") != expected_digest
+            or candidate.get("repository") != authority_receipt.get("repository")
+            or candidate.get("pr_number") != authority_receipt.get("pr_number")
+            or candidate.get("head_sha") != authority_receipt.get("head_sha")
+            or candidate.get("run_id") != authority_receipt.get("run_id")
             or (reconciled_phase and list(closed) != expected_closing)
             or (not reconciled_phase and (closed or reopened))
             or bool(set(closed) & set(reopened))
@@ -1183,28 +2355,93 @@ def resolve_verified_merge_phase(
             )
             or (not merged_phase and candidate.get("merge_commit_sha") is not None)
         ):
+            if current_schema:
+                invalid_current_projection_phase = True
             continue
-        valid_by_phase[str(phase)].append(dict(candidate))
-
-    highest: dict[str, object] | None = None
-    reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
-    for phase in _PHASES:
-        candidates = valid_by_phase[phase]
-        if not candidates:
-            break
-        if len({_canonical_digest(candidate) for candidate in candidates}) != 1:
-            return None
-        highest = candidates[-1]
-        phase_evidence = (
-            tuple(cast(Sequence[int], highest["closed_issues"])),
-            tuple(
-                cast(Sequence[int], highest["reopened_unauthorized_issues"])
-            ),
+        chain = (
+            cast(str, convergence_digest)
+            if current_schema
+            else "__legacy_phase_chain__"
         )
-        if phase == "reconciled":
-            reconciled_evidence = phase_evidence
-        elif phase == "restored" and phase_evidence != reconciled_evidence:
+        candidates_for(chain)[str(phase)].append(dict(candidate))
+
+    if invalid_current_projection_phase:
+        return None
+
+    for phases in valid_by_chain.values():
+        occupied = [bool(phases[phase]) for phase in _PHASES]
+        first = next(
+            (index for index, phase_present in enumerate(occupied) if phase_present),
+            None,
+        )
+        if first is None:
+            continue
+        last = len(occupied) - 1 - occupied[::-1].index(True)
+        if first != 0 or any(
+            not phase_present for phase_present in occupied[first : last + 1]
+        ):
+            # Match watchdog post-merge selection: a current-schema phase
+            # chain with a missing predecessor is not harmless audit history.
             return None
+
+    def resolve_chain(
+        valid_by_phase: Mapping[str, Sequence[Mapping[str, object]]],
+    ) -> dict[str, object] | None:
+        highest: dict[str, object] | None = None
+        reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
+        for phase in _PHASES:
+            candidates = valid_by_phase[phase]
+            if not candidates:
+                if phase == "prepared" or any(
+                    valid_by_phase[later_phase]
+                    for later_phase in _PHASES[_PHASES.index(phase) + 1 :]
+                ):
+                    return None
+                break
+            if len({_canonical_digest(candidate) for candidate in candidates}) != 1:
+                return None
+            highest = dict(candidates[-1])
+            phase_evidence = (
+                tuple(cast(Sequence[int], highest["closed_issues"])),
+                tuple(
+                    cast(Sequence[int], highest["reopened_unauthorized_issues"])
+                ),
+            )
+            if phase == "reconciled":
+                reconciled_evidence = phase_evidence
+            elif phase == "restored" and phase_evidence != reconciled_evidence:
+                return None
+        return highest
+
+    if active_convergence_digest is not None:
+        highest = resolve_chain(
+            valid_by_chain.get(
+                active_convergence_digest,
+                {phase: [] for phase in _PHASES},
+            )
+        )
+    elif len(convergence_by_digest) > 1:
+        merged_chains = [
+            chain
+            for chain in valid_by_chain.values()
+            if (
+                (resolved := resolve_chain(chain)) is not None
+                and _PHASES.index(cast(str, resolved["phase"]))
+                >= _PHASES.index("merged")
+            )
+        ]
+        if len(merged_chains) != 1:
+            return None
+        highest = resolve_chain(merged_chains[0])
+    else:
+        chain = (
+            next(iter(convergence_by_digest), "__legacy_phase_chain__")
+            if convergence_by_digest
+            else "__legacy_phase_chain__"
+        )
+        highest = resolve_chain(
+            valid_by_chain.get(chain, {phase: [] for phase in _PHASES})
+        )
     if highest is None:
         return None
     current_body = pr.get("body")

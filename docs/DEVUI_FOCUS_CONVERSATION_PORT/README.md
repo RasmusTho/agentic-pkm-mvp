@@ -23,7 +23,9 @@ This slice gives the owner one stable place to understand a single Issue or capa
 that subject into an external Codex or Claude conversation without pretending that a provider
 session is work. It admits one governed command only: a fresh, exact **Start Model Inquiry** preview
 with **Start/Hold**, executed through the existing artifact-first workflow and followed by its
-existing terminal receipt.
+existing terminal receipt. The source-linked LLM-assisted overview delivered separately by #5402 is a
+read-only owner projection; it does not make this Focus/Conversation Port delivered or grant action
+authority.
 
 Builder System Control is specified here only as a hard neighboring boundary and minimal read
 contract. It is a separate system-governance lens and a separate follow-up, not part of the first

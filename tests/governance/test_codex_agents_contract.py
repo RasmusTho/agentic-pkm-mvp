@@ -29,7 +29,7 @@ REQUIRED_AGENT_FILES = {
     "verification-closer.toml": ("verification_closer", ".codex/skills/verification-and-closure/SKILL.md"),
 }
 
-VALID_REASONING = {"minimal", "low", "medium", "high", "xhigh"}
+VALID_REASONING = {"minimal", "low", "medium", "high", "xhigh", "max"}
 VALID_SANDBOX = {"read-only", "workspace-write"}
 
 
@@ -68,6 +68,21 @@ def test_codex_agent_model_reasoning_and_sandbox_are_bounded() -> None:
         sandbox = data.get("sandbox_mode")
         assert sandbox in VALID_SANDBOX, path.name
         assert sandbox != "danger-full-access", path.name
+
+
+def test_specialist_defaults_follow_tcd_ladder() -> None:
+    expected = {
+        "issue-set-coordinator.toml": ("gpt-5.6-luna", "low"),
+        "slice-implementer.toml": ("gpt-5.6-luna", "xhigh"),
+        "issue-local-helper.toml": ("gpt-5.6-luna", "medium"),
+        "backlog-contract-maintainer.toml": ("gpt-5.6-luna", "xhigh"),
+        "verification-closer.toml": ("gpt-6-astra", "max"),
+    }
+
+    for filename, (model, effort) in expected.items():
+        data = _load_agent(AGENTS_DIR / filename)
+        assert data["model"] == model
+        assert data["model_reasoning_effort"] == effort
 
 
 def test_codex_subagent_config_limits_fanout() -> None:

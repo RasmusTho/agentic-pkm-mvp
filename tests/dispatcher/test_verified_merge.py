@@ -31,6 +31,10 @@ from app.dispatcher.verified_merge import (
     restored_body_matches_authority,
     verified_merge_body_sha256,
 )
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
+    projection_phase_kwargs,
+)
 
 
 HEAD = "a" * 40
@@ -321,6 +325,7 @@ def test_neutralized_body_transport_round_trip_preserves_canonical_digest() -> N
             authority_receipt=authority,
             phase="prepared",
             pr=_pr(live_body),
+            **projection_phase_kwargs(authority, _pr(live_body)),
         )
         assert prepared["phase_receipt"]["body_sha256"] == authority[
             "neutralized_body_sha256"
@@ -353,11 +358,12 @@ def test_neutralized_body_transport_rejects_noncanonical_whitespace_drift() -> N
             )
             is None
         )
-        with pytest.raises(ValueError, match="live state is malformed"):
+        with pytest.raises(ValueError, match="is malformed"):
             build_verified_merge_phase(
                 authority_receipt=authority,
                 phase="prepared",
                 pr=_pr(drifted_body),
+                **projection_phase_kwargs(authority, _pr(drifted_body)),
             )
 
 
@@ -372,12 +378,13 @@ def test_prepared_phase_accepts_github_terminal_newline_canonicalization() -> No
     assert isinstance(authority, dict)
     neutralized_body = str(plan["neutralized_body"])
     assert not neutralized_body.endswith("\n")
-    github_stored_body = neutralized_body + "\n"
+    neutral_pr = _pr(neutralized_body)
 
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
-        pr=_pr(github_stored_body),
+        pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
 
     assert prepared["phase_receipt"]["head_sha"] == HEAD
@@ -393,12 +400,14 @@ def test_prepared_phase_rejects_substantive_body_drift_after_canonicalization() 
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
 
-    with pytest.raises(ValueError, match="live state is malformed"):
+    with pytest.raises(ValueError, match="is malformed"):
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="prepared",
             pr=_pr(str(plan["neutralized_body"]) + "substantive drift"),
+            **projection_phase_kwargs(authority, neutral_pr),
         )
 
 
@@ -509,8 +518,12 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
         authority_comment=authority_comment,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(
+            authority,
+            neutral_pr,
+            authority_comment=authority_comment,
+        ),
     )
-
     assert prepared["phase_receipt"]["authority_sha256"] == hashlib.sha256(
         json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -523,12 +536,17 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
         "created_at": "2026-07-21T16:32:11Z",
         "updated_at": "2026-07-21T16:32:11Z",
     }
-    with pytest.raises(ValueError, match="live state is malformed"):
+    with pytest.raises(ValueError, match="is malformed"):
         build_verified_merge_phase(
             authority_receipt=authority,
             authority_comment=post_cutoff,
             phase="prepared",
             pr=neutral_pr,
+            **projection_phase_kwargs(
+                authority,
+                neutral_pr,
+                authority_comment=authority_comment,
+            ),
         )
 
     for cr_body in (neutralized + "\r", neutralized.replace("Refs", "Refs\r", 1)):
@@ -541,12 +559,17 @@ def test_legacy_authority_receipt_builds_prepared_phase_without_rebinding() -> N
             + json.dumps(cr_authority, sort_keys=True, separators=(",", ":"))
             + "\n```"
         )
-        with pytest.raises(ValueError, match="live state is malformed"):
+        with pytest.raises(ValueError, match="is malformed"):
             build_verified_merge_phase(
                 authority_receipt=cr_authority,
                 authority_comment=cr_comment,
                 phase="prepared",
                 pr=_pr(cr_body),
+                **projection_phase_kwargs(
+                    authority,
+                    neutral_pr,
+                    authority_comment=authority_comment,
+                ),
             )
 
 
@@ -562,6 +585,16 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         authority_comment=authority_comment,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(
+            authority,
+            neutral_pr,
+            authority_comment=authority_comment,
+        ),
+    )
+    convergence_kwargs = projection_phase_kwargs(
+        authority,
+        neutral_pr,
+        authority_comment=authority_comment,
     )
     merged_pr = {
         **neutral_pr,
@@ -575,6 +608,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         authority_comment=authority_comment,
         phase="merged",
         pr=merged_pr,
+        **convergence_kwargs,
     )
     reconciled = build_verified_merge_phase(
         authority_receipt=authority,
@@ -582,6 +616,7 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         phase="reconciled",
         pr=merged_pr,
         closed_issues=[3820, 3823],
+        **convergence_kwargs,
     )
     restored_pr = {**merged_pr, "body": original}
     restored = build_verified_merge_phase(
@@ -590,18 +625,20 @@ def test_legacy_authority_receipt_preserves_continuous_phase_recovery() -> None:
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
+        **convergence_kwargs,
     )
     comments = [
         _trusted_comment(str(item["phase_receipt_comment"]))
         for item in (prepared, merged, reconciled, restored)
     ]
+    comments.insert(0, projection_convergence_comment(convergence_kwargs))
     comments.insert(0, authority_comment)
 
     assert resolve_verified_merge_phase(
         comments, authority_receipt=authority, pr=restored_pr
     ) == restored["phase_receipt"]
     assert resolve_verified_merge_phase(
-        comments[:1] + comments[2:], authority_receipt=authority, pr=restored_pr
+        comments[:2] + comments[3:], authority_receipt=authority, pr=restored_pr
     ) is None
 
 
@@ -615,6 +652,7 @@ def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() ->
     )
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
     restored_pr = {
         **_pr(original),
         "state": "closed",
@@ -628,6 +666,7 @@ def test_canonical_authority_receipt_preserves_unchanged_double_terminal_lf() ->
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
+        **projection_phase_kwargs(authority, neutral_pr),
     )
 
     assert restored["phase_receipt"]["body_sha256"] == authority["body_sha256"]
@@ -920,7 +959,9 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     merged_pr = {
         **neutral_pr,
         "state": "closed",
@@ -932,6 +973,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         authority_receipt=authority,
         phase="merged",
         pr=merged_pr,
+        **convergence_kwargs,
     )
     reconciled = build_verified_merge_phase(
         authority_receipt=authority,
@@ -939,6 +981,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         pr=merged_pr,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
+        **convergence_kwargs,
     )
     restored_pr = {**merged_pr, "body": plan["original_body"]}
     restored = build_verified_merge_phase(
@@ -947,10 +990,14 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         pr=restored_pr,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
+        **convergence_kwargs,
     )
     comments = [
-        _trusted_comment(str(item["phase_receipt_comment"]))
-        for item in (prepared, prepared, merged, reconciled, restored)
+        projection_convergence_comment(convergence_kwargs),
+        *[
+            _trusted_comment(str(item["phase_receipt_comment"]))
+            for item in (prepared, prepared, merged, reconciled, restored)
+        ],
     ]
 
     phase = resolve_verified_merge_phase(
@@ -968,6 +1015,7 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
         phase="restored",
         pr=restored_pr,
         closed_issues=[3820, 3823],
+        **convergence_kwargs,
     )
     assert (
         resolve_verified_merge_phase(
@@ -975,6 +1023,270 @@ def test_merge_phase_receipts_form_continuous_idempotent_recovery_chain() -> Non
             + [_trusted_comment(str(inconsistent_restored["phase_receipt_comment"]))],
             authority_receipt=authority,
             pr=restored_pr,
+        )
+        is None
+    )
+
+
+def test_current_phase_ledger_rejects_null_or_discontinuous_projection_digest() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    assert isinstance(prepared, dict)
+    assert isinstance(merged, dict)
+
+    def comment(receipt: dict[str, object]) -> dict[str, object]:
+        return _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+
+    durable_convergence_comment = projection_convergence_comment(
+        convergence_kwargs
+    )
+    assert resolve_verified_merge_phase(
+        [durable_convergence_comment, comment(prepared), comment(merged)],
+        authority_receipt=authority,
+        pr=merged_pr,
+    ) == merged
+
+    malformed_reconciled = copy.deepcopy(merged)
+    malformed_reconciled["phase"] = "reconciled"
+    assert (
+        resolve_verified_merge_phase(
+            [
+                durable_convergence_comment,
+                comment(prepared),
+                comment(merged),
+                comment(malformed_reconciled),
+            ],
+            authority_receipt=authority,
+            pr=merged_pr,
+        )
+        is None
+    )
+
+    for phase_receipt in (prepared, merged):
+        null_projection = copy.deepcopy(phase_receipt)
+        null_projection["projection_convergence_sha256"] = None
+        null_projection["final_projection_observation_sha256"] = None
+        comments = [
+            durable_convergence_comment,
+            comment(prepared),
+            comment(merged),
+        ]
+        comments[1 if phase_receipt is prepared else 2] = comment(
+            null_projection
+        )
+        assert (
+            resolve_verified_merge_phase(
+                comments,
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            is None
+        )
+
+    discontinuous = copy.deepcopy(merged)
+    discontinuous["projection_convergence_sha256"] = "f" * 64
+    assert (
+        resolve_verified_merge_phase(
+            [
+                durable_convergence_comment,
+                comment(prepared),
+                comment(discontinuous),
+            ],
+            authority_receipt=authority,
+            pr=merged_pr,
+        )
+        is None
+    )
+
+    for field, forged in (
+        ("repository", "foreign/example"),
+        ("run_id", "forged-run"),
+        ("pr_number", 4999),
+        ("head_sha", "f" * 40),
+    ):
+        mismatched_identity = copy.deepcopy(prepared)
+        mismatched_identity[field] = forged
+        assert (
+            resolve_verified_merge_phase(
+                [
+                    durable_convergence_comment,
+                    comment(mismatched_identity),
+                    comment(merged),
+                ],
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            is None
+        )
+
+    duplicate_convergence_marker = dict(durable_convergence_comment)
+    duplicate_convergence_body = duplicate_convergence_marker["body"]
+    assert isinstance(duplicate_convergence_body, str)
+    duplicate_convergence_marker["body"] = (
+        duplicate_convergence_body
+        + "\nverified merge closing projection convergence:"
+    )
+    duplicate_phase_marker = comment(prepared)
+    duplicate_phase_body = duplicate_phase_marker["body"]
+    assert isinstance(duplicate_phase_body, str)
+    duplicate_phase_marker["body"] = (
+        duplicate_phase_body + "\nverified issue-set merge phase:"
+    )
+    for malformed_comment in (
+        duplicate_convergence_marker,
+        duplicate_phase_marker,
+    ):
+        assert (
+            resolve_verified_merge_phase(
+                [
+                    malformed_comment
+                    if malformed_comment is duplicate_convergence_marker
+                    else durable_convergence_comment,
+                    malformed_comment
+                    if malformed_comment is duplicate_phase_marker
+                    else comment(prepared),
+                    comment(merged),
+                ],
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            is None
+        )
+
+    embedded_convergence_marker = dict(durable_convergence_comment)
+    embedded_convergence_body = embedded_convergence_marker["body"]
+    assert isinstance(embedded_convergence_body, str)
+    embedded_convergence_marker["body"] = (
+        embedded_convergence_body
+        + "\n```json\n"
+        + '{"audit":"verified merge closing projection convergence:"}'
+        + "\n```"
+    )
+    embedded_phase_marker = comment(prepared)
+    embedded_phase_body = embedded_phase_marker["body"]
+    assert isinstance(embedded_phase_body, str)
+    embedded_phase_marker["body"] = (
+        embedded_phase_body
+        + "\n```json\n"
+        + '{"audit":"verified issue-set merge phase:"}'
+        + "\n```"
+    )
+    for harmless_comment in (
+        embedded_convergence_marker,
+        embedded_phase_marker,
+    ):
+        assert (
+            resolve_verified_merge_phase(
+                [
+                    harmless_comment
+                    if harmless_comment is embedded_convergence_marker
+                    else durable_convergence_comment,
+                    harmless_comment
+                    if harmless_comment is embedded_phase_marker
+                    else comment(prepared),
+                    comment(merged),
+                ],
+                authority_receipt=authority,
+                pr=merged_pr,
+            )
+            == merged
+        )
+
+
+def test_explicit_legacy_phase_field_set_remains_continuous() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        **convergence_kwargs,
+    )["phase_receipt"]
+    current_prepared = copy.deepcopy(prepared)
+    for receipt in (prepared, merged):
+        assert isinstance(receipt, dict)
+        receipt.pop("projection_convergence_sha256")
+        receipt.pop("final_projection_observation_sha256")
+
+    comments = [
+        _trusted_comment(
+            "verified issue-set merge phase:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            + "\n```"
+        )
+        for receipt in (prepared, merged)
+    ]
+    assert resolve_verified_merge_phase(
+        comments,
+        authority_receipt=authority,
+        pr=merged_pr,
+    ) == merged
+
+    current_prepared.pop("final_projection_observation_sha256")
+    malformed_current_comment = _trusted_comment(
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            current_prepared, sort_keys=True, separators=(",", ":")
+        )
+        + "\n```"
+    )
+    assert (
+        resolve_verified_merge_phase(
+            [malformed_current_comment, *comments],
+            authority_receipt=authority,
+            pr=merged_pr,
         )
         is None
     )
@@ -990,10 +1302,12 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **convergence_kwargs,
     )
     crashed_pr = {
         **neutral_pr,
@@ -1004,7 +1318,10 @@ def test_merge_phase_resolver_stops_at_premerge_phase_after_merge_crash() -> Non
     }
 
     phase = resolve_verified_merge_phase(
-        [_trusted_comment(str(prepared["phase_receipt_comment"]))],
+        [
+            projection_convergence_comment(convergence_kwargs),
+            _trusted_comment(str(prepared["phase_receipt_comment"])),
+        ],
         authority_receipt=authority,
         pr=crashed_pr,
     )
@@ -1022,10 +1339,12 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **convergence_kwargs,
     )
     raced_pr = {
         **neutral_pr,
@@ -1036,10 +1355,11 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
         "body": "Governing-Issue: #3821\n\nRefs #3820\nFixes #4999",
     }
     authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
+    convergence_comment = projection_convergence_comment(convergence_kwargs)
     prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
 
     resolved = resolve_verified_merge_authority_receipt(
-        [authority_comment, prepared_comment],
+        [authority_comment, convergence_comment, prepared_comment],
         pr=raced_pr,
         repository=REPOSITORY,
         expected_run_id="vrun-authority",
@@ -1048,14 +1368,14 @@ def test_merged_body_race_recovers_only_from_trusted_authority_bound_phase() -> 
 
     assert resolved == authority
     assert resolve_verified_merge_phase(
-        [prepared_comment],
+        [convergence_comment, prepared_comment],
         authority_receipt=authority,
         pr=raced_pr,
         allow_merged_body_drift=True,
     ) == prepared["phase_receipt"]
     assert (
         resolve_verified_merge_authority_receipt(
-            [authority_comment, prepared_comment],
+            [authority_comment, convergence_comment, prepared_comment],
             pr={**raced_pr, "state": "open", "merged": False, "merged_at": None},
             repository=REPOSITORY,
         )
@@ -1088,11 +1408,14 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **projection_phase_kwargs(authority, neutral_pr),
     )
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     merged = build_verified_merge_phase(
         authority_receipt=authority,
         phase="merged",
         pr=merged_neutral,
+        **convergence_kwargs,
     )
     reconciled_a = build_verified_merge_phase(
         authority_receipt=authority,
@@ -1100,6 +1423,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         pr=merged_neutral,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[4999],
+        **convergence_kwargs,
     )
     reconciled_b = build_verified_merge_phase(
         authority_receipt=authority,
@@ -1107,6 +1431,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
         pr=merged_neutral,
         closed_issues=[3820, 3823],
         reopened_unauthorized_issues=[5000],
+        **convergence_kwargs,
     )
     authority_comment = _trusted_comment(str(plan["authority_receipt_comment"]))
     prepared_comment = _trusted_comment(str(prepared["phase_receipt_comment"]))
@@ -1202,12 +1527,37 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
     authority_path = tmp_path / "authority.json"
     pr_path = tmp_path / "pr.json"
     closed_path = tmp_path / "closed.json"
+    convergence_path = tmp_path / "convergence.json"
+    comments_path = tmp_path / "comments.json"
     output_path = tmp_path / "phase.json"
     authority_path.write_text(
         json.dumps(plan["authority_receipt"]), encoding="utf-8"
     )
     pr_path.write_text(json.dumps(merged_pr), encoding="utf-8")
     closed_path.write_text(json.dumps([3820, 3823]), encoding="utf-8")
+    convergence = projection_phase_kwargs(
+        plan["authority_receipt"],
+        _pr(str(plan["neutralized_body"])),
+    )["projection_convergence_receipt"]
+    convergence_path.write_text(json.dumps(convergence), encoding="utf-8")
+    comments_path.write_text(
+        json.dumps(
+            [
+                {
+                    "author_association": "OWNER",
+                    "body": (
+                        "verified merge closing projection convergence:\n"
+                        "```json\n"
+                        + json.dumps(
+                            convergence, sort_keys=True, separators=(",", ":")
+                        )
+                        + "\n```"
+                    ),
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     completed = subprocess.run(
         [
@@ -1218,6 +1568,10 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
             str(authority_path),
             "--phase",
             "restored",
+            "--projection-convergence-json",
+            str(convergence_path),
+            "--comments-json",
+            str(comments_path),
             "--pr-json",
             str(pr_path),
             "--closed-issues-json",
@@ -1520,6 +1874,187 @@ def test_neutralized_body_transport_restores_authenticated_stranded_pr() -> None
     )
 
 
+def _repository_case_recovery_fixture():
+    context = _context()
+    context["repository"] = REPOSITORY.lower()
+    plan = prepare_verified_merge(
+        context=context, pr=_pr(), live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    pr = {
+        **_pr(str(plan["neutralized_body"])),
+        "merged": False,
+        "base": {"repo": {"full_name": REPOSITORY}},
+        "html_url": f"https://github.com/{REPOSITORY}/pull/3822",
+    }
+    return plan, pr, [_trusted_comment(str(plan["authority_receipt_comment"]))]
+
+
+def _case_recovery(comments, pr, **overrides):
+    return classify_neutralized_body_state(
+        comments, pr=pr, repository=REPOSITORY,
+        **{
+            "expected_run_id": _context()["run_id"],
+            "expected_repair_budget": _context()["repair_budget"],
+            **overrides,
+        },
+    )
+
+
+def test_neutralized_repository_case_mismatch_is_restoration_only() -> None:
+    plan, pr, comments = _repository_case_recovery_fixture()
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=pr, repository=REPOSITORY,
+    ) is None
+    result = _case_recovery(comments, pr)
+    assert result["status"] == "restoration_required"
+    restoration = result["restoration"]
+    assert restoration["reason"] == "neutralized-repository-case-mismatch"
+    assert restoration["repository"] == REPOSITORY
+    assert restoration["restore_body_sha256"] == plan["authority_receipt"]["body_sha256"]
+    assert restoration["head_sha"] == restoration["neutralized_head_sha"] == HEAD
+    assert restoration["matching_attempts"] == 1
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=pr, repository=REPOSITORY,
+    ) is None
+    assert resolve_verified_merge_phase(
+        comments, authority_receipt=plan["authority_receipt"], pr=pr,
+    ) is None
+
+
+@pytest.mark.parametrize("fault", [
+    "missing-repo", "foreign-repo", "lowercase-live-repo", "foreign-url",
+    "missing-url", "missing-state", "missing-merged", "merged", "merged-at",
+    "draft", "head", "body", "second-lf", "crlf", "title-closer", "pr-number",
+    "missing-comments", "untrusted", "extra-key", "missing-key", "two-blocks",
+    "extra-raw-marker", "duplicate-key", "conflicting", "duplicate-comment",
+    "foreign-receipt", "noncase-receipt", "governing", "closing", "supporting",
+    "run", "accounting", "missing-run", "missing-accounting",
+    "prepared", "merged-phase", "malformed-phase", "untrusted-phase",
+])
+def test_repository_case_recovery_rejects_unproven_or_inflight_evidence(fault) -> None:
+    plan, pr, comments = _repository_case_recovery_fixture()
+    receipt = copy.deepcopy(plan["authority_receipt"])
+    overrides = {}
+    if fault == "missing-repo":
+        pr.pop("base")
+    elif fault in {"foreign-repo", "lowercase-live-repo"}:
+        pr["base"]["repo"]["full_name"] = (
+            "other/agentic-pkm-mvp" if fault == "foreign-repo" else REPOSITORY.lower()
+        )
+    elif fault == "foreign-url":
+        pr["html_url"] = "https://github.com/other/repo/pull/3822"
+    elif fault == "missing-url":
+        pr.pop("html_url")
+    elif fault == "missing-state":
+        pr.pop("state")
+    elif fault == "missing-merged":
+        pr.pop("merged")
+    elif fault == "merged":
+        pr["merged"] = True
+    elif fault == "merged-at":
+        pr["merged_at"] = "2026-09-08T08:00:00Z"
+    elif fault == "draft":
+        pr["draft"] = True
+    elif fault == "head":
+        pr["head"]["sha"] = NEXT_HEAD
+    elif fault == "body":
+        pr["body"] += "\ndrift"
+    elif fault == "second-lf":
+        pr["body"] += "\n\n"
+    elif fault == "crlf":
+        pr["body"] = pr["body"].replace("\n", "\r\n")
+    elif fault == "title-closer":
+        pr["title"] = "Fixes #3820"
+    elif fault == "pr-number":
+        pr["number"] = 3999
+    elif fault == "missing-comments":
+        comments.clear()
+    elif fault == "untrusted":
+        comments[0]["author_association"] = "NONE"
+    elif fault == "two-blocks":
+        comments[0]["body"] += "\n" + comments[0]["body"]
+    elif fault == "extra-raw-marker":
+        comments.append(_trusted_comment("verified issue-set merge authority:\n" + HEAD))
+    elif fault == "duplicate-key":
+        comments[0]["body"] = comments[0]["body"].replace(
+            '"repository":', '"repository":"other/repo","repository":',
+        )
+    elif fault == "duplicate-comment":
+        comments.append(copy.deepcopy(comments[0]))
+    elif fault in {"prepared", "merged-phase", "malformed-phase", "untrusted-phase"}:
+        comments.append(_trusted_comment(
+            'verified issue-set merge phase:\n```json\n'
+            + json.dumps({"phase": fault, "head_sha": HEAD, "run_id": receipt["run_id"]})
+            + '\n```'
+        ))
+        if fault == "malformed-phase":
+            comments[-1]["body"] = "verified issue-set merge phase:\nmalformed"
+        if fault == "untrusted-phase":
+            comments[-1]["author_association"] = "NONE"
+    elif fault == "missing-run":
+        overrides["expected_run_id"] = None
+    elif fault == "missing-accounting":
+        overrides["expected_repair_budget"] = None
+    else:
+        if fault == "extra-key":
+            receipt["extra"] = True
+        elif fault == "missing-key":
+            receipt.pop("body_sha256")
+        elif fault == "conflicting":
+            receipt["body_sha256"] = "c" * 64
+        elif fault == "foreign-receipt":
+            receipt["repository"] = "other/agentic-pkm-mvp"
+        elif fault == "noncase-receipt":
+            receipt["repository"] = REPOSITORY.lower() + "-other"
+        elif fault == "governing":
+            receipt["governing_issue"] = 3999
+        elif fault == "closing":
+            receipt["closing_issues"] = [3820]
+        elif fault == "supporting":
+            receipt["live_supporting_issues"] = [3820, 3823]
+        elif fault == "run":
+            receipt["run_id"] = "different-run"
+        elif fault == "accounting":
+            receipt["repair_budget"] = {}
+        comment = _trusted_comment(
+            "verified issue-set merge authority:\n```json\n"
+            + json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n```"
+        )
+        comments = [*comments, comment] if fault == "conflicting" else [comment]
+    assert _case_recovery(comments, pr, **overrides)["status"] == "ambiguous_neutralized_body"
+
+
+def test_repository_case_recovery_preserves_trail_and_restarts_exact_authority() -> None:
+    plan, pr, comments = _repository_case_recovery_fixture()
+    snapshot = copy.deepcopy((plan, pr, comments))
+    restoration = _case_recovery(comments, pr)["restoration"]
+    assert restored_body_matches_authority(plan["original_body"], restoration=restoration)
+    assert not restored_body_matches_authority(plan["original_body"] + "drift", restoration=restoration)
+    assert (plan, pr, comments) == snapshot
+    restored = {**pr, "body": plan["original_body"]}
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=restored, repository=REPOSITORY,
+    ) is None
+    context = {**_context(), "run_id": "new-canonical-attempt"}
+    next_plan = prepare_verified_merge(
+        context=context, pr=restored, live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    next_comments = [*comments, _trusted_comment(str(next_plan["authority_receipt_comment"]))]
+    # Authenticate while the original canonical body is still live, before any effect.
+    assert resolve_verified_merge_authority_receipt(
+        next_comments, pr=restored, repository=REPOSITORY,
+        expected_run_id=context["run_id"], expected_repair_budget=context["repair_budget"],
+    ) == next_plan["authority_receipt"]
+    assert next_plan["authority_receipt"]["repair_budget"] == plan["authority_receipt"]["repair_budget"]
+    assert next_comments[:-1] == comments == snapshot[2]
+    assert resolve_verified_merge_authority_receipt(
+        comments, pr=restored, repository=REPOSITORY,
+        expected_run_id=context["run_id"], expected_repair_budget=context["repair_budget"],
+    ) is None
+
+
 def test_neutralized_body_restoration_cli_uses_production_resolver(
     tmp_path: Path,
 ) -> None:
@@ -1532,6 +2067,8 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
     pr_path = tmp_path / "pr.json"
     comments_path = tmp_path / "comments.json"
     output_path = tmp_path / "restoration.json"
+    budget_path = tmp_path / "budget.json"
+    budget_path.write_text(json.dumps(_context()["repair_budget"]), encoding="utf-8")
     comments_path.write_text(
         json.dumps([_trusted_comment(str(plan["authority_receipt_comment"]))]),
         encoding="utf-8",
@@ -1543,6 +2080,8 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
                 sys.executable,
                 "-m",
                 "scripts.resolve_neutralized_body_restoration",
+                "--expected-run-id", str(_context()["run_id"]),
+                "--expected-repair-budget-json", str(budget_path),
                 "--pr-json",
                 str(pr_path),
                 "--comments-json",
@@ -1608,6 +2147,29 @@ def test_neutralized_body_restoration_cli_uses_production_resolver(
         "restoration_required": False,
         "status": "ambiguous_neutralized_body",
     }
+
+
+    case_plan, case_pr, case_comments = _repository_case_recovery_fixture()
+    pr_path.write_text(json.dumps(case_pr), encoding="utf-8")
+    comments_path.write_text(json.dumps(case_comments), encoding="utf-8")
+    case_recovery = _run()
+    assert case_recovery.returncode == 2, case_recovery.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload == _case_recovery(case_comments, case_pr)
+    candidate_path = tmp_path / "candidate.md"
+    candidate_path.write_text(str(case_plan["original_body"]), encoding="utf-8")
+    verified = subprocess.run(
+        [sys.executable, "-m", "scripts.verify_restored_pr_body",
+         "--restoration-json", str(output_path),
+         "--restored-body-file", str(candidate_path)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert verified.returncode == 0, verified.stderr
+    pr_path.write_text(json.dumps({**case_pr, "body": case_plan["original_body"]}), encoding="utf-8")
+    assert _run().returncode == 0
+    pr_path.write_text(json.dumps(case_pr), encoding="utf-8")
+    budget_path.write_text("{}", encoding="utf-8")
+    assert _run().returncode == 3
 
 
 def test_neutralized_body_restoration_fails_closed_without_unambiguous_evidence() -> None:

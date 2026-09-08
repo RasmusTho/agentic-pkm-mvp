@@ -53,10 +53,10 @@ Five execution roles. Each maps to exactly one canonical skill and stays in its 
 | Role (`name`) | Adapter file | Job | Canonical skill |
 |---|---|---|---|
 | `issue_set_coordinator` | `.codex/agents/issue-set-coordinator.toml` | Top-level/root execution role for issue-set planning and dispatch: readiness tables, pickup order, fan-out rationale, receipt reconciliation. Do not insert it as an extra subagent beneath a parent that already coordinates the same set. Coordinates only; does not implement. Defaults to Luna / low for deterministic intake and dispatch; judgment routes through the canonical TCD policy. | `.codex/skills/deliver-issue-set/SKILL.md` |
-| `slice_implementer` | `.codex/agents/slice-implementer.toml` | Implement exactly one bounded, strictly validated `agent:ready` issue end to end; Project Status is optional projection. | `.codex/skills/issue-to-code/SKILL.md` |
-| `issue_local_helper` | `.codex/agents/issue-local-helper.toml` | Answer one bounded read-only evidence, test-design, log-analysis, or fresh-review question for an issue owner; no writes or lifecycle authority. | `.codex/skills/issue-to-code/SKILL.md :: Issue Context Ownership And Bounded Delegation` |
-| `backlog_contract_maintainer` | `.codex/agents/backlog-contract-maintainer.toml` | Repair stale, malformed, duplicate, or drifted Issue/PR/label state plus optional Project projection. | `.codex/skills/issue-maintenance-change-control/SKILL.md` |
-| `verification_closer` | `.codex/agents/verification-closer.toml` | Verify a PR against its governing contract, check CI/review state, and close delivery. | `.codex/skills/verification-and-closure/SKILL.md` |
+| `slice_implementer` | `.codex/agents/slice-implementer.toml` | Implement exactly one bounded, strictly validated `agent:ready` issue end to end; Project Status is optional projection. Explicit intent: `general_delivery`; default carrier binding: Luna/xhigh. | `.codex/skills/issue-to-code/SKILL.md` |
+| `issue_local_helper` | `.codex/agents/issue-local-helper.toml` | Answer one bounded read-only evidence, test-design, log-analysis, or fresh-review question for an issue owner; no writes or lifecycle authority. Default: Luna/medium. | `.codex/skills/issue-to-code/SKILL.md :: Issue Context Ownership And Bounded Delegation` |
+| `backlog_contract_maintainer` | `.codex/agents/backlog-contract-maintainer.toml` | Repair stale, malformed, duplicate, or drifted Issue/PR/label state plus optional Project projection. Uses the shared `general_delivery` intent; stronger capability is an explicit TCD escalation. | `.codex/skills/issue-maintenance-change-control/SKILL.md` |
+| `verification_closer` | `.codex/agents/verification-closer.toml` | Verify a PR against its governing contract, check CI/review state, and close delivery. Explicit intent: `verification`; default strong binding is Astra/max, with Sol only as an explicit fallback. | `.codex/skills/verification-and-closure/SKILL.md` |
 
 The host-local verification dispatch consumer may launch or resume the coordinator session for this
 adapter, but it does not broaden the adapter's authority. Every independent review and re-review is
@@ -108,6 +108,14 @@ central `.codex/skills/klart/SKILL.md` closeout gate. The gate may route remaini
 owning workflow skill or produce a truthful handoff, but its recommendation does not change the
 handoff contract: `final_state` remains only `blocked | needs-human | handoff`; a worker must never
 self-attest `done`.
+
+Apply `.codex/skills/README.md :: Workflow continuation` at every role boundary. A helper returns
+evidence to its active caller; an issue owner executes the next skill through verified closure.
+Publication-only, pending-CI, and queued-verification receipts are intermediate progress, not
+terminal delivery handoffs. The coordinator resumes premature returns and follows any fenced host
+executor through reconciled effects. Only documented stop-loss, explicit user scope restriction,
+or an authenticated active successor transfer permits the originating issue session to stop early.
+These rules preserve the receipt enum and the lifecycle transfer protocol below.
 
 A `subagent_handoff_receipt` reports work to a coordinator; it does not by itself transfer Issue
 lifecycle authority. Replacing the sole writer or lifecycle owner requires a durable

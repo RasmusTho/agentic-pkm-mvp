@@ -147,3 +147,11 @@ Follow-up Issue: <#n or "none">
 ## Capturing learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. Apply authorized automation repairs
+through the configured update tool, verify readback, and resume the caller. Route required repo
+changes through the governance lane and `publish-pr`, or bounded follow-up through
+`issue-maintenance-change-control`; inspection-only scope returns findings. Missing tooling is
+investigated within its permission boundary before reporting a blocker.

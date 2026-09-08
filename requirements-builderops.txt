@@ -1,0 +1,8 @@
+# BuilderOps control-plane runtime closure.
+# Keep this manifest separate from Product's media/retrieval/LLM stack: the
+# image boot path is app.builderops.control_plane.{service,worker,migrate}.
+fastapi==0.136.3
+psycopg[binary]==3.2.10
+pydantic==2.12.0
+starlette==1.2.1
+uvicorn==0.37.0

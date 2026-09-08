@@ -16,12 +16,36 @@ _DECISIONS_MIGRATION_HINT = (
 )
 
 
+_DECISIONS_SCHEMA_ASSERTED = False
+
+
 def _row_value(row: Any, key: str, index: int) -> Any:
     return row.get(key) if isinstance(row, dict) else row[index]
 
 
+def reset_decisions_schema_assertion_memo() -> None:
+    """Reset the process memo after a test mutates the decisions schema."""
+    global _DECISIONS_SCHEMA_ASSERTED
+    _DECISIONS_SCHEMA_ASSERTED = False
+
+
 def assert_decisions_schema(conn: Any) -> None:
-    """Assert the Alembic-owned decisions schema without runtime mutation."""
+    """Assert the Alembic-owned decisions schema without runtime mutation.
+
+    Compose runs migrations before application processes start, so a successful
+    process-lifetime assertion is stable for normal runtime writes. Tests that
+    deliberately alter schema state must call
+    ``reset_decisions_schema_assertion_memo`` before reasserting it.
+    """
+    global _DECISIONS_SCHEMA_ASSERTED
+    if _DECISIONS_SCHEMA_ASSERTED:
+        return
+    _assert_decisions_schema_uncached(conn)
+    _DECISIONS_SCHEMA_ASSERTED = True
+
+
+def _assert_decisions_schema_uncached(conn: Any) -> None:
+    """Perform the first-call fail-loud catalog assertion."""
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.decisions')")
         table_row = cur.fetchone()

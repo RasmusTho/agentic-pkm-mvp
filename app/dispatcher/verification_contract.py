@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 
@@ -39,6 +41,20 @@ _CLOSING_ATTEMPT_TARGET = (
 # PR-controlled API fan-out.
 MAX_CLOSING_ISSUES = 10
 NEUTRALIZED_CLOSING_ISSUES_PREFIX = "Verified-Closing-Issues:"
+
+
+def verification_run_id_for_canary(
+    repository: str, pr_number: int, stage: str
+) -> str:
+    """Derive the stable run identity shared by canary request consumers."""
+
+    identity = json.dumps(
+        [repository.casefold(), pr_number, stage],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return f"vrun-{hashlib.sha256(identity.encode()).hexdigest()[:16]}"
 FINAL_REVIEW_ROUNDS_LINE_PATTERN = re.compile(
     r"(?m)^Final-Review-Rounds:[ \t]*.*$"
 )

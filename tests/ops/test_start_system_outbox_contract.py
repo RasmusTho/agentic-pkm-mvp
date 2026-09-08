@@ -23,7 +23,7 @@ def _compose_env(service: dict) -> dict[str, str | None]:
     return env
 
 
-def test_compose_watcher_worker_have_db_outbox_env() -> None:
+def test_compose_runtime_services_keep_vault_selectors_in_env_file() -> None:
     compose = _load_compose("docker-compose.yaml")
     services = compose.get("services") or {}
     for service_name in ("api", "watcher", "worker"):
@@ -31,9 +31,25 @@ def test_compose_watcher_worker_have_db_outbox_env() -> None:
         env = _compose_env(service)
         env_file = service.get("env_file") or []
         assert "./config/runtime.defaults.env" in env_file
-        assert "VAULT_SYSTEM_DIR_REL" in env
-        assert "VAULT_INBOX_DIR_REL" in env
-        assert "VAULT_DESK_DIR_REL" in env
+        runtime_env = next(
+            (
+                entry
+                for entry in env_file
+                if isinstance(entry, dict)
+                and entry.get("path") == "${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}"
+            ),
+            None,
+        )
+        assert runtime_env == {
+            "path": "${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}",
+            "required": False,
+        }
+        # The governed runtime env_file is the source of the selected vault
+        # layout. A blank base `environment:` entry would shadow those values
+        # and is the deployment defect covered by #5363.
+        assert "VAULT_SYSTEM_DIR_REL" not in env
+        assert "VAULT_INBOX_DIR_REL" not in env
+        assert "VAULT_DESK_DIR_REL" not in env
 
 
 def test_compose_watcher_has_auto_exec_env() -> None:

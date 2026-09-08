@@ -119,15 +119,17 @@ def test_hot_path_doc_defers_escalation_and_names_direct_repair_contract() -> No
         assert fragment in text, fragment
 
 
-def test_pr_integration_skill_allows_issue_backed_or_direct_repair_prs() -> None:
+def test_pr_integration_skill_allows_all_approved_pr_lanes() -> None:
     text = _read(".codex/skills/pr-integration/SKILL.md")
 
     for fragment in (
         "an issue-backed PR exists with a bounded governing slice Issue",
-        "a bounded direct repair PR exists whose body contains a complete `Direct Repair` block.",
-        "A governing issue is required for normal planned workflow; a bounded direct repair PR may proceed without one",
+        "a bounded direct repair PR exists whose body contains a complete `Direct Repair` block, or",
+        "an issue-free docs-authoring or governance PR satisfies its approved lane contract.",
+        "A governing issue is required for issue-backed implementation.",
+        "do not invent an Issue or require a lane detour for routine integration.",
         "Do not require a separate governance/docs lane checkbox when the `Direct Repair` block already states `Type` and `Validation`.",
-        "Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.",
+        "Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor an approved issue-free docs/governance or Direct Repair PR.",
     ):
         assert fragment in text, fragment
 
@@ -172,6 +174,61 @@ def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
         "`closingIssuesReferences` is empty",
     ):
         assert fragment in normalized_text
+
+
+def test_verified_merge_uses_authenticated_closing_projection_convergence() -> None:
+    closure_skill = _read(
+        ".codex/skills/verification-and-closure/SKILL.md"
+    )
+    process_map = _read("docs/development/BUILDER_SYSTEM_PROCESS_MAP.md")
+    phase_cli = _read("scripts/build_verified_issue_set_merge_phase.py")
+    convergence_cli = _read(
+        "scripts/await_verified_merge_projection_convergence.py"
+    )
+    verification_consumer = _read("app/dispatcher/verification_consumer.py")
+    verification_github = _read("app/dispatcher/verification_github.py")
+
+    for fragment in (
+        "verified-merge-closing-projection-convergence.v1",
+        "scripts/await_verified_merge_projection_convergence.py",
+        "two empty admissible reads separated by bounded backoff",
+        "one fresh final empty read",
+        "reuse that receipt",
+        "never post a duplicate authority receipt",
+        "restore only the authority-authenticated canonical body",
+        "no phase, merge, Issue, dispatcher, or lifecycle effect",
+        "post-merge event enumeration and exact closure-attribution reconciliation",
+    ):
+        assert fragment in closure_skill or fragment in process_map, fragment
+
+    for fragment in (
+        "--projection-convergence-json",
+        "--comments-json",
+        "--final-projection-observation-json",
+        "phase requires projection convergence",
+        "one authenticated durable projection convergence",
+        "prepared phase requires projection convergence and final observation",
+    ):
+        assert fragment in phase_cli, fragment
+
+    for fragment in (
+        "closingIssuesReferences(first: 11)",
+        "userContentEdits(first: 1)",
+        "rateLimit { cost remaining resetAt }",
+        '"status": "failed_closed"',
+        "return 2 if failure == \"timeout\" else 3",
+    ):
+        assert fragment in convergence_cli, fragment
+
+    for reader in (verification_consumer, verification_github):
+        assert "userContentEdits(first: 1)" in reader
+        assert "userContentEdits(last: 1)" not in reader
+
+    operating_model = _read("docs/architecture/SBS_OPERATING_MODEL.md")
+    assert "verified-merge convergence rails" in operating_model
+    assert "projection reads never replace post-merge closure attribution" in (
+        operating_model
+    )
 
 
 def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_traceability() -> None:

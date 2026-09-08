@@ -10,18 +10,23 @@ configuration lookup.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import ClassVar, Final, Literal, Sequence, TypeAlias
+from typing import ClassVar, Final, Literal, Protocol, Sequence, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.builderops.delivery_orchestration_contracts import (
     CanonicalDeliveryContract,
     NonEmptyStr,
+    RepositoryId,
     Sha256,
     UtcTimestamp,
     canonical_hash,
 )
-from app.components.settings.providers_loader import ProviderCensus
+from app.components.settings.providers_loader import (
+    BuilderReasoningEffort,
+    BuilderSelectionIntent,
+    ProviderCensus,
+)
 
 
 ALLOCATION_OBSERVATION_VERSION: Final[
@@ -79,13 +84,11 @@ AttemptTransitionReason: TypeAlias = Literal[
     "spark_allocation_unavailable_at_launch",
     "capability_insufficient",
 ]
-ReasoningEffort: TypeAlias = Literal[
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-]
+ReasoningEffort: TypeAlias = BuilderReasoningEffort
+SelectionIntent: TypeAlias = BuilderSelectionIntent
+CarrierName: TypeAlias = Literal["codex", "claude"]
+
+
 def _parse_utc(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
 
@@ -129,6 +132,7 @@ class ExecutionRouteRequest(CanonicalDeliveryContract):
     policy_version: Literal[
         "builderops.execution-routing-policy.v1"
     ] = EXECUTION_ROUTING_POLICY_VERSION
+    repository: RepositoryId | None = None
     issue_number: int = Field(gt=0)
     work_class: WorkClass
     risk: Literal["low", "medium", "high", "critical"]
@@ -169,6 +173,12 @@ class ExecutionRouteDecision(CanonicalDeliveryContract):
     verification_profile_hash: Sha256
     delivery_blocked: Literal[False] = False
     effect_authority: Literal["none-shadow-policy-only"] = "none-shadow-policy-only"
+
+    @property
+    def selection_intent(self) -> Literal["coordination"]:
+        """Bounded-fast is always a coordination decision, never a delivery route."""
+
+        return "coordination"
 
     @model_validator(mode="after")
     def _validate_transition(self) -> "ExecutionRouteDecision":
@@ -235,6 +245,86 @@ class ResolvedExecutionTarget(BaseModel):
             "reasoning_effort": self.reasoning_effort,
             "configuration_ref": self.configuration_ref,
         }
+
+
+class CarrierInvocation(BaseModel):
+    """Carrier-neutral invocation binding after target resolution."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    schema_version: Literal["builderops.carrier-invocation.v1"] = (
+        "builderops.carrier-invocation.v1"
+    )
+    carrier: CarrierName
+    selection_intent: SelectionIntent
+    capability: CapabilityTier
+    provider: str | None = None
+    model: str | None = None
+    reasoning_effort: ReasoningEffort
+    launchable: bool
+
+
+class CarrierAdapter(Protocol):
+    """Small seam shared by active and future Builder carriers."""
+
+    carrier: CarrierName
+    active: bool
+
+    def bind(
+        self,
+        target: ResolvedExecutionTarget,
+        *,
+        selection_intent: SelectionIntent,
+    ) -> CarrierInvocation: ...
+
+
+class CodexCarrierAdapter:
+    carrier: CarrierName = "codex"
+    active = True
+
+    def bind(
+        self,
+        target: ResolvedExecutionTarget,
+        *,
+        selection_intent: SelectionIntent,
+    ) -> CarrierInvocation:
+        return CarrierInvocation(
+            carrier=self.carrier,
+            selection_intent=selection_intent,
+            capability=target.capability,
+            provider=target.provider,
+            model=target.model,
+            reasoning_effort=target.reasoning_effort,
+            launchable=True,
+        )
+
+
+class ClaudeCarrierAdapter:
+    """Compatibility contract for Claude without activating a live launcher."""
+
+    carrier: CarrierName = "claude"
+    active = False
+
+    def bind(
+        self,
+        target: ResolvedExecutionTarget,
+        *,
+        selection_intent: SelectionIntent,
+    ) -> CarrierInvocation:
+        return CarrierInvocation(
+            carrier=self.carrier,
+            selection_intent=selection_intent,
+            capability=target.capability,
+            reasoning_effort=target.reasoning_effort,
+            launchable=False,
+        )
+
+
+def get_carrier_adapter(carrier: CarrierName) -> CarrierAdapter:
+    if carrier == "codex":
+        return CodexCarrierAdapter()
+    if carrier == "claude":
+        return ClaudeCarrierAdapter()
+    raise ValueError(f"unsupported Builder carrier: {carrier}")
 
 
 class ExecutionAttemptObservation(CanonicalDeliveryContract):
@@ -436,8 +526,10 @@ def resolve_execution_target(
     *,
     channel: str,
     capability: CapabilityTier,
+    model_id: str | None = None,
+    selection_intent: SelectionIntent | None = None,
 ) -> ResolvedExecutionTarget:
-    """Late-bind a capability tier through the declared Builder census."""
+    """Late-bind a capability tier and optional model choice through the census."""
 
     profiles = census.runtime_channels.builder_execution.get(channel)
     if profiles is None:
@@ -445,19 +537,100 @@ def resolve_execution_target(
     profile = profiles.get(capability)
     if profile is None or profile.capability_tier != capability:
         raise ValueError("declared census has no matching Builder execution capability")
+    if selection_intent is not None and selection_intent not in profile.selection_intents:
+        raise ValueError(
+            "selection intent is not assigned to the declared Builder execution capability"
+        )
     provider = census.provider(profile.provider)
-    if not any(model.id == profile.model for model in provider.models):
+    if model_id is not None:
+        selected_model = model_id
+    elif selection_intent is not None:
+        selected_model = profile.selection_intent_models.get(
+            selection_intent, profile.model
+        )
+    else:
+        # No-intent resolution is the explicit capability-profile fallback.
+        # Strong reasoning and verification must opt into their provider-neutral
+        # intents so an explicit Sol compatibility override remains Sol.
+        selected_model = profile.model
+    selectable_models = profile.selectable_models or [profile.model]
+    if selected_model not in selectable_models:
+        raise ValueError(
+            "requested model is not selectable for the declared Builder execution capability"
+        )
+    if not any(model.id == selected_model for model in provider.models):
         raise ValueError("Builder execution profile references an undeclared model")
+    reasoning_effort = profile.model_reasoning_efforts.get(selected_model, profile.reasoning_effort)
+    # An explicit model is an intentional fallback/override.  Keep its
+    # declared model-specific reasoning rather than applying the default
+    # intent profile (for example, Sol/high remains Sol/high while Astra/max
+    # remains Astra/max).
+    if selection_intent is not None and model_id is None:
+        reasoning_effort = profile.selection_intent_reasoning_efforts.get(
+            selection_intent, reasoning_effort
+        )
     return ResolvedExecutionTarget(
         capability=capability,
         provider=profile.provider,
-        model=profile.model,
-        reasoning_effort=profile.reasoning_effort,
+        model=selected_model,
+        reasoning_effort=reasoning_effort,
         configuration_ref=(
             "docs/settings/models/providers.yaml"
             f"#builder_execution.{channel}.{capability}"
         ),
     )
+
+
+def resolve_execution_target_for_intent(
+    census: ProviderCensus,
+    *,
+    channel: str,
+    selection_intent: SelectionIntent,
+    model_id: str | None = None,
+) -> ResolvedExecutionTarget:
+    """Resolve a provider-neutral intent through the declared census."""
+
+    profiles = census.runtime_channels.builder_execution.get(channel)
+    if profiles is None:
+        raise ValueError("declared census has no Builder execution channel")
+    matches = [
+        profile
+        for profile in profiles.values()
+        if selection_intent in profile.selection_intents
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "declared census must assign each selection intent to exactly one "
+            "Builder execution capability"
+        )
+    return resolve_execution_target(
+        census,
+        channel=channel,
+        capability=matches[0].capability_tier,
+        model_id=model_id,
+        selection_intent=selection_intent,
+    )
+
+
+def capability_aliases_for_channel(
+    census: ProviderCensus, *, channel: str
+) -> dict[str, CapabilityTier]:
+    """Return declared model/capability aliases for provider-neutral receipts."""
+
+    profiles = census.runtime_channels.builder_execution.get(channel)
+    if profiles is None:
+        raise ValueError("declared census has no Builder execution channel")
+    aliases: dict[str, CapabilityTier] = {
+        capability: cast(CapabilityTier, capability) for capability in profiles
+    }
+    for capability, profile in profiles.items():
+        tier = cast(CapabilityTier, capability)
+        for model in {profile.model, *profile.selectable_models}:
+            existing = aliases.get(model)
+            if existing is not None and existing != tier:
+                raise ValueError("declared Builder model aliases are ambiguous")
+            aliases[model] = tier
+    return aliases
 
 
 def create_execution_attempt(
@@ -574,6 +747,8 @@ def build_execution_routing_canary_receipt(
     """
 
     validate_route_decision(request, decision)
+    if request.repository is None:
+        raise ValueError("canary receipt requires a canonical originating repository")
     if not 1 <= len(attempts) <= 2:
         raise ValueError("Phase 2 canary permits at most one bounded Spark/Luna fallback")
     first = attempts[0]
@@ -608,7 +783,11 @@ def build_execution_routing_canary_receipt(
 
     return {
         "schema_version": PHASE2_CANARY_RECEIPT_VERSION,
-        "candidate": {"issue_number": request.issue_number, "work_class": request.work_class},
+        "candidate": {
+            "repository": request.repository,
+            "issue_number": request.issue_number,
+            "work_class": request.work_class,
+        },
         "route": {
             "route_lineage_id": decision.route_lineage_id,
             "route_decision_id": decision.decision_id,
@@ -627,6 +806,7 @@ def build_execution_routing_canary_receipt(
             {
                 "attempt_id": attempt.attempt_id,
                 "attempt_hash": attempt.content_hash,
+                "repository": request.repository,
                 "attempt_number": attempt.attempt_number,
                 "mode": attempt.mode,
                 "requested_capability": attempt.requested_capability,
@@ -675,6 +855,14 @@ __all__ = [
     "PHASE2_CANARY_RECEIPT_VERSION",
     "RESOLVED_EXECUTION_TARGET_VERSION",
     "ResolvedExecutionTarget",
+    "CarrierAdapter",
+    "CarrierInvocation",
+    "CarrierName",
+    "ClaudeCarrierAdapter",
+    "CodexCarrierAdapter",
+    "SelectionIntent",
+    "get_carrier_adapter",
+    "resolve_execution_target_for_intent",
     "WorkClass",
     "admit_phase2_canary",
     "build_execution_routing_canary_receipt",

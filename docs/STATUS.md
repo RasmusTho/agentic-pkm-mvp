@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-07
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
@@ -143,6 +143,17 @@ promote public internet readiness.
   undecided pending state, while an already-applied merge or reject remains an idempotent no-op for
   later undo. The bounded contract and authority details remain owned by
   `docs/MIMER_IPAD_THINKING_CANVAS/SIDE_BY_SIDE_ENTITY_CONFIRMATION_ON_IPAD.md`.
+- Entity-review target-evolution lineage was accepted through PR #5396 / #4351, merged at
+  `2e907eed2e276d0f43ad30ada6da680327df5e9f`. The accepted parent receipt records 76 focused tests
+  against the dedicated non-production PostgreSQL lane and current-head CI. This receipt does not
+  claim production deployment or terminal EROJ-03 recovery acceptance; the latter belongs to the
+  complete partial-failure replay on parent #4349.
+- The crash-safe entity-review operation journal is terminally verified across EROJ-01 through
+  EROJ-03. The parent #4349 terminal recovery-matrix receipt records 19 fresh dev-PostgreSQL
+  passes across every partial-failure row, including caller rollback, target evolution, repeated
+  split recovery, client-to-Hub canonicalization, and schema parity, with the exact accepted child
+  heads and merge SHAs. This confirms the delivered mechanism on the non-production lane only; it
+  does not claim production deployment or migration.
 - Governed media ingress with durable receipts is shipped (CDLM-01, #4384):
   `POST /api/heimdal/capture/media` acknowledges a capture only after the original is durably in the
   encrypted raw store **and** the `heimdal.capture.media.admitted` outbox event is committed, so a
@@ -423,6 +434,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 ## Current Snapshot
 
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
+- The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
+  ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP
+  operations, with no listener, generic vault write, receipt read-back, or adapter-owned durable
+  state. Its current acceptance evidence is one hermetic JSON-RPC stdio-client journey against an
+  isolated governed runtime (parent #3366); this is not a claim of general third-party-client or
+  production deployment support.
 - Context Bundles production runtime integration is shipped and closed: parent #1559 closed
   2026-06-04 after the read-only construction route (#1560), real retrieval emission (#1562),
   orientation/resurfacing consumption (#1563), governed write-proposal linkage (#1564), and the

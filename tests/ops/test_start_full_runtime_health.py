@@ -8,6 +8,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from app.instance.instance_state import InstanceStateLayout
 from app.instance.runtime import InstanceRegistryRuntime
 from app.instance.settings_rebind import (
@@ -148,6 +150,10 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
         if cmd == "config":
             print('{{"services": {{"db": {{"labels": {{"com.agentic-pkm.mvr05.db-role": "server"}}}}, "instance-state-init": {{"labels": {{"com.agentic-pkm.mvr05.db-role": "fence-controller"}}}}, "migrate": {{"command": ["/app/scripts/run_migrations.sh"], "depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "migration-runner"}}}}, "api": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}, "worker": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}, "watcher": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}, "heimdal-capture-watch": {{"depends_on": ["db"], "labels": {{"com.agentic-pkm.mvr05.db-role": "client"}}}}}}}}')
             raise SystemExit(0)
+        if rest == ["stop", "watcher"]:
+            raise SystemExit(int(os.environ.get("STARTUP_HARNESS_WATCHER_STOP_FAILURE", "0")))
+        if rest == ["start", "watcher"]:
+            raise SystemExit(0)
         if cmd == "up":
             raise SystemExit(0)
         if cmd == "logs":
@@ -186,12 +192,19 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
                 print("0")
             elif service == "api" and "settings-rebind-no-lifecycle" in command:
                 registry_path = os.environ["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"]
+                check_only = "--check-only" in command
+                if (
+                    not check_only
+                    and os.environ.get("STARTUP_HARNESS_REBIND_RECONCILE_FAILURE") == "1"
+                ):
+                    raise SystemExit(1)
                 completed = subprocess.run(
                     [
                         sys.executable,
                         "-m",
                         "app.instance.runtime",
                         "settings-rebind-no-lifecycle",
+                        *( ["--check-only"] if check_only else [] ),
                         "--registry-path",
                         registry_path,
                     ],
@@ -416,7 +429,23 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
     assert "runtime verified: true" in result.stdout
 
 
-def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("stop_failure", "phase", "reload_revision", "reconcile_failure"),
+    [
+        (False, "prepared", 0, False),
+        (True, "prepared", 0, False),
+        (False, "committed", 0, False),
+        (False, "committed", 1, False),
+        (False, "prepared", 0, True),
+    ],
+)
+def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
+    tmp_path: Path,
+    stop_failure: bool,
+    phase: str,
+    reload_revision: int,
+    reconcile_failure: bool,
+) -> None:
     health = _deferred_index_health()
     health["ok"] = True
     health["required_ok"] = True
@@ -444,17 +473,20 @@ def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path
     )
     prepared = SettingsRebindRecord(
         desired_revision=1,
-        applied_revision=0,
-        phase="prepared",
+        applied_revision=0 if phase == "prepared" else 1,
+        phase=phase,
         lifecycle_posture="watcher",
         prior_binding_id=None,
         candidate_binding_id="binding-b",
+        reload_revision=reload_revision,
     )
     runtime.registry.set_settings_rebind_state(
         prepared.as_payload(),
         _capability=STORAGE_MUTATION_CAPABILITY,
     )
     env["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"] = str(runtime.registry.path)
+    env["STARTUP_HARNESS_WATCHER_STOP_FAILURE"] = "1" if stop_failure else "0"
+    env["STARTUP_HARNESS_REBIND_RECONCILE_FAILURE"] = "1" if reconcile_failure else "0"
 
     result = run_runtime_start(
         ["bash", "scripts/start_full_system.sh"],
@@ -464,6 +496,60 @@ def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path
         total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
+    if phase == "committed" and reload_revision == 0:
+        assert result.returncode != 0
+        assert "cannot stop the watcher while a committed settings rebind is pending" in result.stderr
+        assert runtime.open_settings_rebind_store().read() == prepared
+        progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
+        assert "--check-only" in progress
+        assert " stop watcher" not in progress
+        assert "settings-rebind-no-lifecycle --registry-path" not in progress
+        return
+
+    if phase == "committed":
+        assert result.returncode == 0, result.stderr + result.stdout
+        record = runtime.open_settings_rebind_store().read()
+        assert record.phase == "no_lifecycle"
+        assert record.reload_revision == 1
+        progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
+        progress_lines = progress.splitlines()
+        watcher_stop_index = next(
+            index for index, line in enumerate(progress_lines) if " stop watcher" in line
+        )
+        acknowledgement_index = next(
+            index
+            for index, line in enumerate(progress_lines)
+            if "settings-rebind-no-lifecycle --registry-path" in line
+        )
+        assert watcher_stop_index < acknowledgement_index
+        return
+
+    if stop_failure:
+        assert result.returncode != 0
+        assert "could not stop the existing watcher" in result.stderr
+        assert runtime.open_settings_rebind_store().read() == prepared
+        progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
+        assert "settings-rebind-no-lifecycle --registry-path" not in progress
+        return
+
+    if reconcile_failure:
+        assert result.returncode != 0
+        assert "could not reconcile durable settings rebind lifecycle" in result.stderr
+        assert runtime.open_settings_rebind_store().read() == prepared
+        progress_lines = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        watcher_stop_index = next(
+            index for index, line in enumerate(progress_lines) if " stop watcher" in line
+        )
+        watcher_restart_index = next(
+            index
+            for index, line in enumerate(progress_lines)
+            if " start watcher" in line
+        )
+        assert watcher_stop_index < watcher_restart_index
+        return
+
     assert result.returncode == 0, result.stderr + result.stdout
     record = runtime.open_settings_rebind_store().read()
     assert record.phase == "no_lifecycle"
@@ -471,6 +557,16 @@ def test_no_vault_startup_entrypoint_records_durable_no_lifecycle(tmp_path: Path
     assert record.desired_revision == record.applied_revision == 1
     progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
     assert "settings-rebind-no-lifecycle" in progress
+    progress_lines = progress.splitlines()
+    watcher_stop_index = next(
+        index for index, line in enumerate(progress_lines) if " stop watcher" in line
+    )
+    acknowledgement_index = next(
+        index
+        for index, line in enumerate(progress_lines)
+        if "settings-rebind-no-lifecycle --registry-path" in line
+    )
+    assert watcher_stop_index < acknowledgement_index
 
 
 def test_prod_start_full_rejects_deferred_index_rebuild(tmp_path: Path) -> None:

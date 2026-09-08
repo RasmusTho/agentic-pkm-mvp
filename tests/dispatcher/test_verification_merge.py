@@ -29,6 +29,10 @@ from app.dispatcher.verified_merge import (
     fixed_verified_merge_commit_title,
     prepare_verified_merge,
 )
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
+    projection_phase_kwargs,
+)
 from tests.dispatcher.builderops_verification_fakes import FakeBuilderOpsClient
 from tests.dispatcher.verification_helpers import (
     HEAD,
@@ -90,6 +94,12 @@ class RepositoryAuthority:
                     "fixed_commit_message": (
                         FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
                     ),
+                    "body_edit": {
+                        "node_id": "UCE_test_latest",
+                        "edited_at": "2026-09-08T05:00:00Z",
+                        "editor_login": "RasmusTho",
+                        "editor_association": "OWNER",
+                    },
                 }
             ]
             * 20
@@ -199,6 +209,25 @@ class Credentials:
     def resolve(self, **values):
         self.calls.append(values)
         return object()
+
+
+class RejectingBoundaryPreparedRepository(RepositoryAuthority):
+    def __init__(
+        self,
+        *,
+        prepared_gates: list[dict[str, object]],
+        **kwargs,
+    ) -> None:
+        super().__init__(prepared_gates=prepared_gates, **kwargs)
+        self.prepared_gate_calls = 0
+
+    def verified_merge_prepared(self, *args, **kwargs):
+        self.prepared_gate_calls += 1
+        if self.prepared_gate_calls >= 3:
+            raise MergeAuthorityError(
+                "live prepared authority rejected raced body edit"
+            )
+        return super().verified_merge_prepared(*args, **kwargs)
 
 
 class CrashCredentials(Credentials):
@@ -320,6 +349,31 @@ class CrashAfterReconcileOutbox(Outbox):
             evidence=evidence,
         )
         raise SystemExit("simulated crash after durable reconciliation")
+
+
+class FailingReconcileOutbox(Outbox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fail_once = True
+
+    def reconcile(
+        self,
+        claim,
+        *,
+        observed_applied: bool,
+        terminal_unknown: bool = False,
+        evidence,
+    ):
+        self.calls.append("reconcile")
+        if self.fail_once:
+            self.fail_once = False
+            raise RuntimeError("simulated reconciliation failure")
+        return super().reconcile(
+            claim,
+            observed_applied=observed_applied,
+            terminal_unknown=terminal_unknown,
+            evidence=evidence,
+        )
 
 
 class BlockingReviewWinsIntentRaceClient(FakeBuilderOpsClient):
@@ -603,6 +657,12 @@ def test_merge_revalidates_protected_manifest_and_repo_credential_binding() -> N
     assert repository.last_merge["expected_head_sha"] == HEAD
     assert repository.last_merge["expected_base_sha"] == BASE
     assert repository.last_merge["expected_manifest_blob_sha"] == "blob-1"
+    assert repository.last_merge["expected_body_edit"] == {
+        "node_id": "UCE_test_latest",
+        "edited_at": "2026-09-08T05:00:00Z",
+        "editor_login": "RasmusTho",
+        "editor_association": "OWNER",
+    }
     assert repository.last_merge[
         "commit_title"
     ] == fixed_verified_merge_commit_title(3603)
@@ -880,6 +940,114 @@ def test_timed_out_merge_reconciles_before_retry() -> None:
 
     assert receipt.outcome == "retry_after_readback"
     assert repository.calls == ["merge", "readback"]
+
+
+def test_real_merge_rechecks_prepared_authority_at_effect_boundary() -> None:
+    ledger, run, outbox = claimed_run()
+    prepared = {
+        "contract": "verified_merge_prepared_gate.v1",
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "neutralized_body_sha256": "a" * 64,
+        "authority_sha256": "b" * 64,
+        "phase_sha256": "c" * 64,
+        "closing_reference_count": 0,
+    }
+    repository = RepositoryAuthority(
+        prepared_gates=[
+            prepared,
+            prepared,
+            {**prepared, "body_edit": {"node_id": "raced-body-edit"}},
+        ]
+    )
+
+    with pytest.raises(
+        MergeAuthorityError, match="changed at the effect boundary"
+    ):
+        VerificationMergeExecutor(
+            ledger, outbox, repository, Credentials()
+        ).execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert repository.calls == []
+    assert outbox.state == "succeeded"
+
+
+def test_rejected_effect_boundary_authority_terminalizes_no_effect() -> None:
+    ledger, run, outbox = claimed_run()
+    prepared = {
+        "contract": "verified_merge_prepared_gate.v1",
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "neutralized_body_sha256": "a" * 64,
+        "authority_sha256": "b" * 64,
+        "phase_sha256": "c" * 64,
+        "closing_reference_count": 0,
+    }
+    repository = RejectingBoundaryPreparedRepository(
+        prepared_gates=[prepared, prepared],
+        merged=False,
+    )
+    repository.manifest_blobs = iter(["blob-1", "blob-1", "blob-1"])
+
+    executor = VerificationMergeExecutor(ledger, outbox, repository, Credentials())
+    with pytest.raises(MergeAuthorityError, match="rejected raced body edit"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert repository.calls == []
+    assert outbox.state == "succeeded"
+    receipt = executor.recover(run)
+
+    assert receipt.outcome == "terminal_no_effect"
+    assert repository.prepared_gate_calls == 3
+
+
+def test_recovery_fences_unrecorded_boundary_rejection_before_live_gate() -> None:
+    ledger, run, original_outbox = claimed_run()
+    outbox = FailingReconcileOutbox(
+        run.run_id,
+        payload_loader=original_outbox.payload_loader,
+    )
+    ledger.effect_outbox = outbox
+    prepared = {
+        "contract": "verified_merge_prepared_gate.v1",
+        "governing_issue": 3603,
+        "closing_issues": [3603],
+        "neutralized_body_sha256": "a" * 64,
+        "authority_sha256": "b" * 64,
+        "phase_sha256": "c" * 64,
+        "closing_reference_count": 0,
+    }
+    repository = RejectingBoundaryPreparedRepository(
+        prepared_gates=[prepared, prepared],
+        merged=False,
+    )
+    repository.manifest_blobs = iter(
+        ["blob-1", "blob-1", "blob-1", "blob-1"]
+    )
+    repository.base_reads = iter([BASE, BASE, BASE])
+    executor = VerificationMergeExecutor(ledger, outbox, repository, Credentials())
+
+    with pytest.raises(RuntimeError, match="reconciliation failure"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id or "",
+        )
+
+    assert outbox.state == "unknown"
+    receipt = executor.recover(run)
+
+    assert receipt.outcome == "terminal_no_effect"
+    assert repository.prepared_gate_calls == 4
+    assert "recover" in outbox.calls
 
 
 def test_response_loss_reconciles_before_retry() -> None:
@@ -1317,9 +1485,10 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
 
 
 @pytest.mark.parametrize(
-    ("closing_nodes", "accepted"),
+    ("closing_nodes", "forged_final_digest", "accepted"),
     [
-        ([], True),
+        ([], False, True),
+        ([], True, False),
         (
             [
                 {
@@ -1328,11 +1497,13 @@ def test_live_adapter_loads_manifest_from_exact_protected_base(
                 }
             ],
             False,
+            False,
         ),
     ],
 )
 def test_live_adapter_authenticates_exact_prepared_merge_window(
     closing_nodes: list[dict[str, object]],
+    forged_final_digest: bool,
     accepted: bool,
 ) -> None:
     repository = REPO.lower()
@@ -1380,19 +1551,36 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
         **original_pr,
         "body": plan["neutralized_body"],
     }
+    convergence_kwargs = projection_phase_kwargs(
+        authority_receipt, prepared_pr
+    )
+    convergence_receipt = convergence_kwargs["projection_convergence_receipt"]
+    assert isinstance(convergence_receipt, Mapping)
+    body_edit = convergence_receipt["body_edit"]
+    assert isinstance(body_edit, Mapping)
     phase = build_verified_merge_phase(
         authority_receipt=authority_receipt,
         phase="prepared",
         pr=prepared_pr,
+        **convergence_kwargs,
+    )
+    phase_receipt = dict(phase["phase_receipt"])
+    if forged_final_digest:
+        phase_receipt["final_projection_observation_sha256"] = "f" * 64
+    phase_comment = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(phase_receipt, sort_keys=True, separators=(",", ":"))
+        + "\n```"
     )
     comments = [
         {
             "author_association": "COLLABORATOR",
             "body": plan["authority_receipt_comment"],
         },
+        projection_convergence_comment(convergence_kwargs),
         {
             "author_association": "COLLABORATOR",
-            "body": phase["phase_receipt_comment"],
+            "body": phase_comment,
         },
     ]
 
@@ -1408,6 +1596,18 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
                     "data": {
                         "repository": {
                             "pullRequest": {
+                                "userContentEdits": {
+                                    "nodes": [
+                                        {
+                                            "id": body_edit["node_id"],
+                                            "editedAt": body_edit["edited_at"],
+                                            "editor": {
+                                                "login": body_edit["editor_login"],
+                                            },
+                                        }
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
                                 "closingIssuesReferences": {
                                     "nodes": closing_nodes,
                                     "pageInfo": {"hasNextPage": False},

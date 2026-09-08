@@ -50,15 +50,15 @@ inventoried in `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md` (advisory snapsh
 directions are deliberately kept separate. **Direction A — assistant connectors** (Claude/agent
 sessions connecting to third-party MCP servers such as Home Assistant, Todoist, Drafts, Google
 Workspace) is operator configuration, not backlog work, and creates no roadmap claims.
-**Direction B — Mimer as an MCP client adapter** is the first build candidate: ADR-0061 now
-accepts MCP as an additional adapter under A2/B1/C1, so the next bounded slice may build a thin
-stdio-only sidecar over the existing ask, governed-capture, retrieve/search, read-note, and health
-endpoints. Capture's response already carries its governed receipt; no separate receipt read-back
-endpoint is claimed. The adapter preserves the authority envelope the `mimer-*` skills and
-`docs/contracts/MIMER_CLIENT_CONTRACT.md` encode; it enters the backlog only through
-feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is internal plumbing,
-not a transport). The accepted contract still requires implementation-level dependency/filesystem
-isolation and a fixed route allowlist; process separation alone is not enforcement. A second build
+**Direction B — Mimer as an MCP client adapter** is delivered as the ADR-0061 A2/B1/C1
+`mimer-mcp` stdio sidecar over the existing ask, governed-capture, retrieve/search, read-note, and
+health endpoints. Capture's response already carries its governed receipt; no separate receipt
+read-back endpoint is exposed. The adapter preserves the authority envelope the `mimer-*` skills
+and `docs/contracts/MIMER_CLIENT_CONTRACT.md` encode; `app/mcp/vault_tools.py` remains internal
+plumbing, not a transport. Acceptance evidence currently covers the hermetic JSON-RPC stdio client
+journey recorded on parent #3366, not arbitrary third-party clients or a production activation. The
+accepted contract requires implementation-level dependency/filesystem isolation and a fixed route
+allowlist; process separation alone is not enforcement. A second build
 item joins it on the same footing: the audit's
 D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
 free, local-first read-later/highlights source. Per ADR-0049, Heimdal owns Karakeep REST fetch,
@@ -136,7 +136,7 @@ configuration nor those unready items create implementation issues in this hando
   - Canvas-session scaffolding is shipped in bounded form through #598/#599/#600/#601, and owner-doc promotion has landed via subsequent docs work: session logs, body-scoped co-authoring, governance-intent routing, and a gated API/CLI surface now exist behind `CANVAS_ENABLED`. Broader hybrid Panel/Chat behavior and richer Chat cognition remain separate follow-up work.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
-  - External-connectivity (MCP) line: Mimer-as-MCP-server first build candidate (Direction B), then runtime consumption of external MCP signal sources (Direction C) — sequencing and governance invariant in `External-connectivity (MCP) sequencing` above; evidence base `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`.
+  - External-connectivity (MCP) line: the bounded Mimer-as-MCP-client-adapter delivery (Direction B) is complete; remaining work is runtime consumption of external MCP signal sources (Direction C), plus separately gated broader clients, listener, and production-activation follow-ons — sequencing and governance invariant in `External-connectivity (MCP) sequencing` above; evidence base `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.

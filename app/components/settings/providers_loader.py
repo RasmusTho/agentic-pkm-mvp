@@ -13,13 +13,31 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 DEFAULT_PROVIDER_CENSUS_PATH = Path("docs/settings/models/providers.yaml")
+
+BuilderReasoningEffort: TypeAlias = Literal[
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+]
+BuilderSelectionIntent: TypeAlias = Literal[
+    "coordination",
+    "general_delivery",
+    "strong_reasoning",
+    "verification",
+]
+_BUILDER_SELECTION_INTENTS = frozenset(
+    {"coordination", "general_delivery", "strong_reasoning", "verification"}
+)
 
 
 class ProviderCapabilities(BaseModel):
@@ -87,7 +105,18 @@ class BuilderExecutionProfile(TierMapping):
     model_config = ConfigDict(extra="forbid")
 
     capability_tier: Literal["spark", "luna", "terra", "sol"]
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"]
+    reasoning_effort: BuilderReasoningEffort
+    selectable_models: list[str] = Field(default_factory=list)
+    model_reasoning_efforts: dict[str, BuilderReasoningEffort] = Field(
+        default_factory=dict
+    )
+    selection_intents: list[BuilderSelectionIntent] = Field(default_factory=list)
+    selection_intent_reasoning_efforts: dict[
+        BuilderSelectionIntent, BuilderReasoningEffort
+    ] = Field(default_factory=dict)
+    selection_intent_models: dict[BuilderSelectionIntent, str] = Field(
+        default_factory=dict
+    )
 
 
 class ModelInquiryProfile(BaseModel):
@@ -188,6 +217,73 @@ class ProviderCensus(BaseModel):
                     f"Provider census role profile {mapping.role} uses undeclared credential "
                     f"{mapping.credential_identifier}"
                 )
+            if isinstance(mapping, BuilderExecutionProfile):
+                selectable_models = mapping.selectable_models or [mapping.model]
+                if mapping.model not in selectable_models:
+                    raise ValueError(
+                        "Builder execution profile default model must be selectable"
+                    )
+                if len(selectable_models) != len(set(selectable_models)):
+                    raise ValueError(
+                        f"Builder execution profile contains duplicate selectable models "
+                        f"for {mapping.provider}/{mapping.capability_tier}"
+                    )
+                unmapped_models = set(mapping.model_reasoning_efforts) - set(
+                    selectable_models
+                )
+                if unmapped_models:
+                    raise ValueError(
+                        "Builder execution profile maps reasoning effort for a non-selectable model "
+                        f"{mapping.provider}/{sorted(unmapped_models)[0]}"
+                    )
+                for selectable_model_id in selectable_models:
+                    selectable_model = next(
+                        (
+                            item
+                            for item in provider.models
+                            if item.id == selectable_model_id
+                        ),
+                        None,
+                    )
+                    if selectable_model is None:
+                        raise ValueError(
+                            "Builder execution profile references an undeclared selectable model "
+                            f"{mapping.provider}/{selectable_model_id}"
+                        )
+                    for capability in mapping.requires:
+                        if not getattr(selectable_model.capabilities, capability) and not getattr(
+                            provider.capabilities, capability
+                        ):
+                            raise ValueError(
+                                "Builder execution selectable model "
+                                f"{mapping.provider}/{selectable_model_id} lacks {capability}"
+                            )
+                if len(mapping.selection_intents) != len(set(mapping.selection_intents)):
+                    raise ValueError(
+                        "Builder execution profile contains duplicate selection intents "
+                        f"for {mapping.provider}/{mapping.capability_tier}"
+                    )
+                if not set(mapping.selection_intent_reasoning_efforts) <= set(
+                    mapping.selection_intents
+                ):
+                    raise ValueError(
+                        "Builder execution profile maps reasoning effort for an unassigned "
+                        "selection intent"
+                    )
+                if not set(mapping.selection_intent_models) <= set(mapping.selection_intents):
+                    raise ValueError(
+                        "Builder execution profile maps a model for an unassigned "
+                        "selection intent"
+                    )
+                invalid_intent_models = set(mapping.selection_intent_models.values()) - set(
+                    selectable_models
+                )
+                if invalid_intent_models:
+                    raise ValueError(
+                        "Builder execution profile maps a selection intent to a "
+                        "non-selectable model "
+                        f"{mapping.provider}/{sorted(invalid_intent_models)[0]}"
+                    )
         if set(self.runtime_channels.model_inquiry) != set(
             self.runtime_channels.builder_execution
         ):
@@ -224,7 +320,7 @@ class ProviderCensus(BaseModel):
                 "Builder execution profiles must cover every declared Builder channel"
             )
         expected_execution_tiers = {"spark", "luna", "terra", "sol"}
-        for profiles in self.runtime_channels.builder_execution.values():
+        for channel, profiles in self.runtime_channels.builder_execution.items():
             if set(profiles) != expected_execution_tiers:
                 raise ValueError(
                     "Builder execution profiles must declare exactly spark, luna, terra, and sol"
@@ -236,6 +332,20 @@ class ProviderCensus(BaseModel):
                 raise ValueError(
                     "Builder execution profile key must match capability_tier"
                 )
+            assignments = {
+                intent: [
+                    capability
+                    for capability, profile in profiles.items()
+                    if intent in profile.selection_intents
+                ]
+                for intent in _BUILDER_SELECTION_INTENTS
+            }
+            for intent, capabilities in assignments.items():
+                if len(capabilities) != 1:
+                    raise ValueError(
+                        "Builder execution channel must assign each selection intent "
+                        f"exactly once: {channel}/{intent} -> {capabilities}"
+                    )
         for profiles in self.runtime_channels.design_agent_profiles.values():
             actual = {
                 profile.design_agent_id: profile.role

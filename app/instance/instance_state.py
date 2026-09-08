@@ -343,6 +343,7 @@ class LegacyRegistryFinalExport:
         quiescence_proof: DeploymentQuiescenceProof | None = None,
         host_global_root: Path | None = None,
         owner_receipt_path: Path | None = None,
+        binding_by_ref: Mapping[str, str] | None = None,
     ) -> RegistrySnapshot:
         self._require_final_authority(
             export,
@@ -373,7 +374,9 @@ class LegacyRegistryFinalExport:
         if self._capture(export.source_path).fingerprint != export.fingerprint:
             raise InstanceStatePreflightError("legacy registry changed after final export")
         _atomic_private_write(self.layout.registry_path, export.payload)
-        return VaultRegistryStore(self.layout.registry_path).load_or_migrate()
+        return VaultRegistryStore(self.layout.registry_path).load_or_migrate(
+            binding_by_ref=binding_by_ref
+        )
 
     def preserve_final_export(
         self,
@@ -1042,6 +1045,9 @@ class InstanceStateBackup:
                 assert isinstance(identity_row, dict)
                 root_identity = str(identity_row.get("identity") or "").strip()
                 raw_ancestors = identity_row.get("ancestor_identities")
+                raw_legacy_ancestors = identity_row.get(
+                    "legacy_ancestor_identities", []
+                )
                 if (
                     identity_row.get("channel_id") != channel_id
                     or identity_row.get("root") != raw_root
@@ -1055,12 +1061,23 @@ class InstanceStateBackup:
                     )
                     or len(set(raw_ancestors)) != len(raw_ancestors)
                     or root_identity in raw_ancestors
+                    or not isinstance(raw_legacy_ancestors, list)
+                    or any(
+                        not isinstance(value, str)
+                        or not value.startswith("inode:")
+                        or _LEGACY_OWNER_IDENTITY_RE.fullmatch(value) is None
+                        for value in raw_legacy_ancestors
+                    )
+                    or len(set(raw_legacy_ancestors)) != len(raw_legacy_ancestors)
                 ):
                     raise InstanceStatePreflightError(
                         "canonical global live-owner inventory is invalid: "
                         f"owners[{index}] host identity evidence is invalid"
                     )
                 ancestor_identities = tuple(raw_ancestors)
+                legacy_ancestor_identities = tuple(raw_legacy_ancestors)
+            else:
+                legacy_ancestor_identities = ()
             if not require_materialized_owner_roots and not binding_id:
                 # Deployment-finish verifies a host-produced receipt in a
                 # mount-blind scratch namespace. Prefer an exact normalized
@@ -1108,6 +1125,7 @@ class InstanceStateBackup:
                     root,
                     root_identity,
                     ancestor_identities,
+                    legacy_ancestor_identities,
                 )
             )
         try:

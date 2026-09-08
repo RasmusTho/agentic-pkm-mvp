@@ -109,7 +109,11 @@ def _blockers(
 
 
 def _admin_settings(selected_checks: list[str]) -> list[str]:
-    checks = ", ".join(selected_checks) if selected_checks else "<observed required checks>"
+    # A real policy gate may coexist with a technical evidence gap. Keep that
+    # gate visible, but never present placeholders or a partial check set as exact.
+    if selected_checks != list(RECOMMENDED_CHECK_ORDER):
+        return []
+    checks = ", ".join(selected_checks)
     return [
         "Protect `main` with required status checks and strict up-to-date branches.",
         f"Set required status checks for `main`: {checks}.",
@@ -138,6 +142,9 @@ def build_packet(
         auto_merge_allowed=auto_merge,
         selected_checks=selected,
     )
+    # Missing observed checks need evidence recovery, not an administrator. The
+    # existing policy-change gate remains distinct from those technical blockers.
+    human_required = not active or not auto_merge
     return GuardrailPacket(
         branch=branch,
         branch_protection_active=active,
@@ -146,9 +153,9 @@ def build_packet(
         observed_check_evidence=observed,
         no_pr_merged=True,
         no_existing_pr_auto_merge_enabled=True,
-        human_exception_required=bool(blockers),
+        human_exception_required=human_required,
         unresolved_blockers=blockers,
-        exact_admin_settings_required=_admin_settings(selected) if blockers else [],
+        exact_admin_settings_required=_admin_settings(selected) if human_required else [],
     )
 
 

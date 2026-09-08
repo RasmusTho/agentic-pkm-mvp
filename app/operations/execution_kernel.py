@@ -7,7 +7,7 @@ is dispatched once to its registered owner-native handler.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from contextlib import contextmanager
 import fcntl
 from hashlib import sha256
@@ -20,7 +20,14 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 
 from app.archival.contracts import ArtifactClass, LivenessState, PolicyProfile, TransitionStage
 
-from .contracts import OperationOutcome, OperationRequest, OperationStatus
+from .contracts import (
+    OperationItemOutcome,
+    OperationOutcome,
+    OperationReceipt,
+    OperationRequest,
+    OperationStatus,
+    ReceiptStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -33,7 +40,9 @@ class PolicyDecision:
     decision_token: str | None = None
 
     @classmethod
-    def allowed(cls, policy_version: str, decision_token: str = "verified-token") -> "PolicyDecision":
+    def allowed(
+        cls, policy_version: str, decision_token: str = "verified-token"
+    ) -> "PolicyDecision":
         return cls(True, policy_version, decision_token=decision_token)
 
     @classmethod
@@ -48,15 +57,30 @@ class OwnerExecutionResult:
     status: OperationStatus
     items: tuple[Mapping[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
-    archival_receipt: "ArchivalOperationReceipt | None" = None
+    effect_id: str | None = None
+    effect_receipt: Mapping[str, Any] | None = None
 
     @classmethod
-    def succeeded(cls, *, items: tuple[Mapping[str, Any], ...] = ()) -> "OwnerExecutionResult":
-        return cls(OperationStatus.SUCCEEDED, items)
+    def succeeded(
+        cls,
+        *,
+        items: tuple[Mapping[str, Any], ...] = (),
+        effect_id: str | None = None,
+        effect_receipt: Mapping[str, Any] | None = None,
+    ) -> "OwnerExecutionResult":
+        return cls(
+            OperationStatus.SUCCEEDED,
+            items,
+            effect_id=effect_id,
+            effect_receipt=effect_receipt,
+        )
 
     @classmethod
     def ambiguous(cls) -> "OwnerExecutionResult":
-        return cls(OperationStatus.RECOVERY_REQUIRED, warnings=("owner outcome requires receipt reconciliation",))
+        return cls(
+            OperationStatus.RECOVERY_REQUIRED,
+            warnings=("owner outcome requires receipt reconciliation",),
+        )
 
     @classmethod
     def failed(cls, warning: str) -> "OwnerExecutionResult":
@@ -96,7 +120,9 @@ class _StoredOutcome:
 
 class ReceiptStore(Protocol):
     def lookup(self, request_id: str) -> _StoredOutcome | None: ...
-    def reserve(self, request_id: str, intent_digest: str, pending: OperationOutcome) -> tuple[str, _StoredOutcome]: ...
+    def reserve(
+        self, request_id: str, intent_digest: str, pending: OperationOutcome
+    ) -> tuple[str, _StoredOutcome]: ...
 
     def finalize(self, request_id: str, intent_digest: str, outcome: OperationOutcome) -> None: ...
 
@@ -108,7 +134,9 @@ class InMemoryReceiptStore:
         self._records: dict[str, _StoredOutcome] = {}
         self._lock = RLock()
 
-    def reserve(self, request_id: str, intent_digest: str, pending: OperationOutcome) -> tuple[str, _StoredOutcome]:
+    def reserve(
+        self, request_id: str, intent_digest: str, pending: OperationOutcome
+    ) -> tuple[str, _StoredOutcome]:
         with self._lock:
             prior = self._records.get(request_id)
             if prior is not None:
@@ -138,7 +166,9 @@ class JsonReceiptStore:
         self.path = path
         self._lock = RLock()
 
-    def reserve(self, request_id: str, intent_digest: str, pending: OperationOutcome) -> tuple[str, _StoredOutcome]:
+    def reserve(
+        self, request_id: str, intent_digest: str, pending: OperationOutcome
+    ) -> tuple[str, _StoredOutcome]:
         with self._lock:
             with self._process_lock():
                 records = self._read()
@@ -165,7 +195,9 @@ class JsonReceiptStore:
     @contextmanager
     def _process_lock(self) -> Iterator[None]:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with (self.path.parent / f".{self.path.name}.lock").open("a+", encoding="utf-8") as lock_file:
+        with (self.path.parent / f".{self.path.name}.lock").open(
+            "a+", encoding="utf-8"
+        ) as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -178,7 +210,9 @@ class JsonReceiptStore:
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         return {
             request_id: _StoredOutcome(
-                value["intent_digest"], OperationOutcome.from_dict(value["outcome"]), bool(value.get("in_flight", False))
+                value["intent_digest"],
+                OperationOutcome.from_dict(value["outcome"]),
+                bool(value.get("in_flight", False)),
             )
             for request_id, value in raw.items()
         }
@@ -193,7 +227,9 @@ class JsonReceiptStore:
             }
             for request_id, record in records.items()
         }
-        with NamedTemporaryFile("w", encoding="utf-8", dir=self.path.parent, delete=False) as temporary:
+        with NamedTemporaryFile(
+            "w", encoding="utf-8", dir=self.path.parent, delete=False
+        ) as temporary:
             json.dump(payload, temporary, sort_keys=True, separators=(",", ":"))
             temporary.flush()
             Path(temporary.name).replace(self.path)
@@ -214,84 +250,168 @@ class OperationExecutionKernel:
     policy_evaluator: PolicyEvaluator
     handlers: Mapping[str, OwnerHandler]
     receipt_store: ReceiptStore
-    version_checker: VersionChecker = field(default=lambda request: request.expected_version is None)
+    version_checker: VersionChecker = field(
+        default=lambda request: request.expected_version is None
+    )
     token_validator: TokenValidator = field(default=lambda request, decision: False)
 
-    def execute(self, request: OperationRequest, delegation: Mapping[str, Any] | None = None) -> OperationOutcome:
+    def execute(
+        self, request: OperationRequest, delegation: Mapping[str, Any] | None = None
+    ) -> OperationOutcome:
         delegation = delegation if delegation is not None else request.delegation
         if delegation is None:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("bounded delegation is required",))
+            return self._outcome(
+                request, OperationStatus.REJECTED, warnings=("bounded delegation is required",)
+            )
+        request = _with_delegated_batch_policy(request, delegation)
         intent_digest = _intent_digest(request, delegation)
         try:
             prior = self.receipt_store.lookup(request.request_id)
         except Exception:
-            return self._outcome(request, OperationStatus.RECOVERY_REQUIRED, warnings=("receipt ledger is unavailable; owner effect was not started",))
+            return self._outcome(
+                request,
+                OperationStatus.RECOVERY_REQUIRED,
+                warnings=("receipt ledger is unavailable; owner effect was not started",),
+            )
         if prior is not None:
             if prior.intent_digest == intent_digest:
                 return prior.outcome
-            return self._outcome(request, OperationStatus.CONFLICTED, warnings=("request_id is already bound to different intent",))
+            return self._outcome(
+                request,
+                OperationStatus.CONFLICTED,
+                warnings=("request_id is already bound to different intent",),
+            )
         refusal = self._precondition_refusal(request, delegation)
         if refusal is not None:
             return refusal
         try:
             decision = self.policy_evaluator(request, delegation)
         except Exception:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("policy evaluation is unavailable",))
+            return self._outcome(
+                request, OperationStatus.REJECTED, warnings=("policy evaluation is unavailable",)
+            )
         if not decision.admitted:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=(decision.reason or "policy denied operation",))
+            return self._outcome(
+                request,
+                OperationStatus.REJECTED,
+                warnings=(decision.reason or "policy denied operation",),
+            )
         if decision.policy_version != delegation.get("policy_version"):
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("delegation policy version is stale",))
+            return self._outcome(
+                request, OperationStatus.REJECTED, warnings=("delegation policy version is stale",)
+            )
         try:
             token_valid = self.token_validator(request, decision)
         except Exception:
             token_valid = False
         if not token_valid:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("decision token is missing or invalid",))
+            return self._outcome(
+                request,
+                OperationStatus.REJECTED,
+                warnings=("decision token is missing or invalid",),
+            )
         try:
             version_current = self.version_checker(request)
         except Exception:
             version_current = False
         if not version_current:
-            return self._outcome(request, OperationStatus.CONFLICTED, warnings=("version precondition failed",))
+            return self._outcome(
+                request, OperationStatus.CONFLICTED, warnings=("version precondition failed",)
+            )
 
-        pending = self._outcome(request, OperationStatus.RECOVERY_REQUIRED, receipt=_receipt(request, decision.policy_version, intent_digest, "applied_receipt_pending", delegation), warnings=("owner effect may have started; reconcile receipt before retry",))
+        pending = self._outcome(
+            request,
+            OperationStatus.RECOVERY_REQUIRED,
+            receipt=_receipt(
+                request,
+                decision.policy_version,
+                intent_digest,
+                "applied_receipt_pending",
+                delegation,
+            ),
+            warnings=("owner effect may have started; reconcile receipt before retry",),
+        )
         try:
-            reservation, stored = self.receipt_store.reserve(request.request_id, intent_digest, pending)
+            reservation, stored = self.receipt_store.reserve(
+                request.request_id, intent_digest, pending
+            )
         except Exception:
-            return self._outcome(request, OperationStatus.RECOVERY_REQUIRED, warnings=("receipt ledger is unavailable; owner effect was not started",))
+            return self._outcome(
+                request,
+                OperationStatus.RECOVERY_REQUIRED,
+                warnings=("receipt ledger is unavailable; owner effect was not started",),
+            )
         if reservation == "replay":
             return stored.outcome
         if reservation == "conflict":
-            return self._outcome(request, OperationStatus.CONFLICTED, warnings=("request_id is already bound to different intent",))
+            return self._outcome(
+                request,
+                OperationStatus.CONFLICTED,
+                warnings=("request_id is already bound to different intent",),
+            )
 
         handler = self.handlers.get(request.operation_id)
         if handler is None:
-            outcome = self._outcome(request, OperationStatus.NOT_SUPPORTED, receipt=_receipt(request, decision.policy_version, intent_digest, "not_supported"))
+            outcome = self._outcome(
+                request,
+                OperationStatus.NOT_SUPPORTED,
+                receipt=_receipt(request, decision.policy_version, intent_digest, "not_supported"),
+            )
         else:
             try:
                 owner_result = handler(request)
             except Exception:
                 owner_result = OwnerExecutionResult.ambiguous()
-            outcome = self._owner_outcome(request, decision.policy_version, intent_digest, owner_result, delegation)
+            outcome = self._owner_outcome(
+                request, decision.policy_version, intent_digest, owner_result, delegation
+            )
         try:
             self.receipt_store.finalize(request.request_id, intent_digest, outcome)
         except Exception:
-            return self._outcome(request, OperationStatus.RECOVERY_REQUIRED, receipt=_receipt(request, decision.policy_version, intent_digest, "applied_receipt_pending"), warnings=("owner result requires durable receipt reconciliation",))
+            return self._outcome(
+                request,
+                OperationStatus.RECOVERY_REQUIRED,
+                receipt=_receipt(
+                    request, decision.policy_version, intent_digest, "applied_receipt_pending"
+                ),
+                warnings=("owner result requires durable receipt reconciliation",),
+            )
         return outcome
 
-    def _precondition_refusal(self, request: OperationRequest, delegation: Mapping[str, Any] | None) -> OperationOutcome | None:
-        if not request.context.active_context_ref or not request.operation_id or not request.request_id:
-            return self._outcome(request, OperationStatus.INVALID, warnings=("operation, request, and explicit context are required",))
+    def _precondition_refusal(
+        self, request: OperationRequest, delegation: Mapping[str, Any] | None
+    ) -> OperationOutcome | None:
+        if (
+            not request.context.active_context_ref
+            or not request.operation_id
+            or not request.request_id
+        ):
+            return self._outcome(
+                request,
+                OperationStatus.INVALID,
+                warnings=("operation, request, and explicit context are required",),
+            )
         try:
             context_resolved = self.context_resolver(request.context)
         except Exception:
             context_resolved = False
         if not context_resolved:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("active context is unavailable",))
+            return self._outcome(
+                request, OperationStatus.REJECTED, warnings=("active context is unavailable",)
+            )
         if delegation is None:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("bounded delegation is required",))
+            return self._outcome(
+                request, OperationStatus.REJECTED, warnings=("bounded delegation is required",)
+            )
         operation_ids = delegation.get("operation_ids")
-        target_ids = tuple(str(target.get("artifact_id", "")) for target in request.targets)
+        target_ids = tuple(target.get("artifact_id") for target in request.targets)
+        if not all(_stable_nonempty_identity(target_id) for target_id in target_ids):
+            return self._outcome(
+                request,
+                OperationStatus.REJECTED,
+                warnings=("every target requires a stable artifact identity",),
+            )
+        stable_target_ids = tuple(str(target_id) for target_id in target_ids)
         admitted_targets = delegation.get("target_ids")
         if (
             delegation.get("active_context_ref") != request.context.active_context_ref
@@ -300,70 +420,237 @@ class OperationExecutionKernel:
             or request.operation_id not in operation_ids
             or not isinstance(delegation.get("policy_version"), str)
             or not delegation["policy_version"]
-            or not all(isinstance(delegation.get(field), str) and delegation[field] for field in ("principal", "client", "surface", "receipt_ref", "authority_class"))
+            or not all(
+                isinstance(delegation.get(field), str) and delegation[field]
+                for field in ("principal", "client", "surface", "receipt_ref", "authority_class")
+            )
             or not isinstance(admitted_targets, (list, tuple, set))
-            or not set(target_ids).issubset({str(item) for item in admitted_targets})
+            or not set(stable_target_ids).issubset({str(item) for item in admitted_targets})
             or not isinstance(delegation.get("max_targets"), int)
-            or delegation["max_targets"] < len(target_ids)
+            or delegation["max_targets"] < len(stable_target_ids)
             or not isinstance(delegation.get("allowed_effects"), (list, tuple, set))
             or request.operation_id not in delegation["allowed_effects"]
             or not isinstance(delegation.get("expires_at"), (int, float))
             or delegation["expires_at"] <= time()
             or delegation.get("revoked") is not False
         ):
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("delegation does not admit this operation",))
-        if len(target_ids) > 1 and delegation.get("batch_policy") != request.batch_policy:
-            return self._outcome(request, OperationStatus.REJECTED, warnings=("batch policy is not bound by delegation",))
+            return self._outcome(
+                request,
+                OperationStatus.REJECTED,
+                warnings=("delegation does not admit this operation",),
+            )
+        if len(stable_target_ids) > 1:
+            request_batch_policy = request.batch_policy
+            delegation_batch_policy = delegation.get("batch_policy")
+            if not (
+                _valid_batch_policy(request_batch_policy)
+                or _valid_batch_policy(delegation_batch_policy)
+            ):
+                return self._outcome(
+                    request,
+                    OperationStatus.REJECTED,
+                    warnings=("a valid batch policy is required for multiple targets",),
+                )
+            if (
+                _valid_batch_policy(request_batch_policy)
+                and _valid_batch_policy(delegation_batch_policy)
+                and request_batch_policy != delegation_batch_policy
+            ):
+                return self._outcome(
+                    request,
+                    OperationStatus.REJECTED,
+                    warnings=("batch policy is not bound by delegation",),
+                )
         if request.operation_version != "ygg.operation.v1":
-            return self._outcome(request, OperationStatus.NOT_SUPPORTED, warnings=("unsupported operation version",))
+            return self._outcome(
+                request, OperationStatus.NOT_SUPPORTED, warnings=("unsupported operation version",)
+            )
         return None
 
-    def _owner_outcome(self, request: OperationRequest, policy_version: str, intent_digest: str, result: OwnerExecutionResult, delegation: Mapping[str, Any]) -> OperationOutcome:
-        if result.archival_receipt is not None and request.operation_id not in {"artifact.archive", "artifact.restore"}:
-            return self._outcome(request, OperationStatus.NOT_ACKNOWLEDGED, receipt=_receipt(request, policy_version, intent_digest, "not_acknowledged", delegation), warnings=("archival receipt is not admitted for this operation",))
+    def _owner_outcome(
+        self,
+        request: OperationRequest,
+        policy_version: str,
+        intent_digest: str,
+        result: OwnerExecutionResult,
+        delegation: Mapping[str, Any],
+    ) -> OperationOutcome:
         if result.status is OperationStatus.SUCCEEDED:
-            return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "completed", delegation, result.archival_receipt), warnings=result.warnings)
+            if not _has_durable_owner_effect_receipt(result):
+                return self._outcome(
+                    request,
+                    OperationStatus.RECOVERY_REQUIRED,
+                    items=_redact_items(result.items),
+                    receipt=_receipt(
+                        request,
+                        policy_version,
+                        intent_digest,
+                        "recovery_required",
+                        delegation,
+                        result.effect_id,
+                        result.effect_receipt,
+                    ),
+                    warnings=result.warnings
+                    + (
+                        "owner success is missing a durable effect receipt or stable effect identity",
+                        "read receipt before retry",
+                    ),
+                )
+            return self._outcome(
+                request,
+                result.status,
+                items=_redact_items(result.items),
+                receipt=_receipt(
+                    request,
+                    policy_version,
+                    intent_digest,
+                    "completed",
+                    delegation,
+                    result.effect_id,
+                    result.effect_receipt,
+                ),
+                warnings=result.warnings,
+            )
         if result.status is OperationStatus.RECOVERY_REQUIRED:
-            return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "recovery_required", delegation), warnings=result.warnings + ("read receipt before retry",))
-        return self._outcome(request, result.status, items=_redact_items(result.items), receipt=_receipt(request, policy_version, intent_digest, "not_acknowledged", delegation), warnings=result.warnings)
+            return self._outcome(
+                request,
+                result.status,
+                items=_redact_items(result.items),
+                receipt=_receipt(
+                    request, policy_version, intent_digest, "recovery_required", delegation
+                ),
+                warnings=result.warnings + ("read receipt before retry",),
+            )
+        return self._outcome(
+            request,
+            result.status,
+            items=_redact_items(result.items),
+            receipt=_receipt(
+                request, policy_version, intent_digest, "not_acknowledged", delegation
+            ),
+            warnings=result.warnings,
+        )
 
     @staticmethod
-    def _outcome(request: OperationRequest, status: OperationStatus, *, items: tuple[Mapping[str, Any], ...] = (), receipt: Mapping[str, Any] | None = None, warnings: tuple[str, ...] = ()) -> OperationOutcome:
-        return OperationOutcome(request.request_id, status, request.operation_id, request.context, items=items, receipt=receipt, warnings=warnings)
+    def _outcome(
+        request: OperationRequest,
+        status: OperationStatus,
+        *,
+        items: tuple[OperationItemOutcome, ...] = (),
+        receipt: OperationReceipt | None = None,
+        warnings: tuple[str, ...] = (),
+    ) -> OperationOutcome:
+        return OperationOutcome(
+            request.request_id,
+            status,
+            request.operation_id,
+            request.context,
+            items=items,
+            receipt=receipt,
+            warnings=warnings,
+        )
 
 
 def _intent_digest(request: OperationRequest, delegation: Mapping[str, Any]) -> str:
     """Bind replay identity without persisting raw request or delegation payloads."""
     material = {"request": request.to_dict(), "delegation": dict(delegation)}
-    encoded = json.dumps(material, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(material, sort_keys=True, default=str, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return sha256(encoded).hexdigest()
 
 
-def _receipt(request: OperationRequest, policy_version: str, intent_digest: str, state: str, delegation: Mapping[str, Any] | None = None, archival_receipt: ArchivalOperationReceipt | None = None) -> dict[str, Any]:
+def _receipt(
+    request: OperationRequest,
+    policy_version: str,
+    intent_digest: str,
+    state: str,
+    delegation: Mapping[str, Any] | None = None,
+    effect_id: str | None = None,
+    effect_receipt: Mapping[str, Any] | None = None,
+) -> OperationReceipt:
     """Receipt projection intentionally excludes arguments, secrets, and raw delegation."""
-    receipt = {
-        "request_id": request.request_id,
-        "operation_id": request.operation_id,
-        "operation_version": request.operation_version,
-        "context_ref": request.context.active_context_ref,
-        "vault_generation": request.context.vault_generation,
-        "policy_version": policy_version,
-        "principal": None if delegation is None else delegation.get("principal"),
-        "client": None if delegation is None else delegation.get("client"),
-        "surface": None if delegation is None else delegation.get("surface"),
-        "delegation_ref": None if delegation is None else delegation.get("receipt_ref"),
-        "intent_digest": intent_digest,
-        "state": state,
-        "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
-    }
-    if archival_receipt is not None:
-        receipt["archival"] = archival_receipt.to_dict()
-    return receipt
+    return OperationReceipt(
+        receipt_id=None
+        if delegation is None or delegation.get("receipt_ref") is None
+        else str(delegation["receipt_ref"]),
+        status=ReceiptStatus.COMMITTED if state == "completed" else ReceiptStatus.PENDING,
+        payload={
+            "request_id": request.request_id,
+            "operation_id": request.operation_id,
+            "operation_version": request.operation_version,
+            "context_ref": request.context.active_context_ref,
+            "vault_generation": request.context.vault_generation,
+            "policy_version": policy_version,
+            "principal": None if delegation is None else delegation.get("principal"),
+            "client": None if delegation is None else delegation.get("client"),
+            "surface": None if delegation is None else delegation.get("surface"),
+            "delegation_ref": None if delegation is None else delegation.get("receipt_ref"),
+            "effect_id": effect_id if _stable_nonempty_identity(effect_id) else None,
+            "effect_receipt_ref": _effect_receipt_ref(effect_receipt),
+            "intent_digest": intent_digest,
+            "state": state,
+            "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
+        },
+    )
 
 
-def _redact_items(items: tuple[Mapping[str, Any], ...]) -> tuple[Mapping[str, Any], ...]:
+def _stable_nonempty_identity(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _valid_batch_policy(value: object) -> bool:
+    return isinstance(value, Mapping) and bool(value)
+
+
+def _with_delegated_batch_policy(
+    request: OperationRequest, delegation: Mapping[str, Any]
+) -> OperationRequest:
+    if (
+        len(request.targets) > 1
+        and not _valid_batch_policy(request.batch_policy)
+        and _valid_batch_policy(delegation.get("batch_policy"))
+    ):
+        return replace(request, batch_policy=delegation["batch_policy"])
+    return request
+
+
+def _effect_receipt_ref(value: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    receipt_id = value.get("receipt_id")
+    return str(receipt_id) if _stable_nonempty_identity(receipt_id) else None
+
+
+def _has_durable_owner_effect_receipt(result: OwnerExecutionResult) -> bool:
+    return (
+        _stable_nonempty_identity(result.effect_id)
+        and isinstance(result.effect_receipt, Mapping)
+        and _effect_receipt_ref(result.effect_receipt) is not None
+    )
+
+
+def _redact_items(items: tuple[Mapping[str, Any], ...]) -> tuple[OperationItemOutcome, ...]:
     allowed = {"artifact_id", "status", "version", "result_version"}
-    return tuple({str(key): value if key in allowed else "[redacted]" for key, value in item.items()} for item in items)
+    return tuple(
+        OperationItemOutcome(
+            resource_id=None if item.get("artifact_id") is None else str(item["artifact_id"]),
+            status=_operation_status(item.get("status")),
+            input_version=item.get("version"),
+            resulting_version=item.get("result_version"),
+            payload={
+                str(key): value if key in allowed else "[redacted]" for key, value in item.items()
+            },
+        )
+        for item in items
+    )
+
+
+def _operation_status(value: object) -> OperationStatus | None:
+    try:
+        return None if value is None else OperationStatus(str(value))
+    except ValueError:
+        return None
 
 
 __all__ = [

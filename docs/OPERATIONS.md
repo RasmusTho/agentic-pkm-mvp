@@ -5,9 +5,9 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-08-29
+Last reviewed: 2026-09-08
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/release_channels/ordinary_boot.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/runtime/test_startup_artifact_call_sites.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, docker-compose.test.yml, docker-compose.legacy-vault.yml, docker-compose.test-vault.yml, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-08-29
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-08
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -29,7 +29,7 @@ Reading order:
 5. Use `docs/runbooks/` only for task-specific walkthroughs after you have identified the affected runtime surface.
 6. Use `docs/ENVIRONMENTS.md` when the question is whether behavior belongs to `dev`, `test`, `prod`, or a boundary between them.
 7. Use the parallel-stack recipe in `docs/ENVIRONMENTS.md` when you need to run `dev`, `test`, and `prod` Compose stacks simultaneously on one machine.
-8. Use `docs/RELEASE_CHANNELS/README.md` plus the promotion skills when the question is stable/dev channel promotion, rollback, or prod-checkout pinning.
+8. Use `docs/RELEASE_CHANNELS/README.md` plus the promotion skills when the question is stable/dev channel promotion, rollback, or prod-checkout pinning; use `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` for the physical deploy sequence, including authenticated legacy-ledger convergence before the MVR-05 floor.
 9. Use `docs/SECURITY_ARCHITECTURE.md` and `docs/security/API_SECURITY_MATRIX.md` before changing
    API exposure, auth/rate-limit posture, external provider/tool execution, or mutation-capable
    route behavior.
@@ -181,6 +181,12 @@ operational lineage is missing, the supported target posture is a new fenced boo
 writers inactive until owner-native readback and convergence. Total-loss recovery is not claimed as
 shipped runtime capability here.
 
+For a retained DEV v1 ownership record whose old container ancestor inode chain is unavailable,
+operators can use the explicit, stopped-window [DEV legacy-owner re-attestation](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#explicit-dev-legacy-owner-re-attestation)
+command. It requires a fresh authority decision and verified private recovery evidence; normal
+startup remains fail-closed and activation remains a separate deployment step. Missing or
+inconsistent registry backup artifacts are refused without being repaired during admission.
+
 ## Environment posture
 
 This document is primarily the `prod` operator entrypoint.
@@ -258,6 +264,15 @@ TEST startup has two fail-closed Compose modes. With no selected vault, the univ
 keeps the watcher disabled and its vault path empty. With an explicit TEST vault, startup composes
 the selected-vault mount and then the TEST-only activation overlay, which binds the watcher to the
 same in-container `/app/vault` target regardless of inherited parent-shell watcher values.
+
+Fresh TEST bootstrap also supplies `LLM_PROVIDER=mock` when no explicit
+`TEST_LLM_PROVIDER` is configured. Before the MVR-05 instance-state deployment fence runs,
+`scripts/start_full_system.sh` starts only the `db` service and waits for its in-container
+`pg_isready` probe; a failed start or readiness timeout records a fail-closed startup reason and
+does not enter the fence. The fence and the later runtime startup remain unchanged after that
+precondition. Its bind-mounted quiescence and owner-inventory readers tolerate only a bounded
+visibility window for transiently truncated host projections, and a fresh registry may be
+materialized only from the authenticated owner receipt and matching ownership-ledger state.
 
 Use `docs/runbooks/UAT_PANEL_WATCHER.md` for the detailed walkthrough and `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` when you need the full reset semantics.
 
@@ -355,6 +370,7 @@ Watcher auto-exec enablement rule:
 - Registry checkpoint JSON stays bounded to cursor/counter metadata. Per-file observations are stored in an adjacent SQLite sidecar under `WATCHER_STATE_DIR`; deletion reconciliation and stale observation pruning run only after a clean full scan generation drains.
 
 ### Watcher caveats
+- No-vault startup stops the existing watcher before recording `no_lifecycle` and fails without acknowledgement if stop fails. Traversal errors prevent rebind acknowledgement; a durable `drained` receipt remains non-terminal until a fresh resumed old-root scan succeeds and its observations are receipted.
 - The registry watcher remains polling-based; each observation generation walks the configured scope incrementally across bounded ticks. No OS file-event hooks are used.
 - Paths with spaces are supported; wrap vault paths in quotes.
 - When using iCloud/Obsidian sync, keep scopes conservative and rely on debounce/backoff guardrails.
@@ -766,6 +782,7 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 6. For watcher, panel, or CLI-first orchestrator incidents on shipped current-state surfaces, use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`.
 
 Quick issue routing:
+- Builder delivery/readiness/CI evidence gaps -> `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier`. Advisory human flags are not authorization; recover technical evidence through the owning workflow, retaining the affected operation's block. Missing logs or conflicting report metadata do not by themselves require an owner decision. This route does not authorize runtime stabilization, deployment, or a bypass of an immediate-stop or operator gate.
 - Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
 - Health contract or degraded-state interpretation -> `docs/HEALTH.md`
 - Metrics/logging interpretation -> `docs/OBSERVABILITY.md`

@@ -124,3 +124,10 @@ Any single failure is a FAIL. FAIL after `execute-promotion` → call `rollback-
 - On PASS after execute: promotion is accepted; update the parent feature issue with a validation receipt
 - On FAIL after execute: call `rollback-promotion`
 - On FAIL after rollback: escalate to operator; do not loop
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. On PASS, record the acceptance evidence
+and return to the promotion caller, updating the parent validation receipt when authorized. On FAIL
+after execution, invoke `rollback-promotion`; on FAIL after rollback, preserve the operator triage
+gate and do not start a recovery loop.

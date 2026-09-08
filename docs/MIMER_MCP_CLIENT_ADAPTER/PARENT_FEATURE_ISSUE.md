@@ -1,14 +1,16 @@
-State: FILED as GitHub issue #3366 (`agent:blocked` validation hub). This file is the archived local
-contract pointer; GitHub owns live backlog and validation state.
+State: active acceptance record for GitHub issue #3366. #3368 and #3369 are delivered; #3370 adds
+the bounded composed acceptance evidence. This file is the local contract pointer; GitHub owns live
+backlog and validation state.
 
 # type:feature: expose Mimer to MCP clients through the governed client contract
 
 ## Context
 
-The app-connectivity audit ranks a Mimer MCP server as its highest-leverage build item. ADR-0061 and
+The app-connectivity audit ranked a Mimer MCP server as its highest-leverage build item. ADR-0061 and
 the 2026-08-21 owner receipt now accept the A2/B1/C1 contract: a constituent-owned sidecar over the
 governed HTTP API, stdio only, and no network listener or new auth in v1. The decision authorizes
-bounded implementation after its docs contract lands; it does not claim a shipped server.
+bounded implementation after its docs contract lands. The delivery evidence supports only the
+hermetic JSON-RPC stdio-client path recorded on the parent, not arbitrary clients or production use.
 
 ## Scope
 
@@ -52,8 +54,8 @@ bounded implementation after its docs contract lands; it does not claim a shippe
 
 - The parent is a validation hub, never an `agent:ready` implementation issue.
 - #3371 applies the owner's already-recorded A2/B1/C1 decision; no agent chooses the bundle.
-- #3368 and #3369 remain blocked until the Accepted ADR/client-contract writeback lands and their
-  live readiness is separately reconciled.
+- #3368 and #3369 are delivered prerequisites; #3370 must not widen their five-tool, no-listener,
+  no-new-auth, or no-new-authority contract.
 - Preserve the client contract's authority, index-lag, ambiguous-write, trace, and no-hidden-truth
   rules.
 - Do not expose `app/mcp/vault_tools.py` or internal orchestrator descriptors as the client server.
@@ -131,9 +133,8 @@ existing API suites against the integrated head.
 
 ## Validation / Acceptance Path
 
-Keep this parent blocked while children are open. The owner-decision receipt exists; #3368/#3369
-stay blocked until the accepted ADR/client-contract writeback lands and their live contracts are
-reconciled. Record for every child: issue, PR, merge SHA, CI,
+Keep this parent open until its acceptance ledger is complete. The owner-decision receipt and the
+#3368/#3369 delivery receipts exist. Record for every child: issue, PR, merge SHA, CI,
 declared `Verify:` results, owner-doc resolution, and transition-debt outcome. After all four child
 receipts exist, record the composed smoke, restart/failure evidence, supported-client matrix, and
 any operator observation. Close only when all parent ACs are satisfied and current-state docs match

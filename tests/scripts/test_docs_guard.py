@@ -456,3 +456,11 @@ def test_docs_guard_logic_requires_its_specific_paired_doc(tmp_path: Path) -> No
 
 def test_git_hygiene_requires_its_specific_paired_doc(tmp_path: Path) -> None:
     _assert_governance_script_rejects_unrelated_doc(tmp_path, "git_hygiene.py")
+
+
+def test_git_archive_retirement_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, "git_archive_retirement.py")
+
+
+def test_agent_worktree_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, "agent_worktree.py")

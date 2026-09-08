@@ -1220,8 +1220,51 @@ if collisions:
 PY
 }
 
+start_database_before_instance_state_deployment() {
+  # The MVR-05 deployment fence intentionally inspects PostgreSQL sessions
+  # before it stops/recreates runtime clients. On a fresh channel there is no
+  # db container yet, so create only the database server first and wait for its
+  # own readiness. This does not bypass the fence; it supplies the server
+  # precondition that the fence itself requires.
+  echo "--- DATABASE PRECONDITION FOR INSTANCE-STATE DEPLOYMENT ---"
+  check_compose_port_conflicts db
+  if ! run_docker_compose up -d db; then
+    EXIT_REASON="instance_state_database_start_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    return 1
+  fi
+
+  local attempt=1
+  local max_attempts=60
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if run_docker_compose exec -T db sh -ec \
+      'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h "$POSTGRES_HEALTHCHECK_HOST"' \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
+  EXIT_REASON="instance_state_database_not_ready"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: database did not become ready before the instance-state deployment fence" >&2
+  run_docker_compose ps db || true
+  return 1
+}
+
 run_preflight
 ensure_prod_instance_state_volume
+if start_database_before_instance_state_deployment; then
+  :
+else
+  database_precondition_rc=$?
+  exit "${database_precondition_rc}"
+fi
 if prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"; then
   :
 else
@@ -1944,11 +1987,75 @@ mark_phase_ok "db_probe"
 wait_for_healthz
 if [ "$NO_VAULT_MODE" -eq 1 ]; then
   set_phase "settings_rebind_no_lifecycle"
+  # Inspect the durable phase before stopping the existing watcher. A
+  # committed rebind still needs that watcher to finish convergence; stopping
+  # it first would make the no-lifecycle reconciliation impossible and leave
+  # the runtime without its only recovery actor.
+  settings_rebind_phase_json=$(run_docker_compose exec -T api \
+    python -m app.instance.runtime settings-rebind-no-lifecycle \
+    --check-only \
+    --registry-path /app/instance-state/agentic-pkm/vault-registry.md
+  ) || {
+    EXIT_REASON="settings_rebind_phase_check_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup could not inspect durable settings rebind phase" >&2
+    exit 1
+  }
+  settings_rebind_phase_state=$(SETTINGS_REBIND_PHASE_JSON="$settings_rebind_phase_json" python - <<'PY'
+import json
+import os
+
+try:
+    payload = json.loads(os.environ["SETTINGS_REBIND_PHASE_JSON"])
+except (KeyError, json.JSONDecodeError):
+    raise SystemExit(1)
+phase = payload.get("phase")
+if not isinstance(phase, str):
+    raise SystemExit(1)
+print(f"{phase}\t{int(payload.get('reload_complete') is True)}")
+PY
+  ) || {
+    EXIT_REASON="settings_rebind_phase_invalid"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup received an invalid settings rebind phase" >&2
+    exit 1
+  }
+  IFS=$'\t' read -r settings_rebind_phase settings_rebind_reload_complete <<<"$settings_rebind_phase_state"
+  if [ "$settings_rebind_phase" = "committed" ] && [ "$settings_rebind_reload_complete" != "1" ]; then
+    EXIT_REASON="settings_rebind_committed_watcher_required"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup cannot stop the watcher while a committed settings rebind is pending" >&2
+    exit 1
+  fi
+  # The no-vault acknowledgement is truthful only after an existing watcher
+  # has stopped. Restart the idle watcher after the durable acknowledgement.
+  if ! run_docker_compose stop watcher >/dev/null; then
+    EXIT_REASON="settings_rebind_watcher_stop_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup could not stop the existing watcher" >&2
+    exit 1
+  fi
   if ! settings_rebind_no_lifecycle_json=$(
     run_docker_compose exec -T api \
       python -m app.instance.runtime settings-rebind-no-lifecycle \
       --registry-path /app/instance-state/agentic-pkm/vault-registry.md
   ); then
+    if ! run_docker_compose start watcher >/dev/null; then
+      EXIT_REASON="settings_rebind_watcher_restart_failed"
+      EXIT_CODE=1
+      export EXIT_REASON EXIT_CODE
+      write_startup_status 0 "$EXIT_REASON"
+      echo "ERROR: no-vault startup could not restart the watcher after settings rebind reconciliation failed" >&2
+      exit 1
+    fi
     EXIT_REASON="settings_rebind_no_lifecycle_failed"
     EXIT_CODE=1
     export EXIT_REASON EXIT_CODE

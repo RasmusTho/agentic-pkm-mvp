@@ -122,7 +122,7 @@ Before any physical deploy step, resolve the target channel's deployment model:
 13. Reads and records the deploy receipt at `ops/deployments/prod-latest.json`, including the deployed SHA and health/smoke outcome.
 
 14. Appends the promotion execution receipt to the plan file: timestamp, operator, deployment model, merged PR URL or deploy receipt path, which ref/SHA was authorized, which migrations applied, and process recreate/restart confirmation.
-15. Reports to the operator: "Promotion executed. Run verify-promotion to confirm health."
+15. Invokes `verify-promotion` with the plan, then reports the verified acceptance or governed recovery result.
 
 ## Pre-conditions
 
@@ -185,4 +185,17 @@ verify-promotion
 
 - Produced by: `prepare-promotion`
 - On success → `verify-promotion`
-- On failure → `rollback-promotion`
+- On failure before deployment effects → diagnose and repair the refused step; do not roll back.
+- On failure after observed deployment effects → `rollback-promotion` within rollback authority.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After successful execution, invoke
+`verify-promotion` with the plan and retain ownership through its acceptance receipt or governed
+recovery. A failed preflight, plan check, or stable-PR check does not authorize rollback: first read
+back whether the deployed pin, stable ref, migrations, or running process state actually advanced.
+If no deployment effect occurred, diagnose and repair the refused step without production mutation.
+If the effect is unknown, reconcile observed state before choosing recovery; do not blindly retry or
+roll back. Invoke `rollback-promotion` only after evidence establishes a deployment effect requiring
+recovery and its existing rollback authority and migration gates hold. Never leave successful
+execution unverified.

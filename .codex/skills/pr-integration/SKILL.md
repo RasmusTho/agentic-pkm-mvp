@@ -29,7 +29,8 @@ when the PR still needs readiness or repair work before verification.
 
 - Either:
   - an issue-backed PR exists with a bounded governing slice Issue, or
-  - a bounded direct repair PR exists whose body contains a complete `Direct Repair` block.
+  - a bounded direct repair PR exists whose body contains a complete `Direct Repair` block, or
+  - an issue-free docs-authoring or governance PR satisfies its approved lane contract.
 - A PR exists and links the governing branch.
 - The PR was just created or updated by `publish-pr` or equivalent truthful publication flow.
 - Implementation changes are already in place.
@@ -45,7 +46,8 @@ Hand off only when all of these are true:
 - all blocking review feedback is addressed or explicitly classified
 - no escalation trigger remains unresolved
 
-If any condition fails, stop and use the relevant escalation path.
+If any condition fails, stop the failing operation and execute the relevant escalation/repair path.
+Do not end the session unless the shared workflow stop-loss or explicit user scope boundary applies.
 
 ## Hot-Path Execution
 
@@ -57,9 +59,9 @@ If any condition fails, stop and use the relevant escalation path.
 - For review-feedback repairs, verify the fixing commit is reachable from the target base branch before declaring the repair complete. If the repair addresses an earlier review thread, reply with the fixing PR or merge commit and resolve the original thread. [base-branch-truth] [review-thread-closure]
 - On resume or recovery, re-check the current branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, integration, or reimplementation. [post-resume-current-state-gate]
 - Write the minimal delivery receipt before handoff.
-- A governing issue is required for normal planned workflow; a bounded direct repair PR may proceed without one if the PR body includes a complete `Direct Repair` block.
+- A governing issue is required for issue-backed implementation. Approved issue-free docs/governance lanes and bounded Direct Repair use their existing PR-body contract; do not invent an Issue or require a lane detour for routine integration.
 - Do not require a separate governance/docs lane checkbox when the `Direct Repair` block already states `Type` and `Validation`.
-- Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor a valid direct repair PR.
+- Missing issue traceability is an escalation trigger only when the PR is neither issue-backed nor an approved issue-free docs/governance or Direct Repair PR.
 - If CI fails, review blocks, branch drifts, or the PR is large or mixed-scope, stop and read `PR_ESCALATION_PATHS.md`.
 - Integration effort and the model/reasoning to spend (cheap hot path vs. escalated investigation) follow `AGENTS.md :: Total Cost of Development` — do not duplicate it here. [tcd-routing]
 - Keep integration and ordinary review-feedback repair in the same issue agent so PR state and
@@ -100,6 +102,16 @@ Declare exactly one outcome:
 - `blocked-ci-failure`
 - `blocked-contract-drift`
 - `blocked-review-feedback`
+
+These are intermediate routing results, not permission to leave an authorized delivery unfinished.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`. On `ready-for-verification`, immediately
+execute `verification-and-closure`. For a blocked result, execute the corresponding authorized
+repair or `issue-maintenance-change-control` route and resume verification with fresh affected
+evidence. Do not recursively republish an already reconciled commit. End only at the requested scope
+boundary or documented stop-loss, not at a pending check or handoff decision.
 
 ## Lifecycle Truth Rules During Integration
 

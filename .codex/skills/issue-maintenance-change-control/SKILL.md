@@ -1,9 +1,16 @@
 ---
 name: issue-maintenance-change-control
-description: "Keep GitHub Issues, PRs, labels, and optional Project projection truthful when backlog state drifts from repo reality, including high-risk change-control moves across Core Runtime <-> Agentic Lab."
+description: "Keep GitHub Issues, PRs, labels, and optional Project projection truthful when backlog state drifts from repo reality, including high-risk change-control moves between Core Runtime and Agentic Lab."
 ---
 
 # Issue Maintenance: Change Control
+
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: general_delivery` as its provider-neutral default.
+The carrier may be Codex or Claude; the shared resolver binds the intent to the configured target.
+Stronger capability is an explicit TCD escalation, never a provider/model branch embedded in this
+skill.
 
 When setting or repairing `agent:blocked` / `agent:needs-human`, apply exactly one compatible
 `action:*` label and a `blocker_action.v1` receipt per `_shared/BLOCKER_ACTION_CONTRACT.md`; remove
@@ -245,17 +252,20 @@ If an open issue is no longer the truthful backlog item because an equivalent sl
 
 ### Action: Malformed or Stale Open Issue
 
-If an open implementation Issue is malformed, stale, or no longer safely executable:
+If an open implementation Issue is malformed, stale, or no longer safely executable, technical incompleteness alone does not establish a human decision:
 
-1. **Add needs-human label:**
-   ```bash
-   gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked --remove-label agent:in-progress
-   ```
-
-2. **Post comment with the required action.**
-
-3. **Optional Project repair:** when explicitly in scope, apply and verify the derived projection
-   (`Needs Human` unless a retained `Review` or higher-precedence epic/parent condition applies).
+1. Re-read the live contract, delivery evidence, and current lifecycle owner. Apply
+   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier` before
+   choosing an agent state. Recover accessible evidence and repair the bounded contract through
+   this skill; retain an active owner's valid claim while that authorized repair continues.
+2. Keep the Issue non-ready until strict post-write validation passes. If a technical blocker
+   remains, use `agent:blocked` with the compatible `action:*` and `blocker_action.v1` receipt.
+   Use `owner-decision-brief` and `agent:needs-human` only for an independent authority category
+   established by the classifier, not merely because a field, source, or delivery link is missing.
+   Do not remove or transfer a foreign active claim as part of metadata repair.
+3. Execute only the classified label corrections, post the exact next action, and verify readback
+   under `_shared/BLOCKER_ACTION_CONTRACT.md`. Project repair remains optional and follows the
+   verified lifecycle; never project `Needs Human` solely from malformed or stale metadata.
 
 ### Maintenance path versus hot path
 
@@ -269,7 +279,8 @@ If delivered work is still open and traceability is unclear, first try to resolv
 
 1. **Set `agent:needs-human`** rather than false `agent:ready` — but only when resolution genuinely requires human input, not on ambiguity alone (see `AGENTS.md` Agency default)
 2. **Execute label and status corrections** per "Malformed or Stale Open Issue" above
-3. **Leave a comment** explaining the specific blocking question
+3. **Leave a comment** explaining the specific blocking question. A missing delivery link that can
+   be recovered is technical evidence work; it does not by itself satisfy this human-input condition.
 
 ### Parent Feature Issues
 
@@ -289,7 +300,7 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
 
 Child slice issues may become `agent:ready` only when their executable contract is concrete and available:
 
-1. **If contract lives in an open spec PR:** keep the child issue non-active (`agent:blocked` or `agent:needs-human`) until the spec merges or the issue is rewritten with required local contract sections
+1. **If contract lives in an open spec PR:** keep the child issue non-active (`agent:blocked`) until the spec merges or the issue is rewritten with required local contract sections. A separate unresolved authority conflict still routes through the Escalation Classifier; the unmerged spec alone is not a human decision.
 
 2. **If contract is concrete and merged:** can label as `agent:ready` only after strict readiness
    validation exits 0; optional Project repair may mirror it as `Ready` afterward
@@ -300,8 +311,8 @@ Child slice issues may become `agent:ready` only when their executable contract 
 | Condition | Action | Issue Labels | Issue Status | Notes |
 |-----------|--------|-------------|-------------|-------|
 | Issue closed | Execute Close Delivered | -agent:* | Done | Remove all agent labels |
-| Malformed/stale open | Execute Malformed/Stale | +agent:needs-human | Needs Human | Retain explicit Review; parent evidence still wins |
-| Delivered but open | Execute Delivered Open | +agent:needs-human | Needs Human | Retain explicit Review; comment explaining next step |
+| Malformed/stale open | Repair evidence/contract; classify remaining blocker | Technical: agent:blocked; human only after classifier | From verified lifecycle | Preserve current owner and explicit Review; no ready label before strict validation |
+| Delivered but open | Verify delivery and close, or recover missing proof | Terminal: -agent:*; human only after classifier | From verified lifecycle | Missing proof alone is technical; preserve parent and Review rules |
 | Parent feature | Keep non-active | +agent:blocked | Epic / Parent | Validation hub, waiting on child chain |
 | Child with spec in PR | Keep non-active | +agent:blocked | Blocked | Retain explicit Review; wait for spec merge |
 | Child with concrete contract | Can label ready | +agent:ready | Optional projection: Ready | Only when merged, clear, and strict readiness validation passes |
@@ -421,7 +432,7 @@ Use this when the user asks for a maintenance run across everything not done.
      ```bash
      # Example: set to ready if criteria are concrete
      gh issue edit #<N> --repo "$REPO" --add-label agent:ready --remove-label agent:blocked --remove-label agent:needs-human --remove-label agent:in-progress
-     # OR: set to needs-human if ambiguous or boundary move
+     # OR: set to needs-human only for a classifier-established independent authority category
      gh issue edit #<N> --repo "$REPO" --add-label agent:needs-human --remove-label agent:ready --remove-label agent:blocked --remove-label agent:in-progress
      # OR: set to blocked if external dependency exists
      gh issue edit #<N> --repo "$REPO" --add-label agent:blocked --remove-label agent:ready --remove-label agent:needs-human --remove-label agent:in-progress
@@ -495,3 +506,12 @@ Use this when the user asks for a maintenance run across everything not done.
 
 11. Output a receipt listing edited issues, label changes, Issue/PR state changes, verification
     reads, and optional Project before/after counts only when step 2 ran.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+After validating and reading back the correction, resume the calling workflow at its blocked step.
+Invoke `issue-to-code` or `deliver-issue-set` only when delivery belongs to the authorized task;
+backlog maintenance alone does not authorize implementation. Publish any authorized repo governance
+correction through `publish-pr` and follow closure, rather than merely recommending that transition.

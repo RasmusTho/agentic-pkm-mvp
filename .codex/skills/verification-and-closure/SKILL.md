@@ -21,6 +21,13 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 
 ## Your Job
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: verification`. The shared resolver may bind that
+intent to Codex or Claude, but this skill never embeds a provider-specific model ID or carrier
+command. A carrier that is not active returns a truthful compatibility result rather than silently
+changing the verification contract.
+
 - verify the implementation against the governing slice or feature contract
 - validate tests, docs, and writeback quality
 - ensure shipped truth moved to the right owner docs
@@ -386,7 +393,7 @@ finding and does not re-trigger review.
   Total Cost of Development` and current platform configuration, start a fresh repair context when
   that improves independence, and pass it all prior findings, attempted fixes, changed mechanisms,
   validation evidence, and the last progress assessment. When TCD selects a strongest-capability
-  repair, use the configured strongest capability with high or xhigh reasoning. Do not duplicate a
+  repair, use the configured strongest capability with high, xhigh, or max reasoning. Do not duplicate a
   provider/model ladder here; the canonical policy and live configuration govern.
 - Independently re-review after every substantive repair and record the selected capability,
   reasoning level, prior context supplied, fallback (if any), progress evidence, and outcome. Keep
@@ -460,7 +467,10 @@ same exact head back to the ordinary verified-merge sequence below.
 
 1. freeze the authenticated v2 context (`run_id`, repository, PR, exact head, governing issue,
    `closing_issues`, durable `supporting_issues`, attempts, and the compatibility-named
-   `repair_budget` accounting projection); re-read
+   `repair_budget` accounting projection). Derive repository identity from
+   `gh api repos/<owner>/<repo> --jq .full_name` and preserve its exact case; require agreement
+   with the live PR's `base.repo.full_name` and canonical `html_url`. Never lowercase the frozen
+   repository or infer canonical spelling from a remote URL. Re-read
    the live PR title/body/head and GitHub `closingIssuesReferences`, and reject any mismatch or title
    closing attempt even when an earlier `pr-contract` run was green
 2. run `scripts/prepare_verified_issue_set_merge.py` against those snapshots; require its
@@ -475,24 +485,53 @@ same exact head back to the ordinary verified-merge sequence below.
    any repair, rebase, base-branch update, review-feedback fix, or other commit is still expected;
    finish those commits first and restart at step 1 on the new head. A readiness statement is never
    reusable across heads, and the planner refuses neutralization when the precondition is unmet
-3. replace the live PR body with the plan's LF-less neutralized transport body, which converts every authenticated
-   closer to evidence-only `Refs`; immediately re-read the PR and fail closed unless the head and
-   neutralized body match the plan under the terminal-LF-only canonical digest contract above, the
-   title and body contain no canonical or malformed closing attempt, and `closingIssuesReferences`
-   is empty. Because the body edit triggers
+2a. authenticate the just-posted receipt before any neutralization: fetch the live original canonical body,
+   title/head/closing links and complete bounded comment snapshot independently of the POST response.
+   Call `resolve_verified_merge_authority_receipt(comments, pr=live_pr, repository=canonical_repository,
+   expected_run_id=context["run_id"], expected_repair_budget=context["repair_budget"])` and require that
+   the resolved value equals the plan's exact receipt. Recheck canonical live repository identity,
+   unchanged original body digest, title, head, governing/closing/supporting sets, run and accounting
+   against the frozen context/plan. Missing, malformed, conflicting, case-mismatched or unavailable
+   readback is a pre-effect technical repair: no body effect is permitted. Recover the evidence or
+   prepare a new valid attempt before continuing; do not treat a successful comment POST as proof.
+3. replace the live PR body with the plan's neutralized body, which converts every authenticated
+   closer to evidence-only `Refs`. Resolve exactly one trusted same-head authority receipt and reuse
+   it when the canonical body was restored with zero phase receipts; never post a duplicate authority receipt
+   for that head/run. Immediately re-read the PR and fail closed unless the head
+   and neutralized body match the plan under the terminal-LF-only canonical digest contract above,
+   the title and body contain no canonical or malformed closing attempt, and every bounded GraphQL
+   snapshot proves complete, unpaginated evidence that `closingIssuesReferences` is empty. Because the body edit triggers
    governance again, the triggered `pr-contract` must authenticate the trusted, non-conflicting
    exact-head authority receipt against the complete neutralized body issue set; fabricated
-   `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run
-   triggered by that `edited` event to finish green on the same exact head, then re-read the head,
-   body, title, and empty closing references once more. Never reuse the pre-edit green `pr-contract`
+   `Refs`/`Verified-Closing-Issues` text is never sufficient. Wait for the latest `pr-contract` run triggered by that `edited` event,
+   whose workflow creation is at or after the authenticated body edit, to finish green on the same exact head; bind its
+   authority/body/edit/default-branch identity into
+   `verified-merge-closing-projection-convergence.v1`. Then run
+   `scripts/await_verified_merge_projection_convergence.py`: require at least two empty admissible reads separated by bounded backoff
+   and one fresh final empty read, then require the helper to post exactly one collaborator-authored,
+   content-addressed convergence receipt containing the quorum and final observation. Re-read the
+   bounded PR comments and authenticate that exact receipt before continuing. A retry after a crash
+   between the comment write and `prepared` must reuse the one valid same-head receipt and must not
+   post a duplicate. A later non-empty read, API or
+   rate-limit ambiguity, pagination, head/body/title/main/edit drift, authority conflict, or timeout
+   fails closed; restore only the authority-authenticated canonical body and perform no phase,
+   merge, Issue, dispatcher, or lifecycle effect. Never reuse the pre-edit green `pr-contract`
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
    `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
-   exact neutralized PR snapshot. For the pre-#4010 legacy exception, also pass the complete trusted
+   exact convergence receipt plus the fresh final projection snapshot through
+   `--projection-convergence-json`, `--final-projection-observation-json`, and the complete bounded
+   PR comment readback through `--comments-json`; `prepared` refuses
+   missing, forged, stale, cross-head, cross-run, or body-mismatched convergence proof. For the
+   pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored
-   phase ledger; duplicate identical receipts are idempotent, while missing, stale, forged, or
-   conflicting receipts fail closed
+   phase ledger. Every current-schema phase consumer resolves the one trusted durable convergence
+   comment, recomputes its quorum/final-observation proof, and requires its digest; duplicate
+   convergence comments and missing, stale, forged, or
+   conflicting receipts fail closed. Pass the same authenticated convergence JSON to every later
+   phase build so `merged`, `reconciled`, and `restored` preserve the digest already bound by
+   `prepared`; the CLI refuses to construct a new phase without it
 5. merge through the exact-head REST endpoint using the verified SHA and only the plan's fixed
    non-closing commit title/message. Never use GitHub-synthesized or caller-supplied free-form merge
    text. A body/head/closing-link change before this request is a hard stop; never restore closers and
@@ -501,8 +540,11 @@ same exact head back to the ordinary verified-merge sequence below.
 6. verify merge success and re-fetch the merge commit to prove its title/message contains no
    canonical or malformed closing attempt, then post the authority-bound `merged` phase receipt
 7. on resume, recover either authenticated interruption window without restarting accounting. If the
-   exact-head PR is still open with the neutralized body, require the unique trusted exact-run
-   authority receipt, its exact body digest/issue sets/repair accounting, and a continuous `prepared`
+   exact-head PR is restored canonical with exactly one trusted exact-run authority receipt and zero
+   phase receipts, reuse that receipt and restart at the post-edit authenticated convergence gate
+   without posting another authority. If it is still open with the neutralized body, require the
+   same unique receipt, its exact body digest/issue sets/compatibility-named `repair_budget`
+   accounting projection, authenticated convergence proof, and a continuous `prepared`
    phase before resuming the pre-merge sequence. If the live PR is merged-but-incomplete,
    authenticate the same exact authority receipt and latest continuous phase, prove the live merge
    identity, and resume at the first missing phase. Missing, forged, stale, conflicting,
@@ -561,6 +603,12 @@ same exact head back to the ordinary verified-merge sequence below.
 A neutralized body's lifetime is bounded by the one merge attempt that justified it. It is never a
 durable PR state, so it must not outlive its exact head.
 
+The same body-only restoration applies when authenticated projection convergence times out or fails:
+restore the authority receipt's canonical-body digest, leave its immutable authority and any existing
+phase receipts untouched, and perform no merge, Issue, dispatcher, lifecycle, or post-merge effect.
+Once restored, a later attempt on the unchanged head must reuse the one valid trusted authority receipt and
+restart at the post-edit `pr-contract`/convergence gate; it must never post a second receipt.
+
 Whenever a new head is observed on a PR whose body is still neutralized — a repair commit, a rebase,
 a base-branch update, an abandoned attempt, or a resumed session — restore the canonical body before
 any further repair, verification, or re-merge work. Leaving it neutralized fails `pr-contract`
@@ -576,6 +624,23 @@ restoration classifier may use it only to name the receipt's exact restore targe
 missing, untrusted, conflicting, body-drifted, or already-phased evidence so restoration cannot race
 an in-flight merge.
 
+An exact case-only repository metadata mistake has a separate restoration-only proof. Supply the
+canonical live REST PR snapshot (including `base.repo.full_name`, canonical `html_url`, explicit
+`merged: false` and `merged_at: null`), the complete bounded comments, the expected run and unchanged
+repair accounting. The existing classifier requires one trusted, complete canonical authority comment,
+exact PR/head/body/issue sets, and no raw phase evidence or extra authority evidence. Only ASCII case
+may differ from the positively established canonical repository spelling. It preserves the raw same-head
+race guard for all other malformed or conflicting evidence. The malformed receipt never becomes merge authority,
+prepared/merged-phase recovery, or approval. Foreign identities, incomplete snapshots, body drift,
+extra/missing fields, duplicate keys/blocks/comments, and any phase evidence refuse restoration.
+
+After this case-only restoration, keep the original comments and repair accounting unchanged and start
+a new run on the final head with the canonical repository spelling, fresh readiness/current-head CI and
+independent final review. Authenticate its newly posted receipt at step 2a before neutralization; the
+malformed historical receipt cannot be reused as approval. This is distinct from reusing an already
+valid receipt after a projection-convergence timeout. Preserve the body-edit identity, newly triggered
+`pr-contract`, projection quorum/final read and complete phase gates introduced by the ordinary sequence.
+
 Detect the state instead of relying on noticing it per head:
 
 ```bash
@@ -583,9 +648,12 @@ python3 scripts/resolve_neutralized_body_restoration.py \
   --pr-json <pr.json> --comments-json <comments.json> --repository <owner/repo>
 ```
 
+For case-only recovery also supply `--expected-run-id <run-id>` and
+`--expected-repair-budget-json <unchanged-accounting.json>`; omitting either refuses that proof.
+
 It is read-only and separates a positively safe state from an indeterminate one: `0` means no
 restoration is required, `2` means either the body outlived its receipt head or the exact-head
-transport-stranding proof above names the durable receipt's `restore_body_sha256` as the only
+transport-stranding or case-only proof above names the durable receipt's `restore_body_sha256` as the only
 accepted restore target, and `3` means
 the body still carries a `Verified-Closing-Issues` marker but no restore target can be proven —
 because the evidence is missing, untrusted, or conflicting, because the snapshot is incomplete, or
@@ -613,6 +681,9 @@ Rules for the restore:
   readiness statement, authority receipt, and neutralized body on that head
 
 ## When Not to Merge
+
+Refusing a merge does not end the delivery loop. Execute the authorized repair/maintenance route,
+then resume verification; suspend only under the shared workflow stop-loss or explicit user stop.
 
 - any issue-backed acceptance criterion is not met -> create a follow-up Issue instead
 - any issue-backed behavioral AC `Verify:` test is missing, skipped, xfailed, or excluded from CI -> do not merge
@@ -755,3 +826,16 @@ Include the delivery receipt line.
 ### 4. Follow-up Issues
 
 If work is partial, do not merge. Create bounded follow-up Issue(s) using the exact task-contract shape.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`.
+
+Execute required CI/review, repair, merge, reconciliation, and `post-merge-owner-doc` before
+returning a delivery receipt. Follow queued execution through its observed terminal effects; a
+`verified` worker verdict alone is intermediate. In `host_fenced_executor` mode the worker must
+preserve its mutation prohibition and return evidence to the host; the originating delivery owner
+follows the host through merge and reconciliation. Missing host prerequisites trigger bounded
+diagnosis and authorized recovery, not credential fabrication or a weaker merge route. After
+closure, return evidence to the caller for its remaining authorized work; do not start unrelated
+delivery or deployment.

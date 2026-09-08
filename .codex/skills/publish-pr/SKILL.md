@@ -111,9 +111,17 @@ additional paths, force-push, delete refs, or continue after typed refusal.
 ## Handoff
 
 After exact receipt readback, use `pr-integration` only for a concrete readiness, mergeability, CI
-attachment, branch-drift, or review-repair need. Otherwise hand the PR directly to
+attachment, branch-drift, or review-repair need. Otherwise immediately load and execute
 `verification-and-closure`. Publication does not make the Issue or delivery Done.
 
 Report branch, commit, PR number, plan/receipt hashes, validation, BuilderOps routing, and the next
 owner workflow. On a plan divergence, invoke `capture-learning`; never append new operational state
 to `docs/learning-log.md`.
+
+## Workflow continuation
+
+Apply `.codex/skills/README.md :: Workflow continuation`. The publication report is intermediate
+evidence: execute `pr-integration` when triggered, then `verification-and-closure` through verified
+merge and reconciliation before ending delivery. Do not return merely because the PR exists, checks
+are pending, or verification is queued. For an explicit draft-only/publication-only task, verify
+that requested output and return to the caller without widening authority.

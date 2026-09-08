@@ -46,15 +46,29 @@ _instance_state_deployment_deliver_private_inventory() {
   local host_target_path="${2:?host target path required}"
   local uid="${3:?uid required}"
   local gid="${4:?gid required}"
+  local target_dir target_name temporary_path
   if [ ! -s "${source_path}" ]; then
     echo "instance state deployment: refusing to deliver an empty or missing inventory (${source_path})" >&2
     return 1
   fi
-  ( umask 077 && cat -- "${source_path}" > "${host_target_path}" ) || return $?
-  chmod 0600 "${host_target_path}" || return $?
-  chown "${uid}:${gid}" "${host_target_path}" || return $?
-  if [ ! -s "${host_target_path}" ]; then
+  target_dir="$(dirname "${host_target_path}")"
+  target_name="$(basename "${host_target_path}")"
+  temporary_path="$(mktemp "${target_dir}/.${target_name}.tmp.XXXXXX")" || return $?
+  if ! ( umask 077 && cat -- "${source_path}" > "${temporary_path}" ); then
+    rm -f -- "${temporary_path}"
+    return 1
+  fi
+  if ! chmod 0600 "${temporary_path}" || ! chown "${uid}:${gid}" "${temporary_path}"; then
+    rm -f -- "${temporary_path}"
+    return 1
+  fi
+  if [ ! -s "${temporary_path}" ]; then
+    rm -f -- "${temporary_path}"
     echo "instance state deployment: delivered inventory is empty (${host_target_path})" >&2
+    return 1
+  fi
+  if ! mv -f -- "${temporary_path}" "${host_target_path}"; then
+    rm -f -- "${temporary_path}"
     return 1
   fi
 }
@@ -319,7 +333,7 @@ prepare_instance_state_deployment() {
   local runtime_gid="${LOCAL_GID:-$(id -g)}"
   local runtime_user="${runtime_uid}:${runtime_gid}"
   local repo_root inventory_helper controller_pid controller_start_token
-  local inventory_host_path owner_inventory_host_path inventory_rc
+  local inventory_host_path owner_inventory_host_path inventory_rc owner_inventory_sha256
   local quiescence_inventory_host_target_path owner_inventory_host_target_path
   local principal_attempt_id principal_receipt_path principal_receipt_host_path
   local receipt_verify_rc
@@ -414,7 +428,8 @@ prepare_instance_state_deployment() {
   python3 "${inventory_helper}" produce-legacy-owners \
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
-    --output "${owner_inventory_host_path}"
+    --output "${owner_inventory_host_path}" \
+    --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ] || [ ! -s "${owner_inventory_host_path}" ]; then
     rm -f -- "${owner_inventory_host_path}"
@@ -618,7 +633,8 @@ prepare_instance_state_deployment() {
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
     --inventory "${owner_inventory_host_path}" \
-    --output "${owner_inventory_host_path}"
+    --output "${owner_inventory_host_path}" \
+    --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR}"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${owner_inventory_host_path}"
@@ -638,7 +654,6 @@ prepare_instance_state_deployment() {
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
   fi
-
   # Explicit MVR-03 authority transition. One runtime process records the floor
   # and then bootstraps the role, keeping the attempt-local floor receipt out of
   # caller-controlled flags. It consumes MVR-01B's proved lease, quiescence proof,
@@ -765,11 +780,36 @@ prepare_instance_state_deployment() {
   # MVR-05A8: after every fallible stopped-window precondition above has
   # completed, seal scalar rollback immediately before finalization can permit
   # the first binding-keyed migration or restarted runtime write.
+  # MVR-01C may bind the owner receipt to the same proof, so hash only after
+  # every stopped-window consumer that can replace those receipt bytes.
+  if owner_inventory_sha256="$(
+    "${PYTHON:-python3}" - "${owner_inventory_host_target_path}" <<'PY'
+import hashlib
+import sys
+
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as source:
+    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+  )"; then
+    :
+  else
+    inventory_rc=$?
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
   "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
     python -m app.instance.runtime mvr05-record-floor \
       --channel "${channel}" \
       --registry-path /app/instance-state/agentic-pkm/vault-registry.md \
       --host-global-root /app/instance-ownership \
+      --legacy-path "${legacy_path}" \
+      --inventory-path "${inventory_path}" \
+      --inventory-sha256 "${owner_inventory_sha256}" \
       --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json \
       --fence-plan "/app/instance-ownership/mvr05-fence-plan-${controller_pid}.json"
   inventory_rc=$?

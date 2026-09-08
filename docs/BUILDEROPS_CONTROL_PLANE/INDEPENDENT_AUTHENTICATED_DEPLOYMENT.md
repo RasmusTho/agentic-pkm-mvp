@@ -6,7 +6,8 @@ Authority: Defines the independent BuilderOps Compose, image, secret, ingress, h
 
 ## Implementation Status
 
-The repository contract provides a separate BuilderOps Compose project, immutable control-plane and
+The repository contract provides a separate BuilderOps Compose project, an import-side-effect-free
+Builder package, a retained neutral runtime dependency manifest, immutable control-plane and
 PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references,
 migration-gated API and worker startup, loopback API exposure, private authenticated ingress,
 authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. The deployment target
@@ -32,12 +33,50 @@ inventory must classify every known component as `VM-102 resident (target)`, `ex
 dependency`, or `intentionally non-runtime`, and must leave unresolved identity, service, ingress,
 health, lifecycle, migration, and rollback facts as explicit gaps.
 
+The BuilderOps image builds from `Dockerfile.builderops` and
+`requirements-builderops.txt`. Its API, worker, and migration entrypoints import only the
+BuilderOps control-plane package plus the neutral web, validation, PostgreSQL, and ASGI runtime
+dependencies named there. Importing `app` or any Builder entrypoint does not load Product LLM
+configuration, Product database/vault initialization, or Product process settings. Product keeps
+its own explicit LLM policy preflight at the Product API application entrypoint. This is a
+package/build boundary only; it does not prove image qualification, host identity, migration
+admission, authority cutover, ingress, or VM-102 activation.
+
 The ordered schemas and bootstrap-without-baseline refusal are owned only by the
 [VM-102 evidence and receipt contract](README.md#vm-102-evidence-and-receipt-contract). This BCP-02
 contract consumes those receipts but does not redefine them. Locally, deployment still refuses
 secret-bearing evidence, unqualified hosts, missing component gaps, and rollback without a
 compatible runnable baseline; the repository-side candidate qualification remains insufficient for
 live qualification.
+
+### Approved candidate attestation runner
+
+The candidate pair must be verified from VM 102 or from a named, access-controlled operator
+runner before a live deployment attempt. The validated runner baseline is GitHub CLI `2.83.2`
+with the `attestation` subcommand available. A different CLI version is permitted only when it
+supports the same `gh attestation verify` command and flags; the observed version is recorded in
+the redacted operator receipt. The runner's GitHub authentication remains in its normal credential
+store or environment and is never copied into the repository, command output, or receipt.
+
+Run the following command with the exact candidate-pair receipt and source SHA supplied by the
+release evidence:
+
+```bash
+gh --version
+gh attestation verify <candidate-pair-receipt.json> \
+  --repo RasmusTho/agentic-pkm-mvp \
+  --signer-workflow RasmusTho/agentic-pkm-mvp/.github/workflows/app-image-build.yml \
+  --source-ref refs/heads/main \
+  --source-digest <40-character-source-sha>
+```
+
+Exit status `0` is the only success signal. The command must fail closed when `gh`, the
+`attestation` subcommand, authentication, or the candidate proof is unavailable; the deployment
+script performs this check before Docker or database mutation. Record only the CLI version, command
+exit, candidate receipt SHA, source SHA, both immutable image digests, observation time, and
+`secret_material: absent`. A successful verifier result is attestation evidence consumed by
+`builderops_vm_rebuild_activation.v1`; it is not host qualification, writer selection, deployment,
+or owner acceptance.
 
 ## Purpose
 

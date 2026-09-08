@@ -511,6 +511,21 @@ def test_mvr01a_schema_activation_requires_rollback_capability(tmp_path) -> None
     assert VaultRegistryStore(registry_path).load().revision == 1
 
 
+def test_deployment_finish_keeps_fence_through_mvr05_floor_and_backup() -> None:
+    """The stopped window carries authenticated convergence through finalization."""
+
+    deployment = (REPO_ROOT / "scripts/lib/instance_state_deployment.sh").read_text()
+    floor = deployment.index("python -m app.instance.runtime mvr05-record-floor")
+    assert '--inventory-path "${inventory_path}"' in deployment[floor : floor + 700]
+    assert '--inventory-sha256 "${owner_inventory_sha256}"' in deployment[
+        floor : floor + 700
+    ]
+    assert floor < deployment.index("settings-rebind-install-dormant", floor)
+    assert deployment.index("settings-rebind-install-dormant", floor) < deployment.index(
+        "python -m app.instance.runtime deployment-finish", floor
+    )
+
+
 def test_legacy_registry_export_happens_after_writer_quiescence(tmp_path) -> None:
     layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "test")
     legacy = AppLocalSettingsStore(tmp_path / "legacy" / "app-local.md")
@@ -1512,6 +1527,46 @@ def test_quiescence_proof_recovers_publication_after_proved_lease(
             inventory_path=inventory,
         )
     assert _deployment_lease_path(ownership).read_bytes() == proved_lease_bytes
+
+
+def test_quiescence_proof_retries_transient_truncated_inventory(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state = tmp_path / "state"
+    ownership = tmp_path / "ownership"
+    state.mkdir()
+    ownership.mkdir()
+    _begin_instance_state_deployment(
+        channel="prod",
+        instance_state_root=state,
+        host_global_root=ownership,
+        legacy_path=tmp_path / "legacy.md",
+        controller_pid=os.getpid(),
+        controller_start_token=_controller_token(os.getpid()),
+    )
+    inventory = _write_empty_quiescence_inventory(host_global_root=ownership)
+    original_read_bytes = Path.read_bytes
+    truncated_reads = 0
+
+    def read_with_transient_projection(path: Path) -> bytes:
+        nonlocal truncated_reads
+        if path == inventory and truncated_reads == 0:
+            truncated_reads += 1
+            return b'{"schema":"agentic-pkm.host-deployment-quiescence.v2"'
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_with_transient_projection)
+
+    proof = _prove_instance_state_quiescence(
+        channel="prod",
+        host_global_root=ownership,
+        inventory_path=inventory,
+    )
+
+    assert truncated_reads == 1
+    assert proof.channel_id == "prod"
+    assert json.loads(_deployment_lease_path(ownership).read_text())["phase"] == "proved"
 
 
 def test_quiescence_proof_rejects_a_claim_adopted_after_its_first_read(
@@ -3651,6 +3706,38 @@ def test_v2_inventory_proof_is_accepted_by_the_production_proof_consumer(tmp_pat
     assert after == before
 
 
+def test_owner_inventory_reader_retries_transient_truncated_projection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    inventory = tmp_path / "legacy-owner-inventory.json"
+    inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory_payload(
+                [{"channel_id": "prod", "root": str(tmp_path / "vault")}]
+            )
+        ),
+        encoding="utf-8",
+    )
+    inventory.chmod(0o600)
+    original_read_bytes = Path.read_bytes
+    truncated_reads = 0
+
+    def read_with_transient_projection(path: Path) -> bytes:
+        nonlocal truncated_reads
+        if path == inventory and truncated_reads == 0:
+            truncated_reads += 1
+            return b'{"schema":"agentic-pkm.legacy-owner-inventory.v1"'
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_with_transient_projection)
+
+    payload = runtime_module._load_legacy_owner_inventory_payload(inventory)
+
+    assert truncated_reads == 1
+    assert payload["inventory_complete"] is True
+
+
 def test_registry_volume_and_preflight_cover_all_consumers(tmp_path) -> None:
     layout = InstanceStateLayout.for_channel(tmp_path / "instance-state", "dev")
     layout.ensure()
@@ -4811,6 +4898,14 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     assert f'_pkm_resolved_channel="{selector}"' in start
     assert preflight_marker in start
     assert 'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"' in start
+    database_precondition = start.index(
+        "start_database_before_instance_state_deployment()"
+    )
+    assert database_precondition < start.index(
+        "prepare_instance_state_deployment run_docker_compose"
+    )
+    assert "run_docker_compose up -d db" in start
+    assert "pg_isready" in start
     for selector_name in ("ENVIRONMENT", "CHANNEL", "PKM_CHANNEL"):
         assert f"${{{selector_name}:-" in selector
     assert "unset _pkm_resolved_channel" not in start
@@ -4820,6 +4915,114 @@ def test_prod_volume_loss_restore_verifies_key_identity_before_api_or_worker_sta
     assert expected_key["key_id"] != json.loads(
         (backup_root / "ownership-key.json").read_text(encoding="utf-8")
     )["key_id"]
+
+
+def test_start_full_system_starts_database_before_instance_state_deployment(tmp_path) -> None:
+    start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+
+    database_precondition = start.index(
+        "start_database_before_instance_state_deployment()"
+    )
+    fence_call = start.index(
+        'prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"'
+    )
+
+    assert database_precondition < fence_call
+    assert "check_compose_port_conflicts db" in start
+    assert "run_docker_compose up -d db" in start
+    assert "pg_isready" in start
+
+    caller_start = start.index(
+        "\nif start_database_before_instance_state_deployment; then"
+    )
+    caller_end = start.index("\nstart_startup_watchdog", caller_start)
+    caller_body = start[caller_start:caller_end]
+    trace_path = tmp_path / "trace.log"
+    harness = f"""
+set -eu
+TRACE={trace_path!s}
+_pkm_resolved_channel=test
+STARTUP_TIMEOUT_SECONDS=1
+run_preflight() {{ :; }}
+ensure_prod_instance_state_volume() {{ :; }}
+start_database_before_instance_state_deployment() {{ printf 'database-precondition\\n' >> "$TRACE"; }}
+prepare_instance_state_deployment() {{ printf 'mvr05-fence\\n' >> "$TRACE"; }}
+start_startup_watchdog() {{ :; }}
+{caller_body}
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert trace_path.read_text(encoding="utf-8").splitlines() == [
+        "database-precondition",
+        "mvr05-fence",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_reason"),
+    (
+        ("ready", None),
+        ("start-failure", "instance_state_database_start_failed"),
+        ("not-ready", "instance_state_database_not_ready"),
+    ),
+)
+def test_start_full_system_database_precondition_executes_and_fails_closed(
+    tmp_path, mode: str, expected_reason: str | None
+) -> None:
+    """Exercise the extracted precondition seam, including failure propagation."""
+
+    start = (REPO_ROOT / "scripts/start_full_system.sh").read_text(encoding="utf-8")
+    function_start = start.index("start_database_before_instance_state_deployment() {")
+    function_end = start.index("\n}\n\nrun_preflight", function_start) + 2
+    function_body = start[function_start:function_end]
+    trace_path = tmp_path / "trace.log"
+    harness = f"""
+set -u
+TRACE={trace_path!s}
+MODE={mode!s}
+POSTGRES_USER=app
+POSTGRES_DB=app_test
+POSTGRES_HEALTHCHECK_HOST=localhost
+write_startup_status() {{ printf 'status %s %s\\n' "$1" "$2" >> "$TRACE"; }}
+check_compose_port_conflicts() {{ printf 'conflicts %s\\n' "$*" >> "$TRACE"; }}
+run_docker_compose() {{
+  printf 'compose %s\\n' "$*" >> "$TRACE"
+  case "$MODE:$*" in
+    "start-failure:up -d db") return 1 ;;
+    "not-ready:exec -T db"*) return 1 ;;
+  esac
+  return 0
+}}
+sleep() {{ :; }}
+{function_body}
+start_database_before_instance_state_deployment
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    trace = trace_path.read_text(encoding="utf-8")
+
+    if expected_reason is None:
+        assert result.returncode == 0, result.stderr
+        assert trace.index("conflicts db") < trace.index("compose up -d db")
+        assert "compose exec -T db" in trace
+        assert "status" not in trace
+    else:
+        assert result.returncode != 0
+        assert f"status 0 {expected_reason}" in trace
+        if mode == "start-failure":
+            assert "compose exec -T db" not in trace
+        else:
+            assert "compose up -d db" in trace
+            assert "compose exec -T db" in trace
 
 
 def test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore(tmp_path) -> None:

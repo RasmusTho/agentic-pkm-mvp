@@ -369,7 +369,13 @@ def iter_vault_markdown_files(
         if nearest_enclosing_vault_root(walk_root_real, search_root=selected_root_real) != selected_root_real:
             return
 
-    for dirpath, dirnames, filenames in os.walk(str(walk_root)):
+    # ``os.walk`` otherwise suppresses directory traversal failures. Callers
+    # such as the production watcher must fail closed rather than treating a
+    # partially walked vault as a complete scan.
+    def _raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for dirpath, dirnames, filenames in os.walk(str(walk_root), onerror=_raise_walk_error):
         kept: list[str] = []
         for name in dirnames:
             child = Path(dirpath) / name
@@ -476,12 +482,16 @@ class VaultManager:
         return self.select_vault(Path(item.path), remember=False)
 
     def select_vault(self, vault_path: Path, *, remember: bool = True) -> VaultContext:
+        return self._select_vault_locked(vault_path, remember=remember)
+
+    def _select_vault_locked(self, vault_path: Path, *, remember: bool) -> VaultContext:
         previous = self._context
         context = self.validate_vault(vault_path)
-        if remember and context.status in {"selected", "uninitialized", "invalid", "missing"}:
+        if context.status in {"selected", "uninitialized", "invalid", "missing"}:
             rebind_selection = self._settings_rebind_selection(context, vault_path)
             if rebind_selection is None:
-                self._remember_context(context, vault_path)
+                if remember:
+                    self._remember_context(context, vault_path)
             else:
                 activation, registration, known = rebind_selection
                 activation.activate(

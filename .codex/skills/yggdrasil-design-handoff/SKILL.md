@@ -171,3 +171,11 @@ For the constrained route, return the content-addressed
 `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`. Its authority block must preserve the literal
 `not_claimed` values for live selection, MCP system identity, project creation, and live parity; it
 must never be relabeled as the live receipt above.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After accepted design evidence satisfies
+the applicable design and PromotionIntent gates, invoke `docs-governance` for owner/specification
+normalization and the bounded Issue workflow when implementation is authorized. Return design-only
+deliverables to the caller; unresolved token parity, authority, or live design-system gates do not
+permit implementation to proceed.

@@ -75,35 +75,18 @@ def test_builder_closeout_gate_contract_is_discoverable_and_fail_closed() -> Non
     assert "| .codex/skills/klart/SKILL.md |" in docs_index
 
 
-def test_klart_requires_exact_swedish_closeout_response_contract() -> None:
+def test_klart_preserves_closeout_evidence_without_fixed_presentation() -> None:
     agents = _read("AGENTS.md")
     skill_index = _read(".codex/skills/README.md")
-    skill = _read(".codex/skills/klart/SKILL.md")
-    docs_index = _read("docs/DOCS_INDEX.md")
+    skill = " ".join(_read(".codex/skills/klart/SKILL.md").split())
 
-    assert "disable-model-invocation: true" not in skill
-    assert "platform-level response interceptor" in skill
-    assert "cannot\nmechanically rewrite" in skill
-
-    headings = [
-        "### Rekommendation",
-        "### Trådhantering",
-        "### Mål",
-        "### Statusverifiering",
-        "### Klart",
-        "### Kvar",
-        "### Åtgärd",
-        "### Nästa steg",
-        "### Värde",
-        "### Risk vid avslut",
-    ]
-    positions = [skill.index(heading) for heading in headings]
-    assert positions == sorted(positions)
-    assert all(skill.count(heading) == 1 for heading in headings)
-    assert "exact Swedish ten-heading terminal response contract" in " ".join(skill_index.split())
-    assert "exactly these" in agents
-    assert "platform-level response interceptor" in agents
-    assert "| .codex/skills/klart/SKILL.md |" in docs_index
+    assert "No fixed headings are required" in skill
+    assert "actual verification" in skill
+    assert "remaining action, exact blocker, or material risk" in skill
+    assert "fresh read-only assessment" in skill
+    assert "no fixed headings are required" in agents
+    assert "concise outcome, verification, and remaining-action summary" in skill_index
+    assert "exact Swedish ten-heading" not in _read("docs/DOCS_INDEX.md")
 
 
 def test_shared_issue_contract_requires_duplicate_search_before_issue_creation() -> None:
@@ -279,6 +262,79 @@ def test_owner_decision_profile_delegates_classification_and_preserves_operator_
     assert "## Contractual operator gates" in profile
     assert "Never use the decision ownership gate to remove an unconditional operator gate" in profile
     assert "Contractual operator gates still fire exactly as their owning workflows define" in preflight
+
+
+def test_escalation_entrypoints_resolve_current_mandate_before_owner_routing() -> None:
+    """Check prompt routing, not a simulated runtime authorization decision."""
+    method = _read(".codex/skills/decision-quality/SKILL.md")
+    mandate = " ".join(
+        _section_between(method, "## Current mandate and delegated choices", "## Universal preflight").split()
+    )
+    assert "latest explicit instructions" in mandate
+    assert "by priority and scope" in mandate
+    assert "Record what changed and what remains reserved" in mandate
+    assert "Carry existing authorization through retries and workflow transitions" in mandate
+    assert "do not invent supersession or an approval receipt" in mandate
+
+    preflight = " ".join(_owner_decision_contract_preflight().split())
+    assert preflight.index("Resolve the current mandate") < preflight.index("select the live contract")
+    assert "after instruction-priority and current-mandate resolution" in preflight
+    profile = " ".join(_read(".codex/skills/owner-decision-brief/SKILL.md").split())
+    assert "does not override explicit user instructions" in profile
+    assert "decision-quality :: Current mandate and delegated choices" in profile
+
+    classifier = " ".join(_section_between(
+        _read("docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"),
+        "## Escalation Classifier", "### Packet Schema",
+    ).split())
+    assert ".codex/skills/decision-quality/SKILL.md :: Current mandate and delegated choices" in classifier
+    assert "independently required operator acknowledgments remain binding" in classifier
+    assert "Never infer that revision from a label, generated plan, silence" in classifier
+
+
+def test_delegation_keeps_technical_preparation_agent_owned_without_forging_acknowledgment() -> None:
+    method = " ".join(_read(".codex/skills/decision-quality/SKILL.md").split())
+    assert "Complete accessible technical preparation before any remaining ask" in method
+    assert "Never ask a person to discover or copy back machine fields merely to echo" in method
+    assert "in the gate's required form" in method
+    assert "selections as proposals, not operator decisions" in method
+    assert "Delegation does not itself prove safety, approve additional effects" in method
+    assert "separately required human acknowledgment" in method
+    assert "Missing facts stay unknown, not guessed defaults" in method
+
+
+def test_decision_evidence_does_not_promote_health_or_missing_local_state_to_authority() -> None:
+    evidence = " ".join(_section_between(
+        _read(".codex/skills/decision-quality/SKILL.md"),
+        "## Evidence discipline", "## Current mandate and delegated choices",
+    ).split())
+    assert "not found locally is not absent on the remote system" in evidence
+    assert "not checked is unknown" in evidence
+    assert "Health or successful execution does not prove ownership" in evidence
+    assert "exclusive write authority, attestation, or recoverability" in evidence
+    assert "Reused observations retain their original freshness" in evidence
+    assert "Claim use of this method only for the steps actually performed" in evidence
+
+
+def test_technical_stop_routes_recovery_without_broadening_authority_or_investigation() -> None:
+    protocol = " ".join(_section_between(
+        _read("docs/development/AGENT_OPERATING_PROTOCOL.md"),
+        "## Stop conditions", "## Related docs",
+    ).split())
+    assert "Stop the affected operation" in protocol
+    assert "Escalation Classifier" in protocol
+    assert "does not authorize probing past the boundary" in protocol
+    assert "execute and verify only if current authority covers that exact effect" in protocol
+    assert "A prose claim never creates mutation authority" in protocol
+    assert "Execute and verify before continuing." not in protocol
+
+    budgets = _section_between(
+        _read("docs/development/GOVERNANCE_PROPORTIONALITY.md"),
+        "## Delivery budgets and stop-loss", "## Post-validation base-drift evidence reuse",
+    )
+    assert "evidence-based convergence" in budgets
+    assert "2+2" not in budgets
+    assert "Technical stop-loss alone does not create `agent:needs-human`" in budgets
 
 
 def test_builder_thread_capability_is_retired() -> None:
@@ -642,3 +698,136 @@ def test_publish_pr_full_path_owner_is_exact_and_resolvable() -> None:
         "Ambiguous transport/readback",
     ):
         assert trigger in full_path
+
+
+def test_every_builder_skill_executes_or_returns_its_next_step() -> None:
+    # Inventory from disk, not a fixed list: new Builder entrypoints must carry the contract.
+    for path in sorted((REPO_ROOT / ".codex/skills").glob("*/SKILL.md")):
+        if path.parent.name.startswith("mimer-"):
+            assert "## Workflow continuation" not in path.read_text(), path
+            continue
+        text = path.read_text()
+        assert text.count("## Workflow continuation") == 1, path
+        continuation = " ".join(text.split("## Workflow continuation", 1)[1].split())
+        assert ".codex/skills/README.md :: Workflow continuation" in continuation, path
+        assert any(word in continuation.lower() for word in ("execute", "invoke", "return")), path
+
+
+def test_continuation_preserves_scope_and_fenced_execution() -> None:
+    contract = _section_between(
+        _read(".codex/skills/README.md"), "## Workflow continuation", "## BuilderOps Vault routing"
+    )
+    for invariant in (
+        "mimer-*", "external plugin skills", "analysis-only", "draft-only",
+        "not authorize", "stop-loss", "host_fenced_executor", "never synthesize credentials",
+        "explicitly accepted", "recovery evidence", "suspended caller", "recursively reopen",
+        "human involvement is reserved for genuine exceptions",
+    ):
+        assert invariant in contract, invariant
+    assert "Workflow continuation" in _read("AGENTS.md")
+
+
+def test_publication_cannot_be_terminal_delivery_handoff() -> None:
+    issue = _read(".codex/skills/issue-to-code/SKILL.md")
+    assert "19. Immediately execute `verification-and-closure`" in issue
+    assert "If the slice merges" not in issue
+    publish = _read(".codex/skills/publish-pr/SKILL.md")
+    assert "immediately load and execute" in publish
+    assert "Publication does not make the Issue or delivery Done" in publish
+    adapter = _read(".codex/agents/slice-implementer.toml")
+    assert "handoff after publication or closure work" not in adapter
+    assert "stop-loss/explicit user scope restriction" in adapter
+    for name in ("slice-implementer", "verification-closer", "issue-set-coordinator"):
+        assert "Workflow continuation" in _read(f".codex/agents/{name}.toml")
+
+
+def test_stop_loss_distinguishes_failed_operation_from_session_end() -> None:
+    contract = _section_between(
+        _read("docs/development/GOVERNANCE_PROPORTIONALITY.md"),
+        "## Delivery budgets and stop-loss", "## Post-validation base-drift evidence reuse",
+    )
+    for requirement in (
+        "authorized recovery", "not stop-loss", "first failures", "repairable conflicts",
+        "exact step and artifact/PR head", "remaining budget", "no safe authorized continuation",
+        "Technical stop-loss alone does not create", "separate P0/P1",
+    ):
+        assert requirement in contract, requirement
+    closeout = " ".join(_read(".codex/skills/klart/SKILL.md").split())
+    assert "Before suspending an open delivery PR" in closeout
+    assert "proposed successor or copyable prompt is insufficient" in closeout
+
+
+def test_supporting_workflows_do_not_park_followup_work() -> None:
+    owner_doc = _read(".codex/skills/post-merge-owner-doc/SKILL.md")
+    assert "opened PR is interim evidence only" in owner_doc
+    assert "wait for the user's next pass" not in owner_doc
+    assert "Do not block anything" not in owner_doc
+    for name in ("execute-promotion", "rollback-promotion"):
+        continuation = _read(f".codex/skills/{name}/SKILL.md").split(
+            "## Workflow continuation", 1
+        )[1]
+        assert "verify-promotion" in continuation
+    retro = _read(".codex/skills/learning-retrospective/SKILL.md")
+    assert "do not request approval already supplied by the task" in retro
+    assert "follow-up\nagent run using" not in retro
+
+
+def test_maintenance_incompleteness_does_not_imply_human_authority() -> None:
+    skill = _read(".codex/skills/issue-maintenance-change-control/SKILL.md")
+    malformed = _section_between(
+        skill, "### Action: Malformed or Stale Open Issue", "### Maintenance path versus hot path",
+    )
+    for invariant in (
+        "Escalation Classifier", "technical incompleteness alone", "current lifecycle owner",
+        "agent:blocked", "owner-decision-brief", "independent authority category",
+    ):
+        assert invariant in malformed, invariant
+    assert "**Add needs-human label:**" not in malformed
+    table = _section_between(skill, "## Quick Reference: Maintenance State Corrections", "## When splitting")
+    assert "Malformed/stale open | Execute Malformed/Stale | +agent:needs-human" not in table
+    assert "Delivered but open | Execute Delivered Open | +agent:needs-human" not in table
+    assert "after classifier" in table
+    assert "set to needs-human if ambiguous" not in skill
+    child = _section_between(skill, "### Child Slice Issues", "## Quick Reference")
+    assert "`agent:blocked` or `agent:needs-human`" not in child
+
+
+def test_sbs_readiness_routes_technical_incompleteness_through_maintenance() -> None:
+    doc = _read("docs/architecture/SBS_OPERATING_MODEL.md")
+    readiness = _section_between(doc, "## 5. Definition of Ready", "## 6. Definition of Done")
+    for invariant in ("non-ready", "issue-maintenance-change-control", "Escalation Classifier", "independent authority category"):
+        assert invariant in readiness, invariant
+    assert "cannot resolve these is `agent:needs-human`" not in readiness
+    lifecycle = _section_between(doc, "## 7. Issue lifecycle expectations", "## 8. PR lifecycle expectations")
+    assert "unreadiness alone" in lifecycle
+    assert "otherwise `agent:needs-human` or `agent:blocked`" not in lifecycle
+
+
+def test_promotion_continuation_requires_observed_effect_before_rollback() -> None:
+    skill = _read(".codex/skills/execute-promotion/SKILL.md")
+    continuation = " ".join(skill.split("## Workflow continuation", 1)[1].split())
+    for requirement in (
+        "does not authorize rollback", "actually advanced",
+        "no deployment effect occurred", "without production mutation",
+        "effect is unknown", "reconcile observed state",
+        "only after evidence establishes a deployment effect requiring recovery",
+        "rollback authority and migration gates hold",
+    ):
+        assert requirement in continuation, requirement
+    routing = _section_between(skill, "## Routing", "## Workflow continuation")
+    assert "On failure before deployment effects" in routing
+    assert "On failure after observed deployment effects" in routing
+    assert "- On failure → `rollback-promotion`" not in routing
+
+    orchestrator = " ".join(_read(".codex/skills/promote-test-to-prod/SKILL.md").split(
+        "## Workflow continuation", 1
+    )[1].split())
+    assert "observed-effect recovery classification" in orchestrator
+    assert "without rollback" in orchestrator
+    assert "unknown effects require state reconciliation" in orchestrator
+    rollback = " ".join(_read(".codex/skills/rollback-promotion/SKILL.md").split(
+        "## Capability boundary", 1
+    )[0].split())
+    assert "Before any rollback effect" in rollback
+    assert "No deployment effect means return to the caller" in rollback
+    assert "unknown effects mean reconcile state first" in rollback

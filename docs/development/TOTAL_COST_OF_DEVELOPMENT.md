@@ -7,8 +7,9 @@ root instruction owns the early principle; this document owns the detailed decis
 
 ## Decision rule
 
-Capability means workflow/skill, configured Codex model, reasoning effort, context discipline, tool
-choice, verification depth, and review gate. Optimize expected total cost per accepted delivery:
+Capability means workflow/skill, explicit provider-neutral selection intent, carrier binding, reasoning
+effort, context discipline, tool choice, verification depth, and review gate. Optimize expected total
+cost per accepted delivery:
 
 `TCD = model + reasoning + context + tools + parallelization + human time + rework + defects + delay + coordination`
 
@@ -30,6 +31,22 @@ ID in workflow policy. Select reasoning and proof depth from risk:
   boundaries, difficult test strategy, or consequential review;
 - highest configured reasoning: architecture, broad migrations, complex state machines, or work where
   owner steering would otherwise exceed roughly 10-15 minutes.
+
+The provider-neutral execution resolver may expose an explicit model choice within a capability
+profile. TCD first selects the lowest intelligence/capability that adequately handles the task,
+then weighs model cost, latency, human time, rework, defects, delay, and coordination. A deeper
+model is justified when its expected avoided cost exceeds that increment; the configured profile
+model is only the backwards-compatible fallback when no selection intent is supplied, not a claim
+that it is always optimal. Skills must declare one of the shared selection intents — `coordination`,
+`general_delivery`, `strong_reasoning`, or `verification` — and must not branch on provider/model
+IDs. The current policy maps coordination to Luna/low, normal delivery to Luna/xhigh, and strong
+reasoning or verification to Astra/max; Sol and Terra remain explicit compatibility/fallback targets.
+Internal Yggdrasil decisions and external carrier invocations use the same declared census/resolver
+seam; the active carrier is Codex, while the Claude adapter is contract-compatible but inactive.
+An undeclared intent, carrier, or model choice fails closed. A caller may provide an explicit
+provider-neutral `capability_override` such as `terra` for a bounded fallback; that override is
+receipted and validated against the census, and is never inferred from quota exhaustion or encoded
+as a skill-level provider/model branch.
 
 Escalate after two failed attempts or review rejects, unclear requirements, missing/hard-to-interpret
 tests, high blast radius, non-trivial CI failure, or hard-to-assess residual risk. De-escalate when the

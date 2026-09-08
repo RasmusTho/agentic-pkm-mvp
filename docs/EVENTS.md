@@ -75,6 +75,20 @@ Notes:
 - Representative CI coverage must include watcher, panel/promotion, orchestrator, and MCP/tool event
   families so envelope regressions fail before runtime rollout.
 
+## Canonical event identity
+
+Lifecycle payloads use `app.objects.canonical_event_identity(canonical_object_id, vault_uuid)` for
+the identity trio: `uuid` and `object_id` are the canonical `store_objects` identity, while
+`vault_uuid` remains the retained frontmatter continuity identity. The constructor is used by the
+three `vault_sync` lifecycle producers and the watcher deletion fallback, so every route preserves
+the #3510 identity contract without silently rewriting retained identity.
+
+`sync_markdown` and `handle_rename` remain adapter-contract entrypoints, not independent watcher
+runtime wiring. The registry watcher re-ingests changed paths through `vault_alpha`, and the legacy
+filesystem path uses its existing `update_path`/`upsert_object_from_note` adapter surface. Their
+direct integration tests therefore remain contract coverage; this decision adds no parallel runtime
+path.
+
 ## Event Idempotency (normative)
 
 - Every event MUST carry a unique `event_id`.
@@ -1074,6 +1088,15 @@ Emitted when a governed, human-confirmed merge folds one entity into another
 (`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 3 / §9-g). Append-only (HEIM-1): the source
 entity's note is never deleted, only marked `lifecycle: merged` with a `merged_into`
 redirect; the target note's aliases are folded to include the source's label/aliases.
+For entity-review operation recovery, `from_id`, `into_id`, and `operation_id` remain the
+immutable original human-decided pair. A later governed target evolution may add
+`resolved_into_id` as resolution context only; it never rewrites `into_id`. Missing,
+contradictory, cyclic, or fork-ambiguous operation-bound note lineage emits no event and
+leaves the review entry pending. Recovery also requires globally unique paired complement identity
+and completed, event-visible checkpoints for journaled source-reclaiming split hops. Retained
+pre-journal EROJ-02 hops instead require the exact copied producer lineage on source, predecessor,
+and successor plus the deterministic two-sided legacy identity anchored to the original merge.
+Compatibility validation emits no replacement split event or synthetic checkpoint.
 Lineage/audit event, same non-dispatched posture as above. Two emitters:
 
 - **Entity-review merges** (the production human-review path, EROJ-01 #4350): emitted by the
@@ -1084,10 +1107,12 @@ Lineage/audit event, same non-dispatched posture as above. Two emitters:
   `entities/review.md` `pending` entry may be cleared only after a **fresh** connection observes
   both the terminal journal row and this committed event (INV-EROJ-3) — visibility on the writer's
   or a caller's own uncommitted transaction never authorizes the clear. Source:
-  `heimdal.entity_review`. Recovery across later target evolution or splits is NOT claimed here
-  (EROJ-02/EROJ-03).
+  `heimdal.entity_review`. The register lock holds identity and lineage validation through the
+  pending clear, including recovery of an already event-committed or cleared operation.
 - **Direct `EntityRegister.merge()` calls** (the A1 register API outside the review path): emitted
-  by the register immediately after the note writes, without an `operation_id`. Source:
+  by the register immediately after the note writes. The event keeps its existing payload shape, while
+  the canonical note lineage derives a retry-stable direct merge operation identity; it is not an
+  entity-review journal identity and cannot rewrite a review event's original pair. Source:
   `heimdal.entity_register`.
 
 Payload fields (in addition to the envelope):
@@ -1104,12 +1129,29 @@ requires before any merge ships (`docs/HEIMDAL/FABLE_COMPANION.md` §10 F5). One
 resulting new entity. Splitting a merge target re-points any previously-merged child
 entity whose aliases fall in the new partition, restoring `resolve_redirects()` to the
 pre-merge identity — see `tests/heimdal/test_entity_register.py::test_split_reverses_merge`.
+When a public split re-points a child from a previously complete merge, its canonical note lineage
+derives a retry-stable direct split identity and names that reclaimed child; only that explicit,
+successor-complete source-bound proof can provide entity-review target-evolution context. The split
+event payload does not rewrite an entity-review operation's original pair.
+
+The journal commits the exact preallocated plan before split note effects, then checkpoints each
+note effect and moved complement. After global relation validation, all split events commit in the
+same transaction as plan completion. Event keys bind vault, split operation, and preallocated
+successor, so a crash/retry cannot duplicate an event. A fresh transaction must observe the complete
+plan and exact event payloads before split success or review queue clear. A collision with a
+contradictory event refuses completion. The original merge relation's complement id and `into_id`
+survive first and repeated splits unchanged.
+Implicit requests use successive generations when new matching inputs reach the same target and
+partition; each generation has its own event identities. A retry resumes an unfinished generation
+or returns the latest completed generation, while explicit operation ids replay their exact plan.
 
 Payload fields (in addition to the envelope):
 - `split_from` (`string`): the entity_id that was partitioned.
 - `new_entity_id` (`string`): the newly minted canonical entity for this partition.
 - `label` (`string`): the new entity's label.
 - `aliases` (`array[string]`): the alias subset moved into the new entity.
+- `operation_id` (`string`): the retry-stable split plan identity.
+- `complement_ids` (`array[string]`): the original relation ids moved into this successor.
 
 ### `heimdal.register.entity.redirect_resolved`
 

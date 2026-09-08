@@ -129,7 +129,10 @@ def _map_owner_result(request: OperationRequest, proof: Any, transition: Any) ->
         )
     except (AttributeError, TypeError, ValueError):
         return OwnerExecutionResult.ambiguous()
-    return OwnerExecutionResult(OperationStatus.SUCCEEDED, archival_receipt=projection)
+    return OwnerExecutionResult.succeeded(
+        effect_id=projection.receipt_ref,
+        effect_receipt={"receipt_id": projection.receipt_ref},
+    )
 
 
 __all__ = ["ARCHIVE_OPERATION_ID", "RESTORE_OPERATION_ID", "ArchivalOperationServerConfig", "build_archival_operation_handlers"]

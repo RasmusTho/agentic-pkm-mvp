@@ -107,6 +107,22 @@ def test_review_event_batch_exact_replay_is_idempotent(tmp_path) -> None:
     assert [row["kind"] for row in first] == ["verification", "review", "review"]
 
 
+def test_review_event_batch_replay_survives_capability_alias_canonicalization(
+    tmp_path,
+) -> None:
+    state, run, loop = _running_loop(tmp_path)
+    original_events = _clean_reviews()
+    loop.apply_events(original_events, context={"head_sha": HEAD})
+    first = state.attempts(run.run_id)
+
+    canonical_events = [
+        {**event, "capability": "terra"} for event in original_events
+    ]
+    loop.apply_events(canonical_events, context={"head_sha": HEAD})
+
+    assert state.attempts(run.run_id) == first
+
+
 def test_review_event_batch_rolls_back_when_later_event_conflicts(tmp_path) -> None:
     state, run, loop = _running_loop(tmp_path)
     events = _clean_reviews()

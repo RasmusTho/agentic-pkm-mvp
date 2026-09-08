@@ -36,7 +36,7 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 
 - Classify the PR explicitly as `Docs authoring lane`.
 - A governing GitHub Issue is not required for this lane.
-- Do not create backlog work automatically; use `docs-to-issue` later if the authored docs should become bounded implementation work.
+- Do not create backlog work outside the task scope. When backlog extraction is authorized, invoke `docs-to-issue` after the authored authority is committed.
 - Keep current-state docs honest. Do not write future-state intent as shipped reality.
 - Verify every factual claim you add (dates, PR/issue numbers, phase status, citations) directly against the named owning doc or GitHub object before commit — especially when the claim arrives from a sub-agent summary rather than the source itself. A sub-agent's assertion is a lead, not a citation; the coordinator who commits the sentence owns its truth (seen: PR #2756 committed a wrong canvas phase count/date from an unverified sub-agent claim; the review gate caught it pre-merge).
 - If the task starts affecting implementation or delivered behavior, stop using this lane and switch back to the normal Issue-first implementation workflow.
@@ -54,3 +54,10 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 ## Capturing learning
 
 On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After validating authorized doc changes,
+invoke `publish-pr` and follow its delivery chain. If backlog extraction is also in scope, invoke
+`docs-to-issue` or `feature-breakdown` against the committed authority, then resume the caller;
+docs-only scope does not authorize implementation.

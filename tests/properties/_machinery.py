@@ -458,11 +458,11 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 934): (
+    ("app/vault/manager.py", 944): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
-        "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 (site unchanged) when "
+        "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 -> 940 -> 944 (site unchanged) when "
         "#3452 added conflict-quarantine receipt policy above the manager."
     ),
     ("app/vault/settings_service.py", 617): (
@@ -474,13 +474,13 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 2893): (
+    ("app/instance/vault_registry.py", 2977): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
         "plane Sigma (formal-model.md sec 2.3), not a Human Knowledge Artifact. "
-        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2330 -> 2357 -> 2496 -> 2503 -> 2745 -> 2838 -> 2893 "
-        "(site unchanged); re-pinned after directly related SETTINGS-05A (#4967) inserted "
+        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2330 -> 2357 -> 2496 -> 2503 -> 2745 -> 2838 -> 2893 -> 2926 -> 2930 -> 2935 -> 2948 -> 2977 "
+        "(site unchanged); #5432 adds the transaction-refusal lock option. Re-pinned after directly related SETTINGS-05A (#4967) inserted "
         "the durable dormant-rebind schema and producers earlier in vault_registry.py. "
         "SETTINGS-05A adds no new "
         "write_frontmatter site: like MVR-02/MVR-04, it writes the registry through "
@@ -495,10 +495,10 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 714): (
+    ("app/vault/manager.py", 724): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
-        "Line drifted 496 -> 621 -> 623 -> 704 -> 714 (site unchanged) when #3164 added the "
+        "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
         "SETTINGS-05C added the activation seam above the manager."
     ),

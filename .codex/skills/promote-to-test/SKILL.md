@@ -165,3 +165,11 @@ promote-to-test --candidate <sha-or-ref>
 - Precedes: `promote-test-to-prod` (pass it the plan path with the test verification receipt)
 - On FAIL: reverse test migrations, do not produce PASS receipt, report failure
 - Does not call `rollback-promotion` (that skill is prod-scoped); reverse test migrations directly
+
+## Workflow continuation
+
+Follow `.codex/skills/README.md :: Workflow continuation`. After PASS, return the durable test
+receipt to the calling workflow. Invoke `promote-test-to-prod` only when production promotion is
+already authorized and the live release-channel contract permits that route; test-only scope ends
+with test verification. On FAIL, complete test-scoped recovery as specified here and preserve its
+failure evidence.

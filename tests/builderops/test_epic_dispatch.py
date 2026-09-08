@@ -21,6 +21,9 @@ from app.builderops.epic_dispatch import (
     dispatch_issue_sessions,
     frozen_dispatch_plan_hash,
 )
+from app.builderops.execution_routing import resolve_execution_target
+from app.builderops.execution_routing import get_carrier_adapter
+from app.components.settings.providers_loader import load_provider_census
 from app.builderops.epic_run_state import (
     apply_epic_run_update,
     create_epic_run_state,
@@ -35,6 +38,7 @@ def _candidate(
     risk: str = "medium",
     expected_value: str = "medium",
     runtime_hint: str | None = None,
+    model_override: str | None = None,
     files: list[str] | None = None,
     validation_resources: list[str] | None = None,
     owner_docs: list[str] | None = None,
@@ -51,6 +55,7 @@ def _candidate(
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "issue_number": issue_number,
+        "repository": "RasmusTho/agentic-pkm-mvp",
         "title": f"child {issue_number}",
         "url": f"https://example.test/issues/{issue_number}",
         "state": "OPEN",
@@ -78,6 +83,8 @@ def _candidate(
     }
     if preferred_path is not None:
         payload["preferred_path"] = preferred_path
+    if model_override is not None:
+        payload["model_override"] = model_override
     if scriptable:
         payload["scriptable"] = True
     if worktree is not None:
@@ -166,6 +173,29 @@ def test_tcd_decisions_cover_inline_subagent_and_overfan() -> None:
     assert decisions[1003]["skip_reason"] == "parallel-slot-cap"
     assert plan["github_mutations"] == []
     assert plan["agent_spawns"] == []
+
+
+def test_tcd_high_reasoning_accepts_explicit_gpt_6_astra() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[1004],
+        run_id="tcd-astra-option",
+        candidates=[
+            _candidate(
+                1004,
+                risk="high",
+                expected_value="high",
+                files=["app/a.py"],
+                model_override="gpt-6-astra",
+            )
+        ],
+    )
+
+    decision = plan["decisions"][0]
+    runtime_hint = decision["runtime_model_hint"]
+    assert runtime_hint["model_class"] == "high-reasoning"
+    assert runtime_hint["capability"] == "sol"
+    assert runtime_hint["model"] == "gpt-6-astra"
+    assert plan["context_packs"][0]["runtime"] == runtime_hint
 
 
 def test_parallel_selection_rejects_file_lease_dependency_and_validation_conflicts() -> None:
@@ -310,10 +340,10 @@ def test_codex_launcher_resolves_model_from_capability_census(tmp_path: Path) ->
         / "models"
         / "providers.yaml"
     ).read_text(encoding="utf-8")
-    configured_model = "configured-sol-model"
+    configured_model = "configured-astra-model"
     census_path = tmp_path / "providers.yaml"
     census_path.write_text(
-        census_source.replace("gpt-5.6-sol", configured_model), encoding="utf-8"
+        census_source.replace("gpt-6-astra", configured_model), encoding="utf-8"
     )
     plan = build_dispatch_plan(
         independent_issue_numbers=[3006],
@@ -461,12 +491,14 @@ def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
             "issue_number": 4001,
             "selected_path": "subagent",
             "selected_for_dispatch": True,
-                "runtime_model_hint": {
-                    "runtime": "codex",
-                    "model_class": "high-reasoning",
-                    "capability": "sol",
-                    "runtime_difference": "invocation-hint-only",
-                },
+                    "runtime_model_hint": {
+                        "runtime": "codex",
+                        "carrier": "codex",
+                        "model_class": "high-reasoning",
+                        "selection_intent": "strong_reasoning",
+                        "capability": "sol",
+                        "runtime_difference": "invocation-hint-only",
+                    },
             "budget_class": "high",
             "stop_condition": updated["dispatch_decisions"][0]["stop_condition"],
             "skip_reason": None,
@@ -1011,8 +1043,8 @@ def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) ->
     command = launcher.command(plan["context_packs"][0])
 
     assert command[:3] == ["codex", "exec", "--json"]
-    assert command[command.index("--model") + 1] == "gpt-5.6-sol"
-    assert 'model_reasoning_effort="high"' in command
+    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    assert 'model_reasoning_effort="max"' in command
     assert "resume" not in command
     assert command[command.index("--add-dir") + 1] == str(tmp_path)
     assert command[-1] == "-"
@@ -1020,6 +1052,268 @@ def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) ->
     assert "slice_implementer" in prompt
     assert ".codex/skills/issue-to-code/SKILL.md" in prompt
     assert '"number": 5801' in prompt
+
+
+def test_codex_tcd_route_resolves_explicit_gpt_6_astra(tmp_path: Path) -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5802],
+        run_id="codex-command-astra",
+        candidates=[
+            _candidate(
+                5802,
+                risk="high",
+                files=["app/a.py"],
+                model_override="gpt-6-astra",
+                worktree=str(tmp_path / "issue-5802"),
+            )
+        ],
+    )
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+
+    command = launcher.command(plan["context_packs"][0])
+
+    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    assert 'model_reasoning_effort="max"' in command
+
+    default_plan = build_dispatch_plan(
+        independent_issue_numbers=[5803],
+        run_id="codex-command-default",
+        candidates=[
+            _candidate(
+                5803,
+                risk="high",
+                files=["app/a.py"],
+                worktree=str(tmp_path / "issue-5803"),
+            )
+        ],
+    )
+    default_command = launcher.command(default_plan["context_packs"][0])
+    assert default_command[default_command.index("--model") + 1] == "gpt-6-astra"
+
+    invalid_runtime = dict(plan["context_packs"][0]["runtime"])
+    invalid_runtime["model"] = "gpt-5.6-luna"
+    invalid_pack = dict(plan["context_packs"][0])
+    invalid_pack["runtime"] = invalid_runtime
+    with pytest.raises(EpicDispatchError, match="not selectable"):
+        launcher.command(invalid_pack)
+
+
+def test_resolve_execution_target_uses_declared_model_reasoning() -> None:
+    census = load_provider_census()
+
+    default_target = resolve_execution_target(
+        census, channel="dev", capability="sol"
+    )
+    astra_target = resolve_execution_target(
+        census, channel="dev", capability="sol", model_id="gpt-6-astra"
+    )
+    standard_target = resolve_execution_target(
+        census, channel="dev", capability="terra"
+    )
+
+    assert (default_target.model, default_target.reasoning_effort) == (
+        "gpt-5.6-sol",
+        "high",
+    )
+    assert (astra_target.model, astra_target.reasoning_effort) == (
+        "gpt-6-astra",
+        "max",
+    )
+    assert (standard_target.model, standard_target.reasoning_effort) == (
+        "gpt-5.6-terra",
+        "high",
+    )
+
+
+def test_tcd_defaults_prefer_astra_over_sol_and_keep_terra_explicit() -> None:
+    general_plan = build_dispatch_plan(
+        independent_issue_numbers=[5810],
+        run_id="selection-intent-general",
+        candidates=[_candidate(5810, risk="high", files=["app/a.py"])],
+    )
+    general_runtime = general_plan["context_packs"][0]["runtime"]
+
+    assert general_runtime["selection_intent"] == "strong_reasoning"
+    assert general_runtime["capability"] == "sol"
+
+    explicit_general = dict(_candidate(5811, risk="high", files=["app/b.py"]))
+    explicit_general["selection_intent"] = "general_delivery"
+    explicit_plan = build_dispatch_plan(
+        independent_issue_numbers=[5811],
+        run_id="selection-intent-explicit-general",
+        candidates=[explicit_general],
+    )
+    explicit_runtime = explicit_plan["context_packs"][0]["runtime"]
+
+    assert explicit_runtime["selection_intent"] == "general_delivery"
+    assert explicit_runtime["capability"] == "luna"
+
+    target = resolve_execution_target(load_provider_census(), channel="dev", capability="terra")
+    assert (target.model, target.reasoning_effort) == ("gpt-5.6-terra", "high")
+
+
+def test_low_risk_nontrivial_delivery_uses_general_delivery_intent() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5815],
+        run_id="selection-intent-low-risk-delivery",
+        candidates=[_candidate(5815, risk="low", expected_value="medium")],
+    )
+
+    assert plan["context_packs"][0]["runtime"]["selection_intent"] == (
+        "general_delivery"
+    )
+    assert plan["context_packs"][0]["runtime"]["capability"] == "luna"
+
+
+def test_explicit_sol_capability_override_uses_sol_profile_default(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5816,
+        risk="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5816"),
+    )
+    candidate["capability_override"] = "sol"
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5816],
+        run_id="explicit-sol-capability-override",
+        candidates=[candidate],
+    )
+    runtime = plan["context_packs"][0]["runtime"]
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    assert launcher._tcd_route({"runtime": runtime}) == ("gpt-5.6-sol", "high")
+
+
+def test_legacy_low_cost_context_pack_uses_general_delivery_intent(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5817,
+        risk="low",
+        expected_value="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5817"),
+    )
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5817],
+        run_id="legacy-low-cost-selection-intent",
+        candidates=[candidate],
+    )
+    legacy_runtime = dict(plan["context_packs"][0]["runtime"])
+    legacy_runtime.pop("selection_intent")
+    legacy_runtime["model_class"] = "low-cost"
+    legacy_runtime["capability"] = "luna"
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    assert launcher._tcd_route({"runtime": legacy_runtime}) == (
+        "gpt-5.6-luna",
+        "xhigh",
+    )
+
+
+def test_spark_capability_override_requires_bounded_fast_admission() -> None:
+    candidate = _candidate(5818, risk="medium", files=["app/a.py"])
+    candidate["capability_override"] = "spark"
+
+    with pytest.raises(EpicDispatchError, match="bounded-fast admission"):
+        build_dispatch_plan(
+            independent_issue_numbers=[5818],
+            run_id="generic-spark-override-rejected",
+            candidates=[candidate],
+        )
+
+
+def test_codex_launcher_uses_resolved_target_and_claude_adapter_is_not_invoked(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5812,
+        risk="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5812"),
+    )
+    candidate["selection_intent"] = "verification"
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5812],
+        run_id="selection-intent-carriers",
+        candidates=[candidate],
+    )
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    command = launcher.command(plan["context_packs"][0])
+
+    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    assert 'model_reasoning_effort="max"' in command
+    claude_binding = get_carrier_adapter("claude").bind(
+        resolve_execution_target(load_provider_census(), channel="dev", capability="sol"),
+        selection_intent="verification",
+    )
+    assert claude_binding.launchable is False
+
+
+def test_codex_launcher_rebinds_legacy_context_pack_to_current_intent_policy(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5813,
+        risk="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5813"),
+    )
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5813],
+        run_id="legacy-selection-intent-compatibility",
+        candidates=[candidate],
+    )
+    legacy_runtime = dict(plan["context_packs"][0]["runtime"])
+    legacy_runtime.pop("selection_intent")
+    legacy_runtime["capability"] = "terra"
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    model, reasoning = launcher._tcd_route({"runtime": legacy_runtime})
+
+    assert (model, reasoning) == ("gpt-5.6-luna", "xhigh")
+
+
+def test_explicit_capability_override_can_select_terra_without_rewriting_intent(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5814,
+        risk="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5814"),
+    )
+    candidate["capability_override"] = "terra"
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5814],
+        run_id="explicit-terra-capability-override",
+        candidates=[candidate],
+    )
+    runtime = plan["context_packs"][0]["runtime"]
+
+    assert runtime["selection_intent"] == "general_delivery"
+    assert runtime["capability_override"] == "terra"
+    assert runtime["capability"] == "terra"
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    assert launcher._tcd_route({"runtime": runtime}) == ("gpt-5.6-terra", "high")
+
+
+def test_malformed_selection_intent_fails_with_dispatch_contract_error() -> None:
+    launcher = CodexIssueSessionLauncher(repo_root=Path.cwd())
+
+    with pytest.raises(EpicDispatchError, match="unsupported selection intent"):
+        launcher._tcd_route(
+            {
+                "runtime": {
+                    "runtime": "codex",
+                    "carrier": "codex",
+                    "selection_intent": [],
+                }
+            }
+        )
 
 
 def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launch_policy(

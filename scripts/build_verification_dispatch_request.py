@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Sequence, TypeGuard
 
@@ -14,6 +15,9 @@ from app.dispatcher.verification_contract import (
     resolve_final_review_rounds,
     resolve_issue_authority,
     resolve_issue_contract as resolve_issue_contract,
+)
+from app.builderops.execution_routing_receipts import (
+    bind_canary_receipt_to_verification_request,
 )
 
 
@@ -128,6 +132,7 @@ def build_request(
     event: dict[str, object],
     pr: dict[str, object],
     issue: dict[str, object] | None = None,
+    canary_receipt: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     """Return a dispatch request only for successful CI on the current PR head."""
     run = _as_dict(event.get("workflow_run"))
@@ -180,7 +185,7 @@ def build_request(
     if linked_issue != issue_authority.governing_issue:
         return None
 
-    return {
+    request: dict[str, object] = {
         "contract_version": CONTRACT_VERSION,
         "stage": STAGE,
         "repository": repository,
@@ -223,6 +228,11 @@ def build_request(
             stage=STAGE,
         ),
     }
+    if canary_receipt is not None:
+        request = bind_canary_receipt_to_verification_request(
+            request, canary_receipt
+        )
+    return request
 
 
 def render_markdown(request: dict[str, object]) -> str:
@@ -267,6 +277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-markdown", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--canary-receipt-json", type=Path)
     parser.add_argument("--artifact-workflow-run-id", type=int, required=True)
     parser.add_argument("--artifact-repository-id", type=int, required=True)
     args = parser.parse_args(argv)
@@ -276,10 +287,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "id": args.artifact_workflow_run_id,
         "repository_id": args.artifact_repository_id,
     }
+    canary_receipt = None
+    if args.canary_receipt_json is not None:
+        canary_receipt = _load_json(args.canary_receipt_json)
+        if not canary_receipt:
+            _write_github_output(
+                args.github_output,
+                emitted=False,
+                reason="malformed-canary-receipt",
+            )
+            return 1
     request = build_request(
         event=event,
         pr=_load_json(args.pr_json),
         issue=_load_json(args.issue_json),
+        canary_receipt=canary_receipt,
     )
     if request is None:
         final_review_rounds = resolve_final_review_rounds(

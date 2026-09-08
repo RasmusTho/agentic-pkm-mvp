@@ -32,9 +32,51 @@ Hot path:
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
 
-This file owns the canonical workflow chain. Skills reference this chain instead of redefining it; if a skill's inline chain disagrees with this file, this file wins. Issue maintenance is part of the conditional path, not the hot path.
+This file owns the canonical workflow chain. Skills reference this chain instead of redefining it; if a skill's inline chain disagrees with this file, this file wins. Issue maintenance is part of the conditional path, not the hot path. Execute transitions under `## Workflow continuation` below.
 
 Delivery depth is tiered (`AGENTS.md :: Proportional delivery`): single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path — required CI green, self-verified `Verify:` targets, `Final-Review-Rounds: 0`, plain merge with native closing keywords — while Tier 3, multi-issue, and TCD high-risk PRs run the full review + verified-merge ceremony in `verification-and-closure`.
+
+## Workflow continuation
+
+This contract applies to all repo-local Builder System skills and their execution adapters. It does
+not apply to the `mimer-*` Product/Runtime family or external plugin skills. Each Builder skill's
+`Workflow continuation` section identifies its next applicable skill or return to its caller.
+The purpose is low Total Cost of Development: agents carry routine orchestration and recovery;
+human involvement is reserved for genuine exceptions, not transitions between skills.
+
+1. Bind the requested outcome, scope, authority, and any explicit stopping point before starting.
+   A planning, analysis-only, review-only, intake-only, or draft-only request does not authorize the
+   downstream implementation, merge, or deployment. A delivery request includes its required
+   verification and closure; do not ask for that authority again at each skill boundary.
+2. On completing a step, load and execute the next applicable skill now. Naming, recommending,
+   reporting, or queuing it is not execution. Conditional routes run only when triggered. A skill
+   output is intermediate evidence until the requested outcome has been verified.
+3. Supporting skills (decision, learning, readiness repair, review, recovery, and owner-doc checks)
+   return evidence to the suspended caller, which resumes its next unfinished step. Do not restart
+   completed stages, recursively reopen `klart`, or invent another task to represent the transition.
+4. The originating delivery owner remains responsible through publication, current-head CI/review,
+   verified merge, exact Issue reconciliation, and required post-merge receipts. A worker handoff,
+   `ready-for-verification`, queued dispatch, or `verified` executor verdict does not complete that
+   responsibility. Invoke the required reviewer/executor and follow its outcome through closure.
+   A coordinator resumes premature worker returns; it does not park their PRs or relinquish the set.
+5. Until end-to-end automation is explicitly accepted with observed merge, reconciliation, and
+   recovery evidence in the owning Builder workflow, automation assists this loop; it does not
+   replace the session's responsibility. A configured consumer or accepted queue entry is not that
+   acceptance. Keep light/full-path gates and `host_fenced_executor` authority intact. Diagnose and
+   perform authorized recovery for unavailable infrastructure; never synthesize credentials or
+   bypass an executor fence. Recheck the applicable route instead of assuming every PR needs a queue.
+6. CI waiting, review waiting, a first failed check, and a repairable conflict are continuation states.
+   Use bounded backoff and the existing repair/convergence rules. Stop a refused operation before
+   another effect, then execute its authorized recovery route; an operation stop is not automatically
+   a session stop. Before suspending unfinished work, apply
+   `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
+7. Run `klart` only at the Builder session closeout boundary. End after the authorized outcome is
+   verified, or preserve and report a documented stop-loss/explicit user stop. An actual authorized
+   owner transfer must follow the existing lifecycle handoff contract and continue in the accepting
+   successor; it is not permission to leave verification unowned. A copyable prompt is recovery
+   context, not proof that a successor exists or is executing.
+
+No new queue, lifecycle state, receipt schema, or automation authority is introduced by this contract.
 
 ## BuilderOps Vault routing
 
@@ -154,7 +196,7 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `agentic-pkm`
   - default repo-dev context for code, tests, docs, and SoT reading order in this repository
 - `klart`
-  - mandatory Builder System closeout assessment before a builder session or agent returns a terminal response, hands off, goes idle, or otherwise stops; read-only status/recommendation with owner-skill action routing and an exact Swedish ten-heading terminal response contract
+  - mandatory Builder System closeout assessment before a builder session or agent returns a terminal response, hands off, goes idle, or otherwise stops; read-only status/recommendation with owner-skill action routing and a concise outcome, verification, and remaining-action summary
 - `resume-work`
   - dev-time recovery for interrupted Codex/ChatGPT sessions (quota, network, hung command, tool failure, context loss); historical Claude session records may be reconstructed as provenance but never resumed as an active Builder carrier; check resumable orchestration journals/runs before git reconstruction, use git reconstruction as the fallback, keep a lightweight `.codex-tmp/HANDOFF.md`, continue when clear, and escalate only on destructive or contract/SoT ambiguity; not a runtime/product feature
 - `issue-to-code`
@@ -295,7 +337,7 @@ or design-provenance material and do not authorize invocation.
 - Implementation path:
   `agentic-pkm -> issue-to-code -> publish-pr -> [pr-integration when repair/readiness is needed] -> verification-and-closure -> post-merge-owner-doc`
   Every Builder System execution path passes through the terminal closeout gate before a terminal response:
-  `... -> klart -> owning workflow skill or truthful terminal handoff`; when `klart` returns a terminal response, it uses the exact Swedish heading contract defined in `klart`.
+  `... -> klart -> owning workflow skill or truthful terminal handoff`; when `klart` returns a terminal response, it uses the proportional summary defined in `klart`.
 - Drift-correction path:
   `issue-maintenance-change-control -> issue-to-code` when the Issue becomes executable again
 - Epic / Kanban issue-set delivery path:

@@ -5,7 +5,7 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-05
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`
 
@@ -184,7 +184,11 @@ release is scoped to the exact controller identity (pid plus start token) that c
 it cannot disturb a lease still owned by a live or unrelated deployment, and a lease whose recorded
 controller process no longer exists is reclaimable by the next `deployment-begin` instead of fatal.
 The nonce-plus-inventory-digest proof
-is required for restore, final export/preservation, and legacy bootstrap. The finalizer rejects an
+is required for restore, final export/preservation, and legacy bootstrap. Before the MVR-05 floor,
+the producer also passes the SHA-256 of the final host receipt to the runtime. The runtime accepts
+the Compose-mounted receipt only when its bytes match that digest; a stale or incomplete mount
+projection waits briefly and then fails closed rather than being treated as an authenticated
+inventory. The finalizer rejects an
 incomplete, non-private, or unvalidated inventory, captures the final legacy fingerprint, imports it
 on first volume or preserves it beside an established dormant registry, calls the host-global
 legacy-owner bootstrap, creates a verified registry/ledger/key backup, and clears the fence.
@@ -205,6 +209,14 @@ a private receipt bound to the deployment/quiescence proof. The Docker deploymen
 that bound result and its opaque identity evidence; it does not directly resolve host-only paths or
 re-run `root.is_dir()` inside `instance-state-init`.
 
+After finalization, an API, worker, watcher, or Heimdal capture watcher whose selected canonical
+root is visible through a container remount but has a different local inode may admit the already
+registered active binding only by loading that same private receipt, validating its digest, channel,
+binding, and canonical-path correlation, and authenticating its host identity against the active
+ownership ledger. Finalization checkpoints the producer receipt digest in that private ledger
+lease, and remount admission requires that checkpoint to match. Ordinary materialized-root admission remains the default; a missing, stale,
+forged, foreign, ambiguous, unbound, or pending receipt fails closed without registry or ledger mutation.
+
 This decision keeps the one-shot's ordinary mount set intentionally bounded. Ordinary deploy-selected Compose overlays
 exclude `/Users`, `/Volumes`, and selected-vault mounts from `instance-state-init`; the selected-root
 bind in the full-host overlay is for `api`, `worker`, and `watcher` only. The rejected Option A—adding
@@ -222,6 +234,49 @@ command only. For ordinary deploy/start, the effective setting from the ambient 
 paths, duplicate declarations, traversal, aliases, symlink-like paths, and other `/app` locations fail closed before the
 deployment mutation window. Failure remains fail-closed: missing, changed, incomplete, forged, or unbound host
 evidence cannot release the fence or mutate registry/ledger state.
+
+#### Explicit DEV legacy-owner re-attestation
+
+`python -m app.instance.runtime deployment-reattest-legacy-owner` is an explicit local
+operator recovery command for a retained DEV schema-v1 owner whose old container parent-inode
+chain is unavailable. Ordinary startup and legacy authentication continue to refuse that state.
+The command establishes a fresh, receipt-bound ownership epoch; it does not authenticate the lost
+chain or infer any previous effect outcome. It is not total-loss recovery.
+
+Run it only inside the canonical producer's proved stopped interval, before MVR-05 floor admission
+and `deployment-finish`. Supply `--channel dev`, the existing `--instance-state-root` and
+`--host-global-root`, `--owner-receipt-path` and `--quiescence-proof-path` from that interval,
+`--vault-binding-id`, the reviewed raw-file `--expected-ledger-sha256` and
+`--expected-registry-sha256`, a private `--backup-root`, and
+`--acknowledge-new-ownership-epoch`. The acknowledgement is a new authority decision about the
+exact retained root/binding; a path or a backup alone is not ownership authority.
+
+Admission requires one dormant registered owner, one matching active v1 lease, the existing
+protected key, an authenticated sealed locator and root fingerprint matching the complete current
+host inventory, and no tombstones, transfer/lineage, or interrupted rotation. TEST, PROD,
+multiple-owner state, stale evidence, and lost root/key/registry identity are refused. The recovery
+container consumes the existing host receipt without gaining broad host-root mounts. Missing or
+inconsistent last-good, checksum, or legacy-export artifacts are refused without implicit repair;
+the recovery lock does not heal any registry evidence before admission or backup.
+
+Under deployment → producer → ledger → registry locks, recovery saves the unchanged registry
+artifacts, ledger, and key into an owner-only backup. Its authenticated `manifest.json` binds a
+fresh epoch, the explicit decision, before/after digests, and the current stopped-window receipts.
+That verified evidence becomes durable before atomic ledger replacement. Only the single lease's
+current ancestry and owner-receipt provenance change; registry, key, sealed locator, root identity,
+and binding stay unchanged. Public output contains no key material or host paths.
+
+After interruption, retry with the same inputs, private backup, and still-valid deployment window.
+A partial backup can resume only when its existing bytes agree. A complete receipt admits exactly
+its before or after ledger bytes; changed registry, key, inventory, deployment epoch, or ledger
+fails closed. Do not delete authority artifacts to force a retry. If the old deployment window has
+ended after successful ledger replacement, use the normal canonical deployment path to revalidate
+current ownership; this command does not replay across epochs.
+
+The command leaves the restart fence and deployment lease held and never starts writers, changes
+vault files, or migrates SQL. Successful recovery is not activation: normal floor admission and
+`deployment-finish` must still validate the recovered ownership under the stopped proof, and the
+separately authorized deployment performs runtime startup and functional verification.
 
 MVR-01C cuts registry authority over only by committing one complete rollback floor into the same
 locked registry generation. That generation names one validated scalar rollback binding, refreshes
@@ -422,7 +477,7 @@ reachable through its existing contract.
 
 1. **Pin the ref.** Resolve the commit SHA to deploy and its already-built image tag (`ghcr.io/<owner>/pkm-app:<sha>`). For `prod`, the SHA must be the one authorized by the promotion-plan contract in `docs/RELEASE_CHANNELS/README.md` (the `stable`-ref decision; see also #2527). Update the channel's deploy-pin file to that tag.
 2. **Migration gate (forward-only surfaced + operator ack).** Diff the migrations between the currently-running SHA and the target SHA. Classify each per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`. **Surface every forward-only (irreversible) migration explicitly and require operator acknowledgement before proceeding** — a forward-only migration is the one thing that makes a deploy not cleanly rollback-able. Reversible migrations proceed under the standard gate; forward-only migrations are an `agent:needs-human` stop.
-3. **Quiesce/finalize instance state, then execute changed migrations.** Pull the pinned image. For a deploy, `scripts/deploy_channel.sh` runs the instance-state deployment producer before migration execution: it holds the host-global fence and derives the stop set from every enabled Compose service with `depends_on: db`, excluding only the unique `run_migrations.sh` authority. The same host-wide inventory also detects native DB/outbox processes. After two stable empty probes, the producer records the irreversible `minimumRuntimeSchema: mvr-05` floor and its fence receipt before finalizing the protected instance-state boundary. It then stops every runtime writer again and runs the target image's one-shot migration service before any target runtime is recreated. When the migration diff is non-empty, the executor writes a durable pending-migration marker before mutating the pin. The marker binds the source SHA (or explicit no-baseline sentinel), target SHA, and forward-only acknowledgement; it is removed only after the migration service reports success.
+3. **Quiesce/finalize instance state, then execute changed migrations.** Pull the pinned image. For a deploy, `scripts/deploy_channel.sh` runs the instance-state deployment producer before migration execution: it holds the host-global fence and derives the stop set from every enabled Compose service with `depends_on: db`, excluding only the unique `run_migrations.sh` authority. The same host-wide inventory also detects native DB/outbox processes. After two stable empty probes, the producer records the irreversible `minimumRuntimeSchema: mvr-05` floor and its fence receipt before finalizing the protected instance-state boundary. On a retained host whose authenticated ownership ledger is still schema-v1 while the instance registry is deliberately dormant at revision zero, that floor admission uses the proved host inventory and the existing registry-consistency seam to converge the ledger to the current schema before writing the floor; it never activates registry authority. Populated registries remain strict and require their explicit recovery path. It then stops every runtime writer again and runs the target image's one-shot migration service before any target runtime is recreated. When the migration diff is non-empty, the executor writes a durable pending-migration marker before mutating the pin. The marker binds the source SHA (or explicit no-baseline sentinel), target SHA, and forward-only acknowledgement; it is removed only after the migration service reports success.
 4. **Recreate API + gateway.** Only after the instance-state finalization and migration execution succeed, recreate the channel's API/worker/watcher containers and the gateway unit against the pinned image (`docker compose … up -d --force-recreate` for the channel project + gateway-unit recreate). `scripts/deploy_channel.sh` reads the channel's generated runtime-env reference without sourcing, copying, regenerating, rewriting, or printing it. It pins that governed reference plus the preflighted `TTS_ENABLED` / `TTS_HOST_ROOT` snapshot and parsed `VAULT_HOST_ROOT` selector into the Compose process, so caller-shell values cannot replace them and runtime DSNs never participate in Compose interpolation. For each invocation, the wrapper separately resolves, reachability-validates, and where needed translates `SIGNBOARD_ROOT`, then injects it—or explicitly clears a stale value when no valid root resolves—through an API-only Compose override document delivered via a private (mode-0600, wrapper-owned) temp file removed on return, rather than the wrapper's own stdin, so a caller piping real data into the wrapper (#4536) still reaches the container. The override document itself carries no operator path or secret — only the bare `SIGNBOARD_ROOT:` key, whose value Compose forwards from this governed shell's environment — so writing it to a temp file does not weaken the runtime env ownership boundary. This leaves the runtime env and its `VAULT_ROOT` / `VAULT_HOST_ROOT` binding unchanged; `docs/AGENT_ISSUE_DISPATCHER.md :: Local visual Signboard` owns the detailed resolution, translation, and fail-visible no-vault contract. For ordinary deploy-selected Compose overlays, when the governed vault selector is already reachable through the base same-path `/Users` or `/Volumes` mounts, deploy and rollback append `docker-compose.full-host-vault.yml` and bind runtime selectors to that one container path; they do not add the duplicate legacy `/app/vault` mount. That selected-root bind is runtime-only: it is writable for `api`, `worker`, and `watcher`, while `instance-state-init` receives no selected-vault mount. The explicit MVR-01C authority-cutover command is the qualified exception; it mounts the already-authorized `MVR01C_ROLLBACK_VAULT_ROOT` read-only at `/app/selected-vault` for that command only. During fenced instance-state admission, only the registry-consistency path may migrate authenticated schema-v1 ownership state to schema v2: it authenticates complete owner fields against the registry/inventory and proves either the full legacy/converged chain or the stable `/Users`/`/Volumes` ancestor segment before replacing only ancestor fingerprints. Direct loads, malformed, unknown, inaccessible, or unauthenticated state refuse without rewriting the ledger or key. Other explicit sources retain `docker-compose.legacy-vault.yml` compatibility. TEST appends `docker-compose.test-vault.yml` last so its watcher is activated against whichever one container path the access overlay selected. With no explicit vault, no vault overlay is selected and the base+channel no-vault posture remains intact. Because routes load at container start, the recreate—not a file update—is what makes new code live. Recreate API and gateway together so they never diverge in version.
    For that schema-v1 convergence, “authenticated” means complete mutable owner fields match the registry/inventory and the ancestor chain matches either the key-authenticated legacy representation, the already-converged path representation, or the key-authenticated stable `/Users`/`/Volumes` segment. A mixed or merely hex-shaped chain refuses before any ledger or key rewrite.
 5. **Health gate: liveness first, readiness second.** Block until the channel's API `/healthz` returns `{"ok": true}` (`app/api/routes/health_contract.py`) and then require both readiness probes on the channel's ports: `/readyz` must pass, and `/api/health` must report `required_ok: true`. `/healthz` is only a liveness probe; deploy completion requires readiness evidence that startup dependencies, DB connectivity, and the deployed code path are actually usable. The gateway's own `/healthz` must also respond. A deploy is not "done" until liveness and both readiness predicates pass; a failing gate triggers §Rollback.
