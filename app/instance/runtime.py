@@ -442,6 +442,11 @@ class InstanceRegistryRuntime:
                     _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
                 result = recover()
+                context = getattr(result, "context", None)
+                if context is None or not context.is_selected:
+                    raise RegistryError(
+                        "first-vault recovery returned a non-selected vault context"
+                    )
                 complete = getattr(precondition, "complete", None)
                 if complete is not None:
                     complete(
@@ -469,21 +474,28 @@ class InstanceRegistryRuntime:
                 binding_id = pending.vault_binding_id
             if pending is not None and pending.vault_binding_id != binding_id:
                 raise RegistryError("first-vault bootstrap ownership reservation targets another binding")
-            if pending is None:
-                self.ledger.reserve(
-                    channel_id=self.layout.channel_id,
-                    vault_binding_id=binding_id,
-                    root=canonical_root,
-                    allow_same_channel_nested=False,
-                    _capability=_STORAGE_MUTATION_CAPABILITY,
-                )
-            binder = getattr(precondition, "bind", None)
-            if binder is not None and getattr(record, "binding_id", None) != binding_id:
-                record = binder(record, binding_id)
-
-            content_complete = _first_vault_content_complete(path)
+            reservation_acquired = False
             try:
+                if pending is None:
+                    self.ledger.reserve(
+                        channel_id=self.layout.channel_id,
+                        vault_binding_id=binding_id,
+                        root=canonical_root,
+                        allow_same_channel_nested=False,
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                reservation_acquired = True
+                binder = getattr(precondition, "bind", None)
+                if binder is not None and getattr(record, "binding_id", None) != binding_id:
+                    record = binder(record, binding_id)
+
+                content_complete = _first_vault_content_complete(path)
                 result = recover() if content_complete else initialize()
+                context = getattr(result, "context", None)
+                if context is None or not context.is_selected:
+                    raise RegistryError(
+                        "first-vault initializer returned a non-selected vault context"
+                    )
             except BaseException:
                 if _first_vault_content_complete(path):
                     registration = self._new_registration(
@@ -491,23 +503,40 @@ class InstanceRegistryRuntime:
                         vault_binding_id=binding_id,
                         provenance=DEFAULT_PROVENANCE_FIRST_INITIALIZE,
                     )
-                    getattr(precondition, "content_effected")(
-                        record,
-                        vault_id=registration.vault_id or "",
-                        local_instance_id=registration.local_instance_id or "",
-                    )
+                    try:
+                        record = getattr(precondition, "content_effected")(
+                            record,
+                            vault_id=registration.vault_id or "",
+                            local_instance_id=registration.local_instance_id or "",
+                        )
+                    except Exception:
+                        pass
                 else:
-                    getattr(precondition, "fail")(record)
-                    self.ledger.release_pending(
-                        binding_id,
-                        _capability=_STORAGE_MUTATION_CAPABILITY,
-                    )
+                    try:
+                        getattr(precondition, "fail")(record)
+                    except Exception:
+                        pass
+                    if reservation_acquired:
+                        try:
+                            self.ledger.release_pending(
+                                binding_id,
+                                _capability=_STORAGE_MUTATION_CAPABILITY,
+                            )
+                        except Exception:
+                            pass
                 raise
 
             if not _first_vault_content_complete(path):
                 raise RegistryError("first-vault initializer returned before content was complete")
+            materialized_root = Path(resolve_filesystem_root_identity(path).canonical_path)
+            self.ledger.rebind_pending_to_materialized(
+                binding_id,
+                channel_id=self.layout.channel_id,
+                root=materialized_root,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
             registration = self._new_registration(
-                canonical_root,
+                materialized_root,
                 vault_binding_id=binding_id,
                 provenance=DEFAULT_PROVENANCE_FIRST_INITIALIZE,
             )

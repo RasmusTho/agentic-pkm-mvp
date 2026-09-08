@@ -1410,6 +1410,9 @@ def initialize_companion_vault(
                     initialize=initialize,
                     recover=recover,
                 )
+                # The selection store is intentionally process-ephemeral. An exact retry
+                # after the durable first-vault commit therefore mints a fresh scoped
+                # selection after recovery; it never repeats content or registry effects.
                 context_selection_id = _create_initialized_scoped_selection(
                     request=request,
                     api_key=api_key,

@@ -692,10 +692,14 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   revision, performs initialization, and atomically establishes the explicit default plus scoped
   selection; failure before content effect leaves no registry/default/compatibility record, while
   failure after effect recovers forward idempotently. This bootstrap token selects no general write
-  target, grants no authority, and cannot be replayed once registry/revision state changes. The
-  immediately following vault-bound request resolves the binding without last-active fallback.
+  target or grants any general authority. It is single-use for content and registry effects; an
+  exact retry after those effects commit may recover only the already-committed server-owned scoped
+  selection handoff, minting a fresh ephemeral selection rather than repeating initialization or
+  changing the target. The immediately following vault-bound request resolves the binding without
+  last-active fallback.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context`
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic`
+  - Verify: `tests/integration/test_multi_vault_bootstrap_transaction.py::test_response_handoff_retry_reuses_consumed_bootstrap_selection`
 - [ ] **MVR-05B:** After API restart, a stale bearer never authorizes, falls back, retries, or
   transparently remints for any request. Because the ephemeral store cannot prove which binding the
   stale bearer named, even a sole authorized binding equal to the default requires visible

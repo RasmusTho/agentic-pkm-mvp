@@ -1014,6 +1014,65 @@ class OwnershipLedger:
             self._write_ledger_locked(self._replace(current, leases=leases), key)
             return active
 
+    def rebind_pending_to_materialized(
+        self,
+        vault_binding_id: str,
+        *,
+        channel_id: str,
+        root: Path,
+        _capability: _StorageMutationCapability | None = None,
+    ) -> OwnershipLease:
+        """Replace a path-bound reservation with the target's physical identity.
+
+        First-vault initialization may reserve a missing directory before the owner-native
+        initializer creates it.  The pending lease must be converged to the materialized
+        inode chain before activation; otherwise the next registry/ledger consistency
+        preflight sees an active path fingerprint where it requires physical identity.
+        """
+
+        _require_storage_mutation_capability(_capability)
+        identity = resolve_filesystem_root_identity(root)
+        if not identity.materialized:
+            raise LedgerError("materialized ownership identity is unavailable")
+        canonical_root = Path(identity.canonical_path)
+        self._assert_existing_artifacts()
+        with self._locked():
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(key, allow_create=False)
+            lease = current.leases.get(vault_binding_id)
+            if (
+                lease is None
+                or lease.channel_id != channel_id
+                or lease.state not in {"pending", "active"}
+            ):
+                raise LedgerError("ownership reservation is missing or invalid")
+            if not self._matches_root(lease, canonical_root, key):
+                raise LedgerError("materialized root does not match the reserved target")
+            materialized = self._lease_for_root(
+                channel_id=channel_id,
+                vault_binding_id=vault_binding_id,
+                root=canonical_root,
+                key=key,
+                state=lease.state,
+            )
+            if lease == materialized:
+                return lease
+            other_leases = {
+                binding_id: item
+                for binding_id, item in current.leases.items()
+                if binding_id != vault_binding_id
+            }
+            self._assert_no_collision(
+                self._replace(current, leases=other_leases),
+                materialized,
+                key=key,
+                allow_same_channel_nested=False,
+            )
+            leases = dict(other_leases)
+            leases[vault_binding_id] = materialized
+            self._write_ledger_locked(self._replace(current, leases=leases), key)
+            return materialized
+
     def release_pending(
         self,
         vault_binding_id: str,

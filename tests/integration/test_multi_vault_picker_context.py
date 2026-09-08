@@ -496,6 +496,10 @@ def test_fresh_vault_initialize_returns_usable_scoped_context(
     assert scoped.status_code == 200, scoped.text
     assert scoped.json()["context"]["vault_binding_ids"] == [binding_id]
     assert scoped.json()["context"]["principal_id"]
+    runtime.ledger.require_scalar_rollback_ready(
+        channel_id=runtime.layout.channel_id,
+        registrations={binding_id: target},
+    )
     # The scoped selection is the immediate read authority; the registry's
     # interaction-history field is deliberately not consulted or materialized.
     assert runtime.registry.load().last_active_vault_ref is None

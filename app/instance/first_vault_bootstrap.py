@@ -135,7 +135,7 @@ class FirstVaultPrecondition:
     ) -> FirstVaultPrecondition:
         """Revalidate the durable facts while the owner lock is held."""
 
-        if self.state not in {"issued", "reserved", "content_effected"}:
+        if self.state not in {"issued", "reserved", "content_effected", "consumed"}:
             raise FirstVaultBootstrapError("first-vault bootstrap precondition is not executable")
         if time.time() >= self.expires_at:
             raise FirstVaultBootstrapError("first-vault bootstrap precondition expired")
@@ -237,6 +237,11 @@ class FirstVaultPreconditionStore:
             state="issued",
         )
         with self._locked():
+            current = self._load_locked()
+            if current is not None and now < current.expires_at and current.state != "failed":
+                raise FirstVaultBootstrapError(
+                    "a first-vault bootstrap precondition is already in progress"
+                )
             self._write_locked(record)
         return token, record
 
@@ -261,7 +266,7 @@ class FirstVaultPreconditionStore:
         expected_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
         if not hmac.compare_digest(expected_digest, record.token_digest):
             raise FirstVaultBootstrapError("first-vault bootstrap precondition is invalid")
-        if record.state == "consumed":
+        if record.state == "consumed" and not allow_recovery:
             raise FirstVaultBootstrapError("first-vault bootstrap precondition was already consumed")
         if record.state == "failed" and not allow_recovery:
             raise FirstVaultBootstrapError("first-vault bootstrap precondition was rejected")
@@ -284,7 +289,7 @@ class FirstVaultPreconditionStore:
         if snapshot.registrations or snapshot.default_vault_binding_id is not None:
             if not (
                 allow_recovery
-                and record.state in {"reserved", "content_effected"}
+                and record.state in {"reserved", "content_effected", "consumed"}
                 and record.binding_id is not None
                 and set(snapshot.registrations) == {record.binding_id}
                 and snapshot.default_vault_binding_id == record.binding_id

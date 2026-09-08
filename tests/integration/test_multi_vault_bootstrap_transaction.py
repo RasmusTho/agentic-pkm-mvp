@@ -115,7 +115,8 @@ def test_http_bootstrap_binds_expiry_confirmation_and_authority(
         "/api/companion/vault/initialize",
         json={"path": str(target), "confirm": True, "bootstrap_token": token},
     )
-    assert replay.status_code == 409
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["context_selection_id"]
     assert len(runtime.registry.load().registrations) == 1
 
 
@@ -177,3 +178,48 @@ def test_post_effect_restart_recovers_first_initialize_forward(
     )
     assert selection.status_code == 200, selection.text
     assert selection.json()["context"]["vault_binding_ids"] == [snapshot.default_vault_binding_id]
+
+
+def test_response_handoff_retry_reuses_consumed_bootstrap_selection(
+    fresh_bootstrap_instance,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response-handoff loss can recover without repeating content effects."""
+
+    runtime, _principal, _manager, tmp_path = fresh_bootstrap_instance
+    client = TestClient(app, raise_server_exceptions=False)
+    target = tmp_path / "handoff-retry"
+    token = str(_bootstrap(client, target)["bootstrap_token"])
+    original = companion_module._create_initialized_scoped_selection
+    calls = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected response-handoff loss")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(companion_module, "_create_initialized_scoped_selection", fail_once)
+    failed = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(target), "confirm": True, "bootstrap_token": token},
+    )
+    assert failed.status_code == 500
+    assert len(runtime.registry.load().registrations) == 1
+    assert FirstVaultPreconditionStore(runtime.registry.path).load().state == "consumed"
+
+    recovered = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(target), "confirm": True, "bootstrap_token": token},
+    )
+    assert recovered.status_code == 200, recovered.text
+    selection_id = recovered.json()["context_selection_id"]
+    assert selection_id
+
+    replay = client.post(
+        "/api/companion/vault/initialize",
+        json={"path": str(target), "confirm": True, "bootstrap_token": token},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["context_selection_id"]
