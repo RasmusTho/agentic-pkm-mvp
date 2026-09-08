@@ -324,6 +324,9 @@ class DeviceConnection:
     _writer_admission: OAuthWriterAdmission | None = field(
         default=None, repr=False, compare=False
     )
+    _lifecycle_lock: Any = field(
+        default_factory=threading.RLock, repr=False, compare=False
+    )
 
     def public_view(self) -> dict[str, Any]:
         return self.handle.public_view()
@@ -331,9 +334,10 @@ class DeviceConnection:
     def cancel(self) -> None:
         """Release this flow's writer admission without exposing secrets."""
 
-        admission = self._writer_admission
-        if admission is not None:
-            admission.release()
+        with self._lifecycle_lock:
+            admission = self._writer_admission
+            if admission is not None:
+                admission.release()
 
     release = cancel
     close = cancel
@@ -732,20 +736,25 @@ class YouTubeAccountBinder:
         material. Raises :class:`DeviceAuthorizationPending` if the user has not
         approved yet (the caller re-polls after ``interval``).
         """
-        admission = connection._writer_admission
-        if admission is None or admission.released:
-            raise RuntimeError("device connection has no active OAuth writer admission")
-        try:
-            bundle = self._client.poll_device_flow(connection.handle.device_code)
-        except DeviceAuthorizationPending:
-            raise
-        except BaseException:
-            connection.release()
-            raise
-        try:
-            return self._bind_from_bundle(bundle, connection.reconnect_binding_id)
-        finally:
-            connection.release()
+        # Hold the connection lifecycle lock across polling and binding.  A
+        # concurrent cancel must wait for this terminal transition, otherwise
+        # it could release the cross-process admission while this call still
+        # persists credentials and a second writer could enter concurrently.
+        with connection._lifecycle_lock:
+            admission = connection._writer_admission
+            if admission is None or admission.released:
+                raise RuntimeError("device connection has no active OAuth writer admission")
+            try:
+                bundle = self._client.poll_device_flow(connection.handle.device_code)
+            except DeviceAuthorizationPending:
+                raise
+            except BaseException:
+                connection.release()
+                raise
+            try:
+                return self._bind_from_bundle(bundle, connection.reconnect_binding_id)
+            finally:
+                connection.release()
 
     def _bind_from_bundle(self, bundle: TokenBundle, reconnect_binding_id: str | None) -> dict[str, Any]:
         if not bundle.refresh_token:
