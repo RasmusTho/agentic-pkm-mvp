@@ -1987,6 +1987,51 @@ mark_phase_ok "db_probe"
 wait_for_healthz
 if [ "$NO_VAULT_MODE" -eq 1 ]; then
   set_phase "settings_rebind_no_lifecycle"
+  # Inspect the durable phase before stopping the existing watcher. A
+  # committed rebind still needs that watcher to finish convergence; stopping
+  # it first would make the no-lifecycle reconciliation impossible and leave
+  # the runtime without its only recovery actor.
+  settings_rebind_phase_json=$(run_docker_compose exec -T api \
+    python -m app.instance.runtime settings-rebind-no-lifecycle \
+    --check-only \
+    --registry-path /app/instance-state/agentic-pkm/vault-registry.md
+  ) || {
+    EXIT_REASON="settings_rebind_phase_check_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup could not inspect durable settings rebind phase" >&2
+    exit 1
+  }
+  settings_rebind_phase=$(SETTINGS_REBIND_PHASE_JSON="$settings_rebind_phase_json" python - <<'PY'
+import json
+import os
+
+try:
+    payload = json.loads(os.environ["SETTINGS_REBIND_PHASE_JSON"])
+except (KeyError, json.JSONDecodeError):
+    raise SystemExit(1)
+phase = payload.get("phase")
+if not isinstance(phase, str):
+    raise SystemExit(1)
+print(phase)
+PY
+  ) || {
+    EXIT_REASON="settings_rebind_phase_invalid"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup received an invalid settings rebind phase" >&2
+    exit 1
+  }
+  if [ "$settings_rebind_phase" = "committed" ]; then
+    EXIT_REASON="settings_rebind_committed_watcher_required"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    echo "ERROR: no-vault startup cannot stop the watcher while a committed settings rebind is pending" >&2
+    exit 1
+  fi
   # The no-vault acknowledgement is truthful only after an existing watcher
   # has stopped. Restart the idle watcher after the durable acknowledgement.
   if ! run_docker_compose stop watcher >/dev/null; then

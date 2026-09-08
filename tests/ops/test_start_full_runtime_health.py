@@ -190,12 +190,14 @@ def _fake_docker_bin(bin_dir: Path, health: dict[str, object]) -> None:
                 print("0")
             elif service == "api" and "settings-rebind-no-lifecycle" in command:
                 registry_path = os.environ["STARTUP_HARNESS_SETTINGS_REBIND_REGISTRY"]
+                check_only = "--check-only" in command
                 completed = subprocess.run(
                     [
                         sys.executable,
                         "-m",
                         "app.instance.runtime",
                         "settings-rebind-no-lifecycle",
+                        *( ["--check-only"] if check_only else [] ),
                         "--registry-path",
                         registry_path,
                     ],
@@ -420,9 +422,12 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
     assert "runtime verified: true" in result.stdout
 
 
-@pytest.mark.parametrize("stop_failure", [False, True])
+@pytest.mark.parametrize(
+    ("stop_failure", "phase"),
+    [(False, "prepared"), (True, "prepared"), (False, "committed")],
+)
 def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
-    tmp_path: Path, stop_failure: bool,
+    tmp_path: Path, stop_failure: bool, phase: str,
 ) -> None:
     health = _deferred_index_health()
     health["ok"] = True
@@ -451,8 +456,8 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
     )
     prepared = SettingsRebindRecord(
         desired_revision=1,
-        applied_revision=0,
-        phase="prepared",
+        applied_revision=0 if phase == "prepared" else 1,
+        phase=phase,
         lifecycle_posture="watcher",
         prior_binding_id=None,
         candidate_binding_id="binding-b",
@@ -472,12 +477,22 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
         total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
+    if phase == "committed":
+        assert result.returncode != 0
+        assert "cannot stop the watcher while a committed settings rebind is pending" in result.stderr
+        assert runtime.open_settings_rebind_store().read() == prepared
+        progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
+        assert "--check-only" in progress
+        assert " stop watcher" not in progress
+        assert "settings-rebind-no-lifecycle --registry-path" not in progress
+        return
+
     if stop_failure:
         assert result.returncode != 0
         assert "could not stop the existing watcher" in result.stderr
         assert runtime.open_settings_rebind_store().read() == prepared
         progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
-        assert "settings-rebind-no-lifecycle" not in progress
+        assert "settings-rebind-no-lifecycle --registry-path" not in progress
         return
 
     assert result.returncode == 0, result.stderr + result.stdout
@@ -494,7 +509,7 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
     acknowledgement_index = next(
         index
         for index, line in enumerate(progress_lines)
-        if "settings-rebind-no-lifecycle" in line
+        if "settings-rebind-no-lifecycle --registry-path" in line
     )
     assert watcher_stop_index < acknowledgement_index
 
