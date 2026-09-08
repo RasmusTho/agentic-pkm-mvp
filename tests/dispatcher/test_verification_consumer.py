@@ -56,6 +56,10 @@ from tests.dispatcher.verification_helpers import (
     request,
     verified_attempt_receipt,
 )
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
+    projection_phase_kwargs,
+)
 from tests.dispatcher.builderops_verification_fakes import (
     FakeBuilderOpsClient,
     FakeVerificationOutbox,
@@ -260,6 +264,14 @@ class Truth:
     def pull_request(self, repository, pr_number):
         self._last_pr = self.pr
         return self.pr
+
+    def current_body_edit(self, repository, pr_number):
+        return {
+            "node_id": f"UCE_fixture_{pr_number}",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": repository.split("/", 1)[0],
+            "editor_association": "OWNER",
+        }
 
     def checks(self, repository, head_sha):
         return self.check_rows
@@ -550,6 +562,14 @@ class TransitionTruth:
     def pull_request(self, repository, pr_number):
         self._last_pr = next(self.prs)
         return self._last_pr
+
+    def current_body_edit(self, repository, pr_number):
+        return {
+            "node_id": f"UCE_fixture_{pr_number}",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": repository.split("/", 1)[0],
+            "editor_association": "OWNER",
+        }
 
     def checks(self, repository, head_sha):
         return GREEN
@@ -1168,16 +1188,19 @@ def _open_neutralized_recovery_evidence(
         merged=False,
         merge_commit_sha=merge_commit_sha,
     )
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **convergence_kwargs,
     )
     comments = [
         {
             "author_association": "COLLABORATOR",
             "body": plan["authority_receipt_comment"],
         },
+        projection_convergence_comment(convergence_kwargs),
         {
             "author_association": "COLLABORATOR",
             "body": prepared["phase_receipt_comment"],
@@ -1241,6 +1264,62 @@ def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
     assert state.repair_budget_projection(running.run_id) == budget_before
 
 
+def test_open_neutralized_recovery_resumes_current_replacement_prepared_chain(
+    tmp_path,
+) -> None:
+    plan, neutral_pr, comments = _open_neutralized_recovery_evidence()
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, Mapping)
+    current_body_edit = {
+        "node_id": "UCE_fixture_3603_replacement",
+        "edited_at": "2026-08-12T05:00:00Z",
+        "editor_login": REPO.split("/", 1)[0],
+        "editor_association": "OWNER",
+    }
+    replacement_kwargs = projection_phase_kwargs(
+        authority, neutral_pr, body_edit=current_body_edit
+    )
+    replacement_prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        **replacement_kwargs,
+    )
+    comments.extend(
+        [
+            projection_convergence_comment(replacement_kwargs),
+            {
+                "author_association": "COLLABORATOR",
+                "body": replacement_prepared["phase_receipt_comment"],
+            },
+        ]
+    )
+
+    class RecoveryTruth(Truth):
+        def pull_request_comments(self, repository, pr_number):
+            return comments
+
+        def current_body_edit(self, repository, pr_number):
+            return current_body_edit
+
+    state = ledger(tmp_path / "replacement")
+    running = _expired_running_verification(state)
+    consumer = VerificationConsumer(
+        state, RecoveryTruth(neutral_pr, GREEN), Auth(), Launcher(), "recovery-host"
+    )
+
+    pack, _ = consumer._open_neutralized_recovery_pack(
+        running, neutral_pr, GREEN
+    )
+
+    assert pack["merge_recovery"] == {
+        "body_state": "neutralized",
+        "merge_commit_sha": None,
+        "merged_at": None,
+        "phase": "prepared",
+    }
+
+
 @pytest.mark.parametrize(
     "corruption",
     [
@@ -1250,6 +1329,9 @@ def test_open_neutralized_run_resumes_from_trusted_prepared_phase(
         "missing_phase",
         "stale_phase",
         "conflicting_phase",
+        "null_projection_phase",
+        "discontinuous_projection_phase",
+        "final_observation_digest",
         "body_digest",
         "repair_budget",
     ],
@@ -1274,17 +1356,42 @@ def test_open_neutralized_recovery_fails_closed_on_untrusted_evidence(
             {"author_association": "MEMBER", "body": conflicting}
         )
     elif corruption == "missing_phase":
-        comments = comments[:1]
+        comments = comments[:2]
     elif corruption == "stale_phase":
-        comments[1]["body"] = str(comments[1]["body"]).replace(
+        comments[2]["body"] = str(comments[2]["body"]).replace(
             f'"head_sha":"{HEAD}"', f'"head_sha":"{"c" * 40}"'
         )
     elif corruption == "conflicting_phase":
-        conflicting_phase = str(comments[1]["body"]).replace(
+        conflicting_phase = str(comments[2]["body"]).replace(
             '"phase":"prepared"', '"phase":"merged"'
         )
         comments.append(
             {"author_association": "OWNER", "body": conflicting_phase}
+        )
+    elif corruption == "null_projection_phase":
+        comments[2]["body"] = re.sub(
+            r'"projection_convergence_sha256":"[0-9a-f]{64}"',
+            '"projection_convergence_sha256":null',
+            str(comments[2]["body"]),
+        )
+    elif corruption == "discontinuous_projection_phase":
+        comments.append(
+            {
+                "author_association": "OWNER",
+                "body": re.sub(
+                    r'"projection_convergence_sha256":"[0-9a-f]{64}"',
+                    '"projection_convergence_sha256":"' + "f" * 64 + '"',
+                    str(comments[2]["body"]).replace(
+                        '"phase":"prepared"', '"phase":"merged"'
+                    ),
+                ),
+            }
+        )
+    elif corruption == "final_observation_digest":
+        comments[2]["body"] = re.sub(
+            r'"final_projection_observation_sha256":"[0-9a-f]{64}"',
+            '"final_projection_observation_sha256":"' + "f" * 64 + '"',
+            str(comments[2]["body"]),
         )
     elif corruption == "body_digest":
         neutral_pr = {**neutral_pr, "body": f"{neutral_pr['body']}\n\n"}
@@ -1522,10 +1629,12 @@ def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **convergence_kwargs,
     )
     raced_body = (
         "Governing-Issue: #3603\n\nRefs #3603\nFixes #4999\n\n"
@@ -1546,6 +1655,7 @@ def test_merged_incomplete_run_recovers_after_raced_body_edit_and_crash(
                     "author_association": "COLLABORATOR",
                     "body": plan["authority_receipt_comment"],
                 },
+                projection_convergence_comment(convergence_kwargs),
                 {
                     "author_association": "COLLABORATOR",
                     "body": prepared["phase_receipt_comment"],
@@ -1600,10 +1710,12 @@ def test_merged_recovery_accepts_terminal_newline_canonical_body_without_budget_
     authority = plan["authority_receipt"]
     assert isinstance(authority, dict)
     neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
+        **convergence_kwargs,
     )
     crashed_pr = merged_pr(body=original_body[:-1])
 
@@ -1620,6 +1732,7 @@ def test_merged_recovery_accepts_terminal_newline_canonical_body_without_budget_
                     "author_association": "COLLABORATOR",
                     "body": plan["authority_receipt_comment"],
                 },
+                projection_convergence_comment(convergence_kwargs),
                 {
                     "author_association": "COLLABORATOR",
                     "body": prepared["phase_receipt_comment"],
@@ -1684,10 +1797,17 @@ def test_merged_recovery_classifies_pre_4010_legacy_lf_less_body_as_restored(
         + "\n```",
     }
     neutral_pr = eligible_pr(body=plan["neutralized_body"])
+    convergence_kwargs = projection_phase_kwargs(
+        authority,
+        neutral_pr,
+        authority_comment=authority_comment,
+    )
     prepared = build_verified_merge_phase(
         authority_receipt=authority,
+        authority_comment=authority_comment,
         phase="prepared",
         pr=neutral_pr,
+        **convergence_kwargs,
     )
     crashed_pr = merged_pr(body=original_body[:-1])
 
@@ -1701,6 +1821,7 @@ def test_merged_recovery_classifies_pre_4010_legacy_lf_less_body_as_restored(
                 return _merge_comments(self._last_pr)
             return [
                 authority_comment,
+                projection_convergence_comment(convergence_kwargs),
                 {
                     "author_association": "COLLABORATOR",
                     "body": prepared["phase_receipt_comment"],
@@ -1972,12 +2093,19 @@ def _merge_comments(
         **merged_neutral,
         "body": plan["original_body"],
     }
+    convergence_kwargs = projection_phase_kwargs(authority, neutral)
     phases = [
         build_verified_merge_phase(
-            authority_receipt=authority, phase="prepared", pr=neutral
+            authority_receipt=authority,
+            phase="prepared",
+            pr=neutral,
+            **convergence_kwargs,
         ),
         build_verified_merge_phase(
-            authority_receipt=authority, phase="merged", pr=merged_neutral
+            authority_receipt=authority,
+            phase="merged",
+            pr=merged_neutral,
+            **convergence_kwargs,
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
@@ -1985,6 +2113,7 @@ def _merge_comments(
             pr=merged_neutral,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
+            **convergence_kwargs,
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
@@ -1992,6 +2121,7 @@ def _merge_comments(
             pr=restored,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
+            **convergence_kwargs,
         ),
     ]
     phase_index = {"prepared": 1, "merged": 2, "reconciled": 3, "restored": 4}[phase]
@@ -2000,6 +2130,7 @@ def _merge_comments(
             "author_association": "COLLABORATOR",
             "body": plan["authority_receipt_comment"],
         },
+        projection_convergence_comment(convergence_kwargs),
         *[
             {
                 "author_association": "COLLABORATOR",
@@ -3726,6 +3857,41 @@ def test_production_terminal_evidence_rejects_removed_ref_merge_closure(
             expected_repair_budget=budget,
         )
         == "unauthorized_closure"
+    )
+
+
+def test_terminal_consumer_rejects_forged_final_observation_digest(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    budget = state.repair_budget_projection(run.run_id)
+    terminal_pr = merged_pr()
+    comments = _merge_comments(terminal_pr, repair_budget=budget)
+    comments[2]["body"] = re.sub(
+        r'"final_projection_observation_sha256":"[0-9a-f]{64}"',
+        '"final_projection_observation_sha256":"' + "f" * 64 + '"',
+        str(comments[2]["body"]),
+    )
+    evidence = {
+        "comments": comments,
+        "merge_commit": {
+            "repository": REPO,
+            "sha": "b" * 40,
+            "message": "Merge verified issue set",
+        },
+    }
+
+    assert (
+        verification_consumer.delivered_live_truth_rejection(
+            run,
+            terminal_pr,
+            GREEN,
+            evidence,
+            expected_head_sha=HEAD,
+            expected_repair_budget=budget,
+        )
+        == "merge_phase_incomplete"
     )
 
 

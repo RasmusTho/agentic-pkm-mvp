@@ -130,6 +130,7 @@ class ProtectedRepositoryAuthority(Protocol):
         expected_head_sha: str,
         expected_base_sha: str,
         expected_manifest_blob_sha: str,
+        expected_body_edit: Mapping[str, object],
         commit_title: str,
         commit_message: str,
         credential: object,
@@ -630,6 +631,75 @@ class VerificationMergeExecutor:
             credential_id=manifest.credential_id,
             rotation_generation=manifest.credential_generation,
         )
+        effect_body_edit: Mapping[str, object] | None = None
+        if prepared_gate is not None:
+            # Credential resolution is the last local work before the effect.
+            # Re-read the authenticated prepared gate here so a body edit that
+            # races the outbox/credential path cannot reach the transport under
+            # the earlier closing-projection identity.
+            try:
+                effect_boundary_prepared_gate = (
+                    self.repository.verified_merge_prepared(
+                        canonical,
+                        run.pr_number,
+                        run_id=run.run_id,
+                        head_sha=run.current_head_sha,
+                        expected_repair_budget=repair_budget,
+                    )
+                )
+            except MergeAuthorityError as exc:
+                # The prepared-gate adapter may reject a raced body edit
+                # instead of returning a different gate.  The intent is
+                # already durable, but the merge effect has not started;
+                # terminalize it before propagating the authority failure so
+                # recovery cannot leave a claimed intent stranded.
+                self._terminal_no_effect(
+                    operation_key,
+                    evidence={
+                        "base_sha": base_sha,
+                        "head_sha": run.current_head_sha,
+                        "manifest_blob_sha": manifest.blob_sha,
+                        "verified_merge_prepared_error": str(exc),
+                    },
+                )
+                raise
+            if (
+                effect_prepared_gate is None
+                or not self._same_prepared_gate(
+                    effect_prepared_gate, effect_boundary_prepared_gate
+                )
+            ):
+                self._terminal_no_effect(
+                    operation_key,
+                    evidence={
+                        "base_sha": base_sha,
+                        "head_sha": run.current_head_sha,
+                        "manifest_blob_sha": manifest.blob_sha,
+                        "verified_merge_prepared": dict(
+                            effect_boundary_prepared_gate
+                        ),
+                    },
+                )
+                raise MergeAuthorityError(
+                    "verified merge prepared authority changed at the effect boundary"
+                )
+            body_edit = effect_boundary_prepared_gate.get("body_edit")
+            if not isinstance(body_edit, Mapping):
+                self._terminal_no_effect(
+                    operation_key,
+                    evidence={
+                        "base_sha": base_sha,
+                        "head_sha": run.current_head_sha,
+                        "manifest_blob_sha": manifest.blob_sha,
+                        "verified_merge_prepared": dict(
+                            effect_boundary_prepared_gate
+                        ),
+                    },
+                )
+                raise MergeAuthorityError(
+                    "verified merge prepared authority has no body-edit identity"
+                )
+            effect_body_edit = dict(body_edit)
         if dry_run:
             readback: Mapping[str, object] = {
                 "merged": False,
@@ -656,6 +726,11 @@ class VerificationMergeExecutor:
                 expected_head_sha=run.current_head_sha,
                 expected_base_sha=base_sha,
                 expected_manifest_blob_sha=manifest.blob_sha,
+                expected_body_edit=(
+                    effect_body_edit
+                    if effect_body_edit is not None
+                    else {}
+                ),
                 commit_title=commit_title,
                 commit_message=commit_message,
                 credential=credential,
@@ -726,17 +801,31 @@ class VerificationMergeExecutor:
         if not isinstance(base_sha, str):
             raise MergeAuthorityError("merge recovery base identity is malformed")
         manifest = self.repository.delivery_manifest(canonical, base_sha)
+        reconciliation_evidence = pending.get(
+            "reconciliation_evidence"
+        )
+        reconciliation_sequence = pending.get(
+            "reconciliation_receipt_sequence"
+        )
+        durable_reconciliation = (
+            isinstance(reconciliation_evidence, Mapping)
+            and isinstance(reconciliation_sequence, int)
+            and not isinstance(reconciliation_sequence, bool)
+        )
         prepared_gate: Mapping[str, object] | None = None
         if not dry_run:
-            prepared_gate = self.repository.verified_merge_prepared(
-                canonical,
-                run.pr_number,
-                run_id=run.run_id,
-                head_sha=run.current_head_sha,
-                expected_repair_budget=(
-                    self.ledger.repair_budget_projection(run.run_id)
-                ),
-            )
+            # Recovery never replays the merge effect.  The prepared gate in
+            # the durable task-bound payload is sufficient to validate the
+            # recovery manifest; fenced readback below decides whether the
+            # original effect applied.  Re-reading the live gate here would
+            # strand an interrupted pre-transport intent when the rejected
+            # body remains invalid after the boundary was fenced.
+            stored_prepared_gate = payload.get("verified_merge_prepared")
+            if not isinstance(stored_prepared_gate, Mapping):
+                raise MergeAuthorityError(
+                    "recovery prepared authority is unavailable"
+                )
+            prepared_gate = stored_prepared_gate
         expected_payload: dict[str, object] = {
             "repository": canonical,
             "governing_issue": run.request.get("linked_issue"),
@@ -768,17 +857,6 @@ class VerificationMergeExecutor:
             raise MergeAuthorityError(
                 "merge recovery manifest binding is inconsistent"
             )
-        reconciliation_evidence = pending.get(
-            "reconciliation_evidence"
-        )
-        reconciliation_sequence = pending.get(
-            "reconciliation_receipt_sequence"
-        )
-        durable_reconciliation = (
-            isinstance(reconciliation_evidence, Mapping)
-            and isinstance(reconciliation_sequence, int)
-            and not isinstance(reconciliation_sequence, bool)
-        )
         if dry_run and durable_reconciliation:
             assert isinstance(reconciliation_evidence, Mapping)
             if (
@@ -815,7 +893,7 @@ class VerificationMergeExecutor:
                 outcome = "merged"
             elif (
                 reconciliation_evidence.get("outcome")
-                == "terminal_no_effect_after_recovery"
+                in {"terminal_no_effect", "terminal_no_effect_after_recovery"}
             ):
                 outcome = "terminal_no_effect"
             else:
@@ -908,6 +986,29 @@ class VerificationMergeExecutor:
             or not self._same_manifest(manifest, current_manifest)
             or not self._required_gates_pass(current_gates)
         )
+        prepared_recovery_error: str | None = None
+        if not dry_run and not drifted:
+            try:
+                current_prepared_gate = self.repository.verified_merge_prepared(
+                    canonical,
+                    run.pr_number,
+                    run_id=run.run_id,
+                    head_sha=run.current_head_sha,
+                    expected_repair_budget=(
+                        self.ledger.repair_budget_projection(run.run_id)
+                    ),
+                )
+            except MergeAuthorityError as exc:
+                drifted = True
+                prepared_recovery_error = str(exc)
+            else:
+                if not self._same_prepared_gate(
+                    prepared_gate or {}, current_prepared_gate
+                ):
+                    drifted = True
+                    prepared_recovery_error = (
+                        "verified merge prepared authority changed during recovery"
+                    )
         self.ledger.finish_effect(
             operation_key,
             observed_applied=drifted,
@@ -916,6 +1017,11 @@ class VerificationMergeExecutor:
                     "terminal_no_effect_after_recovery"
                     if drifted
                     else "retry_after_readback"
+                ),
+                **(
+                    {"verified_merge_prepared_error": prepared_recovery_error}
+                    if prepared_recovery_error is not None
+                    else {}
                 ),
                 **dict(readback),
             },

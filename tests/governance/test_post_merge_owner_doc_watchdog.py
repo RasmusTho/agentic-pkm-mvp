@@ -3,7 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+
+from app.dispatcher.verified_merge import _canonical_digest
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
+    projection_phase_kwargs,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +44,17 @@ def _node(expression: str, *values: object) -> object:
     return json.loads(completed.stdout)
 
 
+def test_python_and_watchdog_canonical_digests_match_unicode() -> None:
+    value = {
+        "body": "smörgås",
+        "nested": {"title": "Räksmörgås — 東京"},
+    }
+
+    assert _canonical_digest(value) == _node(
+        "canonicalSha256(inputs[0])", value
+    )
+
+
 def _body() -> str:
     return (
         "Governing-Issue: #3821\n\n"
@@ -51,11 +69,15 @@ def _verified_merge_body_digest(body: str) -> str:
     return hashlib.sha256(canonical_body.encode()).hexdigest()
 
 
-def _authority_comment(body: str | None = None) -> dict[str, object]:
-    original = _body() if body is None else body
-    neutralized = original.replace("Fixes #3820", "Refs #3820").replace(
+def _neutralized_body(original: str) -> str:
+    return original.replace("Fixes #3820", "Refs #3820").replace(
         "Closes #3823", "Refs #3823"
     ) + "Verified-Closing-Issues: #3820, #3823\n"
+
+
+def _authority_comment(body: str | None = None) -> dict[str, object]:
+    original = _body() if body is None else body
+    neutralized = _neutralized_body(original)
     receipt = {
         "authenticated_supporting_issues": [3820, 3823],
         "body_sha256": _verified_merge_body_digest(original),
@@ -94,13 +116,34 @@ def _receipt_payload(comment: dict[str, object]) -> dict[str, object]:
     return json.loads(body.split("```json\n", 1)[1].split("\n```", 1)[0])
 
 
+def _convergence_kwargs(
+    authority_comment: dict[str, object],
+) -> dict[str, object]:
+    authority = _receipt_payload(authority_comment)
+    return projection_phase_kwargs(
+        authority,
+        _pr(_neutralized_body(_body())),
+    )
+
+
+def _convergence_comment(
+    authority_comment: dict[str, object],
+) -> dict[str, object]:
+    return projection_convergence_comment(_convergence_kwargs(authority_comment))
+
+
 def _phase_comment(
     authority_comment: dict[str, object],
     *,
     phase: str,
     merge_commit_sha: str | None,
+    phase_kwargs: dict[str, Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     authority = _receipt_payload(authority_comment)
+    convergence = (phase_kwargs or _convergence_kwargs(authority_comment))[
+        "projection_convergence_receipt"
+    ]
+    final_observation = convergence["final_projection_observation"]
     reconciled = phase in {"reconciled", "restored"}
     receipt = {
         "authority_sha256": hashlib.sha256(
@@ -113,10 +156,20 @@ def _phase_comment(
         ),
         "closed_issues": authority["closing_issues"] if reconciled else [],
         "contract": "verified_issue_set_merge_phase.v1",
+        "final_projection_observation_sha256": (
+            hashlib.sha256(
+                json.dumps(
+                    final_observation, separators=(",", ":"), sort_keys=True
+                ).encode()
+            ).hexdigest()
+            if phase == "prepared"
+            else None
+        ),
         "head_sha": authority["head_sha"],
         "merge_commit_sha": merge_commit_sha,
         "phase": phase,
         "pr_number": authority["pr_number"],
+        "projection_convergence_sha256": convergence["receipt_sha256"],
         "reopened_unauthorized_issues": [],
         "repository": authority["repository"],
         "run_id": authority["run_id"],
@@ -436,10 +489,25 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
     merge_sha = "c" * 40
     comments = [
         authority,
+        _convergence_comment(authority),
         _phase_comment(authority, phase="prepared", merge_commit_sha=None),
         _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha),
     ]
     raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+
+    convergence = _receipt_payload(comments[1])
+    prepared_payload = _receipt_payload(comments[2])
+    merged_payload = _receipt_payload(comments[3])
+    assert prepared_payload["projection_convergence_sha256"] == convergence["receipt_sha256"]
+    assert prepared_payload["final_projection_observation_sha256"] == hashlib.sha256(
+        json.dumps(
+            convergence["final_projection_observation"],
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    assert merged_payload["projection_convergence_sha256"] == convergence["receipt_sha256"]
+    assert merged_payload["final_projection_observation_sha256"] is None
 
     selected = _node(
         "selectWatchdogAuthority(inputs[0])",
@@ -456,6 +524,424 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
         "governing_issue": 3821,
         "mode": "durable_receipt",
     }
+
+
+def test_watchdog_parses_dynamic_convergence_fence_for_embedded_pr_body_fence() -> None:
+    canonical_body = _body() + "```yaml\nexample: fenced\n```\n"
+    authority = _authority_comment(canonical_body)
+    neutralized = _neutralized_body(canonical_body)
+    phase_kwargs = projection_phase_kwargs(
+        _receipt_payload(authority), _pr(neutralized)
+    )
+    convergence = projection_convergence_comment(phase_kwargs)
+    convergence_body = convergence["body"]
+    assert isinstance(convergence_body, str)
+    assert "````json\n" in convergence_body
+    merge_sha = "c" * 40
+
+    assert _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": [
+                authority,
+                convergence,
+                _phase_comment(
+                    authority,
+                    phase="prepared",
+                    merge_commit_sha=None,
+                    phase_kwargs=phase_kwargs,
+                ),
+                _phase_comment(
+                    authority,
+                    phase="merged",
+                    merge_commit_sha=merge_sha,
+                    phase_kwargs=phase_kwargs,
+                ),
+            ],
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+        },
+    ) == {
+        "closing_issues": [3820, 3823],
+        "governing_issue": 3821,
+        "mode": "durable_receipt",
+    }
+
+
+def test_watchdog_selects_the_only_delivered_replacement_receipt_chain() -> None:
+    authority = _authority_comment()
+    merge_sha = "c" * 40
+    replacement_kwargs = projection_phase_kwargs(
+        _receipt_payload(authority),
+        _pr(_neutralized_body(_body())),
+        body_edit={
+            "node_id": "UCE_fixture_3822_replacement",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": "fixture-owner",
+            "editor_association": "OWNER",
+        },
+    )
+    comments = [
+        authority,
+        _convergence_comment(authority),
+        _phase_comment(authority, phase="prepared", merge_commit_sha=None),
+        projection_convergence_comment(replacement_kwargs),
+        _phase_comment(
+            authority,
+            phase="prepared",
+            merge_commit_sha=None,
+            phase_kwargs=replacement_kwargs,
+        ),
+        _phase_comment(
+            authority,
+            phase="merged",
+            merge_commit_sha=merge_sha,
+            phase_kwargs=replacement_kwargs,
+        ),
+    ]
+
+    assert _node(
+        "selectWatchdogAuthority(inputs[0])",
+        {
+            "comments": comments,
+            "expectedRepository": REPOSITORY,
+            "linkedIssues": [4999],
+            "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+        },
+    ) == {
+        "closing_issues": [3820, 3823],
+        "governing_issue": 3821,
+        "mode": "durable_receipt",
+    }
+
+
+def test_watchdog_rejects_malformed_or_causally_invalid_pr_contract_start() -> None:
+    authority_comment = _authority_comment()
+    authority = _receipt_payload(authority_comment)
+    convergence = _receipt_payload(_convergence_comment(authority_comment))
+    assert _node("validConvergenceReceipt(inputs[0], inputs[1])", convergence, authority)
+
+    for started_at in (
+        "not-a-timestamp",
+        "2026-08-12T05:00:00Z",
+        "2026-08-12T05:00:04Z",
+    ):
+        malformed = json.loads(json.dumps(convergence))
+        malformed["pr_contract"]["started_at"] = started_at
+        unsigned = dict(malformed)
+        unsigned.pop("receipt_sha256")
+        malformed["receipt_sha256"] = _canonical_digest(unsigned)
+        assert not _node(
+            "validConvergenceReceipt(inputs[0], inputs[1])",
+            malformed,
+            authority,
+        )
+
+    for field, value in (
+        ("workflow_run_id", 0),
+        ("check_run_id", "not-an-id"),
+    ):
+        malformed = json.loads(json.dumps(convergence))
+        malformed["pr_contract"][field] = value
+        unsigned = dict(malformed)
+        unsigned.pop("receipt_sha256")
+        malformed["receipt_sha256"] = _canonical_digest(unsigned)
+        assert not _node(
+            "validConvergenceReceipt(inputs[0], inputs[1])",
+            malformed,
+            authority,
+        )
+
+    malformed = json.loads(json.dumps(convergence))
+    malformed["pr_contract"]["body_edit"]["unexpected"] = "forged"
+    unsigned = dict(malformed)
+    unsigned.pop("receipt_sha256")
+    malformed["receipt_sha256"] = _canonical_digest(unsigned)
+    assert not _node(
+        "validConvergenceReceipt(inputs[0], inputs[1])", malformed, authority
+    )
+
+
+def test_watchdog_accepts_paginated_older_body_edit_history() -> None:
+    authority_comment = _authority_comment()
+    authority = _receipt_payload(authority_comment)
+    phase_kwargs = projection_phase_kwargs(
+        authority, _pr(_neutralized_body(_body()))
+    )
+    convergence = json.loads(
+        json.dumps(phase_kwargs["projection_convergence_receipt"])
+    )
+    convergence["final_projection_observation"]["pull_request"][
+        "body_edits_page_info"
+    ]["has_next_page"] = True
+    unsigned = dict(convergence)
+    unsigned.pop("receipt_sha256")
+    convergence["receipt_sha256"] = _canonical_digest(unsigned)
+
+    assert _node(
+        "validConvergenceReceipt(inputs[0], inputs[1])", convergence, authority
+    )
+
+
+def test_watchdog_rejects_invalid_same_authority_phase_beside_current_chain() -> None:
+    authority = _authority_comment()
+    merge_sha = "c" * 40
+    replacement_kwargs = projection_phase_kwargs(
+        _receipt_payload(authority),
+        _pr(_neutralized_body(_body())),
+        body_edit={
+            "node_id": "UCE_fixture_3822_replacement",
+            "edited_at": "2026-08-12T05:00:00Z",
+            "editor_login": "fixture-owner",
+            "editor_association": "OWNER",
+        },
+    )
+    current_chain = [
+        projection_convergence_comment(replacement_kwargs),
+        _phase_comment(
+            authority,
+            phase="prepared",
+            merge_commit_sha=None,
+            phase_kwargs=replacement_kwargs,
+        ),
+        _phase_comment(
+            authority,
+            phase="merged",
+            merge_commit_sha=merge_sha,
+            phase_kwargs=replacement_kwargs,
+        ),
+    ]
+    stale_convergence = _convergence_comment(authority)
+    invalid_unknown = _phase_comment(
+        authority, phase="prepared", merge_commit_sha=None
+    )
+    invalid_unknown_payload = _receipt_payload(invalid_unknown)
+    invalid_unknown_payload["projection_convergence_sha256"] = "f" * 64
+    invalid_unknown["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_unknown_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    invalid_null = _phase_comment(
+        authority, phase="prepared", merge_commit_sha=None
+    )
+    invalid_null_payload = _receipt_payload(invalid_null)
+    invalid_null_payload["projection_convergence_sha256"] = None
+    invalid_null["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_null_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    invalid_extra = _phase_comment(
+        authority, phase="prepared", merge_commit_sha=None
+    )
+    invalid_extra_payload = _receipt_payload(invalid_extra)
+    invalid_extra_payload["unexpected"] = "forged-current-schema-extension"
+    invalid_extra["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_extra_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    invalid_reconciled = _phase_comment(
+        authority,
+        phase="reconciled",
+        merge_commit_sha=merge_sha,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_reconciled_payload = _receipt_payload(invalid_reconciled)
+    invalid_reconciled_payload["closed_issues"] = []
+    invalid_reconciled["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            invalid_reconciled_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+    invalid_phase = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_phase_payload = _receipt_payload(invalid_phase)
+    invalid_phase_payload["phase"] = "forged-phase"
+    invalid_phase["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_phase_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    invalid_contract = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_contract_payload = _receipt_payload(invalid_contract)
+    invalid_contract_payload["contract"] = "forged-contract"
+    invalid_contract["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_contract_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+    discontinuous = _phase_comment(
+        authority, phase="merged", merge_commit_sha=merge_sha
+    )
+
+    invalid_repository = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_repository_payload = _receipt_payload(invalid_repository)
+    invalid_repository_payload["repository"] = "foreign/example"
+    invalid_repository["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            invalid_repository_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+    invalid_run_id = _phase_comment(
+        authority,
+        phase="prepared",
+        merge_commit_sha=None,
+        phase_kwargs=replacement_kwargs,
+    )
+    invalid_run_id_payload = _receipt_payload(invalid_run_id)
+    invalid_run_id_payload["run_id"] = "forged-run"
+    invalid_run_id["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(invalid_run_id_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+
+    for invalid_phase, convergences in (
+        (invalid_unknown, []),
+        (invalid_null, []),
+        (invalid_extra, []),
+        (invalid_reconciled, []),
+        (invalid_phase, []),
+        (invalid_contract, []),
+        (discontinuous, [stale_convergence]),
+        (invalid_repository, []),
+        (invalid_run_id, []),
+    ):
+        assert _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": [authority, *convergences, invalid_phase, *current_chain],
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+            },
+        ) == {
+            "closing_issues": [],
+            "governing_issue": None,
+            "mode": "trusted_receipt_invalid",
+        }
+
+
+def test_watchdog_rejects_absent_forged_or_digest_mismatched_convergence() -> None:
+    authority = _authority_comment()
+    convergence = _convergence_comment(authority)
+    prepared = _phase_comment(authority, phase="prepared", merge_commit_sha=None)
+    merged = _phase_comment(authority, phase="merged", merge_commit_sha="c" * 40)
+    raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
+
+    forged_convergence = dict(convergence)
+    forged_payload = _receipt_payload(forged_convergence)
+    forged_payload["final_projection_observation"]["pull_request"][
+        "closing_issues"
+    ] = [{"number": 4999, "repository": REPOSITORY}]
+    forged_convergence["body"] = (
+        "verified merge closing projection convergence:\n```json\n"
+        + json.dumps(forged_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+
+    mismatched_prepared = dict(prepared)
+    mismatched_payload = _receipt_payload(mismatched_prepared)
+    mismatched_payload["projection_convergence_sha256"] = "f" * 64
+    mismatched_prepared["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(mismatched_payload, separators=(",", ":"), sort_keys=True)
+        + "\n```"
+    )
+
+    duplicate_convergence_marker = dict(convergence)
+    duplicate_convergence_body = duplicate_convergence_marker["body"]
+    assert isinstance(duplicate_convergence_body, str)
+    duplicate_convergence_marker["body"] = (
+        duplicate_convergence_body
+        + "\nverified merge closing projection convergence:"
+    )
+    duplicate_phase_marker = dict(prepared)
+    duplicate_phase_body = duplicate_phase_marker["body"]
+    assert isinstance(duplicate_phase_body, str)
+    duplicate_phase_marker["body"] = (
+        duplicate_phase_body + "\nverified issue-set merge phase:"
+    )
+
+    cases = (
+        [authority, prepared, merged],
+        [authority, forged_convergence, prepared, merged],
+        [authority, convergence, mismatched_prepared, merged],
+        [authority, duplicate_convergence_marker, prepared, merged],
+        [authority, convergence, duplicate_phase_marker, merged],
+    )
+    for comments in cases:
+        selected = _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": comments,
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr(raced_body),
+            },
+        )
+        assert selected == {
+            "closing_issues": [],
+            "governing_issue": None,
+            "mode": "trusted_receipt_invalid",
+        }
+
+    embedded_convergence_marker = dict(convergence)
+    embedded_convergence_body = embedded_convergence_marker["body"]
+    assert isinstance(embedded_convergence_body, str)
+    embedded_convergence_marker["body"] = (
+        embedded_convergence_body
+        + "\n```json\n"
+        + '{"audit":"verified merge closing projection convergence:"}'
+        + "\n```"
+    )
+    embedded_phase_marker = dict(prepared)
+    embedded_phase_body = embedded_phase_marker["body"]
+    assert isinstance(embedded_phase_body, str)
+    embedded_phase_marker["body"] = (
+        embedded_phase_body
+        + "\n```json\n"
+        + '{"audit":"verified issue-set merge phase:"}'
+        + "\n```"
+    )
+    for comments in (
+        [authority, embedded_convergence_marker, prepared, merged],
+        [authority, convergence, embedded_phase_marker, merged],
+    ):
+        assert _node(
+            "selectWatchdogAuthority(inputs[0])",
+            {
+                "comments": comments,
+                "expectedRepository": REPOSITORY,
+                "linkedIssues": [4999],
+                "livePr": _merged_pr(raced_body),
+            },
+        ) == {
+            "closing_issues": [3820, 3823],
+            "governing_issue": 3821,
+            "mode": "durable_receipt",
+        }
 
 
 def test_watchdog_target_selection_fails_closed_on_raced_body_without_phase_chain() -> None:
@@ -478,6 +964,7 @@ def test_watchdog_target_selection_fails_closed_on_raced_body_without_phase_chai
 
 def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_chain() -> None:
     authority = _authority_comment()
+    convergence = _convergence_comment(authority)
     prepared = _phase_comment(authority, phase="prepared", merge_commit_sha=None)
     merged = _phase_comment(
         authority, phase="merged", merge_commit_sha="c" * 40
@@ -496,6 +983,32 @@ def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_cha
         authority, phase="merged", merge_commit_sha="d" * 40
     )
 
+    discontinuous = _phase_comment(
+        authority, phase="merged", merge_commit_sha="c" * 40
+    )
+    discontinuous_payload = _receipt_payload(discontinuous)
+    discontinuous_payload["projection_convergence_sha256"] = "f" * 64
+    discontinuous["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            discontinuous_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+
+    null_current = _phase_comment(
+        authority, phase="merged", merge_commit_sha="c" * 40
+    )
+    null_current_payload = _receipt_payload(null_current)
+    null_current_payload["projection_convergence_sha256"] = None
+    null_current["body"] = (
+        "verified issue-set merge phase:\n```json\n"
+        + json.dumps(
+            null_current_payload, separators=(",", ":"), sort_keys=True
+        )
+        + "\n```"
+    )
+
     reconciled = _phase_comment(
         authority, phase="reconciled", merge_commit_sha="c" * 40
     )
@@ -512,9 +1025,11 @@ def test_watchdog_target_selection_rejects_forged_stale_or_conflicting_phase_cha
 
     raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
     cases = (
-        [authority, prepared, forged],
-        [authority, prepared, stale],
-        [authority, prepared, merged, reconciled, conflicting],
+        [authority, convergence, prepared, forged],
+        [authority, convergence, prepared, stale],
+        [authority, convergence, prepared, discontinuous],
+        [authority, convergence, prepared, null_current],
+        [authority, convergence, prepared, merged, reconciled, conflicting],
     )
     for comments in cases:
         selected = _node(
@@ -559,6 +1074,7 @@ def test_watchdog_target_selection_never_falls_back_for_forged_stale_or_conflict
         [stale],
         [
             authority,
+            _convergence_comment(authority),
             _phase_comment(authority, phase="prepared", merge_commit_sha=None),
             _phase_comment(authority, phase="merged", merge_commit_sha="c" * 40),
             conflicting,
