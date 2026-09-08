@@ -111,6 +111,9 @@ class BuilderExecutionProfile(TierMapping):
     selection_intent_reasoning_efforts: dict[
         BuilderSelectionIntent, BuilderReasoningEffort
     ] = Field(default_factory=dict)
+    selection_intent_models: dict[BuilderSelectionIntent, str] = Field(
+        default_factory=dict
+    )
 
 
 class ModelInquiryProfile(BaseModel):
@@ -263,6 +266,20 @@ class ProviderCensus(BaseModel):
                     raise ValueError(
                         "Builder execution profile maps reasoning effort for an unassigned "
                         "selection intent"
+                    )
+                if not set(mapping.selection_intent_models) <= set(mapping.selection_intents):
+                    raise ValueError(
+                        "Builder execution profile maps a model for an unassigned "
+                        "selection intent"
+                    )
+                invalid_intent_models = set(mapping.selection_intent_models.values()) - set(
+                    selectable_models
+                )
+                if invalid_intent_models:
+                    raise ValueError(
+                        "Builder execution profile maps a selection intent to a "
+                        "non-selectable model "
+                        f"{mapping.provider}/{sorted(invalid_intent_models)[0]}"
                     )
         if set(self.runtime_channels.model_inquiry) != set(
             self.runtime_channels.builder_execution

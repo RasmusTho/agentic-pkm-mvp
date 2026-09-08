@@ -542,7 +542,19 @@ def resolve_execution_target(
             "selection intent is not assigned to the declared Builder execution capability"
         )
     provider = census.provider(profile.provider)
-    selected_model = profile.model if model_id is None else model_id
+    if model_id is not None:
+        selected_model = model_id
+    elif selection_intent is not None:
+        selected_model = profile.selection_intent_models.get(
+            selection_intent, profile.model
+        )
+    else:
+        # Compatibility callers that predate explicit intents retain the
+        # strongest declared target when one exists. New skill/dispatch
+        # callers must use selection_intent and never rely on this fallback.
+        selected_model = profile.selection_intent_models.get(
+            "strong_reasoning", profile.model
+        )
     selectable_models = profile.selectable_models or [profile.model]
     if selected_model not in selectable_models:
         raise ValueError(
