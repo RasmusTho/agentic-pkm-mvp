@@ -105,6 +105,44 @@ def test_default_strongest_capability_is_provider_neutral(tmp_path) -> None:
     assert loop.strongest_capability == "sol"
 
 
+def test_legacy_unknown_capability_cannot_prove_strongest_repair(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(
+        state,
+        run.run_id,
+        holder="host",
+        lease_id=claimed.lease_id,
+        capability_aliases={
+            **state.capability_aliases,
+            "unknown-capability": "terra",
+        },
+        strongest_capability="sol",
+    )
+
+    loop.apply_events(
+        [
+            {
+                "kind": "repair",
+                "finding_id": "legacy-finding",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "legacy-mechanism",
+                "session_id": "legacy-session",
+                "capability": "unknown-capability",
+                "reasoning_effort": "xhigh",
+                "outcome": "fixed",
+                "strongest": True,
+            }
+        ],
+        context={"head": run.head_sha},
+    )
+
+    attempt = state.attempts(run.run_id)[0]
+    assert attempt["kind"] == "standard_repair"
+    assert attempt["capability"] == "terra"
+
+
 def test_v2_blocking_review_requires_projection_before_ledger_mutation(
     tmp_path,
 ) -> None:

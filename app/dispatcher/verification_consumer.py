@@ -4175,11 +4175,25 @@ def _retry_at(value: object = None) -> str:
 def _legacy_replay_capability_aliases(
     capability_aliases: Mapping[str, str],
 ) -> dict[str, str]:
-    """Bind pre-census placeholders only while replaying persisted evidence."""
+    """Bind pre-census placeholders to a non-strong replay capability.
+
+    The placeholder proves only that an old receipt existed; it is not evidence
+    that the current strongest capability ran. Prefer the declared standard
+    capability for replay, with a deterministic fallback for narrow fixtures.
+    """
+
+    replay_capability = next(
+        (
+            capability_aliases[name]
+            for name in ("terra", "luna", "spark")
+            if name in capability_aliases
+        ),
+        capability_aliases.get("sol", "sol"),
+    )
 
     return {
         **capability_aliases,
-        "unknown-capability": capability_aliases.get("sol", "sol"),
+        "unknown-capability": replay_capability,
     }
 
 

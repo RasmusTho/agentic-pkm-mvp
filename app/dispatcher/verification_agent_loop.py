@@ -355,7 +355,11 @@ class VerificationAgentLoop:
             planned: list[dict[str, object]] = []
             for index, event in enumerate(events):
                 session_id = str(event["session_id"])
-                capability = self._capability_key(str(event["capability"]))
+                raw_capability = str(event["capability"])
+                legacy_capability_placeholder = (
+                    raw_capability == "unknown-capability"
+                )
+                capability = self._capability_key(raw_capability)
                 reasoning_effort = str(event["reasoning_effort"])
                 outcome = str(event["outcome"])
                 attempt_id = attempt_id_for(index)
@@ -384,7 +388,14 @@ class VerificationAgentLoop:
                             raise ValueError(
                                 "each additional repair requires a fresh blocking review"
                             )
-                    strongest = bool(event.get("strongest", False))
+                    # A pre-census placeholder may be replayed for continuity,
+                    # but it cannot prove that the configured strongest
+                    # capability actually ran. Downgrade only the derived
+                    # ledger classification; the original receipt remains
+                    # untouched for forensic compatibility readback.
+                    strongest = bool(event.get("strongest", False)) and not (
+                        legacy_capability_placeholder
+                    )
                     if strongest and (
                         capability != self.strongest_capability
                         or reasoning_effort not in {"high", "xhigh", "max"}
