@@ -85,6 +85,40 @@ def test_undeclared_or_unlinked_divergence_fails(tmp_path: Path) -> None:
             load_provider_census(malformed_path)
 
 
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        (
+            "selection_intents: [coordination, general_delivery]",
+            "selection_intents: [coordination, general_delivery, verification]",
+        ),
+        (
+            (
+                "selection_intents: [strong_reasoning, verification], "
+                "selection_intent_reasoning_efforts: {strong_reasoning: max, verification: max}, "
+                "selection_intent_models: {strong_reasoning: gpt-6-astra, verification: gpt-6-astra}"
+            ),
+            (
+                "selection_intents: [strong_reasoning], "
+                "selection_intent_reasoning_efforts: {strong_reasoning: max}, "
+                "selection_intent_models: {strong_reasoning: gpt-6-astra}"
+            ),
+        ),
+    ],
+)
+def test_builder_selection_intents_are_unique_and_complete_per_channel(
+    tmp_path: Path,
+    replacement: str,
+    expected: str,
+) -> None:
+    source = Path("docs/settings/models/providers.yaml").read_text(encoding="utf-8")
+    malformed_path = tmp_path / "duplicate-or-missing-selection-intent.yaml"
+    malformed_path.write_text(source.replace(replacement, expected, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exactly once"):
+        load_provider_census(malformed_path)
+
+
 def test_census_ships_no_stale_known_divergences() -> None:
     assert _census().known_divergences == []
 
@@ -129,7 +163,7 @@ def test_builder_execution_profiles_cover_supported_capability_tiers() -> None:
         assert set(profiles) == expected_tiers
         for capability, profile in profiles.items():
             assert profile.capability_tier == capability
-            assert profile.reasoning_effort in {"low", "medium", "high", "max"}
+            assert profile.reasoning_effort in {"low", "medium", "high", "xhigh", "max"}
             _assert_mapping(census, profile)
 
 
@@ -138,18 +172,29 @@ def test_builder_execution_profiles_use_tcd_default_ladder() -> None:
 
     for profiles in census.runtime_channels.builder_execution.values():
         assert profiles["luna"].model == "gpt-5.6-luna"
-        assert profiles["luna"].reasoning_effort == "low"
-        assert profiles["terra"].model == "gpt-5.6-luna"
+        assert profiles["luna"].reasoning_effort == "xhigh"
+        assert profiles["luna"].selection_intents == ["coordination", "general_delivery"]
+        assert profiles["luna"].selection_intent_reasoning_efforts == {
+            "coordination": "low",
+            "general_delivery": "xhigh",
+        }
+        assert profiles["terra"].model == "gpt-5.6-terra"
         assert profiles["terra"].reasoning_effort == "high"
+        assert profiles["terra"].selection_intents == []
         assert profiles["sol"].model == "gpt-5.6-sol"
         assert profiles["sol"].reasoning_effort == "high"
+        assert profiles["sol"].selection_intents == ["strong_reasoning", "verification"]
         assert profiles["sol"].model_reasoning_efforts == {
             "gpt-5.6-sol": "high",
             "gpt-6-astra": "max",
         }
+        assert profiles["sol"].selection_intent_models == {
+            "strong_reasoning": "gpt-6-astra",
+            "verification": "gpt-6-astra",
+        }
 
 
-def test_sol_profile_declares_gpt_6_astra_with_explicit_reasoning_effort() -> None:
+def test_sol_profile_selects_gpt_6_astra_for_explicit_strong_intents() -> None:
     census = _census()
     openai = census.provider("openai")
 
@@ -157,11 +202,16 @@ def test_sol_profile_declares_gpt_6_astra_with_explicit_reasoning_effort() -> No
         sol = profiles["sol"]
         assert sol.model == "gpt-5.6-sol"
         assert sol.selectable_models == ["gpt-5.6-sol", "gpt-6-astra"]
+        assert sol.selection_intent_models == {
+            "strong_reasoning": "gpt-6-astra",
+            "verification": "gpt-6-astra",
+        }
         assert sol.model_reasoning_efforts["gpt-6-astra"] == "max"
+        assert sol.model_reasoning_efforts["gpt-5.6-sol"] == "high"
         assert any(model.id == "gpt-6-astra" for model in openai.models)
 
 
-def test_openai_census_declares_gpt_6_astra_without_default_change() -> None:
+def test_openai_census_declares_gpt_6_astra_as_strong_reasoning_default() -> None:
     census = _census()
     openai = census.provider("openai")
     astra = next(model for model in openai.models if model.id == "gpt-6-astra")
@@ -173,11 +223,12 @@ def test_openai_census_declares_gpt_6_astra_without_default_change() -> None:
     assert all(
         mapping.model != "gpt-6-astra"
         for channel in census.runtime_channels.builder_execution.values()
-        for mapping in channel.values()
+        for capability, mapping in channel.items()
+        if capability != "sol"
     )
 
 
-def test_builder_defaults_keep_astra_non_default() -> None:
+def test_builder_selection_intents_prefer_astra_for_strong_reasoning() -> None:
     census = _census()
 
     assert {
@@ -187,17 +238,24 @@ def test_builder_defaults_keep_astra_non_default() -> None:
     } == {
         ("dev", "spark", "gpt-5.3-codex-spark"),
         ("dev", "luna", "gpt-5.6-luna"),
-        ("dev", "terra", "gpt-5.6-luna"),
+        ("dev", "terra", "gpt-5.6-terra"),
         ("dev", "sol", "gpt-5.6-sol"),
         ("test", "spark", "gpt-5.3-codex-spark"),
         ("test", "luna", "gpt-5.6-luna"),
-        ("test", "terra", "gpt-5.6-luna"),
+        ("test", "terra", "gpt-5.6-terra"),
         ("test", "sol", "gpt-5.6-sol"),
         ("prod", "spark", "gpt-5.3-codex-spark"),
         ("prod", "luna", "gpt-5.6-luna"),
-        ("prod", "terra", "gpt-5.6-luna"),
+        ("prod", "terra", "gpt-5.6-terra"),
         ("prod", "sol", "gpt-5.6-sol"),
     }
+    assert all(
+        profile.selection_intent_models["strong_reasoning"] == "gpt-6-astra"
+        for profile in (
+            profiles["sol"]
+            for profiles in census.runtime_channels.builder_execution.values()
+        )
+    )
 
 
 def test_invalid_model_reasoning_mapping_fails_closed(tmp_path: Path) -> None:

@@ -767,6 +767,12 @@ def test_repair_postlaunch_crash_windows_resume_without_relaunch(
         assert outbox is not None
         for claim in outbox.claims.values():
             claim["expires_at"] = "2000-01-01T00:00:00+00:00"
+        if checkpoint == "receipt_persisted":
+            persisted = api.attempt_rows[run.run_id][0]["payload"]
+            persisted_receipt = persisted["receipt"]
+            persisted_receipt["review_events"][0]["capability"] = (
+                "unknown-capability"
+            )
         restarted_state = BuilderOpsVerificationLedger(
             api,
             repository=REPO,

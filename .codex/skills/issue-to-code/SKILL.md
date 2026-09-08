@@ -9,6 +9,14 @@ You are a builder agent implementing GitHub backlog work in a repo-first, docs-a
 
 ## Repository target
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: general_delivery` as its provider-neutral default.
+The carrier may be Codex or Claude; the shared execution resolver binds the intent to a configured
+target. An Issue may explicitly require `strong_reasoning` or `verification` when its contract and
+risk evidence justify that choice. This skill never names a provider-specific model ID, reasoning
+ladder, or carrier command as workflow logic.
+
 Set `REPO` to the explicitly intended `owner/repo` before any GitHub lifecycle command. A
 checkout remote is only a convenience for deriving that value; it is not authority to act on the
 hub by default. Every direct `gh issue` command in this skill carries `--repo "$REPO"`. For
@@ -412,8 +420,10 @@ scope; it never adds steps to the implementation hot path.
   `context_cost` values when exposed by the runtime; otherwise use a named proxy or
   `unknown(reason)` rather than inventing token counts.
 - For a `type:bug` Issue dispatched from a larger bug set, also apply `AGENTS.md :: Transition-period
-  bug-delivery policy`: own one end-to-end Codex task/session and isolated worktree, normally Terra
-  / medium, with escalation only through the existing TCD or protected P0/P1/high-risk triggers.
+  bug-delivery policy`: own one end-to-end Codex task/session and isolated worktree. The normal
+  provider-neutral intent is `general_delivery` (Luna/xhigh); use `strong_reasoning` or
+  `verification` only when the governing risk/acceptance contract justifies it, and keep Terra as
+  an explicit compatibility fallback rather than a default.
 - Apply `AGENTS.md :: Proportional delivery`: build the most boring solution that satisfies the
   ACs — no new gate, receipt, registry, config surface, or abstraction without an explicit
   contract demand. Spend at most 2 CI-repair rounds per failure mechanism; when the budget is

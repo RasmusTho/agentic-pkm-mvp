@@ -71,7 +71,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   outbox reconciliation before success or retry.
 - `app.dispatcher.verification_consumer` re-fetches live PR/check truth, requires a successful
   ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
-  registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
+  registered `verification_closer` adapter with its resolver-bound provider/model/reasoning target,
+  sandbox, and developer
   instructions. Streaming `codex exec --json --output-schema` events persist the thread identity
   immediately. The consumer independently reloads the canonical schema and applies both structural
   and semantic receipt validation to every launcher result before persisting attempts, review events,
@@ -153,8 +154,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   `review_code_correctness`, `static_quality`, `lease_concurrency`, and
   `deployment_model_schema`. Multiple findings may share a mechanism, while an existing finding
   cannot rebind to another domain or mechanism. There is no fixed repair-attempt cap or mandatory
-  standard-attempt prerequisite: TCD may select the configured strongest capability with high or
-  xhigh reasoning at any round. Every additional substantive repair still requires a fresh
+  standard-attempt prerequisite: TCD may select the configured strongest capability with high,
+  xhigh, or max reasoning at any round. Every additional substantive repair still requires a fresh
   independent blocking review of the preceding repair. Capability escalation and evidence-based
   convergence are key-local; monotonic attempt history, policy version, and bindings persist across
   restart, head rebind, and takeover. Before launching another workspace-writing closer for a

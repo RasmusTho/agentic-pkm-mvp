@@ -12,9 +12,14 @@ from app.builderops.execution_routing import (
     ResolvedExecutionTarget,
     admit_phase2_canary,
     build_execution_routing_canary_receipt,
+    capability_aliases_for_channel,
     create_execution_attempt,
+    get_carrier_adapter,
     resolve_bounded_fast_route,
+    resolve_execution_target,
+    resolve_execution_target_for_intent,
 )
+from app.components.settings.providers_loader import load_provider_census
 from app.builderops.execution_routing_receipts import (
     CanaryReceiptEvidenceError,
     append_attempt_intent,
@@ -33,6 +38,66 @@ REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 VERIFICATION_RUN_ID = (
     f"vrun-{canonical_hash([REPOSITORY.lower(), 5328, 'verification'])[:16]}"
 )
+
+
+def test_selection_intent_resolves_through_codex_and_claude_carrier_adapters() -> None:
+    census = load_provider_census()
+
+    coordination = resolve_execution_target_for_intent(
+        census, channel="dev", selection_intent="coordination"
+    )
+    general_delivery = resolve_execution_target_for_intent(
+        census, channel="dev", selection_intent="general_delivery"
+    )
+    strong_reasoning = resolve_execution_target_for_intent(
+        census, channel="dev", selection_intent="strong_reasoning"
+    )
+
+    assert (coordination.model, coordination.reasoning_effort) == (
+        "gpt-5.6-luna",
+        "low",
+    )
+    assert (general_delivery.model, general_delivery.reasoning_effort) == (
+        "gpt-5.6-luna",
+        "xhigh",
+    )
+    assert (strong_reasoning.model, strong_reasoning.reasoning_effort) == (
+        "gpt-6-astra",
+        "max",
+    )
+
+    codex = get_carrier_adapter("codex").bind(
+        strong_reasoning, selection_intent="strong_reasoning"
+    )
+    claude = get_carrier_adapter("claude").bind(
+        strong_reasoning, selection_intent="strong_reasoning"
+    )
+
+    assert codex.launchable is True
+    assert (codex.provider, codex.model) == ("openai", "gpt-6-astra")
+    assert claude.launchable is False
+    assert claude.provider is None
+    assert claude.model is None
+
+
+def test_explicit_sol_fallback_keeps_model_specific_reasoning() -> None:
+    target = resolve_execution_target(
+        load_provider_census(),
+        channel="dev",
+        capability="sol",
+        model_id="gpt-5.6-sol",
+        selection_intent="strong_reasoning",
+    )
+
+    assert (target.model, target.reasoning_effort) == ("gpt-5.6-sol", "high")
+
+
+def test_declared_model_aliases_remain_provider_neutral_in_receipts() -> None:
+    aliases = capability_aliases_for_channel(load_provider_census(), channel="dev")
+
+    assert aliases["gpt-6-astra"] == "sol"
+    assert aliases["gpt-5.6-sol"] == "sol"
+    assert aliases["gpt-5.6-luna"] == "luna"
 
 
 def _request(**overrides: object) -> ExecutionRouteRequest:
@@ -349,6 +414,13 @@ def test_bounded_fast_resolver_is_provider_neutral_and_fail_closed() -> None:
     assert "reasoning_effort" not in type(request).model_fields
     assert decision.context_pack_hash == request.context_pack_hash
     assert decision.verification_profile_hash == request.verification_profile_hash
+    target = resolve_execution_target(
+        load_provider_census(),
+        channel="dev",
+        capability=decision.selected_capability,
+        selection_intent=decision.selection_intent,
+    )
+    assert target.reasoning_effort == "low"
 
     for forbidden in (
         {"work_class": "general_delivery"},

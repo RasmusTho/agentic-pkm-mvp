@@ -111,6 +111,10 @@ def census_with_role_targets(
                 "model": model,
                 "selectable_models": [model],
                 "model_reasoning_efforts": {model: "high"},
+                "selection_intent_models": {
+                    "strong_reasoning": model,
+                    "verification": model,
+                },
                 "requires": [],
             }
         )

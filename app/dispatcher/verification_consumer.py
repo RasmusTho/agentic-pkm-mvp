@@ -33,6 +33,12 @@ from zoneinfo import ZoneInfo
 
 import jsonschema
 
+from app.builderops.execution_routing import (
+    capability_aliases_for_channel,
+    get_carrier_adapter,
+    resolve_execution_target_for_intent,
+)
+from app.components.settings.providers_loader import load_provider_census
 from app.dispatcher.linux_containment import (
     validated_linux_containment_receipt,
 )
@@ -607,6 +613,8 @@ def load_and_validate_verification_closer_receipt(
     trusted_repository: str,
     trusted_evidence_urls: frozenset[str],
     repair_budget_policy: str | None = None,
+    capability_aliases: Mapping[str, str] | None = None,
+    allow_legacy_capability_placeholder: bool = False,
 ) -> Mapping[str, object]:
     """Validate untrusted launcher output against the canonical receipt contract."""
 
@@ -644,6 +652,8 @@ def load_and_validate_verification_closer_receipt(
         candidate,
         trusted_repository=trusted_repository,
         trusted_evidence_urls=trusted_evidence_urls,
+        capability_aliases=capability_aliases,
+        allow_legacy_capability_placeholder=allow_legacy_capability_placeholder,
     )
     try:
         validate_verification_closer_receipt(
@@ -1957,6 +1967,7 @@ class LaunchConfig:
     reasoning_effort: str
     sandbox: str
     developer_instructions: str
+    capability: str = "sol"
 
 
 class CodexExecFailure(RuntimeError):
@@ -2040,7 +2051,17 @@ _ABSOLUTE_MACHINE_PATH = re.compile(
     r"/(?:[^/\s,;:)\]}]+/)*[^/\s,;:)\]}]+)"
 )
 _SAFE_CAPABILITIES = frozenset(
-    {"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "luna", "terra", "sol"}
+    {
+        "gpt-5.3-codex-spark",
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-6-astra",
+        "spark",
+        "luna",
+        "terra",
+        "sol",
+    }
 )
 _SAFE_REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max"}
@@ -2281,18 +2302,35 @@ def _allowlisted_receipt_value(
     return raw if raw in allowed else fallback
 
 
-def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
+def _sanitize_review_event(
+    event: Mapping[str, object],
+    *,
+    capability_aliases: Mapping[str, str] | None = None,
+    allow_legacy_capability_placeholder: bool = False,
+) -> dict[str, object]:
     finding = event.get("finding_id")
     mechanism = event.get("mechanism_id")
     progress_intent = event.get("progress_intent_id")
     mechanism_paths = event.get("mechanism_path_sha256")
+    reported_capability = str(event["capability"])
+    if capability_aliases is not None:
+        if not (
+            allow_legacy_capability_placeholder
+            and reported_capability == "unknown-capability"
+        ):
+            normalized_capability = capability_aliases.get(reported_capability)
+            if normalized_capability is None:
+                raise ReceiptContractError(
+                    "verification receipt capability is not declared"
+                )
+            reported_capability = normalized_capability
     return {
         "kind": event["kind"],
         "session_id": _pseudonymous_receipt_identifier(
             event["session_id"], prefix="review-session"
         ),
         "capability": _allowlisted_receipt_value(
-            event["capability"],
+            reported_capability,
             allowed=_SAFE_CAPABILITIES,
             fallback="unknown-capability",
         ),
@@ -2431,6 +2469,8 @@ def sanitize_verification_closer_receipt(
     *,
     trusted_repository: str | None = None,
     trusted_evidence_urls: frozenset[str] | None = None,
+    capability_aliases: Mapping[str, str] | None = None,
+    allow_legacy_capability_placeholder: bool = False,
 ) -> dict[str, object]:
     """Project one schema-valid coordinator receipt onto its durable-safe form."""
 
@@ -2454,7 +2494,13 @@ def sanitize_verification_closer_receipt(
         "retry_after": retry_after,
         "review_events": (
             [
-                _sanitize_review_event(event)
+                _sanitize_review_event(
+                    event,
+                    capability_aliases=capability_aliases,
+                    allow_legacy_capability_placeholder=(
+                        allow_legacy_capability_placeholder
+                    ),
+                )
                 for event in raw_events[:_MAX_RECEIPT_LIST_ITEMS]
                 if isinstance(event, Mapping)
             ]
@@ -2806,23 +2852,44 @@ class CodexExecLauncher:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
         except (OSError, tomllib.TOMLDecodeError) as exc:
             raise ValueError("verification closer adapter is unavailable") from exc
-        required = {
-            "name": "verification_closer",
-            "model": "gpt-5.6-sol",
-            "model_reasoning_effort": "high",
-            "sandbox_mode": "workspace-write",
-        }
+        required = {"name": "verification_closer", "sandbox_mode": "workspace-write"}
         if any(adapter.get(key) != value for key, value in required.items()):
             raise ValueError("verification closer adapter contract mismatch")
         instructions = adapter.get("developer_instructions")
         if not isinstance(instructions, str) or not instructions.strip():
             raise ValueError("verification closer developer instructions are missing")
+        try:
+            census_root = self.worktree
+            census_path = census_root / "docs/settings/models/providers.yaml"
+            if not census_path.is_file():
+                census_path = Path(__file__).resolve().parents[2] / "docs/settings/models/providers.yaml"
+            census = load_provider_census(
+                census_path
+            )
+            self.provider_census_path = census_path
+            self.capability_aliases = capability_aliases_for_channel(
+                census, channel="dev"
+            )
+            target = resolve_execution_target_for_intent(
+                census,
+                channel="dev",
+                selection_intent="verification",
+            )
+            invocation = get_carrier_adapter("codex").bind(
+                target,
+                selection_intent="verification",
+            )
+        except (OSError, ValueError) as exc:
+            raise ValueError("verification closer execution target is unavailable") from exc
+        if not invocation.launchable or invocation.model is None:
+            raise ValueError("verification closer Codex target is not launchable")
         self.config = LaunchConfig(
             adapter_name="verification_closer",
-            model="gpt-5.6-sol",
-            reasoning_effort="high",
+            model=invocation.model,
+            reasoning_effort=invocation.reasoning_effort,
             sandbox="workspace-write",
             developer_instructions=instructions.strip(),
+            capability=invocation.capability,
         )
 
     def command(
@@ -4105,6 +4172,31 @@ def _retry_at(value: object = None) -> str:
     return (now + delay).isoformat(timespec="microseconds")
 
 
+def _legacy_replay_capability_aliases(
+    capability_aliases: Mapping[str, str],
+) -> dict[str, str]:
+    """Bind pre-census placeholders to a non-strong replay capability.
+
+    The placeholder proves only that an old receipt existed; it is not evidence
+    that the current strongest capability ran. Prefer the declared standard
+    capability for replay, with a deterministic fallback for narrow fixtures.
+    """
+
+    replay_capability = next(
+        (
+            capability_aliases[name]
+            for name in ("terra", "luna", "spark")
+            if name in capability_aliases
+        ),
+        capability_aliases.get("sol", "sol"),
+    )
+
+    return {
+        **capability_aliases,
+        "unknown-capability": replay_capability,
+    }
+
+
 class VerificationConsumer:
     def __init__(
         self,
@@ -4119,6 +4211,13 @@ class VerificationConsumer:
             ledger, truth, auth, launcher, holder
         )
         self.receipt_schema = receipt_schema or CANONICAL_RECEIPT_SCHEMA_PATH
+        ledger_aliases = getattr(ledger, "capability_aliases", None)
+        if not isinstance(ledger_aliases, Mapping):
+            raise ValueError("verification ledger has no declared capability binding")
+        launcher_aliases = getattr(launcher, "capability_aliases", None)
+        if launcher_aliases is not None and dict(launcher_aliases) != dict(ledger_aliases):
+            raise ValueError("verification launcher and ledger census bindings differ")
+        self.capability_aliases: Mapping[str, str] = dict(ledger_aliases)
         self.host_fenced_merge = callable(
             getattr(ledger, "mark_merge_ready", None)
         )
@@ -4665,6 +4764,8 @@ class VerificationConsumer:
                 trusted_repository=run.repository,
                 trusted_evidence_urls=_trusted_evidence_urls(run),
                 repair_budget_policy=run.repair_budget_policy,
+                capability_aliases=self.capability_aliases,
+                allow_legacy_capability_placeholder=True,
             )
         except ReceiptContractError as exc:
             try:
@@ -4896,6 +4997,9 @@ class VerificationConsumer:
             claimed.run_id,
             holder=self.holder,
             lease_id=lease_id,
+            capability_aliases=_legacy_replay_capability_aliases(
+                self.capability_aliases
+            ),
         )
         if events:
             try:
@@ -5316,6 +5420,8 @@ class VerificationConsumer:
                     trusted_repository=claimed.repository,
                     trusted_evidence_urls=_trusted_evidence_urls(claimed),
                     repair_budget_policy=claimed.repair_budget_policy,
+                    capability_aliases=self.capability_aliases,
+                    allow_legacy_capability_placeholder=True,
                 )
             else:
                 begin_effect = getattr(self.ledger, "begin_effect", None)
@@ -5385,6 +5491,7 @@ class VerificationConsumer:
                     trusted_repository=claimed.repository,
                     trusted_evidence_urls=_trusted_evidence_urls(claimed),
                     repair_budget_policy=claimed.repair_budget_policy,
+                    capability_aliases=self.capability_aliases,
                 )
                 safe_session_id = bounded_coordinator_session_id(session_id)
                 if safe_session_id is None:
@@ -5453,7 +5560,7 @@ class VerificationConsumer:
                         claimed.run_id,
                         "verification",
                         failed_session,
-                        self.launcher.config.model,
+                        self.launcher.config.capability,
                         self.launcher.config.reasoning_effort,
                         pack,
                         "rate_limited" if rate_limited else "launch_failed",
@@ -5576,7 +5683,7 @@ class VerificationConsumer:
             try:
                 attempt_idempotency_key = verification_attempt_idempotency_key(
                     session_id,
-                    config.model,
+                    config.capability,
                     config.reasoning_effort,
                     receipt,
                 )
@@ -5593,7 +5700,7 @@ class VerificationConsumer:
                     claimed.run_id,
                     "verification",
                     session_id,
-                    config.model,
+                    config.capability,
                     config.reasoning_effort,
                     pack,
                     "rate_limited" if structured_rate_limit else "launched",
@@ -5831,6 +5938,9 @@ class VerificationConsumer:
                             claimed.run_id,
                             holder=self.holder,
                             lease_id=lease_id,
+                            capability_aliases=_legacy_replay_capability_aliases(
+                                self.capability_aliases
+                            ),
                         ).apply_events(repair_events, context=pack)
                     except ValueError as exc:
                         return self._terminal_event_application_failure(
@@ -5876,6 +5986,9 @@ class VerificationConsumer:
             claimed.run_id,
             holder=self.holder,
             lease_id=lease_id,
+            capability_aliases=_legacy_replay_capability_aliases(
+                self.capability_aliases
+            ),
         )
         if events:
             try:

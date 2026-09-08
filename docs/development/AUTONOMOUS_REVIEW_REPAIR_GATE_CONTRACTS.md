@@ -524,8 +524,8 @@ Convergence policy:
   fresh re-review demonstrate measurable progress.
 - A repeated blocking finding or a round without progress triggers TCD-based capability escalation
   and a bounded replan with the complete prior evidence; it does not trigger an owner interruption
-  by count. A strongest-capability repair uses the configured strongest capability with high or
-  xhigh reasoning.
+  by count. A strongest-capability repair uses the configured strongest capability with high, xhigh,
+  or max reasoning.
 - P2/P3 findings do not enter this loop, consume attempts, trigger capability
   escalation, or require another review round.
 - One clean independent final review on the current head SHA is sufficient for every full-path PR,

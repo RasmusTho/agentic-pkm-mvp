@@ -927,9 +927,9 @@ existing supported, explicit, fresh `bonus_available` observation. `economically
 context pack, constraints, attempt lineage, and verification profile. No quota oracle is implied.
 Fallback means an adequate alternative capability for the same work class; escalation means the
 current capability proved inadequate or risk/ambiguity increased. These are distinct, receipted
-state transitions. The compatibility `terra` slot currently binds to Luna/high for normal delivery;
-moving from Luna/low to that slot, or from the compatibility slot to Sol/high, requires a named
-evidence-based reason, not capacity exhaustion.
+state transitions. The normal `general_delivery` intent binds to Luna/xhigh; `strong_reasoning` and
+`verification` bind to Astra/max through the compatibility `sol` capability key. Terra and the
+actual Sol model remain explicit fallback/override choices, never capacity-exhaustion defaults.
 
 The worker context must be hash-bound and carry only authority, bounded goal, relevant sources and
 tests, constraints, prior-attempt result, verification targets, and stop/escalation conditions. A
@@ -947,9 +947,9 @@ The economic measure is expected Total Cost of Development per accepted delivery
 should minimally record work class, coordinator capability, requested and actual capability,
 provider/model/reasoning observation, allocation class, fallback/escalation reason, attempt count,
 latency, verification/review/CI outcome, rework, human steering, and post-merge repair. Utilization
-of one model and cheapest invocation cost are not success metrics. The current TCD ladder makes Luna
-the normal delivery model through the compatibility `terra` slot, while keeping Sol/high for hard
-work and Astra/max explicit. Future rebinding still requires accepted-delivery evidence; routing
+of one model and cheapest invocation cost are not success metrics. The current TCD intent policy makes
+Luna the normal delivery model and Astra the strong-reasoning/verification target, while keeping Terra
+and the actual Sol model explicit. Future rebinding still requires accepted-delivery evidence; routing
 does not change the capability keys or verification contract.
 
 ### Execution Routing shipped Phase 1 seam
