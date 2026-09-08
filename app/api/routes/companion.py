@@ -115,7 +115,6 @@ from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
 from app.vault.active_context_v1 import ActiveContextSetV1
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_read_window
-from app.instance.vault_registry import VaultRegistryStore
 from app.vault.layout import LAYOUT_NOTE_NAME
 from app.vault.manager import (
     SETTINGS_DIR_NAME,
