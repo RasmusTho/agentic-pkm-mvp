@@ -582,6 +582,17 @@ before a human ask; do not turn unresolved machine facts into owner choices or r
 answered request. Session suspension still follows
 `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
 
+Advisory readiness, CI failure context, PR evidence packs, and post-merge docs reports follow the
+same separation. `human_exception_required` and `human_exception_likely` are routing signals for
+fresh classification, not escalation or execution authority. Unknown or malformed input, a technical
+`agent:blocked` hold, missing logs, conflicting checkboxes, or shipped-vs-target drift retain their
+readiness/refusal and evidence gaps without asserting a human decision. Explicit human-only/operator
+requirements, CODEOWNER hints, human-labelled evidence, and unresolved authority requirements remain
+visible for the owning workflow to verify. Negated, resolved, or merely mentioned owner decisions
+do not establish an unresolved requirement; a separate unresolved requirement must not be hidden by
+settled text elsewhere. These advisory tools neither authenticate delegation nor waive a gate, and
+their false human flag never means the operation is safe or authorized.
+
 Repair history applies only to blocking failures and is partitioned by stable failure
 mechanism and failure domain. The closed domains are review/code correctness,
 static-quality, lease/concurrency, and deployment/model-schema compatibility. A

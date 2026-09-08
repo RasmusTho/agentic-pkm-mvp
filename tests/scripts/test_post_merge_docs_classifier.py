@@ -289,10 +289,55 @@ def test_human_exception_requires_authority_or_contradiction_evidence() -> None:
 
     assert normal.impact_classification != "human_exception_likely"
     assert authority.impact_classification == "human_exception_likely"
-    assert contradiction.impact_classification == "human_exception_likely"
+    assert contradiction.impact_classification == "unknown"
     assert ordinary_owner_doc_update.impact_classification == "docs_update_likely"
     assert no_exception_phrase.impact_classification == "no_change_likely"
     assert "Human Exception" in render_markdown(authority)
+
+
+@pytest.mark.parametrize("statement", [
+    "No owner decision is needed.",
+    "Owner authority has already been granted.",
+    "An owner decision is not required.",
+    "This does not require an owner decision.",
+    "The owner decision is resolved.",
+    "There is no strategic ambiguity.",
+    "This repair improves owner decision presentation.",
+])
+def test_resolved_or_negated_owner_mentions_do_not_escalate(statement) -> None:
+    result = classify(
+        pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+        files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+    )
+    assert result.impact_classification == "no_change_likely"
+    assert "Human Exception" not in result.recommended_next_action
+
+
+@pytest.mark.parametrize("declaration,statement", [
+    ("- [x] No owner-doc change implied.\n- [x] Owner-doc updated in this PR.", ""),
+    ("- [x] No owner-doc change implied.", "Shipped behavior contradicts target spec."),
+])
+def test_metadata_and_implementation_drift_require_reconciliation_not_owner(declaration, statement) -> None:
+    result = classify(pr=_pr(_body(declaration, statement)),
+                      files_payload=["app/runtime.py"], issue={"number": 3217})
+    assert result.impact_classification == "unknown"
+    assert result.unknowns_missing_evidence
+    assert "reconcil" in result.recommended_next_action.lower()
+    assert "Human Exception" not in result.recommended_next_action
+
+
+@pytest.mark.parametrize("statement", [
+    "No owner decision is needed for docs. Owner authority is ambiguous for production.",
+    "Owner authority has already been granted for docs, but an owner decision is still required for release.",
+    "The owner decision is not yet resolved.",
+    "Still waiting for an owner decision.",
+    "The task requires an owner decision.",
+    "Strategic ambiguity remains.",
+])
+def test_unresolved_authority_is_not_hidden_by_other_resolved_mentions(statement) -> None:
+    result = classify(pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+                      files_payload=["app/runtime.py"], issue={"number": 3217})
+    assert result.impact_classification == "human_exception_likely"
 
 
 def test_issue_less_governance_pr_uses_declaration_and_files() -> None:
@@ -344,7 +389,7 @@ def test_target_spec_exception_requires_explicit_contradiction() -> None:
     )
 
     assert ordinary_spec_reference.impact_classification == "docs_update_likely"
-    assert explicit_contradiction.impact_classification == "human_exception_likely"
+    assert explicit_contradiction.impact_classification == "unknown"
     assert negated_contradiction.impact_classification == "docs_update_likely"
 
 

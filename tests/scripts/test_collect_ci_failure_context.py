@@ -14,6 +14,18 @@ from scripts.collect_ci_failure_context import LogSource, build_context
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize("sources", [[], [LogSource(name="CI/job.txt", text="")]])
+def test_missing_logs_are_technical_evidence_gap(sources) -> None:
+    context = build_context(repository="owner/repo", run_id="123", sources=sources)
+    assert context.failure_class == "unknown_failure"
+    assert context.actionable_by_autonomous_repair is False
+    assert context.human_exception_required is False
+    assert "no log text available" in context.unknowns_missing_evidence
+    assert "evidence" in context.safe_next_action.lower()
+    assert "Human Exception" not in context.safe_next_action
+    assert context.rerun_instruction is None
+
+
 def _context_for(text: str, *, pr_number: int | None = 42, name: str = "job/step.txt"):
     return build_context(
         repository="RasmusTho/agentic-pkm-mvp",

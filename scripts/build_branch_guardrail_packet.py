@@ -138,6 +138,9 @@ def build_packet(
         auto_merge_allowed=auto_merge,
         selected_checks=selected,
     )
+    # Missing observed checks need evidence recovery, not an administrator. The
+    # existing policy-change gate remains distinct from those technical blockers.
+    human_required = not active or not auto_merge
     return GuardrailPacket(
         branch=branch,
         branch_protection_active=active,
@@ -146,9 +149,9 @@ def build_packet(
         observed_check_evidence=observed,
         no_pr_merged=True,
         no_existing_pr_auto_merge_enabled=True,
-        human_exception_required=bool(blockers),
+        human_exception_required=human_required,
         unresolved_blockers=blockers,
-        exact_admin_settings_required=_admin_settings(selected) if blockers else [],
+        exact_admin_settings_required=_admin_settings(selected) if human_required else [],
     )
 
 

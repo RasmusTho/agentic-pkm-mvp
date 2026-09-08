@@ -156,15 +156,30 @@ def _governance_only_files(files: list[str]) -> bool:
     )
 
 
-def _authority_or_contradiction_evidence(body: str, files: list[str]) -> list[str]:
-    evidence: list[str] = []
-    if _owner_doc_declaration(body) == "conflicting_declarations":
-        evidence.append("owner-doc writeback declaration has conflicting checked options")
-    if re.search(r"\b(owner authority|strategic ambiguity|owner decision)\b", body, re.I):
-        evidence.append("PR body names owner authority, strategic ambiguity, or owner decision")
-    if _has_explicit_target_contradiction(body):
-        evidence.append("PR body indicates shipped-vs-target/spec contradiction")
-    return evidence
+def _authority_evidence(body: str) -> list[str]:
+    # Advisory prose detection, not authorization. Match an unresolved requirement,
+    # not a bare topic or an already-settled declaration. Strip only the matched
+    # negative requirement, never the whole body (a second requirement may remain).
+    text = re.sub(
+        r"\b(?:does not|do not|did not|never)\s+(?:require|need)\s+"
+        r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b"
+        r"|\bno\s+(?:owner decision|owner authority|strategic decision)\s+"
+        r"(?:is\s+)?(?:needed|required)\b",
+        "", body, flags=re.I,
+    )
+    requirement = re.search(
+        r"\b(?:owner authority|owner decision|strategic decision)\s+"
+        r"(?:(?:is|remains)\s+)?(?:still\s+)?"
+        r"(?:ambiguous|unclear|unresolved|missing|pending|required|needed|"
+        r"not\s+(?:yet\s+)?(?:resolved|granted|approved))\b"
+        r"|\b(?:requires?|needs|awaits|waiting for|blocked (?:by|on))\s+"
+        r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b"
+        r"|\bstrategic ambiguity\s+(?:remains|persists|is unresolved)\b",
+        text, re.I,
+    )
+    if requirement:
+        return ["PR body names an unresolved owner authority or decision requirement"]
+    return []
 
 
 def _has_explicit_target_contradiction(body: str) -> bool:
@@ -202,6 +217,10 @@ def _unknowns(
         unknowns.append("changed files unavailable")
     if owner_doc_declaration == "unknown":
         unknowns.append("owner-doc/spec declaration unavailable")
+    elif owner_doc_declaration == "conflicting_declarations":
+        unknowns.append("owner-doc/spec declaration conflicting")
+    if _has_explicit_target_contradiction(str(pr.get("body") or "")):
+        unknowns.append("shipped-vs-target/spec contradiction needs reconciliation")
     return unknowns
 
 
@@ -242,7 +261,7 @@ def classify(
         owner_doc_declaration=declaration,
     )
     evidence: list[str] = []
-    authority_evidence = _authority_or_contradiction_evidence(body, files)
+    authority_evidence = _authority_evidence(body)
     blocking_unknowns = list(unknowns)
     if (
         blocking_unknowns == ["linked issue unavailable"]
@@ -254,7 +273,7 @@ def classify(
     if blocking_unknowns and not evidence and not authority_evidence:
         classification = "unknown"
         evidence.append("insufficient evidence; classifier did not infer missing facts")
-        action = "Collect PR body, linked issue, changed files, and owner-doc declaration before deciding."
+        action = "Collect and reconcile PR body, linked issue, changed files, and owner-doc declaration before deciding; keep unsupported writes blocked."
     elif authority_evidence:
         classification = "human_exception_likely"
         evidence.extend(authority_evidence)

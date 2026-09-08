@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.build_branch_guardrail_packet import build_packet, render_markdown
 
 
@@ -115,3 +117,21 @@ def test_human_exception_packet_contains_exact_admin_settings() -> None:
     assert "Protect `main`" in markdown
     assert "Set required status checks for `main`" in markdown
     assert "Enable repository auto-merge only after `main` protection is active." in markdown
+
+
+@pytest.mark.parametrize("auto_merge,protection_status", [(True, 200), (False, 200), (True, 404)])
+def test_missing_check_evidence_alone_does_not_require_admin(auto_merge, protection_status) -> None:
+    packet = build_packet(
+        repo={"allow_auto_merge": auto_merge},
+        main_protection={"required_status_checks": {}} if protection_status == 200 else {},
+        main_protection_status=protection_status,
+        check_runs_payload=[],
+    )
+    assert packet.unresolved_blockers
+    assert packet.required_checks_selected == []
+    assert packet.observed_check_evidence == []
+    assert packet.no_pr_merged is True
+    assert packet.no_existing_pr_auto_merge_enabled is True
+    requires_policy_action = not auto_merge or protection_status != 200
+    assert packet.human_exception_required is requires_policy_action
+    assert bool(packet.exact_admin_settings_required) is requires_policy_action
