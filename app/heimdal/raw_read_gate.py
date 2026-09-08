@@ -174,6 +174,37 @@ class GatedRawRead:
     storage_kind: str
 
 
+@dataclass(frozen=True)
+class OperationTargetProof:
+    """Public non-plaintext proof for a fixed owner execution identity."""
+
+    raw_ref: str
+    artifact_id: str
+    generation: int
+    representation_id: str
+    liveness: str
+
+
+def resolve_operation_target(raw_ref: str, *, service_reader: str) -> OperationTargetProof:
+    """Resolve an active opaque target without decrypting or writing a receipt."""
+    if service_reader not in resolve_read_allowlist():
+        raise RawReadRefusedError("operation service reader is not allowlisted")
+    record_id = _record_id_from_raw_ref(raw_ref)
+    record = raw_store.resolve_active_raw_record(record_id)
+    active = [item for item in raw_store.all_raw_representations(record_id) if item.active]
+    if record is None or len(active) != 1:
+        raise RawReadRefusedError("operation target has no exact active representation")
+    return OperationTargetProof(raw_ref, record.id, active[0].raw_generation, active[0].id, "active")
+
+
+def revalidate_operation_target(proof: OperationTargetProof, *, service_reader: str) -> OperationTargetProof:
+    """Fence target drift immediately before an owner effect."""
+    current = resolve_operation_target(proof.raw_ref, service_reader=service_reader)
+    if (current.artifact_id, current.generation, current.representation_id, current.liveness) != (proof.artifact_id, proof.generation, proof.representation_id, proof.liveness):
+        raise RawReadRefusedError("operation target changed before effect")
+    return current
+
+
 class _MemoryReceiptStore:
     """In-process append-only store. Test/dev backend; volatile by design."""
 

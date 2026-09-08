@@ -25,6 +25,12 @@ from .execution_kernel import (
     OwnerExecutionResult,
     PolicyDecision,
 )
+from .archival_operations import (
+    ARCHIVE_OPERATION_ID,
+    RESTORE_OPERATION_ID,
+    ArchivalOperationServerConfig,
+    build_archival_operation_handlers,
+)
 
 __all__ = [
     "CapabilityAvailability",
@@ -48,4 +54,8 @@ __all__ = [
     "OperationExecutionKernel",
     "OwnerExecutionResult",
     "PolicyDecision",
+    "ARCHIVE_OPERATION_ID",
+    "RESTORE_OPERATION_ID",
+    "ArchivalOperationServerConfig",
+    "build_archival_operation_handlers",
 ]
