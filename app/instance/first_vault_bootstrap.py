@@ -205,6 +205,7 @@ class FirstVaultPreconditionStore:
         remember: bool,
         confirm: bool,
         snapshot: RegistrySnapshot,
+        ownership_in_progress: bool = False,
     ) -> tuple[str, FirstVaultPrecondition]:
         if not confirm:
             raise FirstVaultBootstrapError(
@@ -215,6 +216,10 @@ class FirstVaultPreconditionStore:
         if snapshot.settings_rebind is not None:
             raise FirstVaultBootstrapError(
                 "first-vault bootstrap requires no compatibility state"
+            )
+        if ownership_in_progress:
+            raise FirstVaultBootstrapError(
+                "first-vault bootstrap ownership transition is already in progress"
             )
         now = float(self._clock())
         token = secrets.token_urlsafe(32)

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.companion as companion_module
 import app.api.routes.active_context_selection as selection_routes
 from app.api.app import app
+from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 from app.instance.first_vault_bootstrap import FirstVaultBootstrapError, FirstVaultPreconditionStore
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
@@ -118,6 +119,29 @@ def test_http_bootstrap_binds_expiry_confirmation_and_authority(
     assert replay.status_code == 200, replay.text
     assert replay.json()["context_selection_id"]
     assert len(runtime.registry.load().registrations) == 1
+
+
+def test_bootstrap_issuance_refuses_pending_same_channel_ownership(
+    fresh_bootstrap_instance,
+) -> None:
+    """An expired-looking in-flight transition cannot be replaced by a new token."""
+
+    runtime, _principal, _manager, tmp_path = fresh_bootstrap_instance
+    client = TestClient(app, raise_server_exceptions=False)
+    runtime.ledger.reserve(
+        channel_id=runtime.layout.channel_id,
+        vault_binding_id="binding-in-flight",
+        root=tmp_path / "pending-target",
+        allow_same_channel_nested=False,
+        _capability=_STORAGE_MUTATION_CAPABILITY,
+    )
+
+    response = client.post(
+        "/api/companion/vault/initialize/bootstrap",
+        json={"path": str(tmp_path / "replacement"), "confirm": True},
+    )
+    assert response.status_code == 409, response.text
+    assert "ownership transition" in response.text
 
 
 def test_post_effect_restart_recovers_first_initialize_forward(

@@ -1315,6 +1315,11 @@ def create_vault_initialize_bootstrap(
     runtime, registry_path = _first_vault_runtime()
     principal_id = _authenticated_principal_id(request, api_key, registry_path)
     store = FirstVaultPreconditionStore(registry_path)
+    ownership_in_progress = any(
+        lease.channel_id == runtime.layout.channel_id
+        and lease.state in {"pending", "active"}
+        for lease in runtime.ledger.load().leases.values()
+    )
     try:
         token, record = store.issue(
             principal_id=principal_id,
@@ -1324,6 +1329,7 @@ def create_vault_initialize_bootstrap(
             remember=req.remember,
             confirm=req.confirm,
             snapshot=runtime.registry.load(),
+            ownership_in_progress=ownership_in_progress,
         )
     except FirstVaultBootstrapError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
