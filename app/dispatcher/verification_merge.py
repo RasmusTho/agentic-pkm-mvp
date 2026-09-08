@@ -635,15 +635,32 @@ class VerificationMergeExecutor:
             # Re-read the authenticated prepared gate here so a body edit that
             # races the outbox/credential path cannot reach the transport under
             # the earlier closing-projection identity.
-            effect_boundary_prepared_gate = (
-                self.repository.verified_merge_prepared(
-                    canonical,
-                    run.pr_number,
-                    run_id=run.run_id,
-                    head_sha=run.current_head_sha,
-                    expected_repair_budget=repair_budget,
+            try:
+                effect_boundary_prepared_gate = (
+                    self.repository.verified_merge_prepared(
+                        canonical,
+                        run.pr_number,
+                        run_id=run.run_id,
+                        head_sha=run.current_head_sha,
+                        expected_repair_budget=repair_budget,
+                    )
                 )
-            )
+            except MergeAuthorityError as exc:
+                # The prepared-gate adapter may reject a raced body edit
+                # instead of returning a different gate.  The intent is
+                # already durable, but the merge effect has not started;
+                # terminalize it before propagating the authority failure so
+                # recovery cannot leave a claimed intent stranded.
+                self._terminal_no_effect(
+                    operation_key,
+                    evidence={
+                        "base_sha": base_sha,
+                        "head_sha": run.current_head_sha,
+                        "manifest_blob_sha": manifest.blob_sha,
+                        "verified_merge_prepared_error": str(exc),
+                    },
+                )
+                raise
             if (
                 effect_prepared_gate is None
                 or not self._same_prepared_gate(
