@@ -549,12 +549,10 @@ def resolve_execution_target(
             selection_intent, profile.model
         )
     else:
-        # Compatibility callers that predate explicit intents retain the
-        # strongest declared target when one exists. New skill/dispatch
-        # callers must use selection_intent and never rely on this fallback.
-        selected_model = profile.selection_intent_models.get(
-            "strong_reasoning", profile.model
-        )
+        # No-intent resolution is the explicit capability-profile fallback.
+        # Strong reasoning and verification must opt into their provider-neutral
+        # intents so an explicit Sol compatibility override remains Sol.
+        selected_model = profile.model
     selectable_models = profile.selectable_models or [profile.model]
     if selected_model not in selectable_models:
         raise ValueError(

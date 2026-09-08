@@ -85,6 +85,40 @@ def test_undeclared_or_unlinked_divergence_fails(tmp_path: Path) -> None:
             load_provider_census(malformed_path)
 
 
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        (
+            "selection_intents: [coordination, general_delivery]",
+            "selection_intents: [coordination, general_delivery, verification]",
+        ),
+        (
+            (
+                "selection_intents: [strong_reasoning, verification], "
+                "selection_intent_reasoning_efforts: {strong_reasoning: max, verification: max}, "
+                "selection_intent_models: {strong_reasoning: gpt-6-astra, verification: gpt-6-astra}"
+            ),
+            (
+                "selection_intents: [strong_reasoning], "
+                "selection_intent_reasoning_efforts: {strong_reasoning: max}, "
+                "selection_intent_models: {strong_reasoning: gpt-6-astra}"
+            ),
+        ),
+    ],
+)
+def test_builder_selection_intents_are_unique_and_complete_per_channel(
+    tmp_path: Path,
+    replacement: str,
+    expected: str,
+) -> None:
+    source = Path("docs/settings/models/providers.yaml").read_text(encoding="utf-8")
+    malformed_path = tmp_path / "duplicate-or-missing-selection-intent.yaml"
+    malformed_path.write_text(source.replace(replacement, expected, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exactly once"):
+        load_provider_census(malformed_path)
+
+
 def test_census_ships_no_stale_known_divergences() -> None:
     assert _census().known_divergences == []
 

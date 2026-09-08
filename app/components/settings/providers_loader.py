@@ -35,6 +35,9 @@ BuilderSelectionIntent: TypeAlias = Literal[
     "strong_reasoning",
     "verification",
 ]
+_BUILDER_SELECTION_INTENTS = frozenset(
+    {"coordination", "general_delivery", "strong_reasoning", "verification"}
+)
 
 
 class ProviderCapabilities(BaseModel):
@@ -317,7 +320,7 @@ class ProviderCensus(BaseModel):
                 "Builder execution profiles must cover every declared Builder channel"
             )
         expected_execution_tiers = {"spark", "luna", "terra", "sol"}
-        for profiles in self.runtime_channels.builder_execution.values():
+        for channel, profiles in self.runtime_channels.builder_execution.items():
             if set(profiles) != expected_execution_tiers:
                 raise ValueError(
                     "Builder execution profiles must declare exactly spark, luna, terra, and sol"
@@ -329,6 +332,20 @@ class ProviderCensus(BaseModel):
                 raise ValueError(
                     "Builder execution profile key must match capability_tier"
                 )
+            assignments = {
+                intent: [
+                    capability
+                    for capability, profile in profiles.items()
+                    if intent in profile.selection_intents
+                ]
+                for intent in _BUILDER_SELECTION_INTENTS
+            }
+            for intent, capabilities in assignments.items():
+                if len(capabilities) != 1:
+                    raise ValueError(
+                        "Builder execution channel must assign each selection intent "
+                        f"exactly once: {channel}/{intent} -> {capabilities}"
+                    )
         for profiles in self.runtime_channels.design_agent_profiles.values():
             actual = {
                 profile.design_agent_id: profile.role

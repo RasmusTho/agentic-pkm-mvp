@@ -2048,7 +2048,7 @@ def _selection_intent_for_risk(risk: str) -> SelectionIntent:
     if risk in {"critical", "high"}:
         return "strong_reasoning"
     if risk == "low":
-        return "coordination"
+        return "general_delivery"
     return "general_delivery"
 
 

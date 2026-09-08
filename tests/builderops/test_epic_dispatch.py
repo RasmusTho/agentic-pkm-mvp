@@ -1112,8 +1112,8 @@ def test_resolve_execution_target_uses_declared_model_reasoning() -> None:
     )
 
     assert (default_target.model, default_target.reasoning_effort) == (
-        "gpt-6-astra",
-        "max",
+        "gpt-5.6-sol",
+        "high",
     )
     assert (astra_target.model, astra_target.reasoning_effort) == (
         "gpt-6-astra",
@@ -1150,6 +1150,40 @@ def test_tcd_defaults_prefer_astra_over_sol_and_keep_terra_explicit() -> None:
 
     target = resolve_execution_target(load_provider_census(), channel="dev", capability="terra")
     assert (target.model, target.reasoning_effort) == ("gpt-5.6-terra", "high")
+
+
+def test_low_risk_nontrivial_delivery_uses_general_delivery_intent() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5815],
+        run_id="selection-intent-low-risk-delivery",
+        candidates=[_candidate(5815, risk="low", expected_value="medium")],
+    )
+
+    assert plan["context_packs"][0]["runtime"]["selection_intent"] == (
+        "general_delivery"
+    )
+    assert plan["context_packs"][0]["runtime"]["capability"] == "luna"
+
+
+def test_explicit_sol_capability_override_uses_sol_profile_default(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(
+        5816,
+        risk="medium",
+        files=["app/a.py"],
+        worktree=str(tmp_path / "issue-5816"),
+    )
+    candidate["capability_override"] = "sol"
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5816],
+        run_id="explicit-sol-capability-override",
+        candidates=[candidate],
+    )
+    runtime = plan["context_packs"][0]["runtime"]
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    assert launcher._tcd_route({"runtime": runtime}) == ("gpt-5.6-sol", "high")
 
 
 def test_codex_launcher_uses_resolved_target_and_claude_adapter_is_not_invoked(
