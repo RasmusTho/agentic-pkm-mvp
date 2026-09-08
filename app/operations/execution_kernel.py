@@ -592,6 +592,7 @@ def _receipt(
             "state": state,
             "recovery": "read_receipt_before_retry" if state == "recovery_required" else None,
         },
+        extensions=_effect_receipt_extensions(effect_receipt),
     )
 
 
@@ -620,6 +621,21 @@ def _effect_receipt_ref(value: Mapping[str, Any] | None) -> str | None:
         return None
     receipt_id = value.get("receipt_id")
     return str(receipt_id) if _stable_nonempty_identity(receipt_id) else None
+
+
+def _effect_receipt_extensions(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """Preserve only the bounded, redacted owner projection in the receipt.
+
+    Effect receipts are otherwise opaque and must not be copied into the
+    generic kernel receipt. Archival handlers explicitly provide this safe
+    projection so generation, policy, stage, and liveness remain auditable.
+    """
+    if not isinstance(value, Mapping):
+        return {}
+    archival = value.get("archival")
+    if not isinstance(archival, Mapping):
+        return {}
+    return {"archival": dict(archival)}
 
 
 def _has_durable_owner_effect_receipt(result: OwnerExecutionResult) -> bool:

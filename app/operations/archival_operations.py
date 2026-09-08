@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from app.archival.contracts import ArtifactClass, LivenessState, TransitionStage
+from app.heimdal.retention import RetentionWindowMissingError
+from app.ops.heimdal_cold_volume import ArchiveVolumeRefusedError
 from app.heimdal.local_archive import (
     OPERATION_RESTORE_SERVICE,
     ArchiveDegradedError,
@@ -74,6 +76,10 @@ def _execute(request: OperationRequest, config: ArchivalOperationServerConfig) -
         if exc.reason in {"record_outside_archive_window", "retention_policy_unavailable"}:
             return OwnerExecutionResult(OperationStatus.REJECTED, warnings=(exc.reason,))
         return OwnerExecutionResult.ambiguous()
+    except ArchiveVolumeRefusedError:
+        return OwnerExecutionResult(OperationStatus.REJECTED, warnings=("archive_volume_refused",))
+    except RetentionWindowMissingError:
+        return OwnerExecutionResult(OperationStatus.REJECTED, warnings=("retention_window_unavailable",))
     except Exception:
         return OwnerExecutionResult.ambiguous()
     return _map_owner_result(request, proof, result.transition)
@@ -131,7 +137,7 @@ def _map_owner_result(request: OperationRequest, proof: Any, transition: Any) ->
         return OwnerExecutionResult.ambiguous()
     return OwnerExecutionResult.succeeded(
         effect_id=projection.receipt_ref,
-        effect_receipt={"receipt_id": projection.receipt_ref},
+        effect_receipt={"receipt_id": projection.receipt_ref, "archival": projection.to_dict()},
     )
 
 

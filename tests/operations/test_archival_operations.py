@@ -7,6 +7,8 @@ from app.operations import InMemoryReceiptStore, OperationContext, OperationExec
 from app.operations.archival_operations import ARCHIVE_OPERATION_ID, RESTORE_OPERATION_ID, ArchivalOperationServerConfig, build_archival_operation_handlers
 from app.heimdal.raw_read_gate import OperationTargetProof
 from app.heimdal.local_archive import ArchiveDegradedError
+from app.heimdal.retention import RetentionWindowMissingError
+from app.ops.heimdal_cold_volume import ArchiveVolumeRefusedError
 
 
 def _request(operation_id: str, *, request_id: str = "request-1", version: object = 7, artifact_class: ArtifactClass = ArtifactClass.SOURCE) -> OperationRequest:
@@ -45,6 +47,16 @@ def test_archival_outcomes_preserve_liveness_generation_policy_and_receipts(monk
     assert outcome.receipt is not None
     assert outcome.receipt.payload["effect_id"] == "receipt-1"
     assert outcome.receipt.payload["effect_receipt_ref"] == "receipt-1"
+    assert outcome.receipt.extensions["archival"] == {
+        "artifact_ref": "raw-1",
+        "receipt_ref": "receipt-1",
+        "generation": 7,
+        "artifact_class": "source",
+        "policy": "raw_evidence",
+        "stage": "restored",
+        "liveness": "active",
+        "recovery_ref": None,
+    }
 
 
 def test_archival_failures_are_typed_and_recoverable(monkeypatch) -> None:
@@ -91,3 +103,19 @@ def test_definite_pre_effect_retention_refusal_is_rejected(monkeypatch) -> None:
     assert outcome.status is OperationStatus.REJECTED
     assert outcome.warnings == ("record_outside_archive_window",)
     assert outcome.receipt is not None and outcome.receipt.payload["recovery"] is None
+
+
+def test_pre_effect_provider_refusals_are_rejected_without_recovery(monkeypatch) -> None:
+    monkeypatch.setattr("app.operations.archival_operations.resolve_operation_restore_target", lambda raw_ref, *, service_reader: SimpleNamespace(raw_ref=raw_ref, artifact_id="raw-1", generation=7, representation_id="representation-1"))
+    config = ArchivalOperationServerConfig(Path("/config"), "dev", Path("/vault"))
+    monkeypatch.setattr("app.operations.archival_operations.run_single_record_archive_operation", lambda proof, **kwargs: (_ for _ in ()).throw(ArchiveVolumeRefusedError("redacted")))
+    archive_outcome = _kernel(config).execute(_request(ARCHIVE_OPERATION_ID, request_id="volume"), _delegation(ARCHIVE_OPERATION_ID))
+    assert archive_outcome.status is OperationStatus.REJECTED
+    assert archive_outcome.warnings == ("archive_volume_refused",)
+    assert archive_outcome.receipt is not None and archive_outcome.receipt.payload["recovery"] is None
+
+    monkeypatch.setattr("app.operations.archival_operations.run_single_record_restore_operation", lambda proof, **kwargs: (_ for _ in ()).throw(RetentionWindowMissingError("redacted")))
+    restore_outcome = _kernel(config).execute(_request(RESTORE_OPERATION_ID, request_id="window"), _delegation(RESTORE_OPERATION_ID))
+    assert restore_outcome.status is OperationStatus.REJECTED
+    assert restore_outcome.warnings == ("retention_window_unavailable",)
+    assert restore_outcome.receipt is not None and restore_outcome.receipt.payload["recovery"] is None
