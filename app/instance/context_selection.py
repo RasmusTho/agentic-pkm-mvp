@@ -184,6 +184,12 @@ class ContextSelectionStore:
         #: replacement back -- resurrecting a bearer that was reported cleared. Two
         #: concurrent PUTs could likewise both publish the same generation.
         self._lock = threading.RLock()
+        # Resolver memory belongs to the same ephemeral process/session domain as
+        # selection records.  It is deliberately not a module-global fallback:
+        # it exists only to retain the prior identity needed to rotate a context
+        # generation when live registry or authorization facts drift between
+        # HTTP requests.  A store reset drops it together with every bearer.
+        self._request_resolvers: dict[str, ActiveContextSelectionResolver] = {}
         #: A fresh epoch per store instance. A process restart builds a new store, so a
         #: pre-restart bearer cannot resolve even if its raw value were replayed.
         self._process_epoch = uuid.uuid4().hex
@@ -257,6 +263,7 @@ class ContextSelectionStore:
             raise ReselectionRequiredError("selection is expired, unknown, or pre-restart")
         if (
             record.principal.principal_id != principal.principal_id
+            or record.principal.revision != principal.revision
             or record.instance_identity != instance_identity
         ):
             raise SelectionPrincipalMismatchError()
@@ -326,6 +333,26 @@ class ContextSelectionStore:
                 if record.selection_capability_digest == digest:
                     del self._records[key]
 
+    def request_resolver(
+        self,
+        *,
+        instance_identity: str,
+        factory: Callable[[], ActiveContextSelectionResolver],
+    ) -> ActiveContextSelectionResolver:
+        """Return the process-local resolver that owns drift generations.
+
+        The caller supplies live lookup closures, so retaining the resolver does
+        not retain registry or authorization truth.  The identity key prevents a
+        re-bound instance from inheriting another instance's generation history.
+        """
+
+        with self._lock:
+            resolver = self._request_resolvers.get(instance_identity)
+            if resolver is None:
+                resolver = factory()
+                self._request_resolvers[instance_identity] = resolver
+            return resolver
+
     def __len__(self) -> int:
         with self._lock:
             self._prune()
@@ -388,6 +415,7 @@ class ActiveContextSelectionResolver:
         self._registry_revision = registry_revision
         self._authorizer = authorizer
         self._instance_identity = instance_identity
+        self._lock = threading.RLock()
         #: (context_id, generation) -> the underlying identity last seen at that generation.
         #: Keying on the generation as well as the context is what separates the two kinds
         #: of change: a deliberate session switch mints a new generation and therefore a new
@@ -401,6 +429,28 @@ class ActiveContextSelectionResolver:
         self._rotations: dict[str, int] = {}
 
     def resolve(
+        self,
+        *,
+        selection: ContextSelectionRecord | None,
+        principal: PrincipalContext,
+        action: str,
+        write_class: str,
+        required_permission: str,
+        default_binding_id: str | None = None,
+    ) -> ResolutionResult:
+        """Resolve and publish one snapshot atomically with drift bookkeeping."""
+
+        with self._lock:
+            return self._resolve_unlocked(
+                selection=selection,
+                principal=principal,
+                action=action,
+                write_class=write_class,
+                required_permission=required_permission,
+                default_binding_id=default_binding_id,
+            )
+
+    def _resolve_unlocked(
         self,
         *,
         selection: ContextSelectionRecord | None,

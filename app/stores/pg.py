@@ -1555,18 +1555,38 @@ class PgVectorIndex(VectorIndex):
         already exist). This lets a cache-through rebuild recognize
         reconcilable CTI-2 fallback rows without a second query.
         """
+        return self.all_rows_for_bindings((self.vault_binding_id,))
+
+    def all_rows_for_bindings(self, binding_ids: Iterable[str] | None = None) -> List[dict]:
+        """Return durable rows with binding provenance for a scoped cache rebuild.
+
+        The compatibility-bound ``all_rows`` method remains available for old
+        callers.  The production retrieval cache must load the binding column
+        for every registered binding, otherwise scoped requests cannot
+        distinguish real rows from legacy/unattributed data.
+        """
         _ensure_tables()
         with _connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT object_id, kind, source_ref, payload, embedding, model, provider, dim, normalize
-                    FROM store_vector_index
-                    WHERE vault_binding_id = %s
-                    ORDER BY updated_at
-                    """,
-                    (self.vault_binding_id,),
-                )
+                if binding_ids is None:
+                    cur.execute(
+                        """
+                        SELECT object_id, kind, source_ref, payload, embedding, model, provider, dim, normalize, vault_binding_id
+                        FROM store_vector_index
+                        ORDER BY updated_at
+                        """
+                    )
+                else:
+                    ids = tuple(binding_ids)
+                    cur.execute(
+                        """
+                        SELECT object_id, kind, source_ref, payload, embedding, model, provider, dim, normalize, vault_binding_id
+                        FROM store_vector_index
+                        WHERE vault_binding_id = ANY(%s)
+                        ORDER BY updated_at
+                        """,
+                        (list(ids),),
+                    )
                 rows = cur.fetchall()
         return [
             {
@@ -1579,9 +1599,31 @@ class PgVectorIndex(VectorIndex):
                 "provider": row["provider"],
                 "dim": row["dim"],
                 "normalize": row["normalize"],
+                "vault_binding_id": row["vault_binding_id"],
             }
             for row in rows
         ]
+
+    def generation_for_bindings(self, binding_ids: Iterable[str] | None = None) -> str:
+        """Return a generation token for the rows a multi-binding cache loads."""
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                if binding_ids is None:
+                    cur.execute(
+                        "SELECT count(*) AS total, COALESCE(max(updated_at)::text, '') AS latest "
+                        "FROM store_vector_index"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT count(*) AS total, COALESCE(max(updated_at)::text, '') AS latest "
+                        "FROM store_vector_index WHERE vault_binding_id = ANY(%s)",
+                        (list(binding_ids),),
+                    )
+                row = cur.fetchone()
+        if not row:
+            return "multi:0:"
+        return f"multi:{int(row['total'] or 0)}:{row['latest'] or ''}"
 
 
 class PgRelationIndex(RelationIndex):

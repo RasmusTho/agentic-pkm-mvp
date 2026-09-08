@@ -11,17 +11,18 @@ import os
 from dataclasses import replace
 
 from app.components.llm.router import LLMRoute, LLMRouter, LLMTaskIntent
+from app.settings.models import SettingsBundle
 from app.settings.tiering import active_settings_profile
 
 
-def resolve_effective_reasoning_route() -> LLMRoute:
+def resolve_effective_reasoning_route(settings: SettingsBundle | None = None) -> LLMRoute:
     """Resolve the current compiled reasoning route without performing I/O.
 
     ``LLMRouter`` reads the atomically-published settings generation, so each
     call observes one bundle.  This resolver adds only the one-release legacy
     model override and never derives a provider from that override.
     """
-    route = LLMRouter().route(LLMTaskIntent(task_kind="reasoning", risk="high"))
+    route = LLMRouter(settings=settings).route(LLMTaskIntent(task_kind="reasoning", risk="high"))
     legacy_model = (os.getenv("REASONING_MODEL") or "").strip()
     if not legacy_model:
         return route

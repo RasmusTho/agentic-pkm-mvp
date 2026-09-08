@@ -159,9 +159,14 @@ def _registry_path() -> Path:
     return Path(value).expanduser().resolve(strict=False)
 
 
-def get_selection_service(
-    store: ContextSelectionStore = Depends(get_selection_store),
-) -> ActiveContextSelectionService:
+def build_selection_service(store: ContextSelectionStore) -> ActiveContextSelectionService:
+    """Build the server-owned selection service from the current process binding.
+
+    Keeping construction separate from FastAPI's dependency wrapper lets other
+    request dependencies explicitly preserve the no-registry product journey:
+    they can test for the registry before this factory performs any instance
+    read.
+    """
     registry_path = _registry_path()
     principal_store = open_local_operator_principal_store(registry_path)
     try:
@@ -175,6 +180,12 @@ def get_selection_service(
         principal_record=record,
         selection_store=store,
     )
+
+
+def get_selection_service(
+    store: ContextSelectionStore = Depends(get_selection_store),
+) -> ActiveContextSelectionService:
+    return build_selection_service(store)
 
 
 def _derive(
@@ -222,6 +233,8 @@ def _selection_failure(exc: Exception) -> HTTPException:
         return HTTPException(status_code=401, detail=_RESELECTION_REQUIRED_DETAIL)
     if isinstance(exc, SelectionIntentError):
         return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, PrincipalPreflightError):
+        return HTTPException(status_code=401, detail="reselection_required")
     if isinstance(exc, DimensionResolutionError):
         # All-or-nothing, and the status distinguishes *why* the whole resolution failed
         # so an operator can repair the dimension. The detail carries the opaque dimension

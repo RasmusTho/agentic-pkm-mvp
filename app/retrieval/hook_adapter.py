@@ -8,6 +8,7 @@ from rank_bm25 import BM25Okapi
 
 from app.retrieval.hybrid_rerank_hook import apply_optional_rerank
 from app.retrieval.tuning import get_retrieval_tuning
+from app.settings.models import RetrievalTuning
 
 
 def _bm25_dominance_margin(query: str, items: List[Dict[str, Any]]) -> float | None:
@@ -57,7 +58,12 @@ def _bm25_dominance_margin(query: str, items: List[Dict[str, Any]]) -> float | N
     return float(top_two[0] - top_two[1])
 
 
-def maybe_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def maybe_rerank(
+    query: str,
+    items: List[Dict[str, Any]],
+    *,
+    tuning: RetrievalTuning | None = None,
+) -> List[Dict[str, Any]]:
     """Rerank gate (ADR-0059 D3, #3404/#3407): reads the process-resolved RetrievalTuning surface.
 
     ``RERANK_ENABLE`` keeps working as an override into that surface (compat) — see
@@ -71,13 +77,22 @@ def maybe_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]
       pass through unchanged when gated off. Containment (``_contain_rerank`` in
       ``app/retrieval/hybrid.py``) applies identically whenever rerank actually runs.
     """
-    tuning = get_retrieval_tuning()
+    explicit_tuning = tuning
+    tuning = tuning or get_retrieval_tuning()
     if tuning.rerank == "off":
         return items
     if tuning.rerank == "conditional":
         margin = _bm25_dominance_margin(query, items)
         if margin is not None and margin >= tuning.rerank_score_margin:
             return items
-        return apply_optional_rerank(query, items)
+        return (
+            apply_optional_rerank(query, items)
+            if explicit_tuning is None
+            else apply_optional_rerank(query, items, tuning=tuning)
+        )
     # "always"
-    return apply_optional_rerank(query, items)
+    return (
+        apply_optional_rerank(query, items)
+        if explicit_tuning is None
+        else apply_optional_rerank(query, items, tuning=tuning)
+    )

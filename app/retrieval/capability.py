@@ -7,8 +7,12 @@ from app.retrieval.hybrid import (
     ScopeDenial,
     _clamp_in_context,
     _intrinsic_evidence_role,
+    get_store,
     scoped_hybrid_search,
 )
+from app.retrieval.context_cache import runtime_context_cache_identity
+from app.vault.active_context_v1 import ActiveContextSetV1
+from app.settings.models import RetrievalTuning
 
 ViewFreshnessState = Literal["fresh", "stale", "partial", "unknown"]
 
@@ -59,6 +63,13 @@ class RetrievalRequest:
     view_freshness: RetrievalViewFreshness | None = None
     include_signal_payload: bool = False
     signal_payload: RetrievalSignalPayload | None = None
+    #: The immutable server-resolved context for a scoped production read.
+    #: Legacy callers deliberately omit it while their compatibility route is
+    #: retained; it is never reconstructed from a global vault selection.
+    active_context: ActiveContextSetV1 | None = None
+    #: Effective per-binding settings provenance for scoped retrieval.
+    settings_bundle_digest: str | None = None
+    retrieval_tuning: RetrievalTuning | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +238,12 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         # per-request active-scope binding, so the prefilter partitions in production instead of
         # waiting on an ambient `ASK_DOMAIN_SCOPE` that no production code ever set.
         scope=request.scope,
+        allowed_binding_ids=(
+            set(request.active_context.binding_ids)
+            if request.active_context is not None
+            else None
+        ),
+        tuning=request.retrieval_tuning,
     )
     raw_hits = scoped.results
     diagnostics: dict[str, Any] = {
@@ -267,6 +284,46 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     }
     if request.provenance_metadata:
         metadata["provenance"]["hints"] = dict(request.provenance_metadata)
+    if request.active_context is not None:
+        cache_identity = runtime_context_cache_identity(
+            request.active_context,
+            settings_bundle_digest=request.settings_bundle_digest,
+        )
+        metadata["provenance"]["active_context"] = {
+            "context_id": request.active_context.context_id,
+            "generation": request.active_context.generation,
+            "registry_revision": request.active_context.registry_revision,
+            "authorization_epoch": request.active_context.authorization_epoch,
+            "binding_ids": list(request.active_context.binding_ids),
+            "selection_capability_digest": request.active_context.selection_capability_digest,
+            "cache_key": cache_identity.key,
+        }
+    if request.active_context is not None:
+        allowed_bindings = set(request.active_context.binding_ids)
+        admitted: list[dict[str, Any]] = []
+        rejected = 0
+        # Count the complete candidate set, not only the already-ranked result
+        # window. Binding eligibility itself runs in hybrid.py before scoring
+        # and top-k; this count is observability only.
+        for document in get_store().all():
+            binding_id = (document.payload or {}).get("vault_binding_id")
+            if not isinstance(binding_id, str) or binding_id not in allowed_bindings:
+                rejected += 1
+        for raw in raw_hits:
+            payload = dict(raw.get("payload") or {})
+            binding_id = payload.get("vault_binding_id")
+            # Legacy un-namespaced index rows are not attributable to a scoped
+            # request.  Excluding them is intentionally fail-closed; the
+            # producer/migration must add provenance before the row can serve a
+            # multi-vault session.
+            if not isinstance(binding_id, str) or binding_id not in allowed_bindings:
+                continue
+            bound = dict(raw)
+            payload["context_generation"] = request.active_context.generation
+            bound["payload"] = payload
+            admitted.append(bound)
+        raw_hits = admitted
+        metadata["provenance"]["active_context"]["rejected_unbound_hits"] = rejected
     hits = _apply_closure_decay([RetrievalHit.from_hybrid(hit) for hit in raw_hits])
     return RetrievalResponse(
         query=request.query,

@@ -18,6 +18,7 @@ from app.components.embeddings import get_embedding_identity
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.tuning import get_retrieval_tuning
+from app.settings.models import RetrievalTuning
 
 _logger = logging.getLogger(__name__)
 
@@ -371,14 +372,25 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     index = get_vector_index()
     # Capture the generation BEFORE reading rows: a write racing the rebuild
     # then triggers the next generation check instead of being missed.
-    generation = index.generation()
+    all_rows_for_bindings = getattr(index, "all_rows_for_bindings", None)
+    generation_for_bindings = getattr(index, "generation_for_bindings", None)
+    generation = (
+        generation_for_bindings(None)
+        if callable(generation_for_bindings)
+        else index.generation()
+    )
     active_identity = get_embedding_identity()
 
     docs: list[dict] = []
     missing_embeddings = 0
     mixed_identity_count = 0
     mixed_identity_tuples: set[tuple[Any, Any, Any, Any]] = set()
-    for row in index.all_rows():
+    rows = (
+        all_rows_for_bindings(None)
+        if callable(all_rows_for_bindings)
+        else index.all_rows()
+    )
+    for row in rows:
         row_identity = (
             row.get("provider"),
             row.get("model"),
@@ -394,7 +406,13 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
         if any(value is not None for value in row_identity) and row_identity != active_identity_tuple:
             mixed_identity_count += 1
             mixed_identity_tuples.add(row_identity)
-        payload = row.get("payload") or {}
+        payload = dict(row.get("payload") or {})
+        # The durable column is the binding authority. A payload copy cannot
+        # manufacture provenance for a legacy row or override a moved row.
+        if "vault_binding_id" in row:
+            payload.pop("vault_binding_id", None)
+            if row.get("vault_binding_id"):
+                payload["vault_binding_id"] = row["vault_binding_id"]
         text = _row_text(payload)
         if not text:
             continue
@@ -645,6 +663,7 @@ def _rank_eligible(
     k: int,
     language: Optional[str],
     query_vector: list[float] | None,
+    tuning: RetrievalTuning | None = None,
 ) -> List[dict]:
     """Score, normalize, and rank ONLY the eligible docs, then package result dicts.
 
@@ -691,7 +710,7 @@ def _rank_eligible(
     # ADR-0059 D3 (#3404/#3407): fusion strategy and weights come from the process-resolved
     # RetrievalTuning config instead of a literal. "linear" reproduces today's formula exactly
     # (parity-tested); "rrf" is the weighted-RRF alternative, dark by default.
-    tuning = get_retrieval_tuning()
+    tuning = tuning or get_retrieval_tuning()
     if tuning.fusion == "rrf":
         combined = _weighted_rrf_combined(bm25_raw, emb_raw, overlap_bonus, tuning)
     else:
@@ -723,34 +742,55 @@ def _rank_eligible(
 
 
 def _partition_by_scope(
-    docs: List[Document], scope: str | None
+    docs: List[Document],
+    scope: str | None,
+    allowed_binding_ids: set[str] | None = None,
 ) -> tuple[List[int], List[Document]]:
-    """Split docs into (eligible indices, excluded docs) by scope eligibility, BEFORE tokenize/score.
+    """Split docs into (eligible indices, excluded docs) by binding/scope BEFORE tokenize/score.
 
     Eligibility decides membership; similarity decides order. With no active scope every doc is
     eligible (unchanged behavior). With an active scope, membership is the same conservative domain
     decision as before (``_doc_in_scope``: explicit ``payload['domain']`` / ``bridge_domains``;
-    missing domain is ineligible) — only its POSITION moves ahead of scoring. Eligible items are
-    returned as store indices so scoring can reuse the store's cached vectors while excluding the
-    ineligible rows from the candidate set.
+    missing domain is ineligible). When binding ids are supplied, unattributed or other-binding
+    rows are excluded as well. Eligible items preserve their store indices so scoring can reuse the
+    store's cached vectors while excluding the ineligible rows from the candidate set.
     """
-    if not scope:
-        return list(range(len(docs))), []
     eligible_idx: List[int] = []
     excluded: List[Document] = []
     for idx, doc in enumerate(docs):
-        if _doc_in_scope(doc, scope):
+        payload = doc.payload or {}
+        binding_allowed = (
+            allowed_binding_ids is None
+            or (
+                isinstance(payload.get("vault_binding_id"), str)
+                and payload.get("vault_binding_id") in allowed_binding_ids
+            )
+        )
+        scope_allowed = not scope or _doc_in_scope(doc, scope)
+        if binding_allowed and scope_allowed:
             eligible_idx.append(idx)
         else:
             excluded.append(doc)
     return eligible_idx, excluded
 
 
-def _contain_rerank(query: str, admitted: List[dict]) -> List[dict]:
+def _contain_rerank(
+    query: str,
+    admitted: List[dict],
+    *,
+    tuning: RetrievalTuning | None = None,
+) -> List[dict]:
     """Apply the optional rerank hook, then enforce that it only reordered/dropped within the
     admitted set — reranking never reintroduces an excluded doc (spec AC1, second clause)."""
     admitted_ids = {item.get("doc_id") for item in admitted}
-    reranked = maybe_rerank(query, admitted)
+    # Preserve the legacy hook seam when no request-scoped tuning was resolved.
+    # Scoped requests take the explicit keyword so process-global tuning cannot
+    # override their immutable settings bundle.
+    reranked = (
+        maybe_rerank(query, admitted)
+        if tuning is None
+        else maybe_rerank(query, admitted, tuning=tuning)
+    )
     intruders = {item.get("doc_id") for item in reranked} - admitted_ids
     if intruders:
         raise AssertionError(
@@ -766,6 +806,8 @@ def scoped_hybrid_search(
     language: Optional[str] = None,
     query_vector: list[float] | None = None,
     scope: str | None = None,
+    allowed_binding_ids: set[str] | None = None,
+    tuning: RetrievalTuning | None = None,
 ) -> ScopedRetrieval:
     """Scope-prefiltered retrieval with content-free denials — the structured entrypoint.
 
@@ -793,7 +835,11 @@ def scoped_hybrid_search(
         return ScopedRetrieval(results=[], denials=(), scope_policy_prefiltered=True, active_scope=scope)
 
     # 1) PREFILTER before ranking — eligibility decides membership, not similarity.
-    eligible_idx, excluded = _partition_by_scope(docs, scope)
+    if allowed_binding_ids is None:
+        # Keep the legacy two-argument seam for unbound callers and test spies.
+        eligible_idx, excluded = _partition_by_scope(docs, scope)
+    else:
+        eligible_idx, excluded = _partition_by_scope(docs, scope, allowed_binding_ids)
 
     # Content-free denials for relevant-but-excluded material (never a silent drop). The empty
     # eligible set is likewise no longer a silent early-exit.
@@ -802,11 +848,17 @@ def scoped_hybrid_search(
 
     # 2) RANK only the eligible set (candidate set + normalization restricted to eligible-only).
     results = _rank_eligible(
-        query, docs, eligible_idx, k=k, language=language, query_vector=query_vector
+        query,
+        docs,
+        eligible_idx,
+        k=k,
+        language=language,
+        query_vector=query_vector,
+        tuning=tuning,
     )
 
     # 3) Rerank within the admitted set only (never reintroduces an exclusion).
-    results = _contain_rerank(query, results)
+    results = _contain_rerank(query, results, tuning=tuning)
     return ScopedRetrieval(
         results=results,
         denials=denials,

@@ -5,9 +5,15 @@ from typing import Any, Dict, List
 from app.components.rerankers import get_reranker
 from app.retrieval.rerank import RerankItem
 from app.retrieval.tuning import get_retrieval_tuning
+from app.settings.models import RetrievalTuning
 
 
-def apply_optional_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def apply_optional_rerank(
+    query: str,
+    items: List[Dict[str, Any]],
+    *,
+    tuning: RetrievalTuning | None = None,
+) -> List[Dict[str, Any]]:
     """Apply the optional rerank hook, gated and sized by the process-resolved RetrievalTuning
     surface (ADR-0059 D3, #3404/#3407). ``RERANK_ENABLE``/``RERANK_TOP_K`` keep working as
     overrides into that surface (compat); ``RERANK_PROVIDER`` continues to select the reranker
@@ -19,7 +25,7 @@ def apply_optional_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[
     the sole production caller. The only local guard here is ``rerank="off"`` — kept so direct
     callers (tests, other consumers) get the same inert-by-default behavior without duplicating the
     gate logic."""
-    tuning = get_retrieval_tuning()
+    tuning = tuning or get_retrieval_tuning()
     if tuning.rerank == "off":
         return items
     top_k = tuning.rerank_top_k

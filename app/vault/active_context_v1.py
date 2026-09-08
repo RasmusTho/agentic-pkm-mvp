@@ -123,13 +123,19 @@ class PrincipalContext:
     principal_id: str
     principal_kind: PrincipalKind
     subject: AuthSubject
+    #: Monotonic revision of the auth/GOV-owned principal record.  A role id is
+    #: intentionally stable across credential rotation, so the revision is the
+    #: stale-session fence rather than a new identity.
+    revision: int = 0
 
     def __post_init__(self) -> None:
         if not self.principal_id:
             raise ActiveContextError("principal id is required; unresolved principals fail closed")
+        if self.revision < 0:
+            raise ActiveContextError("principal revision cannot be negative")
 
     def cache_component(self) -> str:
-        return f"{self.principal_kind}:{self.principal_id}"
+        return f"{self.principal_kind}:{self.principal_id}@{self.revision}"
 
 
 @dataclass(frozen=True)

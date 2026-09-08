@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
@@ -79,6 +79,7 @@ from app.domain.commitments import (
 )
 from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
+from app.api.request_active_context import require_scoped_read_context
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -112,6 +113,8 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
+from app.vault.active_context_v1 import ActiveContextSetV1
+from app.instance.context_bound_read import ContextBoundReadError, context_bound_read_window
 from app.vault.layout import LAYOUT_NOTE_NAME
 from app.vault.manager import (
     SETTINGS_DIR_NAME,
@@ -1538,6 +1541,19 @@ class VaultNoteListResponse(BaseModel):
     total_count: int
 
 
+class ScopedVaultNoteEntry(VaultNoteEntry):
+    """A note result with the source binding and frozen request generation."""
+
+    vault_binding_id: str
+    context_generation: int
+
+
+class ScopedVaultNoteListResponse(BaseModel):
+    notes: list[ScopedVaultNoteEntry]
+    context_generation: int
+    total_count: int
+
+
 # Commitments are surfaced from durable vault artefacts (slice 1, #2073), not from any
 # ephemeral AgentState. The surface is read/proposal-only: it carries an explicit
 # read-only marker and never triggers a commitment write or state transition.
@@ -2255,6 +2271,54 @@ def list_vault_notes(
         vault_identity=_vault_identity_state(vault_root),
         total_count=len(notes),
     )
+
+
+@router.get("/vault/notes/scoped", response_model=ScopedVaultNoteListResponse)
+def list_scoped_vault_notes(
+    q: str = Query("", description="Optional search filter by title or path"),
+    context: ActiveContextSetV1 = Depends(require_scoped_read_context),
+) -> ScopedVaultNoteListResponse | JSONResponse:
+    """Read each selected binding without consulting the global vault manager."""
+
+    registry_path = (os.getenv("INSTANCE_VAULT_REGISTRY_PATH") or "").strip()
+    if not registry_path:
+        # The dependency normally prevents this; retain a bounded response if
+        # process configuration changes between resolution and the read seam.
+        raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
+    try:
+        read_window = context_bound_read_window(
+            context,
+            registry_store=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+        )
+    except ContextBoundReadError as exc:
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
+
+    notes: list[ScopedVaultNoteEntry] = []
+    try:
+        with read_window as roots:
+            for source in roots:
+                for note in _list_vault_notes(source.root, q=q):
+                    notes.append(
+                        ScopedVaultNoteEntry(
+                            **note.model_dump(),
+                            vault_binding_id=source.vault_binding_id,
+                            context_generation=source.context_generation,
+                        )
+                    )
+                    if len(notes) >= _BROWSE_MAX_NOTES:
+                        break
+                if len(notes) >= _BROWSE_MAX_NOTES:
+                    break
+            response = ScopedVaultNoteListResponse(
+                notes=notes,
+                context_generation=context.generation,
+                total_count=len(notes),
+            )
+            # Serialize before releasing the shared effect lease; otherwise a
+            # revocation can complete between filesystem read and publication.
+            return JSONResponse(content=response.model_dump(mode="json"))
+    except ContextBoundReadError as exc:
+        raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
 
 def _validate_workspace_note_path(note_path_raw: str) -> str:
