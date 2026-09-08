@@ -75,6 +75,20 @@ Notes:
 - Representative CI coverage must include watcher, panel/promotion, orchestrator, and MCP/tool event
   families so envelope regressions fail before runtime rollout.
 
+## Canonical event identity
+
+Lifecycle payloads use `app.objects.canonical_event_identity(canonical_object_id, vault_uuid)` for
+the identity trio: `uuid` and `object_id` are the canonical `store_objects` identity, while
+`vault_uuid` remains the retained frontmatter continuity identity. The constructor is used by the
+three `vault_sync` lifecycle producers and the watcher deletion fallback, so every route preserves
+the #3510 identity contract without silently rewriting retained identity.
+
+`sync_markdown` and `handle_rename` remain adapter-contract entrypoints, not independent watcher
+runtime wiring. The registry watcher re-ingests changed paths through `vault_alpha`, and the legacy
+filesystem path uses its existing `update_path`/`upsert_object_from_note` adapter surface. Their
+direct integration tests therefore remain contract coverage; this decision adds no parallel runtime
+path.
+
 ## Event Idempotency (normative)
 
 - Every event MUST carry a unique `event_id`.
