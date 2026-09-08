@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import gc
 import os
 from pathlib import Path
 import subprocess
 import sys
 import threading
+import weakref
 
 import pytest
 
@@ -669,6 +671,160 @@ def test_concurrent_connect_converges_to_one_binding_and_credential(tmp_path: Pa
     assert len(rows) == 1
     assert encrypted.binding_ids() == (rows[0].account_binding_id,)
     assert first_client.starts == 1
+
+
+def test_abandoned_device_flow_releases_writer_admission(tmp_path: Path) -> None:
+    store_path = tmp_path / "oauth-state" / "tokens.enc"
+    store_path.parent.mkdir(mode=0o700)
+    bindings = yab.AccountBindingStore.for_runtime()
+    first_client = _OAuthClient()
+    first = _binder(first_client, tokstore.YouTubeTokenStore(store_path), bindings)
+    second_client = _OAuthClient()
+    second = _binder(second_client, tokstore.YouTubeTokenStore(store_path), bindings)
+
+    connection = first.start_device_connection()
+    admission = connection._writer_admission
+    assert admission is not None
+    with pytest.raises(tokstore.OAuthWriterAdmissionError):
+        second.start_device_connection()
+
+    # A pending poll is still reusable, but dropping the connection must not
+    # retain the process-local descriptor forever.
+    first_client.poll_device_flow = lambda _device_code: (_ for _ in ()).throw(
+        oauth.DeviceAuthorizationPending("authorization_pending")
+    )
+    with pytest.raises(oauth.DeviceAuthorizationPending):
+        first.finish_device_connection(connection)
+    connection_ref = weakref.ref(connection)
+    del connection
+    gc.collect()
+
+    assert connection_ref() is None
+    assert admission.released is True
+    recovered = second.start_device_connection()
+    assert second_client.starts == 1
+    recovered.cancel()
+
+
+def test_writer_admission_reopens_after_cancel_and_stays_serialized(
+    tmp_path: Path,
+) -> None:
+    store_path = tmp_path / "oauth-state" / "tokens.enc"
+    store_path.parent.mkdir(mode=0o700)
+    bindings = yab.AccountBindingStore.for_runtime()
+    first_client = _OAuthClient()
+    first = _binder(first_client, tokstore.YouTubeTokenStore(store_path), bindings)
+    second_client = _OAuthClient()
+    second = _binder(second_client, tokstore.YouTubeTokenStore(store_path), bindings)
+    third_client = _OAuthClient()
+    third = _binder(third_client, tokstore.YouTubeTokenStore(store_path), bindings)
+
+    abandoned = first.start_device_connection()
+    admission = abandoned._writer_admission
+    assert admission is not None
+    abandoned.cancel()
+    abandoned.cancel()
+    assert admission.released is True
+
+    active = second.start_device_connection()
+    with pytest.raises(tokstore.OAuthWriterAdmissionError):
+        third.start_device_connection()
+    receipt = second.finish_device_connection(active)
+    assert receipt["status"] == "connected"
+
+    reopened = third.start_reconnect(receipt["account"]["binding_id"])
+    reopened.cancel()
+    assert third_client.starts == 1
+
+
+def test_cancel_waits_for_finish_before_releasing_writer_admission(
+    tmp_path: Path,
+) -> None:
+    store_path = tmp_path / "oauth-state" / "tokens.enc"
+    store_path.parent.mkdir(mode=0o700)
+    bindings = yab.AccountBindingStore.for_runtime()
+    first_client = _OAuthClient()
+    poll_started = threading.Event()
+    allow_poll = threading.Event()
+
+    def blocking_poll(_device_code: str) -> oauth.TokenBundle:
+        poll_started.set()
+        assert allow_poll.wait(timeout=5)
+        return _OAuthClient.poll_device_flow(first_client, _device_code)
+
+    first_client.poll_device_flow = blocking_poll  # type: ignore[method-assign]
+    first = _binder(first_client, tokstore.YouTubeTokenStore(store_path), bindings)
+    second_client = _OAuthClient(channel_id=CHANNEL_B)
+    second = _binder(second_client, tokstore.YouTubeTokenStore(store_path), bindings)
+
+    connection = first.start_device_connection()
+    finish_result: dict[str, object] = {}
+
+    def finish() -> None:
+        try:
+            finish_result["receipt"] = first.finish_device_connection(connection)
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            finish_result["error"] = exc
+
+    finish_thread = threading.Thread(target=finish)
+    finish_thread.start()
+    assert poll_started.wait(timeout=5)
+
+    cancel_requested = threading.Event()
+
+    def cancel() -> None:
+        cancel_requested.set()
+        connection.cancel()
+
+    cancel_thread = threading.Thread(target=cancel)
+    cancel_thread.start()
+    assert cancel_requested.wait(timeout=5)
+
+    # Cancellation is waiting on the finish lifecycle lock, so the admission
+    # remains held and a second writer is still refused.
+    with pytest.raises(tokstore.OAuthWriterAdmissionError):
+        second.start_device_connection()
+
+    allow_poll.set()
+    finish_thread.join(timeout=5)
+    cancel_thread.join(timeout=5)
+    assert not finish_thread.is_alive()
+    assert not cancel_thread.is_alive()
+    assert "error" not in finish_result
+    receipt = finish_result["receipt"]
+    assert isinstance(receipt, dict)
+    assert receipt["status"] == "connected"
+
+    reopened = second.start_reconnect(receipt["account"]["binding_id"])
+    reopened.cancel()
+
+
+def test_abandoned_flow_recovery_has_no_secret_or_orphan_state(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store_path = tmp_path / "oauth-state" / "tokens.enc"
+    store_path.parent.mkdir(mode=0o700)
+    bindings = yab.AccountBindingStore.for_runtime()
+    store = tokstore.YouTubeTokenStore(store_path)
+    client = _OAuthClient()
+    binder = _binder(client, store, bindings)
+
+    connection = binder.start_device_connection()
+    connection.cancel()
+    connection.release()
+    gc.collect()
+
+    assert bindings.list_all() == ()
+    assert store.binding_ids() == ()
+    assert "synthetic-device-code" not in caplog.text
+    assert "synthetic-access" not in caplog.text
+    assert "synthetic-refresh" not in caplog.text
+
+    # Recovery can acquire again without reusing an orphan credential or
+    # leaking the abandoned flow's secret-bearing handle.
+    recovered = binder.start_device_connection()
+    assert store.binding_ids() == ()
+    recovered.cancel()
 
 
 def test_token_first_failure_and_recovery_reconcile_orphan_credential(

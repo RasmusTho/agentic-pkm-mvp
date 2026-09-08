@@ -324,6 +324,7 @@ class OAuthWriterAdmission:
 
     def __init__(self, descriptor: int) -> None:
         self._descriptor = descriptor
+        self._release_lock = threading.Lock()
         self._released = False
 
     @property
@@ -331,13 +332,33 @@ class OAuthWriterAdmission:
         return self._released
 
     def release(self) -> None:
-        if self._released:
-            return
-        self._released = True
+        with self._release_lock:
+            if self._released:
+                return
+            self._released = True
+            try:
+                fcntl.flock(self._descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(self._descriptor)
+
+    close = release
+    cancel = release
+
+    def __enter__(self) -> "OAuthWriterAdmission":
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        self.release()
+
+    def __del__(self) -> None:
+        # The explicit lifecycle owns normal cleanup.  This is the last-resort
+        # path for a dropped device connection; release() is idempotent and
+        # lock-guarded so finalization cannot close another admission's fd.
         try:
-            fcntl.flock(self._descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(self._descriptor)
+            self.release()
+        except BaseException:
+            # Destructors must never surface cleanup failures or leak details.
+            pass
 
     def __repr__(self) -> str:
         return "OAuthWriterAdmission(path=***)"
