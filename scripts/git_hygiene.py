@@ -30,6 +30,7 @@ if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocati
 
 from app.dispatcher.verification_contract import resolve_issue_authority
 from app.dispatcher.signboard import VALID_STATUSES as DISPATCHER_VALID_STATUSES
+from app.dispatcher.sync_github import github_issue_task_id
 from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 
@@ -1359,6 +1360,166 @@ def _dispatcher_source_anchors(value: object) -> set[str]:
     ):
         raise RuntimeError("dispatcher_task_identity_ambiguous")
     return set(anchors)
+
+
+_DISPATCHER_PICKUP_RECEIPT_RE = re.compile(
+    r"^\s*pickup intent receipt\s*:", re.IGNORECASE
+)
+_DISPATCHER_PRESERVED_WORKTREE_MARKER_RE = re.compile(
+    r"(?:^|[.!?]\s+)preserved\s+worktree\s*:", re.IGNORECASE
+)
+_DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
+    r"(?:^|[.!?]\s+)preserved\s+worktree\s*:\s*`?/", re.IGNORECASE
+)
+_DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?/[^\s;`,]+`?\s+"
+    r"is\s+still\s+dirty\s+on\s+branch\s+`?[^\s;`,]+`?\s+at\s+head\s+`?[0-9a-f]{40,64}`?",
+    re.IGNORECASE,
+)
+_DISPATCHER_WORKTREE_BINDING_RE = re.compile(
+    r"\bworktree(?:\s*[:=]\s*|\s+)(?:`)?(?P<value>/[^\s;`,]+)",
+    re.IGNORECASE,
+)
+_DISPATCHER_BRANCH_BINDING_RE = re.compile(
+    r"(?:\bbranch\s*[:=]\s*|\bon\s+branch\s+)`?(?P<value>[^\s;`,]+)`?",
+    re.IGNORECASE,
+)
+_DISPATCHER_HEAD_BINDING_RE = re.compile(
+    r"(?:\b(?:base\s+)?head\s*[:=]\s*|\bat\s+head\s+)`?(?P<value>[0-9a-f]{40,64})`?",
+    re.IGNORECASE,
+)
+
+
+def _dispatcher_resumable_binding_resources(
+    cwd: Path, record: Mapping[str, object],
+) -> set[str]:
+    """Return only structured or explicitly resumable task resource bindings.
+
+    ``sync_state.comments`` is a GitHub history projection. Its arbitrary prose
+    may mention old delivery SHAs and must not become cleanup authority. A
+    comment contributes resources only when it uses an explicit pickup or
+    preserved-worktree binding shape.
+    """
+    task_id = record.get("task_id")
+    repository = record.get("repo")
+    issue = record.get("issue_number")
+    status = record.get("status")
+    legacy_blank_repository = (
+        isinstance(task_id, str)
+        and isinstance(repository, str)
+        and repository == ""
+        and isinstance(issue, int)
+        and not isinstance(issue, bool)
+        and issue > 0
+        and task_id == f"github-issue-{issue}"
+        and status == "blocked"
+    )
+    current_identity = (
+        not isinstance(task_id, str)
+        or not task_id
+        or not isinstance(repository, str)
+        or not re.fullmatch(r"[^/\s]+/[^/\s]+", repository)
+        or not isinstance(issue, int)
+        or isinstance(issue, bool)
+        or issue < 1
+        or (
+            not legacy_blank_repository
+            and task_id != github_issue_task_id(repository, issue)
+        )
+    )
+    if current_identity and not legacy_blank_repository:
+        raise RuntimeError("dispatcher_activity_invalid")
+    resources: set[str] = {f"issue:{issue}", f"github:issue:{issue}"}
+    linked_pr = _dispatcher_linked_pr(record.get("linked_pr"))
+    if linked_pr is not None:
+        resources.update({f"pull:{linked_pr}", f"github:pull:{linked_pr}"})
+    anchors_value = record.get("source_anchor_refs", "[]")
+    resources.update(_dispatcher_source_anchors(anchors_value))
+
+    for field, prefix in (("branch", "branch"), ("worktree", "worktree")):
+        value = record.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            raise RuntimeError("dispatcher_activity_invalid")
+        if field == "branch":
+            run_git_check(["check-ref-format", "--branch", value], cwd)
+            resources.update({value, f"branch:{value}", f"refs/heads/{value}"})
+        elif not value.startswith("/"):
+            raise RuntimeError("dispatcher_activity_invalid")
+        else:
+            resources.add(f"{prefix}:{value}")
+    for field in ("head", "sha"):
+        value = record.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40,64}", value):
+            raise RuntimeError("dispatcher_activity_invalid")
+        resources.add(value)
+
+    sync_state = record.get("sync_state")
+    if sync_state is None:
+        if not resources:
+            raise RuntimeError("dispatcher_activity_invalid")
+        return resources
+    if not isinstance(sync_state, str):
+        raise RuntimeError("dispatcher_activity_invalid")
+    try:
+        projected = json.loads(sync_state)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("dispatcher_activity_invalid") from exc
+    if not isinstance(projected, dict):
+        raise RuntimeError("dispatcher_activity_invalid")
+    comments = projected.get("comments", [])
+    if comments is None:
+        return resources
+    if not isinstance(comments, list):
+        raise RuntimeError("dispatcher_activity_invalid")
+    for comment in comments:
+        if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+            raise RuntimeError("dispatcher_activity_invalid")
+        body = comment["body"]
+        for line in body.splitlines():
+            explicit_binding = bool(
+                _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
+                or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
+                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+            )
+            if not explicit_binding:
+                continue
+            if (
+                _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
+                and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
+            ) or (
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+                and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
+            ):
+                raise RuntimeError("dispatcher_activity_invalid")
+            worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(line)
+            branch = _DISPATCHER_BRANCH_BINDING_RE.search(line)
+            head = _DISPATCHER_HEAD_BINDING_RE.search(line)
+            if not any((branch, head)):
+                # An explicit marker with only a path (or no parseable
+                # branch/head) is unsafe: the remaining binding may be on a
+                # different line and must not be guessed or joined.
+                raise RuntimeError("dispatcher_activity_invalid")
+            if worktree:
+                resources.add(f"worktree:{worktree.group('value')}")
+            if branch:
+                branch_name = branch.group("value")
+                run_git_check(["check-ref-format", "--branch", branch_name], cwd)
+                resources.update(
+                    {branch_name, f"branch:{branch_name}", f"refs/heads/{branch_name}"}
+                )
+            if head:
+                resources.add(head.group("value"))
+    if not resources:
+        raise RuntimeError("dispatcher_activity_invalid")
+    return resources
 
 
 def _legacy_dispatcher_anchor_valid(anchor: str) -> bool:
@@ -3586,9 +3747,13 @@ def _retirement_local_activity(
                     raise RuntimeError("dispatcher_activity_invalid")
                 resources.add(resource)
         elif record.get("status") not in {"completed", "_meta"}:
-            # A direct explicit reference in a resumable task is retained even
-            # if its pickup lease expired. Unrelated historical rows do not veto.
-            resources.add(json.dumps(record, sort_keys=True))
+            # Keep canonical task identity and explicitly resumable bindings,
+            # even after a pickup lease expires. Free-form sync history is not
+            # an artifact reference: it commonly contains merged child SHAs.
+            status = record.get("status")
+            if status not in _NONTERMINAL_DISPATCHER_STATUSES:
+                raise RuntimeError("dispatcher_activity_invalid")
+            resources.update(_dispatcher_resumable_binding_resources(cwd, record))
     return protected_shas, resources
 
 

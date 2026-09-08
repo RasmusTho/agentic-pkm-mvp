@@ -180,6 +180,21 @@ authority, or command behavior changes. Focused executable coverage lives in
 `tests/ops/test_git_hygiene.py`; branch/worktree publication callers also use
 `scripts/agent_workspace_preflight.sh`.
 
+For the local-retirement activity census, every current non-terminal task must
+retain its canonical repo-qualified task identity
+(`github-<owner>--<repo>-issue-<N>`) and structured Issue/PR/source-anchor
+identities; the only compatibility exception is a validated historical
+`github-issue-<N>` row with an empty repository and `blocked` status. Legacy
+structured `branch`, `worktree`, and `head` fields remain valid explicit
+artifact bindings. The `sync_state.comments` projection is historical GitHub
+prose, not an artifact registry. It contributes a binding only for an exact,
+line-bounded `Pickup intent receipt:` or explicit
+`Preserved worktree: /...; branch: ...; base HEAD: ...` / dedicated-worktree
+receipt shape. Delivery receipts, narrative mentions, embedded or negated
+marker text, and cross-line fragments do not preserve a target. Missing or
+malformed task identity, status, JSON, or explicit binding evidence fails
+closed before any CAS.
+
 
 ## Rescue-backed serial maintenance policy
 
