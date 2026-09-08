@@ -281,14 +281,15 @@ def _run_ask(
     ask_settings = get_ask_settings()
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
-        state = run_ask_graph(
-            req.question,
-            trace_id=trace_id,
-            ask_settings=ask_settings,
-            active_scope=active_scope,
-            active_context=active_context,
-            settings_bundle_digest=settings_bundle_digest,
-        )
+        graph_kwargs = {
+            "ask_settings": ask_settings,
+            "active_scope": active_scope,
+        }
+        if active_context is not None:
+            graph_kwargs["active_context"] = active_context
+        if settings_bundle_digest is not None:
+            graph_kwargs["settings_bundle_digest"] = settings_bundle_digest
+        state = run_ask_graph(req.question, trace_id=trace_id, **graph_kwargs)
     except LLMBackendTimeout as exc:
         record_ask_error()
         raise HTTPException(
