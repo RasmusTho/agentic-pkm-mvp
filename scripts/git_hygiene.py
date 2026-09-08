@@ -1361,6 +1361,96 @@ def _dispatcher_source_anchors(value: object) -> set[str]:
     return set(anchors)
 
 
+_DISPATCHER_PICKUP_RECEIPT_RE = re.compile(
+    r"\bpickup intent receipt\s*:", re.IGNORECASE
+)
+_DISPATCHER_EXPLICIT_BINDING_RE = re.compile(
+    r"\b(?:preserved|dedicated)\s+worktree\b"
+    r"(?:\s*[:=]\s*/|.*\b(?:branch|head)\s*(?:[:=]|\s+))",
+    re.IGNORECASE | re.DOTALL,
+)
+_DISPATCHER_WORKTREE_BINDING_RE = re.compile(
+    r"\bworktree(?:\s*[:=]\s*|\s+)(?P<value>/[^\s;`,]+)",
+    re.IGNORECASE,
+)
+_DISPATCHER_BRANCH_BINDING_RE = re.compile(
+    r"(?:\bbranch\s*[:=]\s*|\bon\s+branch\s+)`?(?P<value>[^\s;`,]+)`?",
+    re.IGNORECASE,
+)
+_DISPATCHER_HEAD_BINDING_RE = re.compile(
+    r"(?:\b(?:base\s+)?head\s*[:=]\s*|\bat\s+head\s+)`?(?P<value>[0-9a-f]{40,64})`?",
+    re.IGNORECASE,
+)
+
+
+def _dispatcher_resumable_binding_resources(
+    cwd: Path, record: Mapping[str, object],
+) -> set[str]:
+    """Return only structured or explicitly resumable task resource bindings.
+
+    ``sync_state.comments`` is a GitHub history projection. Its arbitrary prose
+    may mention old delivery SHAs and must not become cleanup authority. A
+    comment contributes resources only when it uses an explicit pickup or
+    preserved-worktree binding shape.
+    """
+    issue = record.get("issue_number")
+    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
+        raise RuntimeError("dispatcher_activity_invalid")
+    resources = {f"issue:{issue}", f"github:issue:{issue}"}
+    linked_pr = _dispatcher_linked_pr(record.get("linked_pr"))
+    if linked_pr is not None:
+        resources.update({f"pull:{linked_pr}", f"github:pull:{linked_pr}"})
+    resources.update(_dispatcher_source_anchors(record.get("source_anchor_refs")))
+
+    sync_state = record.get("sync_state")
+    if sync_state is None:
+        return resources
+    if not isinstance(sync_state, str):
+        raise RuntimeError("dispatcher_activity_invalid")
+    try:
+        projected = json.loads(sync_state)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise RuntimeError("dispatcher_activity_invalid") from exc
+    if not isinstance(projected, dict):
+        raise RuntimeError("dispatcher_activity_invalid")
+    comments = projected.get("comments", [])
+    if comments is None:
+        return resources
+    if not isinstance(comments, list):
+        raise RuntimeError("dispatcher_activity_invalid")
+    for comment in comments:
+        if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+            raise RuntimeError("dispatcher_activity_invalid")
+        body = comment["body"]
+        explicit_binding = bool(
+            _DISPATCHER_PICKUP_RECEIPT_RE.search(body)
+            or _DISPATCHER_EXPLICIT_BINDING_RE.search(body)
+        )
+        if not explicit_binding:
+            continue
+        worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(body)
+        branch = _DISPATCHER_BRANCH_BINDING_RE.search(body)
+        head = _DISPATCHER_HEAD_BINDING_RE.search(body)
+        if not any((worktree, branch, head)):
+            # A later narrative may repeat the word "preserved" without
+            # carrying the original binding. A pickup receipt, however, is a
+            # structured claim and must never be accepted without a resource.
+            if _DISPATCHER_PICKUP_RECEIPT_RE.search(body):
+                raise RuntimeError("dispatcher_activity_invalid")
+            continue
+        if worktree:
+            resources.add(f"worktree:{worktree.group('value')}")
+        if branch:
+            branch_name = branch.group("value")
+            run_git_check(["check-ref-format", "--branch", branch_name], cwd)
+            resources.update(
+                {branch_name, f"branch:{branch_name}", f"refs/heads/{branch_name}"}
+            )
+        if head:
+            resources.add(head.group("value"))
+    return resources
+
+
 def _legacy_dispatcher_anchor_valid(anchor: str) -> bool:
     return bool(
         re.fullmatch(r"(?:github:)?(?:issue|pull):[1-9][0-9]*", anchor)
@@ -3586,9 +3676,10 @@ def _retirement_local_activity(
                     raise RuntimeError("dispatcher_activity_invalid")
                 resources.add(resource)
         elif record.get("status") not in {"completed", "_meta"}:
-            # A direct explicit reference in a resumable task is retained even
-            # if its pickup lease expired. Unrelated historical rows do not veto.
-            resources.add(json.dumps(record, sort_keys=True))
+            # Keep canonical task identity and explicitly resumable bindings,
+            # even after a pickup lease expires. Free-form sync history is not
+            # an artifact reference: it commonly contains merged child SHAs.
+            resources.update(_dispatcher_resumable_binding_resources(cwd, record))
     return protected_shas, resources
 
 

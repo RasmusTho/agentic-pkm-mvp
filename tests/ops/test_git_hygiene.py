@@ -5408,6 +5408,63 @@ def test_local_retirement_preserves_live_branch_lease(tmp_path, monkeypatch):
     assert result["deleted"] == 0
 
 
+def test_local_retirement_ignores_historical_dispatcher_delivery_sha(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{"body": f"Child delivery receipt at head `{sha}`."}]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after verified merged delivery",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_preserves_explicit_resumable_binding(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"Preserved worktree: {tmp_path / 'old-checkout'}; "
+                            f"branch: old; base HEAD: {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work only when no resumable binding remains",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 def test_local_retirement_stops_on_generation_drift(tmp_path, monkeypatch):
     from scripts import agent_worktree
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
