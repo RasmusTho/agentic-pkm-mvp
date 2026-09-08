@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PIN_FILE="${BUILDEROPS_PIN_FILE:-${ROOT}/config/deploy/builderops.env}"
 PREVIOUS_PIN_FILE="${BUILDEROPS_PREVIOUS_PIN_FILE:-${ROOT}/config/deploy/builderops.previous.env}"
 RECEIPT_DIR="${BUILDEROPS_RECEIPT_DIR:-${ROOT}/ops/deployments/builderops}"
+# This host-local path is intentionally fixed so callers cannot select
+# different lock files and run concurrent deployments under separate locks.
+LOCK_PATH="/tmp/agentic-pkm-mvp-builderops-lock/deployment.lock"
 BUILDEROPS_PIN_FILE="${PIN_FILE}"
 export BUILDEROPS_PIN_FILE
 
@@ -19,12 +22,12 @@ source "${ROOT}/scripts/builderops/preflight_app_password_secret.sh"
 # argv/environment markers alone cannot bypass the interlock.
 if [ -z "${BUILDEROPS_DEPLOYMENT_LOCK_FD:-}" ]; then
   exec python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
-    --lock-path "${BUILDEROPS_DEPLOYMENT_LOCK_PATH:-${PIN_FILE}.lock}" \
+    --lock-path "${LOCK_PATH}" \
     -- bash "${BASH_SOURCE[0]}" "$@"
 fi
 
 python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
-  --lock-path "${BUILDEROPS_DEPLOYMENT_LOCK_PATH:-${PIN_FILE}.lock}" \
+  --lock-path "${LOCK_PATH}" \
   --assert-held --fd "${BUILDEROPS_DEPLOYMENT_LOCK_FD}" || {
   echo "BuilderOps deployment interlock proof is missing or invalid" >&2
   exit 75

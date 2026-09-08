@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -647,6 +648,10 @@ def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> N
     assert "duplicate_builderops_engine_writers" in refusal["refusals"]
     assert refusal["secret_material"] == "absent"
     assert len(refusal["evidence_fingerprint"]) == 64
+    fingerprint = refusal.pop("evidence_fingerprint")
+    assert fingerprint == hashlib.sha256(
+        json.dumps(refusal, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def test_deploy_refuses_malformed_project_listing_before_docker_mutation(tmp_path: Path) -> None:
@@ -836,6 +841,9 @@ def test_deployment_wrapper_rejects_forged_inherited_lock_proof(tmp_path: Path) 
     assert result.returncode == 75
     assert "interlock proof" in result.stderr
     assert "--__builderops_deployment_lock_held" not in (
+        ROOT / "scripts/deploy_builderops.sh"
+    ).read_text(encoding="utf-8")
+    assert "BUILDEROPS_DEPLOYMENT_LOCK_PATH" not in (
         ROOT / "scripts/deploy_builderops.sh"
     ).read_text(encoding="utf-8")
 

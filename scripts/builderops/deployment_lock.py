@@ -6,9 +6,29 @@ from __future__ import annotations
 import argparse
 import fcntl
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _open_lock(lock_path: Path, *, create: bool) -> int:
+    parent = lock_path.parent
+    if create:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_stat = parent.stat()
+    if parent_stat.st_uid != os.getuid() or stat.S_IMODE(parent_stat.st_mode) & 0o077:
+        raise PermissionError("deployment interlock directory must be private to its owner")
+
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    if create:
+        flags |= os.O_CREAT
+    lock_fd = os.open(lock_path, flags, 0o600)
+    lock_stat = os.fstat(lock_fd)
+    if lock_stat.st_uid != os.getuid() or stat.S_IMODE(lock_stat.st_mode) & 0o077:
+        os.close(lock_fd)
+        raise PermissionError("deployment interlock file must be private to its owner")
+    return lock_fd
 
 
 def _assert_held(lock_path: Path, lock_fd: int) -> int:
@@ -16,7 +36,7 @@ def _assert_held(lock_path: Path, lock_fd: int) -> int:
 
     try:
         fd_stat = os.fstat(lock_fd)
-        probe_fd = os.open(lock_path, os.O_RDWR)
+        probe_fd = _open_lock(lock_path, create=False)
     except (OSError, ValueError) as exc:
         print(f"BuilderOps deployment interlock proof is invalid: {exc}", file=sys.stderr)
         return 75
@@ -78,8 +98,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("a command is required after --")
 
     lock_path = args.lock_path
-    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        lock_fd = _open_lock(lock_path, create=True)
+    except OSError as exc:
+        print(f"BuilderOps deployment interlock is unavailable: {exc}", file=sys.stderr)
+        return 75
     try:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
