@@ -365,14 +365,12 @@ def _unknowns(
     return missing
 
 
-def _safe_next_action(failure_class: str, actionable: bool, human_required: bool) -> str:
-    if human_required:
-        return "emit Human Exception packet with missing evidence; do not repair automatically"
+def _safe_next_action(failure_class: str, actionable: bool) -> str:
     if failure_class == "timeout_or_infra":
         return "attach context pack to PR evidence; autonomous repair should wait for fresh evidence"
     if actionable:
         return "hand context pack to CI repair agent for bounded diagnosis on the PR branch"
-    return "attach context pack to PR evidence and block repair until more evidence is available"
+    return "recover missing CI evidence with bounded diagnosis/backoff; keep automatic repair blocked until evidence is available"
 
 
 def _rerun_instruction(
@@ -424,7 +422,6 @@ def build_context(
     owner = _infer_owner(source.text, source.name)
     step = _extract_failing_step(source.name, source.text, failure_class)
     inferred_job_name = _extract_job_name(source.name)
-    human_required = failure_class == "unknown_failure" and not block
     actionable = failure_class not in {"timeout_or_infra", "unknown_failure"} and bool(block)
     resolved_job_name = job_name or inferred_job_name
     missing = _unknowns(pr_number, base_branch, source, command, owner, resolved_job_name)
@@ -444,12 +441,14 @@ def build_context(
         suspected_owner_script_or_test_file=owner,
         appears_caused_by_pr=_appears_caused_by_pr(failure_class, pr_number),
         actionable_by_autonomous_repair=actionable,
-        human_exception_required=human_required,
+        # Log availability cannot establish a missing human mandate. Keep the
+        # compatibility field, but leave authority classification to the caller.
+        human_exception_required=False,
         unknowns_missing_evidence=missing,
         rerun_instruction=_rerun_instruction(
             failure_class, run_id, resolved_job_name, actionable
         ),
-        safe_next_action=_safe_next_action(failure_class, actionable, human_required),
+        safe_next_action=_safe_next_action(failure_class, actionable),
     )
 
 

@@ -560,9 +560,32 @@ def test_blocked_or_needs_human_labels_are_not_agentable() -> None:
     needs_human = classify_issue_body(body, labels=["agent:needs-human"])
 
     assert blocked.readiness_classification == "not_agentable"
-    assert blocked.human_exception_required is True
+    assert blocked.human_exception_required is False
     assert needs_human.readiness_classification == "not_agentable"
     assert needs_human.human_exception_required is True
+
+
+@pytest.mark.parametrize("fixture,labels,extra", [
+    ("valid_ready_candidate.md", ["agent:blocked"], ""),
+    ("legacy_malformed_body.md", [], ""),
+    ("ambiguous_intent.md", [], ""),
+    ("valid_ready_candidate.md", [], "\nBlocked until CI evidence is restored."),
+    ("valid_ready_candidate.md", [], "\nDo not pick up before dependency delivery."),
+])
+def test_technical_unreadiness_does_not_require_human(fixture, labels, extra) -> None:
+    report = classify_issue_body((FIXTURE_DIR / fixture).read_text() + extra, labels=labels)
+    assert report.readiness_classification != "ready_candidate"
+    assert report.human_exception_required is False
+    assert report.repair_guidance
+
+
+@pytest.mark.parametrize("extra", ["", "\nHuman only.", "\nOperator gated.", "\nRequires an owner decision."])
+@pytest.mark.parametrize("fixture", ["valid_ready_candidate.md", "legacy_malformed_body.md"])
+def test_explicit_human_evidence_survives_technical_unreadiness(extra, fixture) -> None:
+    labels = ["agent:blocked"] if extra else ["agent:needs-human"]
+    report = classify_issue_body((FIXTURE_DIR / fixture).read_text() + extra, labels=labels)
+    assert report.readiness_classification != "ready_candidate"
+    assert report.human_exception_required is True
 
 
 def test_cli_observe_only_writes_json_and_markdown(tmp_path: Path) -> None:

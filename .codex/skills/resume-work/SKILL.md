@@ -110,10 +110,16 @@ report evidence, but it must not edit, push, publish, merge, close, or mutate li
 release succeeds but successor registration, readback, or acknowledgment fails, authority does not
 transfer: the current owner remains the lifecycle owner but has no writable worktree and may only
 restore its own registration or route reconciliation; neither side may publish or close. If two
-owners or writable worktrees are asserted, the unpublished candidate head is omitted or disagrees,
-or current review/receipt evidence contains newer blocking review evidence, classify the recovery as
-situation 4 and fail closed. Do not publish or close until the current owner reconciles the record or
-the normal issue-maintenance/owner-authority path establishes one owner and one current head.
+owners or writable worktrees are asserted, or the unpublished candidate head is omitted or disagrees,
+fail closed on transfer, publication, and closure until the current owner or the normal
+issue-maintenance path reconciles one owner and one current head. Apply
+`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier`; ask the owner
+only if a genuine authority conflict remains after the permitted evidence recovery.
+
+Newer blocking review evidence alone is technical supersession: the current owner repairs and
+revalidates through `pr-integration` and `verification-and-closure`. It does not transfer lifecycle
+authority or require a new owner decision. Retain the merge/closure block until current-head evidence
+passes; never use technical recovery to acknowledge a stale handoff.
 
 From that, classify into one of the four situations and act.
 

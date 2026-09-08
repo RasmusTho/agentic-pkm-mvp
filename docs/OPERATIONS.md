@@ -782,6 +782,7 @@ Startup/runtime verification now treats task routes and embeddings explicitly:
 6. For watcher, panel, or CLI-first orchestrator incidents on shipped current-state surfaces, use `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`.
 
 Quick issue routing:
+- Builder delivery/readiness/CI evidence gaps -> `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation Classifier`. Advisory human flags are not authorization; recover technical evidence through the owning workflow, retaining the affected operation's block. Missing logs or conflicting report metadata do not by themselves require an owner decision. This route does not authorize runtime stabilization, deployment, or a bypass of an immediate-stop or operator gate.
 - Missing dependency or local runtime startup issue -> `docs/INFRASTRUCTURE.md` and `docs/DEPENDENCIES.md`
 - Health contract or degraded-state interpretation -> `docs/HEALTH.md`
 - Metrics/logging interpretation -> `docs/OBSERVABILITY.md`
