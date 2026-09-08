@@ -464,7 +464,7 @@ def test_prod_archive_preflight_blocks_when_channel_config_is_malformed(
     helper = REPO_ROOT / "scripts/lib/heimdal_cold_volume_preflight.sh"
     root = tmp_path / "prod-root"
     root.mkdir()
-    (root / ".env.prod.local").mkdir()
+    (root / ".env.prod.local").write_text("not a valid env assignment\n", encoding="utf-8")
     python = tmp_path / "python-fixture"
     invocation_marker = tmp_path / "python-invoked"
     python.write_text(

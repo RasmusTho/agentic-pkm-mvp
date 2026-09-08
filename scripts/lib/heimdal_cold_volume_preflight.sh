@@ -84,13 +84,33 @@ heimdal_cold_volume_archive_configured() {
     return 1
   fi
   [ -f "${channel_config}" ] && [ -r "${channel_config}" ] || return 2
-  awk -F= '
-    /^[[:space:]]*HEIMDAL_ARCHIVE_METADATA_FILE[[:space:]]*=/ {
-      found = 1
-      exit
+  local config_status=""
+  if ! config_status="$(awk '
+    BEGIN { status = 1 }
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "" || line ~ /^#/) {
+        next
+      }
+      if (line !~ /^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) {
+        status = 2
+        exit
+      }
+      if (line ~ /^HEIMDAL_ARCHIVE_METADATA_FILE[[:space:]]*=/) {
+        status = 0
+      }
     }
-    END { exit(found ? 0 : 1) }
-  ' "${channel_config}"
+    END { print status }
+  ' "${channel_config}")"; then
+    return 2
+  fi
+  case "${config_status}" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 heimdal_cold_volume_preflight() {
