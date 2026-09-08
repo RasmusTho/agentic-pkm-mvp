@@ -1220,8 +1220,51 @@ if collisions:
 PY
 }
 
+start_database_before_instance_state_deployment() {
+  # The MVR-05 deployment fence intentionally inspects PostgreSQL sessions
+  # before it stops/recreates runtime clients. On a fresh channel there is no
+  # db container yet, so create only the database server first and wait for its
+  # own readiness. This does not bypass the fence; it supplies the server
+  # precondition that the fence itself requires.
+  echo "--- DATABASE PRECONDITION FOR INSTANCE-STATE DEPLOYMENT ---"
+  check_compose_port_conflicts db
+  if ! run_docker_compose up -d db; then
+    EXIT_REASON="instance_state_database_start_failed"
+    EXIT_CODE=1
+    export EXIT_REASON EXIT_CODE
+    write_startup_status 0 "$EXIT_REASON"
+    return 1
+  fi
+
+  local attempt=1
+  local max_attempts=60
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if run_docker_compose exec -T db sh -ec \
+      'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h "$POSTGRES_HEALTHCHECK_HOST"' \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
+  EXIT_REASON="instance_state_database_not_ready"
+  EXIT_CODE=1
+  export EXIT_REASON EXIT_CODE
+  write_startup_status 0 "$EXIT_REASON"
+  echo "ERROR: database did not become ready before the instance-state deployment fence" >&2
+  run_docker_compose ps db || true
+  return 1
+}
+
 run_preflight
 ensure_prod_instance_state_volume
+if start_database_before_instance_state_deployment; then
+  :
+else
+  database_precondition_rc=$?
+  exit "${database_precondition_rc}"
+fi
 if prepare_instance_state_deployment run_docker_compose "${_pkm_resolved_channel}"; then
   :
 else

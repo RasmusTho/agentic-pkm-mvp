@@ -422,6 +422,16 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   the only accepted restore target; it is read-only detection that grants no merge authority, does
   not weaken the exact-head binding, never rewrites the durable receipt trail, and fails closed on
   merged, foreign, untrusted, or conflicting evidence.
+- Case-only repository metadata restoration uses the same read-only restoration result and candidate
+  verifier. It requires canonical live REST base-repository and PR URL identity, an explicitly open
+  unmerged snapshot, exact head/body/issue/run binding, unchanged expected repair accounting, one
+  trusted canonical authority comment and no phase or extra authority evidence. It refuses incomplete,
+  foreign, malformed, duplicate, conflicting, or drifted evidence. The original receipt is never
+  corrected or accepted as merge authority; its comments and accounting remain unchanged. A new
+  canonical run after restoration must independently satisfy the ordinary CI/review and body-edit
+  projection-convergence gates. Before any neutralization, the owning workflow derives case-preserved
+  repository identity from the live API and resolves the just-posted receipt on the original live PR
+  snapshot with exact run and accounting; failed authentication causes no body effect.
 - The authority-bound phase ledger is continuous and idempotent:
   `prepared -> merged -> reconciled -> restored`. Duplicate identical phase receipts are harmless;
   missing, stale, forged, skipped, or conflicting phases fail closed. If a crash leaves the exact

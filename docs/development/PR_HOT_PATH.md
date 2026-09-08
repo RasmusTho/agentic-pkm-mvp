@@ -322,6 +322,9 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 ## Safety Invariants
 
 - current SHA truth before merge
+- before neutralization, derive and preserve the canonical case-sensitive repository identity from
+  live GitHub REST evidence and independently authenticate the just-posted exact receipt against the
+  original live body/head/issue sets/run/unchanged accounting. Failed readback permits no body effect
 - issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
   publishes the neutralized body in the LF-less canonical transport form, revalidates the live
   body/head/closing links with at most one stored terminal LF, rejects a second LF, CR/CRLF, or any
@@ -339,6 +342,11 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
   change while the body is still neutralized requires restoring the canonical body before further
   repair work; an exact-head body stranded by the historical extra-LF transport is restoration-only
   and requires the unique authenticated body/receipt proof before the original body may be restored
+- exact case-only repository metadata recovery is restoration-only: complete canonical live PR
+  identity, one trusted canonical receipt, exact run/accounting/body/issue binding and absence of
+  phase or extra authority evidence may name the unique original body. The malformed receipt remains
+  invalid merge authority; retain its history and accounting and authenticate a new canonical run
+  through every ordinary CI, review, body-edit/projection and phase gate before any merge
 - branch/worktree sanity before commit, push, or merge
 - required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified

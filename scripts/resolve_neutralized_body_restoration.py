@@ -10,7 +10,8 @@ exit ``0`` never stands in for "cannot tell":
 * ``0`` -- no restoration required: the live body is canonical, or a trusted
   authority receipt still covers the current head.
 * ``2`` -- restoration required: either the body outlived its receipt head or
-  an exact-head receipt proves the historical one-extra-LF transport deadlock;
+  an exact-head receipt proves the historical one-extra-LF transport deadlock
+  or the strictly authenticated case-only repository metadata mistake;
   the durable receipt names the unique restore target.
 * ``3`` -- ambiguous: the body is neutralized on an open PR but the evidence is
   missing, untrusted, or conflicting, so no restore target can be proven. Stop
@@ -56,6 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--comments-json", type=Path, required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--expected-run-id")
+    parser.add_argument("--expected-repair-budget-json", type=Path)
     parser.add_argument("--output-json", type=Path)
     return parser
 
@@ -67,6 +69,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         pr=_mapping(args.pr_json),
         repository=args.repository,
         expected_run_id=args.expected_run_id,
+        expected_repair_budget=(
+            _mapping(args.expected_repair_budget_json)
+            if args.expected_repair_budget_json is not None else None
+        ),
     )
     exit_code = _EXIT_CODES[str(payload["status"])]
     if args.output_json is not None:
