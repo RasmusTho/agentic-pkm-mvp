@@ -322,6 +322,8 @@ def test_resolved_or_negated_owner_mentions_do_not_escalate(statement) -> None:
     "Owner decision has not been resolved.",
     "Owner authority has not yet been granted.",
     "No longer pending owner decision for A; awaiting owner authority for B.",
+    "Implementation is not blocked by an owner decision still required for release.",
+    "This change does not require an owner decision still needed for production.",
 ])
 def test_pending_owner_requirement_formulations_remain_visible(statement) -> None:
     result = classify(
@@ -330,6 +332,90 @@ def test_pending_owner_requirement_formulations_remain_visible(statement) -> Non
     )
     assert result.impact_classification == "human_exception_likely"
     assert "Human Exception" in result.recommended_next_action
+
+
+@pytest.mark.parametrize("state", [
+    "ambiguous", "unclear", "unresolved", "missing", "pending", "required", "needed",
+])
+@pytest.mark.parametrize("verb", ["", "is ", "remains ", "still ", "is still ", "remains still "])
+@pytest.mark.parametrize("subject", ["owner decision", "owner authority", "strategic decision"])
+def test_owner_requirement_states_preserve_local_negation(state, verb, subject) -> None:
+    affirmative = f"{subject} {verb}{state}."
+    negative = f"No {subject} {verb}{state}."
+    for statement, expected in [
+        (affirmative, "human_exception_likely"),
+        (negative, "no_change_likely"),
+        (negative + " Awaiting owner authority for a separate action.", "human_exception_likely"),
+    ]:
+        result = classify(
+            pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+            files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+        )
+        assert result.impact_classification == expected, statement
+
+
+@pytest.mark.parametrize("affirmative,negative", [
+    ("Requires an owner decision", "Does not require an owner decision"),
+    ("Requires owner authority", "No longer requires owner authority"),
+    ("Need an owner decision", "Don't need an owner decision"),
+    ("Needs an owner decision", "Never needs an owner decision"),
+    ("Awaits owner authority", "No longer awaits owner authority"),
+    ("Awaiting owner decision", "Not awaiting owner decision"),
+    ("Pending strategic decision", "No longer pending strategic decision"),
+    ("Waiting for an owner decision", "Not waiting for an owner decision"),
+    ("Blocked by owner authority", "Not blocked by owner authority"),
+    ("Blocked on owner decision", "No longer blocked on owner decision"),
+    ("Strategic ambiguity remains", "No strategic ambiguity remains"),
+    ("Strategic ambiguity persists", "No strategic ambiguity persists"),
+    ("Strategic ambiguity is unresolved", "No strategic ambiguity is unresolved"),
+])
+def test_preposed_requirements_preserve_local_negation(affirmative, negative) -> None:
+    for statement, expected in [
+        (affirmative + ".", "human_exception_likely"),
+        (negative + ".", "no_change_likely"),
+        (negative + ". Owner authority is missing elsewhere.", "human_exception_likely"),
+    ]:
+        result = classify(
+            pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+            files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+        )
+        assert result.impact_classification == expected, statement
+
+
+@pytest.mark.parametrize("subject,terminal", [
+    ("owner decision", "resolved"), ("owner authority", "granted"), ("owner authority", "approved"),
+])
+def test_terminal_predicate_polarity_is_atomic(subject, terminal) -> None:
+    statements = [
+        (f"{subject} {prefix} {terminal}.", "human_exception_likely")
+        for prefix in ["is not", "is not yet", "has not been", "has not yet been", "must be"]
+    ] + [
+        (f"{subject} {prefix} {terminal}.", "no_change_likely")
+        for prefix in ["is", "has been", "has already been"]
+    ] + [(f"No {subject} has not yet been {terminal}.", "no_change_likely")]
+    for statement, expected in statements:
+        result = classify(
+            pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+            files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+        )
+        assert result.impact_classification == expected, statement
+
+
+@pytest.mark.parametrize("negative", [
+    "No owner decision is pending for docs",
+    "This no longer requires an owner decision for docs",
+    "No strategic ambiguity remains for docs",
+    "Owner authority has already been granted for docs",
+])
+@pytest.mark.parametrize("separator", [". ", "; ", "\n", ", but ", " and "])
+def test_independent_requirement_survives_either_clause_order(negative, separator) -> None:
+    positive = "Owner authority is missing for release"
+    for statement in [negative + separator + positive, positive + separator + negative]:
+        result = classify(
+            pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+            files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+        )
+        assert result.impact_classification == "human_exception_likely", statement
 
 
 @pytest.mark.parametrize("declaration,statement", [

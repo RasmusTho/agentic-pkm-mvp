@@ -158,30 +158,39 @@ def _governance_only_files(files: list[str]) -> bool:
 
 def _authority_evidence(body: str) -> list[str]:
     # Advisory prose detection, not authorization. Match an unresolved requirement,
-    # not a bare topic or an already-settled declaration. Strip only the matched
-    # negative requirement, never the whole body (a second requirement may remain).
-    text = re.sub(
-        r"\b(?:does not|do not|did not|never)\s+(?:require|need)\s+"
-        r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b"
-        r"|\bno\s+(?:owner decision|owner authority|strategic decision)\s+"
-        r"(?:is\s+)?(?:needed|required)\b"
-        r"|\b(?:not|no longer)\s+(?:awaiting|pending|waiting for)\s+"
-        r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b",
-        "", body, flags=re.I,
-    )
-    requirement = re.search(
-        r"\b(?:owner authority|owner decision|strategic decision)\s+"
+    # not a bare topic or an already-settled declaration. Suppress only a positive
+    # match contained in a local negative span, never an independent requirement.
+    subject = r"(?:owner authority|owner decision|strategic decision)"
+    predicate = (
         r"(?:(?:is|remains)\s+)?(?:still\s+)?"
         r"(?:ambiguous|unclear|unresolved|missing|pending|required|needed|"
         r"(?:has\s+)?not\s+(?:yet\s+)?(?:been\s+)?(?:resolved|granted|approved)|"
-        r"must\s+be\s+(?:made|resolved|granted|approved))\b"
-        r"|\b(?:requires?|needs|awaits|awaiting|pending|waiting for|blocked (?:by|on))\s+"
-        r"(?:an?\s+)?(?:owner decision|owner authority|strategic decision)\b"
-        r"|\bstrategic ambiguity\s+(?:remains|persists|is unresolved)\b",
-        text, re.I,
+        r"must\s+be\s+(?:made|resolved|granted|approved))"
     )
-    if requirement:
-        return ["PR body names an unresolved owner authority or decision requirement"]
+    declaration = rf"{subject}\s+{predicate}"
+    request = (
+        r"(?:requires?|needs?|awaits|awaiting|pending|waiting for|blocked (?:by|on))\s+"
+        rf"(?:an?\s+)?{subject}"
+    )
+    ambiguity = r"strategic ambiguity\s+(?:remains|persists|is unresolved)"
+    # Reuse the positive grammar here so adding a recognized requirement cannot
+    # silently leave its local negative declaration outside the filter.
+    negative_pattern = (
+        rf"\bno\s+(?:{declaration}|{ambiguity})\b"
+        r"|\b(?:does not|do not|did not|doesn't|don't|didn't|never|not|no longer)\s+"
+        rf"{request}\b"
+    )
+    negative_spans = [match.span() for match in re.finditer(negative_pattern, body, re.I)]
+    # Look ahead for overlapping positive matches: a negated request can contain
+    # the subject of a separate trailing predicate ("not blocked by an owner
+    # decision still required for release"). Deleting text loses that predicate.
+    requirements = re.finditer(
+        rf"(?=(\b(?:{declaration}|{request}|{ambiguity})\b))", body, re.I,
+    )
+    for requirement in requirements:
+        start, end = requirement.span(1)
+        if not any(left <= start and end <= right for left, right in negative_spans):
+            return ["PR body names an unresolved owner authority or decision requirement"]
     return []
 
 
