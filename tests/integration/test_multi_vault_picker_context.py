@@ -296,6 +296,7 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
     registration = runtime.registry.load().registrations["binding-b"]
     activation = SettingsRebindActivation.from_environment(runtime.registry)
     tripped = False
+    post_commit_fault = False
     commit_done = threading.Event()
     watcher_errors: list[BaseException] = []
     watcher_thread: threading.Thread | None = None
@@ -318,13 +319,16 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
             watcher_errors.append(exc)
 
     def fail_before_ack(stage: str) -> None:
-        nonlocal tripped, watcher_thread
+        nonlocal post_commit_fault, tripped, watcher_thread
         if stage == "acknowledge" and not tripped:
             tripped = True
             raise RuntimeError("injected pre-commit fault")
         if stage == "acknowledge" and watcher_thread is None:
             watcher_thread = threading.Thread(target=reconcile_retry)
             watcher_thread.start()
+        if stage == "commit" and not post_commit_fault:
+            post_commit_fault = True
+            raise RuntimeError("injected post-commit fault")
 
     monkeypatch.setattr("app.instance.settings_rebind._activation_fault_point", fail_before_ack)
     with pytest.raises(RuntimeError, match="pre-commit fault"):
@@ -338,6 +342,28 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
     assert cancelled.candidate_binding_id == "binding-a"
     assert runtime.registry.load().last_active_vault_ref is None
 
+    with pytest.raises(RuntimeError, match="injected post-commit fault"):
+        activation.activate(
+            selection=KnownVaultRef(
+                ref=registration.ref,
+                path=registration.path,
+                vault_id=registration.vault_id,
+                local_instance_id=registration.local_instance_id,
+                vault_name=registration.vault_name,
+                last_opened_at=registration.last_opened_at,
+            ),
+            candidate_binding_id="binding-b",
+            candidate_root=vault_b,
+        )
+    assert watcher_thread is not None
+    watcher_thread.join(timeout=5)
+    assert not watcher_thread.is_alive()
+    assert not watcher_errors
+    committed = runtime.open_settings_rebind_store().read()
+    assert committed.phase == "committed"
+    assert committed.candidate_binding_id == "binding-b"
+    assert committed.reload_revision != committed.desired_revision
+
     activation.activate(
         selection=KnownVaultRef(
             ref=registration.ref,
@@ -350,13 +376,10 @@ def test_picker_and_watcher_rebind_is_failure_atomic(
         candidate_binding_id="binding-b",
         candidate_root=vault_b,
     )
-    assert watcher_thread is not None
-    watcher_thread.join(timeout=5)
-    assert not watcher_thread.is_alive()
-    assert not watcher_errors
     recovered = runtime.open_settings_rebind_store().read()
     assert recovered.phase == "committed"
     assert recovered.candidate_binding_id == "binding-b"
+    assert recovered.reload_revision == recovered.desired_revision
 
 
 def test_compatibility_bridge_enables_legacy_without_scoped_activation(
