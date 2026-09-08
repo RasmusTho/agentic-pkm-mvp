@@ -14,6 +14,8 @@ from app.builderops.epic_run_state import validate_run_id
 from app.builderops.execution_routing import (
     AllocationObservation,
     CapabilityTier,
+    SelectionIntent,
+    get_carrier_adapter,
     ExecutionAttemptObservation,
     ExecutionRouteDecision,
     ExecutionRouteRequest,
@@ -24,6 +26,7 @@ from app.builderops.execution_routing import (
     create_execution_attempt,
     resolve_bounded_fast_route,
     resolve_execution_target,
+    resolve_execution_target_for_intent,
     validate_route_decision,
 )
 from app.builderops.execution_routing_receipts import (
@@ -32,7 +35,7 @@ from app.builderops.execution_routing_receipts import (
     append_attempt_outcome,
     attempt_intent_exists,
 )
-from app.components.settings.providers_loader import load_provider_census
+from app.components.settings.providers_loader import ProviderCensus, load_provider_census
 from app.dispatcher.verification_consumer import _is_codex_usage_limit_event
 
 SCHEMA_VERSION = 2
@@ -108,9 +111,23 @@ class IssueSessionLauncher(Protocol):
 
 _CAPABILITY_FOR_MODEL_CLASS = {
     "low-cost": "luna",
+    "standard": "luna",
+    "high-reasoning": "sol",
+}
+# Context packs written before selection intents carried the old capability
+# value for the standard class.  Keep that value readable, but rebind the
+# request to the current provider-neutral intent policy before launch.
+_LEGACY_CAPABILITY_FOR_MODEL_CLASS = {
+    "low-cost": "luna",
     "standard": "terra",
     "high-reasoning": "sol",
 }
+_SELECTION_INTENT_FOR_MODEL_CLASS: dict[str, SelectionIntent] = {
+    "low-cost": "coordination",
+    "standard": "general_delivery",
+    "high-reasoning": "strong_reasoning",
+}
+_SELECTION_INTENTS = set(_SELECTION_INTENT_FOR_MODEL_CLASS.values()) | {"verification"}
 ACTIVE_WORKER_RUNTIME = "codex"
 
 
@@ -309,17 +326,72 @@ class CodexIssueSessionLauncher:
         runtime = context_pack.get("runtime")
         if not isinstance(runtime, Mapping) or runtime.get("runtime") != "codex":
             raise EpicDispatchError("serial session launcher supports codex runtime only")
+        carrier = runtime.get("carrier", runtime.get("runtime"))
+        if carrier != "codex":
+            raise EpicDispatchError("serial session launcher supports codex carrier only")
+        raw_selection_intent = runtime.get("selection_intent")
         model_class = runtime.get("model_class")
-        if (
-            not isinstance(model_class, str)
-            or model_class not in _CAPABILITY_FOR_MODEL_CLASS
-        ):
-            raise EpicDispatchError("context pack has no supported TCD model class")
+        if raw_selection_intent is None:
+            if (
+                not isinstance(model_class, str)
+                or model_class not in _CAPABILITY_FOR_MODEL_CLASS
+            ):
+                raise EpicDispatchError("context pack has no supported TCD model class")
+            selection_intent = _SELECTION_INTENT_FOR_MODEL_CLASS[model_class]
+        else:
+            if (
+                not isinstance(raw_selection_intent, str)
+                or raw_selection_intent not in _SELECTION_INTENTS
+            ):
+                raise EpicDispatchError("context pack has unsupported selection intent")
+            selection_intent = cast(SelectionIntent, raw_selection_intent)
         capability = runtime.get("capability")
-        if capability is None:
-            capability = _CAPABILITY_FOR_MODEL_CLASS[model_class]
-        if capability != _CAPABILITY_FOR_MODEL_CLASS[model_class]:
-            raise EpicDispatchError("context pack capability conflicts with TCD model class")
+        capability_override = runtime.get("capability_override")
+        if capability_override is not None and (
+            not isinstance(capability_override, str)
+            or capability_override not in {"spark", "luna", "terra", "sol"}
+        ):
+            raise EpicDispatchError("context pack has unsupported capability override")
+        try:
+            expected_target = (
+                resolve_execution_target(
+                    self.provider_census,
+                    channel=self.builder_channel,
+                    capability=cast(CapabilityTier, capability_override),
+                )
+                if capability_override is not None
+                else resolve_execution_target_for_intent(
+                    self.provider_census,
+                    channel=self.builder_channel,
+                    selection_intent=selection_intent,
+                )
+            )
+        except ValueError as exc:
+            raise EpicDispatchError(str(exc)) from exc
+        expected_capability = expected_target.capability
+        if raw_selection_intent is None:
+            assert isinstance(model_class, str)
+            legacy_capability = _LEGACY_CAPABILITY_FOR_MODEL_CLASS[model_class]
+            if capability is not None and capability not in {
+                expected_capability,
+                legacy_capability,
+            }:
+                raise EpicDispatchError(
+                    "context pack capability conflicts with legacy TCD selection policy"
+                )
+            capability = expected_capability
+        elif capability_override is not None:
+            if capability is None:
+                capability = capability_override
+            if capability != capability_override:
+                raise EpicDispatchError(
+                    "context pack capability conflicts with explicit capability override"
+                )
+        else:
+            if capability is None:
+                capability = expected_capability
+            if capability != expected_capability:
+                raise EpicDispatchError("context pack capability conflicts with TCD selection policy")
         model_id = runtime.get("model")
         if model_id is not None and (
             not isinstance(model_id, str) or not model_id.strip()
@@ -332,10 +404,19 @@ class CodexIssueSessionLauncher:
                 channel=self.builder_channel,
                 capability=capability_tier,
                 model_id=model_id,
+                selection_intent=(
+                    None if capability_override is not None else selection_intent
+                ),
+            )
+            invocation = get_carrier_adapter("codex").bind(
+                target,
+                selection_intent=selection_intent,
             )
         except ValueError as exc:
             raise EpicDispatchError(str(exc)) from exc
-        return target.model, target.reasoning_effort
+        if not invocation.launchable or invocation.model is None:
+            raise EpicDispatchError("resolved Codex target is not launchable")
+        return invocation.model, invocation.reasoning_effort
 
     @staticmethod
     def _planned_worktree(context_pack: Mapping[str, Any]) -> Path:
@@ -373,6 +454,7 @@ def build_dispatch_plan(
     """
 
     normalized_run_id = validate_run_id(run_id)
+    provider_census = load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH)
     independent_scope = _normalize_independent_issue_numbers(independent_issue_numbers)
     if epic_issue_number is None:
         if not independent_scope:
@@ -427,7 +509,12 @@ def build_dispatch_plan(
     )
 
     for index, candidate in enumerate(normalized_candidates):
-        decision = _build_tcd_decision(candidate, runtimes, lease_issues)
+        decision = _build_tcd_decision(
+            candidate,
+            runtimes,
+            lease_issues,
+            provider_census=provider_census,
+        )
         selected_for_dispatch = False
         context_pack_id = None
 
@@ -820,6 +907,7 @@ def _launch_canary(
         load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH),
         channel="dev",
         capability="luna",
+        selection_intent=decision.selection_intent,
     )
     fallback_intent_attempt = create_execution_attempt(
         request=request,
@@ -1080,6 +1168,11 @@ def _validate_execution_routing_context(
             census,
             channel="dev",
             capability=route.selected_capability,
+            selection_intent=(
+                route.selection_intent
+                if route.selected_capability != "spark"
+                else None
+            ),
         )
         mode = _normalize_choice(
             routing_payload.get("mode"), "execution_routing.mode", {"shadow", "canary"}
@@ -1269,6 +1362,8 @@ def _build_tcd_decision(
     candidate: Mapping[str, Any],
     runtimes: list[str],
     active_leases: set[int],
+    *,
+    provider_census: ProviderCensus,
 ) -> dict[str, Any]:
     issue_number = candidate["issue_number"]
     skip_reason = _claimability_skip_reason(candidate, active_leases)
@@ -1285,10 +1380,20 @@ def _build_tcd_decision(
 
     runtime_model_hint = {
         "runtime": runtime_target,
+        "carrier": runtime_target,
         "model_class": _model_class_for(risk),
-        "capability": _capability_for_risk(risk),
+        "selection_intent": candidate["selection_intent"]
+        or _selection_intent_for_risk(risk),
+        "capability": _capability_for_selection_intent(
+            candidate["selection_intent"] or _selection_intent_for_risk(risk),
+            provider_census=provider_census,
+        ),
         "runtime_difference": "invocation-hint-only",
     }
+    capability_override = candidate["capability_override"]
+    if capability_override is not None:
+        runtime_model_hint["capability_override"] = capability_override
+        runtime_model_hint["capability"] = capability_override
     model_override = candidate.get("model_override")
     if model_override is not None:
         runtime_model_hint["model"] = model_override
@@ -1502,6 +1607,20 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     if execution_routing is not None and not isinstance(execution_routing, Mapping):
         raise EpicDispatchError("execution_routing must be an object when supplied")
     model_override = _normalize_optional_string(candidate.get("model_override"))
+    capability_override = candidate.get("capability_override")
+    if capability_override is not None:
+        capability_override = _normalize_choice(
+            capability_override,
+            "capability_override",
+            {"spark", "luna", "terra", "sol"},
+        )
+    selection_intent = candidate.get("selection_intent")
+    if selection_intent is not None:
+        selection_intent = _normalize_choice(
+            selection_intent,
+            "selection_intent",
+            _SELECTION_INTENTS,
+        )
     repository = _normalize_optional_string(candidate.get("repository"))
     return {
         "issue_number": issue_number,
@@ -1520,6 +1639,8 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "preferred_path": _normalize_optional_string(candidate.get("preferred_path")),
         "runtime_hint": runtime_hint,
         "model_override": model_override,
+        "capability_override": capability_override,
+        "selection_intent": selection_intent,
         "scriptable": bool(candidate.get("scriptable", False)),
         "issue_local_helper_budget": issue_local_helper_budget,
         "issue_local_helper_rationale": helper_rationale,
@@ -1707,6 +1828,11 @@ def _build_execution_routing(
             census,
             channel="dev",
             capability=route.selected_capability,
+            selection_intent=(
+                route.selection_intent
+                if route.selected_capability != "spark"
+                else None
+            ),
         )
         attempt = create_execution_attempt(
             request=request,
@@ -1918,8 +2044,31 @@ def _model_class_for(risk: str) -> str:
     return "standard"
 
 
+def _selection_intent_for_risk(risk: str) -> SelectionIntent:
+    if risk in {"critical", "high"}:
+        return "strong_reasoning"
+    if risk == "low":
+        return "coordination"
+    return "general_delivery"
+
+
+def _capability_for_selection_intent(
+    selection_intent: SelectionIntent,
+    *,
+    provider_census: ProviderCensus | None = None,
+    channel: str = "dev",
+) -> str:
+    census = provider_census or load_provider_census(_DECLARED_PROVIDER_CENSUS_PATH)
+    target = resolve_execution_target_for_intent(
+        census,
+        channel=channel,
+        selection_intent=selection_intent,
+    )
+    return target.capability
+
+
 def _capability_for_risk(risk: str) -> str:
-    return _CAPABILITY_FOR_MODEL_CLASS[_model_class_for(risk)]
+    return _capability_for_selection_intent(_selection_intent_for_risk(risk))
 
 
 def _budget_class_for(risk: str, expected_value: str) -> str:

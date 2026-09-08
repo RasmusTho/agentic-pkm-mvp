@@ -90,6 +90,21 @@ def test_distinct_findings_have_no_numeric_stop_and_require_rereview(
         )
 
 
+def test_default_strongest_capability_is_provider_neutral(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+
+    loop = VerificationAgentLoop(
+        state,
+        run.run_id,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+
+    assert loop.strongest_capability == "sol"
+
+
 def test_v2_blocking_review_requires_projection_before_ledger_mutation(
     tmp_path,
 ) -> None:
@@ -398,7 +413,7 @@ def test_tcd_can_select_strongest_capability_before_two_standard_attempts(
         mechanism_id="parser",
         session_id="fix-1",
         capability="sol",
-        reasoning_effort="xhigh",
+        reasoning_effort="max",
         context={"head": run.head_sha},
         outcome="fixed",
         strongest=True,

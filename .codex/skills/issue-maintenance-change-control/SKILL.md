@@ -5,6 +5,13 @@ description: "Keep GitHub Issues, PRs, labels, and optional Project projection t
 
 # Issue Maintenance: Change Control
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: general_delivery` as its provider-neutral default.
+The carrier may be Codex or Claude; the shared resolver binds the intent to the configured target.
+Stronger capability is an explicit TCD escalation, never a provider/model branch embedded in this
+skill.
+
 When setting or repairing `agent:blocked` / `agent:needs-human`, apply exactly one compatible
 `action:*` label and a `blocker_action.v1` receipt per `_shared/BLOCKER_ACTION_CONTRACT.md`; remove
 action labels on ready or terminal transitions.

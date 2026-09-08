@@ -15,6 +15,10 @@ from app.dispatcher.verification_contract import (
     MAX_CLOSING_ISSUES,
     verification_run_id_for_canary,
 )
+from app.dispatcher.verification_consumer import (
+    CANONICAL_RECEIPT_SCHEMA_PATH,
+    load_and_validate_verification_closer_receipt,
+)
 from app.dispatcher.verification_dispatch import (
     REPAIR_INTENT_ATTEMPT_KIND,
     VerificationDispatchLedger,
@@ -29,6 +33,8 @@ from tests.dispatcher.verification_helpers import (
     ledger,
     pre_trust_request,
     request,
+    admit_verification_receipt,
+    verified_attempt_receipt,
 )
 from app.dispatcher.store import SqliteStore
 
@@ -163,6 +169,121 @@ def test_attempt_recording_remains_lease_fenced_without_numeric_repair_cap(
         lease_id=claimed.lease_id,
         idempotency_key="repair-1",
     ) == 1
+
+
+def test_legacy_model_capability_replay_is_canonical_and_idempotent(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    receipt = {
+        "finding_id": "F-legacy-capability",
+        "failure_domain": "review_code_correctness",
+        "mechanism_id": "legacy-capability",
+        "head_sha": run.head_sha,
+    }
+    assert state.record_attempt(
+        run.run_id,
+        "standard_repair",
+        "legacy-session",
+        "gpt-5.6-sol",
+        "high",
+        {"head": run.head_sha},
+        "fixed",
+        receipt,
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="legacy-model-key",
+    ) == 1
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_attempts SET capability=? WHERE run_id=?",
+            ("gpt-5.6-sol", run.run_id),
+        )
+    assert state.attempts(run.run_id)[0]["capability"] == "sol"
+    assert state.record_attempt(
+        run.run_id,
+        "standard_repair",
+        "legacy-session",
+        "sol",
+        "high",
+        {"head": run.head_sha},
+        "fixed",
+        receipt,
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="new-capability-key",
+    ) == 1
+    assert len(state.attempts(run.run_id)) == 1
+
+
+def test_legacy_nested_receipt_capability_replay_is_canonical_and_idempotent(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    legacy_receipt = verified_attempt_receipt()
+    legacy_admitted = admit_verification_receipt(
+        state,
+        run.run_id,
+        "legacy-verification-session",
+        legacy_receipt,
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+
+    assert state.record_attempt(
+        run.run_id,
+        "verification",
+        "legacy-verification-session",
+        "gpt-5.6-sol",
+        "xhigh",
+        {"head": run.head_sha},
+        "launched",
+        legacy_admitted,
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="legacy-verification-key",
+    ) == 1
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_attempts SET capability=? WHERE run_id=?",
+            ("gpt-5.6-sol", run.run_id),
+        )
+
+    assert state.attempts(run.run_id)[0]["capability"] == "sol"
+    canonical_receipt = load_and_validate_verification_closer_receipt(
+        legacy_receipt,
+        CANONICAL_RECEIPT_SCHEMA_PATH,
+        trusted_repository="RasmusTho/agentic-pkm-mvp",
+        trusted_evidence_urls=frozenset(),
+        capability_aliases=state.capability_aliases,
+    )
+    canonical_admitted = admit_verification_receipt(
+        state,
+        run.run_id,
+        "legacy-verification-session",
+        dict(canonical_receipt),
+        holder="host",
+        lease_id=claimed.lease_id,
+    )
+
+    assert state.record_attempt(
+        run.run_id,
+        "verification",
+        "legacy-verification-session",
+        "sol",
+        "xhigh",
+        {"head": run.head_sha},
+        "launched",
+        canonical_admitted,
+        holder="host",
+        lease_id=claimed.lease_id,
+        idempotency_key="current-verification-key",
+    ) == 1
+    attempts = state.attempts(run.run_id)
+    assert len(attempts) == 1
+    assert attempts[0]["receipt"]["review_events"][0]["capability"] == "sol"
 
 
 def test_repair_progress_receipt_is_lease_fenced_and_replay_safe(tmp_path) -> None:

@@ -21,6 +21,13 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 
 ## Your Job
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: verification`. The shared resolver may bind that
+intent to Codex or Claude, but this skill never embeds a provider-specific model ID or carrier
+command. A carrier that is not active returns a truthful compatibility result rather than silently
+changing the verification contract.
+
 - verify the implementation against the governing slice or feature contract
 - validate tests, docs, and writeback quality
 - ensure shipped truth moved to the right owner docs
@@ -386,7 +393,7 @@ finding and does not re-trigger review.
   Total Cost of Development` and current platform configuration, start a fresh repair context when
   that improves independence, and pass it all prior findings, attempted fixes, changed mechanisms,
   validation evidence, and the last progress assessment. When TCD selects a strongest-capability
-  repair, use the configured strongest capability with high or xhigh reasoning. Do not duplicate a
+  repair, use the configured strongest capability with high, xhigh, or max reasoning. Do not duplicate a
   provider/model ladder here; the canonical policy and live configuration govern.
 - Independently re-review after every substantive repair and record the selected capability,
   reasoning level, prior context supplied, fallback (if any), progress evidence, and outcome. Keep

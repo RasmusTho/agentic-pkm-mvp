@@ -17,6 +17,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Protocol
 
 from app.builderops.control_plane.client import (
@@ -24,6 +25,8 @@ from app.builderops.control_plane.client import (
     ControlPlaneClientError,
     ControlPlaneNotFoundError,
 )
+from app.builderops.execution_routing import capability_aliases_for_channel
+from app.components.settings.providers_loader import load_provider_census
 from app.dispatcher.verification_dispatch import (
     ACTIVE_STATES,
     REPAIR_ATTEMPT_KINDS,
@@ -40,14 +43,17 @@ from app.dispatcher.verification_dispatch import (
     _VerificationReceiptAdmissionRegistry,
     _verification_anchor_is_eligible,
     _attempt_plan,
+    _canonicalize_persisted_attempt_receipt,
     _is_exact_event_batch_replay,
     _latest_closure_anchor,
     _persisted_attempt_receipt,
+    _find_semantic_replay,
     _project_verification_receipt_authority,
     _reject_reserved_event_batch_metadata,
     _validated_attempt_receipt_for_persistence,
     _validate_review_session_reuse,
     _canonical_request_projection,
+    _canonicalize_receipt_for_replay,
     _current_head_replay_authority_matches,
     _live_takeover_authority_matches,
     _projected_mechanism_id,
@@ -256,6 +262,10 @@ class BuilderOpsVerificationLedger:
         self.client = client
         self.repository = repository.lower()
         self.effect_outbox = effect_outbox
+        census_path = Path(__file__).resolve().parents[2] / "docs/settings/models/providers.yaml"
+        self.capability_aliases: Mapping[str, str] = capability_aliases_for_channel(
+            load_provider_census(census_path), channel="dev"
+        )
         self._verification_receipt_admissions = (
             _VerificationReceiptAdmissionRegistry()
         )
@@ -268,6 +278,14 @@ class BuilderOpsVerificationLedger:
             "source_refs": [source_ref],
             "schema_version": 1,
         }
+
+    def _canonical_capability(self, kind: str, capability: str) -> str:
+        if kind == REPAIR_INTENT_ATTEMPT_KIND and capability == "deterministic":
+            return capability
+        normalized = self.capability_aliases.get(capability)
+        if normalized is None:
+            raise ValueError("verification capability is not declared")
+        return normalized
 
     def _admit_validated_verification_receipt(
         self,
@@ -935,16 +953,28 @@ class BuilderOpsVerificationLedger:
                 for event in payload["batch_events"]:
                     if not isinstance(event, Mapping):
                         raise ValueError("BuilderOps verification attempt batch is malformed")
-                    result.append(
-                        _project_verification_receipt_authority(dict(event))
+                    normalized_event = dict(event)
+                    normalized_event["capability"] = self._canonical_capability(
+                        str(normalized_event["kind"]),
+                        str(normalized_event["capability"]),
                     )
+                    result.append(_canonicalize_persisted_attempt_receipt(
+                        _project_verification_receipt_authority(normalized_event),
+                        self.capability_aliases,
+                    ))
             else:
                 attempt = dict(payload)
+                attempt["capability"] = self._canonical_capability(
+                    str(attempt["kind"]), str(attempt["capability"])
+                )
                 if "containment" in attempt:
                     validated_linux_containment_receipt(
                         attempt["containment"]
                     )
-                result.append(_project_verification_receipt_authority(attempt))
+                result.append(_canonicalize_persisted_attempt_receipt(
+                    _project_verification_receipt_authority(attempt),
+                    self.capability_aliases,
+                ))
         return result
 
     def record_attempt(
@@ -970,6 +1000,7 @@ class BuilderOpsVerificationLedger:
             "verification",
         }:
             raise ValueError("invalid verification attempt kind")
+        capability = self._canonical_capability(kind, capability)
         _reject_reserved_event_batch_metadata(receipt)
         snapshot = self._snapshot(run_id)
         lease = self._assert_lease(snapshot, holder, lease_id)
@@ -997,6 +1028,10 @@ class BuilderOpsVerificationLedger:
             outcome=outcome,
             receipt=receipt,
             producer_authorized=producer_authorized,
+        )
+        persisted_receipt = _canonicalize_receipt_for_replay(
+            persisted_receipt,
+            self.capability_aliases,
         )
         if idempotency_key:
             replay_attempt_id = "vattempt-" + _digest(
@@ -1038,6 +1073,31 @@ class BuilderOpsVerificationLedger:
                     raise ValueError(
                         "verification attempt replay ordinal is malformed"
                     )
+                if kind == "verification":
+                    self._verification_receipt_admissions.retire(receipt)
+                return ordinal
+            semantic_replay = _find_semantic_replay(
+                attempts,
+                kind=kind,
+                session_id=session_id,
+                capability=capability,
+                reasoning_effort=reasoning_effort,
+                outcome=outcome,
+                expected_receipt=(
+                    dict(persisted_receipt)
+                    if persisted_receipt is not None
+                    else None
+                ),
+                expected_containment=(
+                    validated_linux_containment_receipt(containment_receipt)
+                    if containment_receipt is not None
+                    else None
+                ),
+            )
+            if semantic_replay is not None:
+                ordinal = semantic_replay.get("ordinal")
+                if not isinstance(ordinal, int) or isinstance(ordinal, bool):
+                    raise ValueError("verification attempt replay ordinal is malformed")
                 if kind == "verification":
                     self._verification_receipt_admissions.retire(receipt)
                 return ordinal
@@ -1154,6 +1214,9 @@ class BuilderOpsVerificationLedger:
             _reject_reserved_event_batch_metadata(receipt)
             item_kind = str(item["kind"])
             item_session_id = str(item["session_id"])
+            item["capability"] = self._canonical_capability(
+                item_kind, str(item["capability"])
+            )
             producer_authorized = False
             if item_kind == "verification":
                 producer_authorized = (

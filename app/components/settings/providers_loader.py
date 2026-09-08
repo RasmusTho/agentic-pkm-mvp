@@ -29,6 +29,12 @@ BuilderReasoningEffort: TypeAlias = Literal[
     "xhigh",
     "max",
 ]
+BuilderSelectionIntent: TypeAlias = Literal[
+    "coordination",
+    "general_delivery",
+    "strong_reasoning",
+    "verification",
+]
 
 
 class ProviderCapabilities(BaseModel):
@@ -101,6 +107,10 @@ class BuilderExecutionProfile(TierMapping):
     model_reasoning_efforts: dict[str, BuilderReasoningEffort] = Field(
         default_factory=dict
     )
+    selection_intents: list[BuilderSelectionIntent] = Field(default_factory=list)
+    selection_intent_reasoning_efforts: dict[
+        BuilderSelectionIntent, BuilderReasoningEffort
+    ] = Field(default_factory=dict)
 
 
 class ModelInquiryProfile(BaseModel):
@@ -242,6 +252,18 @@ class ProviderCensus(BaseModel):
                                 "Builder execution selectable model "
                                 f"{mapping.provider}/{selectable_model_id} lacks {capability}"
                             )
+                if len(mapping.selection_intents) != len(set(mapping.selection_intents)):
+                    raise ValueError(
+                        "Builder execution profile contains duplicate selection intents "
+                        f"for {mapping.provider}/{mapping.capability_tier}"
+                    )
+                if not set(mapping.selection_intent_reasoning_efforts) <= set(
+                    mapping.selection_intents
+                ):
+                    raise ValueError(
+                        "Builder execution profile maps reasoning effort for an unassigned "
+                        "selection intent"
+                    )
         if set(self.runtime_channels.model_inquiry) != set(
             self.runtime_channels.builder_execution
         ):

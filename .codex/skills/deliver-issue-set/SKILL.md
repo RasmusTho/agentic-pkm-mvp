@@ -14,6 +14,13 @@ The goal is to produce an executable implementation plan and, when requested, de
 
 This skill is a coordinator. It does not replace `issue-to-code`, `verification-and-closure`, `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`.
 
+## Explicit execution selection intent
+
+This skill declares `execution_selection_intent: coordination` for deterministic intake, readiness,
+dispatch planning, and receipt reconciliation. It passes only that provider-neutral intent into the
+shared resolver; it never branches on a Codex/Claude model ID. Worker skills declare their own intent
+and remain responsible for their issue-local implementation or verification route.
+
 For larger `type:bug` sets, the coordinator capability, session isolation, serial default, and
 independent-wave exception are canonical in `AGENTS.md :: Transition-period bug-delivery policy`.
 Apply that policy before the generic independent-issue fast lane or delivery-mode parallel rules.

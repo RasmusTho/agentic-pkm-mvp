@@ -361,7 +361,14 @@ class PostMergeTerminalReadOutageTruth(Truth):
 
 
 class Launcher:
-    config = LaunchConfig("verification_closer", "gpt-5.6-terra", "high", "workspace-write", "instructions")
+    config = LaunchConfig(
+        "verification_closer",
+        "gpt-5.6-terra",
+        "high",
+        "workspace-write",
+        "instructions",
+        capability="terra",
+    )
     def __init__(self): self.calls = []
     def launch(self, context_pack, *, resume_session_id=None, on_thread_started=None, on_heartbeat=None):
         self.calls.append((context_pack, resume_session_id))
@@ -7811,6 +7818,44 @@ def test_receipt_preserves_diagnosable_outcome_for_known_capability() -> None:
     assert event["outcome"] in verification_consumer._SAFE_EVENT_OUTCOMES
 
 
+def test_receipt_projects_astra_model_to_sol_capability_before_ledger() -> None:
+    receipt = {
+        "verdict": "retry",
+        "head_sha": HEAD,
+        "summary": "strong verification review",
+        "receipt_ids": ["receipt-1"],
+        "retry_after": None,
+        "review_events": [
+            {
+                "kind": "review",
+                "session_id": "01900000-0000-7000-8000-000000000043",
+                "capability": "gpt-6-astra",
+                "reasoning_effort": "max",
+                "outcome": "clean",
+                "finding_id": None,
+                "failure_domain": None,
+                "mechanism_id": None,
+                "strongest": None,
+            }
+        ],
+        "human_exception": None,
+    }
+    schema = (
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+    )
+
+    sanitized = verification_consumer.load_and_validate_verification_closer_receipt(
+        receipt,
+        schema,
+        trusted_repository=REPO,
+        trusted_evidence_urls=frozenset(),
+        capability_aliases={"gpt-6-astra": "sol", "sol": "sol"},
+    )
+
+    assert sanitized["review_events"][0]["capability"] == "sol"
+
+
 def test_retry_verdict_receipt_is_diagnosable_without_raw_logs(tmp_path) -> None:
     """A retry/backoff terminal receipt stays diagnosable through the normal
     operator surface (``dispatcher verification-status``), not only via raw
@@ -7839,7 +7884,7 @@ def test_retry_verdict_receipt_is_diagnosable_without_raw_logs(tmp_path) -> None
     terminal_receipt = status_view["terminal_receipt"]
     assert terminal_receipt["verdict"] == "retry"
     event = terminal_receipt["review_events"][0]
-    assert event["capability"] == "gpt-5.6-terra"
+    assert event["capability"] == "terra"
     assert event["outcome"] == "unrecognized-outcome"
     assert event["outcome"] not in {"blocking", "clean", "fixed", "repaired"}
     assert event["failure_domain"] == "review_code_correctness"

@@ -3,7 +3,7 @@ status: active
 kind: chat
 provider: openai
 model: gpt-6-astra
-notes: Explicit high-risk TCD candidate in the Sol capability; not a default model. When selected through the declared Builder resolver it uses max reasoning effort.
+notes: Not the default for product chat. It is the declared Builder default for strong_reasoning and verification intents in the Sol capability, with max reasoning effort; the actual Sol model remains an explicit fallback.
 pricing:
   standard_input_usd_per_million_tokens: 10.0
   standard_output_usd_per_million_tokens: 50.0

@@ -73,10 +73,10 @@ def test_codex_agent_model_reasoning_and_sandbox_are_bounded() -> None:
 def test_specialist_defaults_follow_tcd_ladder() -> None:
     expected = {
         "issue-set-coordinator.toml": ("gpt-5.6-luna", "low"),
-        "slice-implementer.toml": ("gpt-5.6-luna", "high"),
+        "slice-implementer.toml": ("gpt-5.6-luna", "xhigh"),
         "issue-local-helper.toml": ("gpt-5.6-luna", "medium"),
-        "backlog-contract-maintainer.toml": ("gpt-5.6-sol", "high"),
-        "verification-closer.toml": ("gpt-5.6-sol", "high"),
+        "backlog-contract-maintainer.toml": ("gpt-5.6-luna", "xhigh"),
+        "verification-closer.toml": ("gpt-6-astra", "max"),
     }
 
     for filename, (model, effort) in expected.items():
