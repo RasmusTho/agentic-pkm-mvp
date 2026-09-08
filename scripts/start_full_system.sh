@@ -2003,7 +2003,7 @@ if [ "$NO_VAULT_MODE" -eq 1 ]; then
     echo "ERROR: no-vault startup could not inspect durable settings rebind phase" >&2
     exit 1
   }
-  settings_rebind_phase=$(SETTINGS_REBIND_PHASE_JSON="$settings_rebind_phase_json" python - <<'PY'
+  settings_rebind_phase_state=$(SETTINGS_REBIND_PHASE_JSON="$settings_rebind_phase_json" python - <<'PY'
 import json
 import os
 
@@ -2014,7 +2014,7 @@ except (KeyError, json.JSONDecodeError):
 phase = payload.get("phase")
 if not isinstance(phase, str):
     raise SystemExit(1)
-print(phase)
+print(f"{phase}\t{int(payload.get('reload_complete') is True)}")
 PY
   ) || {
     EXIT_REASON="settings_rebind_phase_invalid"
@@ -2024,7 +2024,8 @@ PY
     echo "ERROR: no-vault startup received an invalid settings rebind phase" >&2
     exit 1
   }
-  if [ "$settings_rebind_phase" = "committed" ]; then
+  IFS=$'\t' read -r settings_rebind_phase settings_rebind_reload_complete <<<"$settings_rebind_phase_state"
+  if [ "$settings_rebind_phase" = "committed" ] && [ "$settings_rebind_reload_complete" != "1" ]; then
     EXIT_REASON="settings_rebind_committed_watcher_required"
     EXIT_CODE=1
     export EXIT_REASON EXIT_CODE

@@ -423,11 +423,16 @@ def test_dev_channel_alias_returns_zero_with_deferred_index_rebuild(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    ("stop_failure", "phase"),
-    [(False, "prepared"), (True, "prepared"), (False, "committed")],
+    ("stop_failure", "phase", "reload_revision"),
+    [
+        (False, "prepared", 0),
+        (True, "prepared", 0),
+        (False, "committed", 0),
+        (False, "committed", 1),
+    ],
 )
 def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
-    tmp_path: Path, stop_failure: bool, phase: str,
+    tmp_path: Path, stop_failure: bool, phase: str, reload_revision: int,
 ) -> None:
     health = _deferred_index_health()
     health["ok"] = True
@@ -461,6 +466,7 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
         lifecycle_posture="watcher",
         prior_binding_id=None,
         candidate_binding_id="binding-b",
+        reload_revision=reload_revision,
     )
     runtime.registry.set_settings_rebind_state(
         prepared.as_payload(),
@@ -477,7 +483,7 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
         total_timeout=STARTUP_FIXTURE_TIMEOUT_SECONDS,
     )
 
-    if phase == "committed":
+    if phase == "committed" and reload_revision == 0:
         assert result.returncode != 0
         assert "cannot stop the watcher while a committed settings rebind is pending" in result.stderr
         assert runtime.open_settings_rebind_store().read() == prepared
@@ -485,6 +491,24 @@ def test_no_vault_rebind_rejects_existing_watcher_before_acknowledgement(
         assert "--check-only" in progress
         assert " stop watcher" not in progress
         assert "settings-rebind-no-lifecycle --registry-path" not in progress
+        return
+
+    if phase == "committed":
+        assert result.returncode == 0, result.stderr + result.stdout
+        record = runtime.open_settings_rebind_store().read()
+        assert record.phase == "no_lifecycle"
+        assert record.reload_revision == 1
+        progress = Path(env["STARTUP_HARNESS_PROGRESS_PATH"]).read_text(encoding="utf-8")
+        progress_lines = progress.splitlines()
+        watcher_stop_index = next(
+            index for index, line in enumerate(progress_lines) if " stop watcher" in line
+        )
+        acknowledgement_index = next(
+            index
+            for index, line in enumerate(progress_lines)
+            if "settings-rebind-no-lifecycle --registry-path" in line
+        )
+        assert watcher_stop_index < acknowledgement_index
         return
 
     if stop_failure:

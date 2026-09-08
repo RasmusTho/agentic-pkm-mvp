@@ -4848,6 +4848,11 @@ def main(argv: list[str] | None = None) -> int:
                     "desired_revision": record.desired_revision,
                     "applied_revision": record.applied_revision,
                     "phase": record.phase,
+                    "reload_revision": record.reload_revision,
+                    "reload_complete": (
+                        record.phase == "committed"
+                        and record.reload_revision == record.desired_revision
+                    ),
                 },
                 sort_keys=True,
             )

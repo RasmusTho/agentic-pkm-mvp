@@ -259,7 +259,7 @@ class SettingsRebindStore:
         *,
         desired_revision: int,
     ) -> SettingsRebindRecord:
-        """Complete one already-prepared revision as intentionally unwatched."""
+        """Record an intentionally unwatched prepared or fully reloaded revision."""
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
@@ -271,7 +271,12 @@ class SettingsRebindStore:
             if current.desired_revision != desired_revision:
                 raise RegistryError("settings rebind no_lifecycle revision mismatch")
             return current
-        if current.phase != "prepared":
+        if current.phase == "committed":
+            if current.reload_revision != current.desired_revision:
+                raise RegistryError(
+                    "settings rebind no_lifecycle acknowledgement requires a completed reload"
+                )
+        elif current.phase != "prepared":
             raise RegistryError(
                 "settings rebind no_lifecycle acknowledgement requires a prepared revision"
             )
@@ -317,9 +322,15 @@ class SettingsRebindStore:
             return self.acknowledge_no_lifecycle(
                 desired_revision=current.desired_revision,
             )
-        raise RegistryError(
-            "absent watcher cannot reconcile a committed settings rebind revision"
-        )
+        if current.phase == "committed":
+            if current.reload_revision != current.desired_revision:
+                raise RegistryError(
+                    "absent watcher cannot reconcile a pending committed settings rebind revision"
+                )
+            return self.acknowledge_no_lifecycle(
+                desired_revision=current.desired_revision,
+            )
+        raise RegistryError("absent watcher cannot reconcile this settings rebind revision")
 
 
 def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
