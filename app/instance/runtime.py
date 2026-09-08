@@ -4653,6 +4653,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     rebind_no_lifecycle = subparsers.add_parser("settings-rebind-no-lifecycle")
     rebind_no_lifecycle.add_argument("--registry-path", type=Path, required=True)
+    rebind_no_lifecycle.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Read the durable phase without changing it",
+    )
     for name in ("default-vault-get", "default-vault-set", "default-vault-clear"):
         command = subparsers.add_parser(name)
         command.add_argument("--registry-path", type=Path, required=True)
@@ -4834,9 +4839,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "settings-rebind-no-lifecycle":
         from app.instance.settings_rebind import SettingsRebindStore
 
-        record = SettingsRebindStore(
-            VaultRegistryStore(args.registry_path)
-        ).reconcile_no_lifecycle()
+        store = SettingsRebindStore(VaultRegistryStore(args.registry_path))
+        record = store.read() if args.check_only else store.reconcile_no_lifecycle()
         print(
             json.dumps(
                 {
@@ -4844,6 +4848,11 @@ def main(argv: list[str] | None = None) -> int:
                     "desired_revision": record.desired_revision,
                     "applied_revision": record.applied_revision,
                     "phase": record.phase,
+                    "reload_revision": record.reload_revision,
+                    "reload_complete": (
+                        record.phase == "committed"
+                        and record.reload_revision == record.desired_revision
+                    ),
                 },
                 sort_keys=True,
             )

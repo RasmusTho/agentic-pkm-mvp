@@ -510,7 +510,20 @@ class VaultRegistryStore:
                     and requested.reload_revision != existing.reload_revision
                     and replace(requested, reload_revision=existing.reload_revision) == existing
                 )
-                if not reload_only_advance:
+                completed_watcher_retirement = (
+                    existing.phase == "committed"
+                    and existing.reload_revision == existing.desired_revision
+                    and requested.phase == "no_lifecycle"
+                    and requested.lifecycle_posture == "no_lifecycle"
+                    and requested.reload_revision == existing.reload_revision
+                    and replace(
+                        requested,
+                        phase="committed",
+                        lifecycle_posture="watcher",
+                    )
+                    == existing
+                )
+                if not reload_only_advance and not completed_watcher_retirement:
                     raise RegistryError(
                         "settings rebind state cannot change without a revision advance"
                     )

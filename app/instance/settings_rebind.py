@@ -259,7 +259,7 @@ class SettingsRebindStore:
         *,
         desired_revision: int,
     ) -> SettingsRebindRecord:
-        """Complete one already-prepared revision as intentionally unwatched."""
+        """Record an intentionally unwatched prepared or fully reloaded revision."""
 
         from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
@@ -271,7 +271,12 @@ class SettingsRebindStore:
             if current.desired_revision != desired_revision:
                 raise RegistryError("settings rebind no_lifecycle revision mismatch")
             return current
-        if current.phase != "prepared":
+        if current.phase == "committed":
+            if current.reload_revision != current.desired_revision:
+                raise RegistryError(
+                    "settings rebind no_lifecycle acknowledgement requires a completed reload"
+                )
+        elif current.phase != "prepared":
             raise RegistryError(
                 "settings rebind no_lifecycle acknowledgement requires a prepared revision"
             )
@@ -317,9 +322,15 @@ class SettingsRebindStore:
             return self.acknowledge_no_lifecycle(
                 desired_revision=current.desired_revision,
             )
-        raise RegistryError(
-            "absent watcher cannot reconcile a committed settings rebind revision"
-        )
+        if current.phase == "committed":
+            if current.reload_revision != current.desired_revision:
+                raise RegistryError(
+                    "absent watcher cannot reconcile a pending committed settings rebind revision"
+                )
+            return self.acknowledge_no_lifecycle(
+                desired_revision=current.desired_revision,
+            )
+        raise RegistryError("absent watcher cannot reconcile this settings rebind revision")
 
 
 def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
@@ -344,6 +355,9 @@ def _activation_fault_point(stage: str) -> None:
     """Test seam for foreground crash recovery; production is a no-op."""
 
     del stage
+
+
+_COMPLETION_SCAN_CYCLES = 2
 
 
 class SettingsRebindActivation:
@@ -551,7 +565,8 @@ class SettingsRebindActivation:
             self._watcher_state_dir,
             record.desired_revision,
         )
-        deadline = time.monotonic() + max(self._wait_timeout_seconds, 0.0)
+        wait_timeout = self._stage_wait_timeout(required_stage)
+        deadline = time.monotonic() + max(wait_timeout, 0.0)
         while True:
             try:
                 receipt = load_settings_rebind_watcher_receipt(receipt_path)
@@ -576,6 +591,16 @@ class SettingsRebindActivation:
                     f"{required_stage} for revision {record.desired_revision}"
                 )
             time.sleep(self._poll_seconds)
+
+    def _stage_wait_timeout(self, required_stage: str) -> float:
+        """Return the deadline budget for one acknowledgement stage."""
+
+        # Completion is published only after the post-commit drain and the
+        # resumed old-root scan. Give that two-cycle transition a deadline
+        # derived from the same per-cycle budget used for acknowledgement.
+        if required_stage == "completed":
+            return self._wait_timeout_seconds * _COMPLETION_SCAN_CYCLES
+        return self._wait_timeout_seconds
 
 
 def _install_dormant_settings_rebind(

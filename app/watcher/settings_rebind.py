@@ -493,13 +493,10 @@ class DormantSettingsRebindReconciler:
         )
         _write_receipt(self._receipt_path(cycle.record), drained)
         _rebind_fault_point("resume")
-        completed = replace(
-            drained,
-            stage="completed",
-            resume_ready_at=_now_iso(),
-        )
-        _write_receipt(self._receipt_path(cycle.record), completed)
-        return completed
+        # A drained receipt is non-terminal: the next tick must first produce
+        # a fresh successful old-root scan after resume before completion may
+        # authorize adoption of the candidate binding.
+        return drained
 
     def candidate_vault_path(self, record: SettingsRebindRecord) -> Path:
         """Resolve the committed candidate for the next watcher tick."""
