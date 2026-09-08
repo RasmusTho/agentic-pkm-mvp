@@ -1154,6 +1154,28 @@ class EntityRegister:
         ]
         if len(initial) != 1:
             raise EntityRegisterError("target evolution lacks the journal-bound original merge proof")
+        all_entries = (
+            dict(entries)
+            if entries is not None
+            else {entry.entity_id: entry for entry in self._all_entries()}
+        )
+        original_source = all_entries[from_id]
+        original_complements = [
+            relation
+            for entry in all_entries.values()
+            for relation in entry.complements
+            if relation["complement_id"] == original_source.complement_id
+            and relation["from_id"] == from_id
+            and relation["into_id"] == into_id
+        ]
+        if (
+            original_source.complement_id is None
+            or len(original_complements) != 1
+            or original_complements[0].get("operation_id") != operation_id
+        ):
+            raise EntityRegisterError(
+                "target evolution lacks an operation-bound original complement proof"
+            )
         current = into_id
         seen: set[str] = set()
 

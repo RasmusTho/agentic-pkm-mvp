@@ -405,6 +405,68 @@ def test_consecutive_source_reclaimed_splits_follow_each_lineage_hop(tmp_path: P
     ) == second_successor
 
 
+def test_merge_effect_state_traverses_consecutive_reclaimed_splits(tmp_path: Path) -> None:
+    """The production merge classifier follows every source-reclaim hop."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    second_successor = register.split(
+        first_successor, {"Recovered twice": ["Source", "S"]}
+    )[0]
+
+    assert register.merge_effect_state(source, target) == MERGE_EFFECTS_COMPLETE
+    assert register.resolve_target_evolution(
+        source, target, operation_id="review-operation"
+    ) == second_successor
+
+
+def test_merge_effect_state_rejects_invalid_split_chain(tmp_path: Path) -> None:
+    """A broken terminal complement cannot certify the original merge."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    second_successor = register.split(
+        first_successor, {"Recovered twice": ["Source", "S"]}
+    )[0]
+    terminal = register.get_entry(second_successor)
+    assert terminal is not None
+    register._write_entry(replace(terminal, aliases=()))
+
+    with pytest.raises(EntityRegisterError, match="complement"):
+        register.merge_effect_state(source, target)
+
+
+def test_merge_effect_state_rejects_operation_mismatched_split_chain(
+    tmp_path: Path,
+) -> None:
+    """A mutable merge link cannot override the complement's operation proof."""
+    register = _register(tmp_path)
+    source = register.mint_canonical("Source", aliases=["S"])
+    target = register.mint_canonical("Target")
+    register.ensure_merge_effects(source, target, operation_id="review-operation")
+
+    first_successor = register.split(target, {"Recovered once": ["Source", "S"]})[0]
+    register.split(first_successor, {"Recovered twice": ["Source", "S"]})
+    source_entry = register.get_entry(source)
+    assert source_entry is not None
+    tampered_lineage = tuple(
+        {**link, "operation_id": "tampered-operation"}
+        if link.get("mutation_kind") == "merge"
+        else link
+        for link in source_entry.lineage
+    )
+    register._write_entry(replace(source_entry, lineage=tampered_lineage))
+
+    with pytest.raises(EntityRegisterError, match="operation-bound"):
+        register.merge_effect_state(source, target)
+
+
 def test_repointed_split_requires_complete_successor_complement(tmp_path: Path) -> None:
     """A split redirect without the successor complement is not lineage proof."""
     register = _register(tmp_path)
