@@ -540,12 +540,14 @@ class SettingsRebindActivation:
         *,
         binding_id: str | None,
         provenance: str | None,
+        capability: _StorageMutationCapability | None = None,
     ) -> SettingsRebindRecord:
         """Run default SET/CLEAR through the same compatibility handoff."""
 
-        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+        from app.instance._storage_boundary import _require_storage_mutation_capability
         from app.instance.vault_registry import KnownVaultRef
 
+        _require_storage_mutation_capability(capability)
         prior = self.store.read()
         snapshot = self.store._registry.load()
         registration = (
@@ -563,7 +565,7 @@ class SettingsRebindActivation:
                     binding_id,
                     provenance=provenance or "explicit",
                     expected_revision=snapshot.revision,
-                    _capability=_STORAGE_MUTATION_CAPABILITY,
+                    _capability=capability,
                 )
                 return SettingsRebindRecord.from_payload(updated.settings_rebind)
         selection = (

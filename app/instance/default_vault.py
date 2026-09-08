@@ -358,15 +358,14 @@ class InstanceDefaultVaultService:
                 registry_revision=before.revision,
                 previous_vault_binding_id=before.default_vault_binding_id,
                 changed=False,
-            )
+        )
         if before.settings_rebind is not None:
-            from app.instance._storage_boundary import _require_storage_mutation_capability
             from app.instance.settings_rebind import SettingsRebindActivation
 
-            _require_storage_mutation_capability(self._capability)
             SettingsRebindActivation.from_environment(self._store).activate_default(
                 binding_id=vault_binding_id,
                 provenance=None if vault_binding_id is None else provenance,
+                capability=self._capability,
             )
             updated = self._store.load()
         else:
