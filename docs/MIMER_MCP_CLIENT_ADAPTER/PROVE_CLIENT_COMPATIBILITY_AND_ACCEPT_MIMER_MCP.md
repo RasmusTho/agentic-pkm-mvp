@@ -9,6 +9,10 @@ depends_on: [EXPOSE_GOVERNED_MIMER_TOOLS_OVER_MCP.md, PACKAGE_AND_HARDEN_MIMER_M
 can_parallelize_with: []
 ---
 
+State: Implemented. Delivered by PR #5351 (issue #3370, 2026-09-08); the verified support level is
+one hermetic JSON-RPC stdio-client journey against an isolated governed runtime. General
+third-party-client support and production activation remain deferred.
+
 # Prove Client Compatibility and Accept Mimer MCP
 
 ## Purpose
@@ -42,19 +46,19 @@ one synthetic call.
 
 ## Acceptance Criteria
 
-- [ ] A hermetic composed journey proves MCP initialization, exact discovery, health, retrieve,
+- [x] A hermetic composed journey proves MCP initialization, exact discovery, health, retrieve,
       note read, ask, and one governed capture receipt through the packaged transport.
   Verify: `tests/mcp/test_mimer_server_smoke.py::test_composed_mimer_mcp_journey`
-- [ ] The composed journey proves generic vault write and receipt read-back are absent, and a
+- [x] The composed journey proves generic vault write and receipt read-back are absent, and a
       WriteGuard-blocked capture remains blocked without retry or fallback.
   Verify: `tests/mcp/test_mimer_server_smoke.py::test_composed_journey_preserves_write_boundary_and_failure`
-- [ ] Restart recovery restores protocol health and discovery without replaying the prior capture or
+- [x] Restart recovery restores protocol health and discovery without replaying the prior capture or
       retaining adapter-owned durable state.
   Verify: `tests/mcp/test_mimer_server_smoke.py::test_restart_recovers_without_capture_replay`
-- [ ] The parent issue records the tested client(s), transport(s), runtime head SHA, capture trace and
+- [x] The parent issue records the tested client(s), transport(s), runtime head SHA, capture trace and
       AuthorityReceipt reference, restart result, and any untested-client follow-up.
   Verify: runtime acceptance receipt on the parent feature issue
-- [ ] Every child has a delivery receipt and owner-doc resolution; current-state docs and the local
+- [x] Every child has a delivery receipt and owner-doc resolution; current-state docs and the local
       spec state are reconciled to exactly the accepted support level.
   Verify: doc writeback at `docs/STATUS.md :: Current Snapshot`, `docs/ARCHITECTURE.md :: MCP/tools`, `docs/ROADMAP.md :: External-connectivity (MCP) sequencing`, `docs/MIMER_MCP_CLIENT_ADAPTER/README.md :: Relationship to GitHub Issues`, and `docs/MIMER_MCP_CLIENT_ADAPTER/PARENT_FEATURE_ISSUE.md :: State`
 
