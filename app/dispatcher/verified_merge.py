@@ -1405,7 +1405,7 @@ def _validated_projection_observation(
         or latest_body_edit.get("editor_association")
         not in _TRUSTED_AUTHOR_ASSOCIATIONS
         or not isinstance(body_edits_page_info, Mapping)
-        or body_edits_page_info.get("has_next_page") is not False
+        or not isinstance(body_edits_page_info.get("has_next_page"), bool)
         or not isinstance(closing_issues, list)
         or any(
             not isinstance(item, Mapping)

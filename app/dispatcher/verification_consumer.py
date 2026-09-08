@@ -1399,7 +1399,7 @@ class GhCliVerificationSource:
             or len(nodes) != 1
             or not isinstance(nodes[0], Mapping)
             or not isinstance(page_info, Mapping)
-            or page_info.get("hasNextPage") is not False
+            or not isinstance(page_info.get("hasNextPage"), bool)
         ):
             raise RuntimeError("GitHub body-edit evidence is incomplete")
         edit = nodes[0]

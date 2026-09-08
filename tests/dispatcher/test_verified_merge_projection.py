@@ -413,7 +413,7 @@ def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -
 
     incomplete_edits = copy.deepcopy(second)
     incomplete_edits["pull_request"]["body_edits_page_info"] = {  # type: ignore[index]
-        "has_next_page": True
+        "has_next_page": "unknown"
     }
     rejected.append((first, incomplete_edits))
 
@@ -464,6 +464,32 @@ def test_projection_convergence_rejects_regression_drift_and_ambiguous_reads() -
                 ),
                 minimum_backoff_seconds=1,
             )
+
+
+def test_projection_convergence_accepts_older_body_edit_history() -> None:
+    authority, neutralized_body, pr_contract, _ = _projection_fixture()
+    observations = [
+        _observation(neutralized_body, observed_at="2026-08-12T05:00:04Z"),
+        _observation(neutralized_body, observed_at="2026-08-12T05:00:06Z"),
+    ]
+    for observation in observations:
+        observation["pull_request"]["body_edits_page_info"] = {  # type: ignore[index]
+            "has_next_page": True
+        }
+    final = _observation(neutralized_body, observed_at="2026-08-12T05:00:07Z")
+    final["pull_request"]["body_edits_page_info"] = {  # type: ignore[index]
+        "has_next_page": True
+    }
+
+    result = verified_merge.build_verified_merge_projection_convergence(
+        authority_receipt=authority,
+        pr_contract=pr_contract,
+        observations=observations,
+        final_projection_observation=final,
+        minimum_backoff_seconds=1,
+    )
+
+    assert result["convergence_receipt"]["body_edit"] == pr_contract["body_edit"]
 
 
 def _projection_fixture() -> tuple[
