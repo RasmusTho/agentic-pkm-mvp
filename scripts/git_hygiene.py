@@ -1394,16 +1394,42 @@ def _dispatcher_resumable_binding_resources(
     preserved-worktree binding shape.
     """
     issue = record.get("issue_number")
-    if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
-        raise RuntimeError("dispatcher_activity_invalid")
-    resources = {f"issue:{issue}", f"github:issue:{issue}"}
+    resources: set[str] = set()
+    if issue is not None:
+        if not isinstance(issue, int) or isinstance(issue, bool) or issue < 1:
+            raise RuntimeError("dispatcher_activity_invalid")
+        resources.update({f"issue:{issue}", f"github:issue:{issue}"})
     linked_pr = _dispatcher_linked_pr(record.get("linked_pr"))
     if linked_pr is not None:
         resources.update({f"pull:{linked_pr}", f"github:pull:{linked_pr}"})
-    resources.update(_dispatcher_source_anchors(record.get("source_anchor_refs")))
+    anchors_value = record.get("source_anchor_refs", "[]")
+    resources.update(_dispatcher_source_anchors(anchors_value))
+
+    for field, prefix in (("branch", "branch"), ("worktree", "worktree")):
+        value = record.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            raise RuntimeError("dispatcher_activity_invalid")
+        if field == "branch":
+            run_git_check(["check-ref-format", "--branch", value], cwd)
+            resources.update({value, f"branch:{value}", f"refs/heads/{value}"})
+        elif not value.startswith("/"):
+            raise RuntimeError("dispatcher_activity_invalid")
+        else:
+            resources.add(f"{prefix}:{value}")
+    for field in ("head", "sha"):
+        value = record.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40,64}", value):
+            raise RuntimeError("dispatcher_activity_invalid")
+        resources.add(value)
 
     sync_state = record.get("sync_state")
     if sync_state is None:
+        if not resources:
+            raise RuntimeError("dispatcher_activity_invalid")
         return resources
     if not isinstance(sync_state, str):
         raise RuntimeError("dispatcher_activity_invalid")
@@ -1448,6 +1474,8 @@ def _dispatcher_resumable_binding_resources(
             )
         if head:
             resources.add(head.group("value"))
+    if not resources:
+        raise RuntimeError("dispatcher_activity_invalid")
     return resources
 
 
