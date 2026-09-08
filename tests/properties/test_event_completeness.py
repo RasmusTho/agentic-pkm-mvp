@@ -40,6 +40,8 @@ uses, and T-materialize runs over the explicit memory `STORE_BACKEND`.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,6 +65,24 @@ from tests.properties._machinery import (
 pytest.importorskip("hypothesis")
 
 from hypothesis import HealthCheck, given, settings, strategies as st  # noqa: E402
+
+
+def test_all_producers_use_canonical_event_identity() -> None:
+    """The four #3510 lifecycle producers cannot hand-copy identity fields."""
+    import app.services.vault_sync as vault_sync
+    import app.watcher.vault_watcher as vault_watcher
+
+    def constructor_calls(module: object) -> int:
+        tree = ast.parse(inspect.getsource(module))
+        return sum(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "canonical_event_identity"
+            for node in ast.walk(tree)
+        )
+
+    assert constructor_calls(vault_sync) == 3
+    assert constructor_calls(vault_watcher) == 1
 
 
 # ---------------------------------------------------------------------------
