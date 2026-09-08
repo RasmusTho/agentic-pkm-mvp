@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.app import app
 from app.api.routes import active_context_selection as selection_routes
 from app.api.routes import ask as ask_routes
+from app.instance._storage_boundary import CapabilityNotReadyError
 from tests._mvr03_principal_harness import provisioned_instance
 
 SELECTION_URL = "/api/companion/active-context/selection"
@@ -78,7 +79,7 @@ def test_invalid_override_fails_closed_without_falling_back_to_session(
 def test_backend_read_enabling_preserves_dormant_producers(instance, client, monkeypatch) -> None:
     """All scoped read producers work while legacy/picker writes remain dormant."""
 
-    _runtime, first = instance
+    runtime, first = instance
     session = _create(client, first.vault_binding_id)
     scoped = client.get(
         "/api/companion/vault/notes/scoped",
@@ -116,10 +117,16 @@ def test_backend_read_enabling_preserves_dormant_producers(instance, client, mon
     assert legacy.status_code == 200, legacy.text
     assert "context_generation" not in legacy.json()
 
-    # No scoped read implicitly activates the not-ready removal/relocation /
-    # transfer producers. Those capabilities remain outside this bounded
-    # backend read slice and are still represented only by the registry's
-    # dormant state, not a new client journey.
+    # The actual dormant producer methods remain fail-closed after scoped reads;
+    # route inventory alone would not prove that the capability gate still holds.
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06B"):
+        runtime.remove(first.vault_binding_id)
+    with pytest.raises(CapabilityNotReadyError, match="MVR-06C"):
+        runtime.relocate(first.vault_binding_id, runtime.layout.root / "relocated")
+    with pytest.raises(CapabilityNotReadyError, match="MVR-05C"):
+        runtime.transfer_to(runtime, first.vault_binding_id)
+
+    # No scoped read implicitly activates the not-ready picker/write routes.
     assert not any(
         route.path.endswith("/remove") or route.path.endswith("/relocate") or route.path.endswith("/transfer")
         for route in client.app.routes

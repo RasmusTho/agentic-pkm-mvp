@@ -1,7 +1,11 @@
+from dataclasses import replace
+
 from app.retrieval import hybrid
 from app.retrieval.capability import RetrievalRequest, retrieve
+from app.settings.models import RetrievalTuning
 from tests.retrieval.test_retrieval_capability import _patch_embeddings, _scoped_context
 from app.retrieval.hybrid import get_store
+from app.vault.active_context_v1 import ActiveContextBinding
 
 
 def test_production_retrieval_preserves_binding_provenance(monkeypatch) -> None:
@@ -70,5 +74,112 @@ def test_production_retrieval_preserves_binding_provenance(monkeypatch) -> None:
                 )
             ).metadata["provenance"]["active_context"]["cache_key"]
         )
+    finally:
+        get_store().set_documents([])
+
+
+def test_multi_binding_cache_filters_before_scoring_and_keeps_legacy_unbound(monkeypatch) -> None:
+    """A shared cache cannot let another binding win scoped top-k selection."""
+
+    _patch_embeddings(monkeypatch)
+
+    class DurableIndex:
+        def generation_for_bindings(self, _binding_ids=None):
+            return "durable-generation-2"
+
+        def all_rows_for_bindings(self, _binding_ids=None):
+            return [
+                {
+                    "object_id": "binding-b-hit",
+                    "payload": {"domain": "core", "text": "needle needle needle"},
+                    "source_ref": "vault-b/needle.md",
+                    "vault_binding_id": "binding-b",
+                    "embedding": [0.1, 0.1, 0.1],
+                },
+                {
+                    "object_id": "legacy-hit",
+                    "payload": {"domain": "core", "text": "needle needle"},
+                    "source_ref": "legacy/needle.md",
+                    "vault_binding_id": None,
+                    "embedding": [0.1, 0.1, 0.1],
+                },
+                {
+                    "object_id": "binding-a-hit",
+                    "payload": {"domain": "core", "text": "needle"},
+                    "source_ref": "vault-a/needle.md",
+                    "vault_binding_id": "binding-a",
+                    "embedding": [0.1, 0.1, 0.1],
+                },
+            ]
+
+    monkeypatch.setattr("app.stores.get_vector_index", lambda: DurableIndex())
+    hybrid.reset_durable_rebuild_state()
+    hybrid.rebuild_from_durable_index(force=True)
+    context_a = _scoped_context()
+    context_b = replace(
+        context_a,
+        context_id="ctx-b",
+        source_bindings=(ActiveContextBinding("binding-b", 1, "epoch-b"),),
+    )
+    try:
+        selected_a = retrieve(
+            RetrievalRequest(query="needle", k=1, scope="core", active_context=context_a)
+        )
+        selected_b = retrieve(
+            RetrievalRequest(query="needle", k=1, scope="core", active_context=context_b)
+        )
+        legacy = retrieve(RetrievalRequest(query="needle", k=3, scope="core"))
+
+        assert [hit.doc_id for hit in selected_a.hits] == ["binding-a-hit"]
+        assert [hit.doc_id for hit in selected_b.hits] == ["binding-b-hit"]
+        assert {hit.doc_id for hit in legacy.hits} == {
+            "binding-a-hit",
+            "binding-b-hit",
+            "legacy-hit",
+        }
+    finally:
+        get_store().set_documents([])
+
+
+def test_scoped_request_tuning_controls_rerank_after_candidate_filter(monkeypatch) -> None:
+    """Scoped rerank decisions use the resolved request bundle, not process-global tuning."""
+
+    _patch_embeddings(monkeypatch)
+    get_store().set_documents(
+        [
+            {
+                "doc_id": "binding-a-hit",
+                "text": "needle scoped result",
+                "source_ref": "vault-a/needle.md",
+                "payload": {"domain": "core", "vault_binding_id": "binding-a"},
+            }
+        ]
+    )
+    applied: list[str] = []
+    monkeypatch.setattr(
+        "app.retrieval.hook_adapter.get_retrieval_tuning",
+        lambda: RetrievalTuning(rerank="always"),
+    )
+
+    def _spy_rerank(_query: str, items: list[dict]) -> list[dict]:
+        applied.append(_query)
+        return items
+
+    monkeypatch.setattr(
+        "app.retrieval.hook_adapter.apply_optional_rerank",
+        _spy_rerank,
+    )
+    try:
+        response = retrieve(
+            RetrievalRequest(
+                query="needle",
+                k=1,
+                scope="core",
+                active_context=_scoped_context(),
+                retrieval_tuning=RetrievalTuning(rerank="off"),
+            )
+        )
+        assert response.hits
+        assert applied == []
     finally:
         get_store().set_documents([])

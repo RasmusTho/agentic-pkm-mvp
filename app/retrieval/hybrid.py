@@ -742,34 +742,48 @@ def _rank_eligible(
 
 
 def _partition_by_scope(
-    docs: List[Document], scope: str | None
+    docs: List[Document],
+    scope: str | None,
+    allowed_binding_ids: set[str] | None = None,
 ) -> tuple[List[int], List[Document]]:
-    """Split docs into (eligible indices, excluded docs) by scope eligibility, BEFORE tokenize/score.
+    """Split docs into (eligible indices, excluded docs) by binding/scope BEFORE tokenize/score.
 
     Eligibility decides membership; similarity decides order. With no active scope every doc is
     eligible (unchanged behavior). With an active scope, membership is the same conservative domain
     decision as before (``_doc_in_scope``: explicit ``payload['domain']`` / ``bridge_domains``;
-    missing domain is ineligible) — only its POSITION moves ahead of scoring. Eligible items are
-    returned as store indices so scoring can reuse the store's cached vectors while excluding the
-    ineligible rows from the candidate set.
+    missing domain is ineligible). When binding ids are supplied, unattributed or other-binding
+    rows are excluded as well. Eligible items preserve their store indices so scoring can reuse the
+    store's cached vectors while excluding the ineligible rows from the candidate set.
     """
-    if not scope:
-        return list(range(len(docs))), []
     eligible_idx: List[int] = []
     excluded: List[Document] = []
     for idx, doc in enumerate(docs):
-        if _doc_in_scope(doc, scope):
+        payload = doc.payload or {}
+        binding_allowed = (
+            allowed_binding_ids is None
+            or (
+                isinstance(payload.get("vault_binding_id"), str)
+                and payload.get("vault_binding_id") in allowed_binding_ids
+            )
+        )
+        scope_allowed = not scope or _doc_in_scope(doc, scope)
+        if binding_allowed and scope_allowed:
             eligible_idx.append(idx)
         else:
             excluded.append(doc)
     return eligible_idx, excluded
 
 
-def _contain_rerank(query: str, admitted: List[dict]) -> List[dict]:
+def _contain_rerank(
+    query: str,
+    admitted: List[dict],
+    *,
+    tuning: RetrievalTuning | None = None,
+) -> List[dict]:
     """Apply the optional rerank hook, then enforce that it only reordered/dropped within the
     admitted set — reranking never reintroduces an excluded doc (spec AC1, second clause)."""
     admitted_ids = {item.get("doc_id") for item in admitted}
-    reranked = maybe_rerank(query, admitted)
+    reranked = maybe_rerank(query, admitted, tuning=tuning)
     intruders = {item.get("doc_id") for item in reranked} - admitted_ids
     if intruders:
         raise AssertionError(
@@ -809,22 +823,12 @@ def scoped_hybrid_search(
     _revalidate_cache_generation()
 
     docs = _STORE.all()
-    if allowed_binding_ids is not None:
-        # Binding eligibility is a candidate-set boundary, not a post-ranking
-        # decoration. Legacy/unattributed rows are excluded before embeddings,
-        # scoring, reranking, and top-k selection.
-        docs = [
-            doc
-            for doc in docs
-            if isinstance((doc.payload or {}).get("vault_binding_id"), str)
-            and (doc.payload or {}).get("vault_binding_id") in allowed_binding_ids
-        ]
     scope = (scope or "").strip() or _resolve_domain_scope()
     if not docs:
         return ScopedRetrieval(results=[], denials=(), scope_policy_prefiltered=True, active_scope=scope)
 
     # 1) PREFILTER before ranking — eligibility decides membership, not similarity.
-    eligible_idx, excluded = _partition_by_scope(docs, scope)
+    eligible_idx, excluded = _partition_by_scope(docs, scope, allowed_binding_ids)
 
     # Content-free denials for relevant-but-excluded material (never a silent drop). The empty
     # eligible set is likewise no longer a silent early-exit.
@@ -843,7 +847,7 @@ def scoped_hybrid_search(
     )
 
     # 3) Rerank within the admitted set only (never reintroduces an exclusion).
-    results = _contain_rerank(query, results)
+    results = _contain_rerank(query, results, tuning=tuning)
     return ScopedRetrieval(
         results=results,
         denials=denials,
