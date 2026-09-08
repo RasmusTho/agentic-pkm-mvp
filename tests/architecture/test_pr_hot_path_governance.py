@@ -185,6 +185,8 @@ def test_verified_merge_uses_authenticated_closing_projection_convergence() -> N
     convergence_cli = _read(
         "scripts/await_verified_merge_projection_convergence.py"
     )
+    verification_consumer = _read("app/dispatcher/verification_consumer.py")
+    verification_github = _read("app/dispatcher/verification_github.py")
 
     for fragment in (
         "verified-merge-closing-projection-convergence.v1",
@@ -217,6 +219,10 @@ def test_verified_merge_uses_authenticated_closing_projection_convergence() -> N
         "return 2 if failure == \"timeout\" else 3",
     ):
         assert fragment in convergence_cli, fragment
+
+    for reader in (verification_consumer, verification_github):
+        assert "userContentEdits(first: 1)" in reader
+        assert "userContentEdits(last: 1)" not in reader
 
     operating_model = _read("docs/architecture/SBS_OPERATING_MODEL.md")
     assert "verified-merge convergence rails" in operating_model

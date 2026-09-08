@@ -387,7 +387,7 @@ class GitHubProtectedRepositoryAuthority:
             query($owner: String!, $name: String!, $number: Int!) {
               repository(owner: $owner, name: $name) {
                 pullRequest(number: $number) {
-                  userContentEdits(last: 1) {
+                  userContentEdits(first: 1) {
                     nodes { id editedAt editor { login } }
                     pageInfo { hasNextPage }
                   }
