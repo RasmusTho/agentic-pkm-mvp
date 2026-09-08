@@ -5408,6 +5408,390 @@ def test_local_retirement_preserves_live_branch_lease(tmp_path, monkeypatch):
     assert result["deleted"] == 0
 
 
+def test_local_retirement_ignores_historical_dispatcher_delivery_sha(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{"body": f"Child delivery receipt at head `{sha}`."}]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after verified merged delivery",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_preserves_explicit_resumable_binding(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"Preserved worktree: {tmp_path / 'old-checkout'}; "
+                            f"branch: old; base HEAD: {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work only when no resumable binding remains",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_ignores_narrative_binding_words(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"The preserved worktree was retired; branch: old was "
+                            f"delivered at head: {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after narrative-only reference check",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_ignores_negated_pickup_marker(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"Not a pickup intent receipt: branch: old; "
+                            f"base HEAD: {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after negated-marker check",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_ignores_negated_dedicated_worktree_marker(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"Not a dedicated worktree {tmp_path / 'old-checkout'} "
+                            f"is still dirty on branch old at HEAD {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after negated-marker check",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_rejects_cross_line_partial_binding(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    commands = []
+    real_run_git = git_hygiene.run_git
+
+    def traced_run_git(args, cwd):
+        commands.append(args)
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(git_hygiene, "run_git", traced_run_git)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"Preserved worktree: {tmp_path / 'old-checkout'}\n"
+                            f"branch: old; base HEAD: {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only with complete line-bounded binding",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+    assert not any(args[:1] == ["update-ref"] for args in commands)
+
+
+def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch):
+    calls = []
+
+    def canonical_task_id(repository, issue):
+        calls.append((repository, issue))
+        return "canonical-task-id"
+
+    monkeypatch.setattr(git_hygiene, "github_issue_task_id", canonical_task_id)
+    resources = git_hygiene._dispatcher_resumable_binding_resources(
+        tmp_path,
+        {
+            "task_id": "canonical-task-id",
+            "repo": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 5258,
+            "status": "blocked",
+            "linked_pr": None,
+            "source_anchor_refs": "[]",
+            "sync_state": None,
+        },
+    )
+    assert calls == [("RasmusTho/agentic-pkm-mvp", 5258)]
+    assert resources == {"issue:5258", "github:issue:5258"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Preserved worktree: relative; branch: old; base HEAD: " + "a" * 40,
+        "Dedicated worktree /tmp/old is still dirty on branch old at head not-a-sha",
+    ],
+)
+def test_local_retirement_rejects_malformed_explicit_marker(
+    tmp_path, monkeypatch, body
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({"comments": [{"body": body}]}),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only with valid explicit binding grammar",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_preserves_backticked_dedicated_binding(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5067",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5067,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "Maintenance reconciliation: while the dedicated worktree "
+                            f"`{tmp_path / 'old-checkout'}` is still dirty on branch "
+                            f"`old` at HEAD `{sha}`, with local changes."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work only when the dedicated binding is absent",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+
+
+def test_legacy_archive_retirement_ignores_historical_dispatcher_delivery_sha(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{"body": f"Child delivery receipt at head `{sha}`."}]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_legacy_archive_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive archive after verified merged delivery",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_accepts_validated_legacy_blank_repository_task(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-issue-5258",
+                "repo": "",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": None,
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after validated legacy-row check",
+    )
+    assert result["deleted"] == 1
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+            "repo": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 5258,
+            "status": "unknown",
+            "source_anchor_refs": "[]",
+            "linked_pr": None,
+        },
+        {
+            "task_id": "github-issue-5258",
+            "repo": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 5258,
+            "status": "blocked",
+            "source_anchor_refs": "[]",
+            "linked_pr": None,
+        },
+        {
+            "issue_number": 5258,
+            "status": "blocked",
+            "source_anchor_refs": "[]",
+            "linked_pr": None,
+        },
+    ],
+)
+def test_local_retirement_preserves_ambiguous_dispatcher_task(
+    tmp_path, monkeypatch, record
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {"kind": "task", "record": record}
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only with an unambiguous dispatcher census",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 def test_local_retirement_stops_on_generation_drift(tmp_path, monkeypatch):
     from scripts import agent_worktree
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
