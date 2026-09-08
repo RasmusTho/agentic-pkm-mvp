@@ -5416,6 +5416,7 @@ def test_local_retirement_ignores_historical_dispatcher_delivery_sha(
         {
             "kind": "task",
             "record": {
+                "task_id": "github-issue-5258",
                 "issue_number": 5258,
                 "status": "blocked",
                 "linked_pr": None,
@@ -5441,6 +5442,7 @@ def test_local_retirement_preserves_explicit_resumable_binding(
         {
             "kind": "task",
             "record": {
+                "task_id": "github-issue-5258",
                 "issue_number": 5258,
                 "status": "blocked",
                 "linked_pr": None,
@@ -5462,6 +5464,96 @@ def test_local_retirement_preserves_explicit_resumable_binding(
     )
     assert result["deleted"] == 0
     assert result["retained"][ref] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_ignores_narrative_binding_words(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-issue-5258",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"The preserved worktree was retired; branch: old was "
+                            f"delivered at head: {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after narrative-only reference check",
+    )
+    assert result["deleted"] == 1
+
+
+def test_legacy_archive_retirement_ignores_historical_dispatcher_delivery_sha(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _legacy_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-issue-5258",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": json.dumps({
+                    "comments": [{"body": f"Child delivery receipt at head `{sha}`."}]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_legacy_archive_refs(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive archive after verified merged delivery",
+    )
+    assert result["deleted"] == 1
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {
+            "task_id": "github-issue-5258",
+            "issue_number": 5258,
+            "status": "unknown",
+            "source_anchor_refs": "[]",
+            "linked_pr": None,
+        },
+        {
+            "issue_number": 5258,
+            "status": "blocked",
+            "source_anchor_refs": "[]",
+            "linked_pr": None,
+        },
+    ],
+)
+def test_local_retirement_preserves_ambiguous_dispatcher_task(
+    tmp_path, monkeypatch, record
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {"kind": "task", "record": record}
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only with an unambiguous dispatcher census",
+        )
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 

@@ -1364,10 +1364,11 @@ def _dispatcher_source_anchors(value: object) -> set[str]:
 _DISPATCHER_PICKUP_RECEIPT_RE = re.compile(
     r"\bpickup intent receipt\s*:", re.IGNORECASE
 )
-_DISPATCHER_EXPLICIT_BINDING_RE = re.compile(
-    r"\b(?:preserved|dedicated)\s+worktree\b"
-    r"(?:\s*[:=]\s*/|.*\b(?:branch|head)\s*(?:[:=]|\s+))",
-    re.IGNORECASE | re.DOTALL,
+_DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
+    r"\bpreserved\s+worktree\s*:\s*/", re.IGNORECASE
+)
+_DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
+    r"\bdedicated\s+worktree\s+/", re.IGNORECASE
 )
 _DISPATCHER_WORKTREE_BINDING_RE = re.compile(
     r"\bworktree(?:\s*[:=]\s*|\s+)(?P<value>/[^\s;`,]+)",
@@ -1393,6 +1394,9 @@ def _dispatcher_resumable_binding_resources(
     comment contributes resources only when it uses an explicit pickup or
     preserved-worktree binding shape.
     """
+    task_id = record.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        raise RuntimeError("dispatcher_activity_invalid")
     issue = record.get("issue_number")
     resources: set[str] = set()
     if issue is not None:
@@ -1448,32 +1452,34 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
-        explicit_binding = bool(
-            _DISPATCHER_PICKUP_RECEIPT_RE.search(body)
-            or _DISPATCHER_EXPLICIT_BINDING_RE.search(body)
-        )
-        if not explicit_binding:
-            continue
-        worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(body)
-        branch = _DISPATCHER_BRANCH_BINDING_RE.search(body)
-        head = _DISPATCHER_HEAD_BINDING_RE.search(body)
-        if not any((worktree, branch, head)):
-            # A later narrative may repeat the word "preserved" without
-            # carrying the original binding. A pickup receipt, however, is a
-            # structured claim and must never be accepted without a resource.
-            if _DISPATCHER_PICKUP_RECEIPT_RE.search(body):
-                raise RuntimeError("dispatcher_activity_invalid")
-            continue
-        if worktree:
-            resources.add(f"worktree:{worktree.group('value')}")
-        if branch:
-            branch_name = branch.group("value")
-            run_git_check(["check-ref-format", "--branch", branch_name], cwd)
-            resources.update(
-                {branch_name, f"branch:{branch_name}", f"refs/heads/{branch_name}"}
+        for line in body.splitlines():
+            explicit_binding = bool(
+                _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
+                or _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
+                or _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
             )
-        if head:
-            resources.add(head.group("value"))
+            if not explicit_binding:
+                continue
+            worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(line)
+            branch = _DISPATCHER_BRANCH_BINDING_RE.search(line)
+            head = _DISPATCHER_HEAD_BINDING_RE.search(line)
+            if not any((worktree, branch, head)):
+                # A pickup receipt is a structured claim and must never be
+                # accepted without at least one parseable resource. Narrative
+                # preservation text without an exact binding is not authority.
+                if _DISPATCHER_PICKUP_RECEIPT_RE.search(line):
+                    raise RuntimeError("dispatcher_activity_invalid")
+                continue
+            if worktree:
+                resources.add(f"worktree:{worktree.group('value')}")
+            if branch:
+                branch_name = branch.group("value")
+                run_git_check(["check-ref-format", "--branch", branch_name], cwd)
+                resources.update(
+                    {branch_name, f"branch:{branch_name}", f"refs/heads/{branch_name}"}
+                )
+            if head:
+                resources.add(head.group("value"))
     if not resources:
         raise RuntimeError("dispatcher_activity_invalid")
     return resources
@@ -3707,6 +3713,9 @@ def _retirement_local_activity(
             # Keep canonical task identity and explicitly resumable bindings,
             # even after a pickup lease expires. Free-form sync history is not
             # an artifact reference: it commonly contains merged child SHAs.
+            status = record.get("status")
+            if status not in _NONTERMINAL_DISPATCHER_STATUSES:
+                raise RuntimeError("dispatcher_activity_invalid")
             resources.update(_dispatcher_resumable_binding_resources(cwd, record))
     return protected_shas, resources
 
