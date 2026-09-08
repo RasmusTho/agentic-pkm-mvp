@@ -68,15 +68,55 @@ heimdal_cold_volume_preflight_effective() {
   heimdal_cold_volume_preflight "${PKM_EFFECTIVE_CHANNEL}" "${root}"
 }
 
+heimdal_cold_volume_archive_configured() {
+  local root="${1:-$(pwd)}"
+  local channel="${2:-prod}"
+  local channel_config="${root}/.env.${channel}.local"
+
+  # An ambient declaration is enough to opt into the gate; the Python boundary
+  # still requires the matching channel-local declaration before it can pass.
+  if [ -n "${HEIMDAL_ARCHIVE_METADATA_FILE:-}" ]; then
+    return 0
+  fi
+  if [ ! -e "${channel_config}" ]; then
+    # A broken symlink is a configuration failure, not an absent declaration.
+    [ -L "${channel_config}" ] && return 2
+    return 1
+  fi
+  [ -f "${channel_config}" ] && [ -r "${channel_config}" ] || return 2
+  awk -F= '
+    /^[[:space:]]*HEIMDAL_ARCHIVE_METADATA_FILE[[:space:]]*=/ {
+      found = 1
+      exit
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${channel_config}"
+}
+
 heimdal_cold_volume_preflight() {
   local channel="${1:-}"
   local root="${2:-$(pwd)}"
   local python_bin="${PYTHON:-python3}"
   local rc=0
 
-  # HAR-03 makes this a production invariant. Dev/test remain resettable and
-  # may exercise the same module explicitly without acquiring a host mount.
+  # Dev/test remain resettable and may exercise the same module explicitly
+  # without acquiring a host mount. Prod opts into HAR-03 only when the
+  # channel declares that the archive capability is configured; the archive
+  # boundary itself remains fail-closed once opted in.
   [ "${channel}" = "prod" ] || return 0
+  local archive_config_rc=0
+  if heimdal_cold_volume_archive_configured "${root}" "${channel}"; then
+    :
+  else
+    archive_config_rc=$?
+  fi
+  if [ "${archive_config_rc}" -eq 1 ]; then
+    echo "archive volume preflight: not configured"
+    return 0
+  elif [ "${archive_config_rc}" -ne 0 ]; then
+    echo "archive volume preflight: configuration check failed" >&2
+    return "${archive_config_rc}"
+  fi
 
   (
     cd "${root}" || exit 1

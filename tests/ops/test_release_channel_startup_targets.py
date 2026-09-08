@@ -360,7 +360,7 @@ def test_every_supported_prod_forward_producer_routes_through_archive_gate() -> 
     "entrypoint",
     ["scripts/run_verification.sh", "scripts/verify_runtime_chain.sh"],
 )
-def test_prod_verification_chain_refuses_before_any_host_mutation(
+def test_prod_archive_preflight_blocks_when_archive_is_configured_but_not_ready(
     tmp_path: Path,
     entrypoint: str,
 ) -> None:
@@ -412,6 +412,99 @@ def test_prod_verification_chain_refuses_before_any_host_mutation(
     assert "archive volume preflight failed: output=redacted" in result.stderr
 
 
+def test_prod_archive_preflight_skips_when_archive_is_not_configured(
+    tmp_path: Path,
+) -> None:
+    """An archive-free prod start must not require a future archive volume."""
+    helper = REPO_ROOT / "scripts/lib/heimdal_cold_volume_preflight.sh"
+    python = tmp_path / "python-fixture"
+    invocation_marker = tmp_path / "python-invoked"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"touch {invocation_marker!s}\n"
+        "exit 78\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHON": str(python),
+            "PKM_ENVIRONMENT": "prod",
+            "COMPOSE_PROJECT_NAME": "pkm-prod",
+        }
+    )
+    env.pop("HEIMDAL_ARCHIVE_METADATA_FILE", None)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; heimdal_cold_volume_preflight_effective "$2"',
+            "harness",
+            str(helper),
+            str(REPO_ROOT),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not invocation_marker.exists()
+    assert "archive volume preflight: not configured" in result.stdout
+
+
+def test_prod_archive_preflight_blocks_when_channel_config_is_malformed(
+    tmp_path: Path,
+) -> None:
+    """A malformed channel config must not be mistaken for dormant archive support."""
+    helper = REPO_ROOT / "scripts/lib/heimdal_cold_volume_preflight.sh"
+    root = tmp_path / "prod-root"
+    root.mkdir()
+    (root / ".env.prod.local").mkdir()
+    python = tmp_path / "python-fixture"
+    invocation_marker = tmp_path / "python-invoked"
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"touch {invocation_marker!s}\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHON": str(python),
+            "PKM_ENVIRONMENT": "prod",
+            "COMPOSE_PROJECT_NAME": "pkm-prod",
+        }
+    )
+    env.pop("HEIMDAL_ARCHIVE_METADATA_FILE", None)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; heimdal_cold_volume_preflight_effective "$2"',
+            "harness",
+            str(helper),
+            str(root),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert not invocation_marker.exists()
+    assert "archive volume preflight: configuration check failed" in result.stderr
+
+
 @pytest.mark.parametrize(
     "entrypoint",
     [
@@ -449,6 +542,7 @@ def test_custom_compose_separator_prod_overlay_refuses_before_host_mutation(
             "COMPOSE_PROJECT_NAME": "custom",
             "COMPOSE_FILE": "docker-compose.yaml;docker-compose.prod.yml",
             "COMPOSE_PATH_SEPARATOR": ";",
+            "HEIMDAL_ARCHIVE_METADATA_FILE": str(tmp_path / "archive-metadata.json"),
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(host_state),
             "LOG_PATH": str(log_path),
             "REPORT_PATH": str(report_path),
