@@ -161,11 +161,16 @@ def _authority_evidence(body: str) -> list[str]:
     # not a bare topic or an already-settled declaration. Suppress only a positive
     # match contained in a local negative span, never an independent requirement.
     subject = r"(?:owner authority|owner decision|strategic decision)"
+    resolution = r"(?:made|resolved|granted|approved)"
+    obligation = (
+        rf"(?:must\s+be\s+{resolution}|"
+        rf"(?:needs?|requires?)\s+(?:to\s+be\s+{resolution}|resolution|approval))"
+    )
     predicate = (
         r"(?:(?:is|remains)\s+)?(?:still\s+)?"
         r"(?:ambiguous|unclear|unresolved|missing|pending|required|needed|"
-        r"(?:has\s+)?not\s+(?:yet\s+)?(?:been\s+)?(?:resolved|granted|approved)|"
-        r"must\s+be\s+(?:made|resolved|granted|approved))"
+        rf"(?:(?:has\s+)?not|hasn't|isn't)\s+(?:yet\s+)?(?:been\s+)?{resolution}|"
+        rf"{obligation})"
     )
     declaration = rf"{subject}\s+{predicate}"
     request = (
@@ -177,7 +182,7 @@ def _authority_evidence(body: str) -> list[str]:
     # silently leave its local negative declaration outside the filter.
     negative_pattern = (
         rf"\bno\s+(?:{declaration}|{ambiguity})\b"
-        r"|\b(?:does not|do not|did not|doesn't|don't|didn't|never|not|no longer)\s+"
+        r"|\b(?:does not|do not|did not|doesn't|don't|didn't|isn't|aren't|never|not|no longer)\s+"
         rf"{request}\b"
     )
     negative_spans = [match.span() for match in re.finditer(negative_pattern, body, re.I)]

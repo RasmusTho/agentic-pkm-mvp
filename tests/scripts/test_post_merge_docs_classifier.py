@@ -321,6 +321,9 @@ def test_resolved_or_negated_owner_mentions_do_not_escalate(statement) -> None:
     "Owner decision must be made.",
     "Owner decision has not been resolved.",
     "Owner authority has not yet been granted.",
+    "Owner decision needs to be made.",
+    "Owner decision needs resolution.",
+    "Owner authority still needs to be granted.",
     "No longer pending owner decision for A; awaiting owner authority for B.",
     "Implementation is not blocked by an owner decision still required for release.",
     "This change does not require an owner decision still needed for production.",
@@ -332,6 +335,37 @@ def test_pending_owner_requirement_formulations_remain_visible(statement) -> Non
     )
     assert result.impact_classification == "human_exception_likely"
     assert "Human Exception" in result.recommended_next_action
+
+
+@pytest.mark.parametrize("subject", ["owner decision", "owner authority", "strategic decision"])
+@pytest.mark.parametrize("verb,base", [("needs", "need"), ("requires", "require")])
+@pytest.mark.parametrize("complement", [
+    "to be made", "to be resolved", "to be granted", "to be approved", "resolution", "approval",
+])
+@pytest.mark.parametrize("qualifier", ["", "still "])
+def test_subject_first_obligations_preserve_local_polarity(subject, verb, base, complement, qualifier) -> None:
+    positive = f"{subject} {qualifier}{verb} {complement}."
+    negatives = [
+        f"No {subject} {qualifier}{verb} {complement}.",
+        f"{subject} does not {base} {complement}.",
+        f"{subject} doesn't {base} {complement}.",
+        f"{subject} no longer {verb} {complement}.",
+        f"{subject} never {verb} {complement}.",
+    ]
+    if verb == "needs" and complement.startswith("to "):
+        negatives.append(f"{subject} need not {complement.removeprefix('to ')}.")
+    for negative in negatives:
+        for statement, expected in [
+            (positive, "human_exception_likely"),
+            (negative, "no_change_likely"),
+            (negative + " " + positive, "human_exception_likely"),
+            (positive + " " + negative, "human_exception_likely"),
+        ]:
+            result = classify(
+                pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
+                files_payload=["tests/governance/test_policy.py"], issue={"number": 3217},
+            )
+            assert result.impact_classification == expected, statement
 
 
 @pytest.mark.parametrize("state", [
@@ -365,6 +399,9 @@ def test_owner_requirement_states_preserve_local_negation(state, verb, subject) 
     ("Waiting for an owner decision", "Not waiting for an owner decision"),
     ("Blocked by owner authority", "Not blocked by owner authority"),
     ("Blocked on owner decision", "No longer blocked on owner decision"),
+    ("Awaiting owner authority", "Isn't awaiting owner authority"),
+    ("Waiting for an owner decision", "Aren't waiting for an owner decision"),
+    ("Blocked by owner authority", "Isn't blocked by owner authority"),
     ("Strategic ambiguity remains", "No strategic ambiguity remains"),
     ("Strategic ambiguity persists", "No strategic ambiguity persists"),
     ("Strategic ambiguity is unresolved", "No strategic ambiguity is unresolved"),
@@ -382,17 +419,25 @@ def test_preposed_requirements_preserve_local_negation(affirmative, negative) ->
         assert result.impact_classification == expected, statement
 
 
-@pytest.mark.parametrize("subject,terminal", [
-    ("owner decision", "resolved"), ("owner authority", "granted"), ("owner authority", "approved"),
-])
+@pytest.mark.parametrize("subject", ["owner decision", "owner authority", "strategic decision"])
+@pytest.mark.parametrize("terminal", ["made", "resolved", "granted", "approved"])
 def test_terminal_predicate_polarity_is_atomic(subject, terminal) -> None:
     statements = [
         (f"{subject} {prefix} {terminal}.", "human_exception_likely")
-        for prefix in ["is not", "is not yet", "has not been", "has not yet been", "must be"]
+        for prefix in [
+            "is not", "is not yet", "has not been", "has not yet been", "must be",
+            "isn't", "isn't yet", "hasn't been", "hasn't yet been",
+        ]
     ] + [
         (f"{subject} {prefix} {terminal}.", "no_change_likely")
         for prefix in ["is", "has been", "has already been"]
     ] + [(f"No {subject} has not yet been {terminal}.", "no_change_likely")]
+    settled = "Owner authority has already been granted for docs."
+    statements += [
+        (mixed, expected)
+        for statement, expected in statements
+        for mixed in [settled + " " + statement, statement + " " + settled]
+    ]
     for statement, expected in statements:
         result = classify(
             pr=_pr(_body("- [x] No owner-doc change implied.", statement)),
