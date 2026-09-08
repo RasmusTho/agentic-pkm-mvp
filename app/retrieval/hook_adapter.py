@@ -77,6 +77,7 @@ def maybe_rerank(
       pass through unchanged when gated off. Containment (``_contain_rerank`` in
       ``app/retrieval/hybrid.py``) applies identically whenever rerank actually runs.
     """
+    explicit_tuning = tuning
     tuning = tuning or get_retrieval_tuning()
     if tuning.rerank == "off":
         return items
@@ -84,6 +85,14 @@ def maybe_rerank(
         margin = _bm25_dominance_margin(query, items)
         if margin is not None and margin >= tuning.rerank_score_margin:
             return items
-        return apply_optional_rerank(query, items)
+        return (
+            apply_optional_rerank(query, items)
+            if explicit_tuning is None
+            else apply_optional_rerank(query, items, tuning=tuning)
+        )
     # "always"
-    return apply_optional_rerank(query, items)
+    return (
+        apply_optional_rerank(query, items)
+        if explicit_tuning is None
+        else apply_optional_rerank(query, items, tuning=tuning)
+    )

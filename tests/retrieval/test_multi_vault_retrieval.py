@@ -183,3 +183,39 @@ def test_scoped_request_tuning_controls_rerank_after_candidate_filter(monkeypatc
         assert applied == []
     finally:
         get_store().set_documents([])
+
+
+def test_scoped_rerank_tuning_reaches_hook_and_overrides_global(monkeypatch) -> None:
+    """Scoped rerank mode and size reach the lower hook despite conflicting global tuning."""
+
+    from app.retrieval.hook_adapter import maybe_rerank
+
+    seen_top_k: list[int] = []
+
+    class _Reranker:
+        def rerank(self, _query, items, *, top_k):
+            seen_top_k.append(top_k)
+            return [items[-1]]
+
+    monkeypatch.setattr(
+        "app.retrieval.hook_adapter.get_retrieval_tuning",
+        lambda: RetrievalTuning(rerank="off"),
+    )
+    monkeypatch.setattr(
+        "app.retrieval.hybrid_rerank_hook.get_retrieval_tuning",
+        lambda: RetrievalTuning(rerank="off"),
+    )
+    monkeypatch.setattr("app.retrieval.hybrid_rerank_hook.get_reranker", lambda: _Reranker())
+
+    items = [
+        {"id": "first", "text": "first result"},
+        {"id": "second", "text": "second result"},
+    ]
+    result = maybe_rerank(
+        "result",
+        items,
+        tuning=RetrievalTuning(rerank="always", rerank_top_k=1),
+    )
+
+    assert seen_top_k == [1]
+    assert [item["id"] for item in result] == ["second", "first"]
