@@ -5607,6 +5607,63 @@ def test_local_retirement_rejects_cross_line_partial_binding(
     assert not any(args[:1] == ["update-ref"] for args in commands)
 
 
+def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch):
+    calls = []
+
+    def canonical_task_id(repository, issue):
+        calls.append((repository, issue))
+        return "canonical-task-id"
+
+    monkeypatch.setattr(git_hygiene, "github_issue_task_id", canonical_task_id)
+    resources = git_hygiene._dispatcher_resumable_binding_resources(
+        tmp_path,
+        {
+            "task_id": "canonical-task-id",
+            "repo": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 5258,
+            "status": "blocked",
+            "linked_pr": None,
+            "source_anchor_refs": "[]",
+            "sync_state": None,
+        },
+    )
+    assert calls == [("RasmusTho/agentic-pkm-mvp", 5258)]
+    assert resources == {"issue:5258", "github:issue:5258"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Preserved worktree: relative; branch: old; base HEAD: " + "a" * 40,
+        "Dedicated worktree /tmp/old is still dirty on branch old at head not-a-sha",
+    ],
+)
+def test_local_retirement_rejects_malformed_explicit_marker(
+    tmp_path, monkeypatch, body
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({"comments": [{"body": body}]}),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard only with valid explicit binding grammar",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 def test_legacy_archive_retirement_ignores_historical_dispatcher_delivery_sha(
     tmp_path, monkeypatch
 ):
@@ -5630,6 +5687,31 @@ def test_legacy_archive_retirement_ignores_historical_dispatcher_delivery_sha(
     result = git_hygiene.retire_legacy_archive_refs(
         repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
         owner_discard="discard inactive archive after verified merged delivery",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_accepts_validated_legacy_blank_repository_task(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-issue-5258",
+                "repo": "",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[\"github:issue:5258\"]",
+                "sync_state": None,
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after validated legacy-row check",
     )
     assert result["deleted"] == 1
 

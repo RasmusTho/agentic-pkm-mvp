@@ -30,6 +30,7 @@ if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocati
 
 from app.dispatcher.verification_contract import resolve_issue_authority
 from app.dispatcher.signboard import VALID_STATUSES as DISPATCHER_VALID_STATUSES
+from app.dispatcher.sync_github import github_issue_task_id
 from scripts.review_before_ci_gate import _issue_free_pr_contract_lane
 
 
@@ -1364,8 +1365,15 @@ def _dispatcher_source_anchors(value: object) -> set[str]:
 _DISPATCHER_PICKUP_RECEIPT_RE = re.compile(
     r"^\s*pickup intent receipt\s*:", re.IGNORECASE
 )
+_DISPATCHER_PRESERVED_WORKTREE_MARKER_RE = re.compile(
+    r"(?:^|[.!?]\s+)preserved\s+worktree\s*:", re.IGNORECASE
+)
 _DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
     r"(?:^|[.!?]\s+)preserved\s+worktree\s*:\s*/", re.IGNORECASE
+)
+_DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
+    re.IGNORECASE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+/[^\s;`,]+\s+is\s+still\s+dirty\s+"
@@ -1399,7 +1407,18 @@ def _dispatcher_resumable_binding_resources(
     task_id = record.get("task_id")
     repository = record.get("repo")
     issue = record.get("issue_number")
-    if (
+    status = record.get("status")
+    legacy_blank_repository = (
+        isinstance(task_id, str)
+        and isinstance(repository, str)
+        and repository == ""
+        and isinstance(issue, int)
+        and not isinstance(issue, bool)
+        and issue > 0
+        and task_id == f"github-issue-{issue}"
+        and status == "blocked"
+    )
+    current_identity = (
         not isinstance(task_id, str)
         or not task_id
         or not isinstance(repository, str)
@@ -1407,8 +1426,12 @@ def _dispatcher_resumable_binding_resources(
         or not isinstance(issue, int)
         or isinstance(issue, bool)
         or issue < 1
-        or task_id != f"github-{repository.replace('/', '--')}-issue-{issue}"
-    ):
+        or (
+            not legacy_blank_repository
+            and task_id != github_issue_task_id(repository, issue)
+        )
+    )
+    if current_identity and not legacy_blank_repository:
         raise RuntimeError("dispatcher_activity_invalid")
     resources: set[str] = {f"issue:{issue}", f"github:issue:{issue}"}
     linked_pr = _dispatcher_linked_pr(record.get("linked_pr"))
@@ -1463,11 +1486,19 @@ def _dispatcher_resumable_binding_resources(
         for line in body.splitlines():
             explicit_binding = bool(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
-                or _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
-                or _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
+                or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
+                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
             )
             if not explicit_binding:
                 continue
+            if (
+                _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
+                and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
+            ) or (
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+                and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
+            ):
+                raise RuntimeError("dispatcher_activity_invalid")
             worktree = _DISPATCHER_WORKTREE_BINDING_RE.search(line)
             branch = _DISPATCHER_BRANCH_BINDING_RE.search(line)
             head = _DISPATCHER_HEAD_BINDING_RE.search(line)
