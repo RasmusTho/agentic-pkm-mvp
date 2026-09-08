@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
@@ -21,6 +25,48 @@ SETTINGS_REBIND_SCHEMA = "settings_rebind.v1"
 SETTINGS_REBIND_SCHEMA_REVISION = 1
 MINIMUM_SETTINGS_REBIND_RUNTIME_KEY = "minimum_settings_rebind_runtime"
 MINIMUM_SETTINGS_REBIND_RUNTIME = "1"
+_TRANSITION_LOCKS = threading.local()
+
+
+@contextmanager
+def compatibility_ingress_window(
+    registry: VaultRegistryStore,
+    *,
+    transition: bool = False,
+) -> Iterator[None]:
+    """Coordinate compatibility effects with one foreground rebind.
+
+    The file lock covers API, watcher, and worker processes.  The durable
+    ``settings_rebind.v1`` record remains the crash-recovery authority, so a
+    process that dies while holding the lock still leaves compatibility ingress
+    fail-closed on the next attempt.
+    """
+
+    identity = (os.getpid(), str(registry.path.resolve()))
+    held: frozenset[tuple[int, str]] = getattr(
+        _TRANSITION_LOCKS, "held", frozenset()
+    )
+    if identity in held:
+        yield
+        return
+    lock_path = registry.path.parent / "settings-rebind-ingress.lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX if transition else fcntl.LOCK_SH)
+        if transition:
+            _TRANSITION_LOCKS.held = held | {identity}
+        try:
+            yield
+        finally:
+            if transition:
+                _TRANSITION_LOCKS.held = held
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 _FIELDS = {
     "schema",
@@ -32,14 +78,18 @@ _FIELDS = {
     "priorBindingId",
     "candidateBindingId",
     "reloadRevision",
+    "scalarDrainRevision",
     "checksum",
 }
-_LEGACY_FIELDS = _FIELDS - {"reloadRevision"}
+_ORIGINAL_FIELDS = _FIELDS - {"scalarDrainRevision"}
+_SCALAR_FIELDS = _FIELDS - {"reloadRevision"}
+_LEGACY_FIELDS = _FIELDS - {"reloadRevision", "scalarDrainRevision"}
 _PHASE_POSTURES = {
     "dormant": "dormant",
     "prepared": "watcher",
     "committed": "watcher",
     "no_lifecycle": "no_lifecycle",
+    "cancelled": "watcher",
 }
 
 
@@ -77,6 +127,7 @@ class SettingsRebindRecord:
     prior_binding_id: str | None = None
     candidate_binding_id: str | None = None
     reload_revision: int | None = 0
+    scalar_drain_revision: int | None = 0
 
     @classmethod
     def dormant(cls, *, binding_id: str | None = None) -> SettingsRebindRecord:
@@ -93,13 +144,21 @@ class SettingsRebindRecord:
             "priorBindingId": self.prior_binding_id,
             "candidateBindingId": self.candidate_binding_id,
             "reloadRevision": 0 if self.reload_revision is None else self.reload_revision,
+            "scalarDrainRevision": (
+                0 if self.scalar_drain_revision is None else self.scalar_drain_revision
+            ),
         }
         payload["checksum"] = _checksum(payload)
         return payload
 
     @classmethod
     def from_payload(cls, value: object) -> SettingsRebindRecord:
-        if not isinstance(value, dict) or set(value) not in (_FIELDS, _LEGACY_FIELDS):
+        if not isinstance(value, dict) or set(value) not in (
+            _FIELDS,
+            _ORIGINAL_FIELDS,
+            _SCALAR_FIELDS,
+            _LEGACY_FIELDS,
+        ):
             raise RegistryError("settings rebind record has an invalid shape")
         if value.get("schema") != SETTINGS_REBIND_SCHEMA:
             raise RegistryError("settings rebind record has an invalid schema")
@@ -120,7 +179,7 @@ class SettingsRebindRecord:
             raise RegistryError("dormant settings rebind revisions must be zero")
         if phase == "prepared" and not (desired > applied):
             raise RegistryError("prepared settings rebind requires unapplied desired revision")
-        if phase in {"committed", "no_lifecycle"} and desired != applied:
+        if phase in {"committed", "no_lifecycle", "cancelled"} and desired != applied:
             raise RegistryError("completed settings rebind revisions must match")
         prior = _binding(value.get("priorBindingId"), name="prior binding")
         candidate = _binding(value.get("candidateBindingId"), name="candidate binding")
@@ -132,6 +191,14 @@ class SettingsRebindRecord:
             reload_revision = _revision(value.get("reloadRevision"), name="reload revision")
             if reload_revision > applied:
                 raise RegistryError("settings rebind reload revision exceeds applied revision")
+        if "scalarDrainRevision" not in value:
+            scalar_drain_revision = None
+        else:
+            scalar_drain_revision = _revision(
+                value.get("scalarDrainRevision"), name="scalar drain revision"
+            )
+            if scalar_drain_revision > desired:
+                raise RegistryError("settings rebind scalar drain revision exceeds desired revision")
         supplied_checksum = value.get("checksum")
         if (
             not isinstance(supplied_checksum, str)
@@ -148,6 +215,7 @@ class SettingsRebindRecord:
             prior_binding_id=prior,
             candidate_binding_id=candidate,
             reload_revision=reload_revision,
+            scalar_drain_revision=scalar_drain_revision,
         )
 
 
@@ -229,6 +297,7 @@ class SettingsRebindStore:
             prior_binding_id=prior,
             candidate_binding_id=candidate_binding_id,
             reload_revision=0,
+            scalar_drain_revision=max(current.desired_revision, current.applied_revision) + 1,
         )
         updated = self._registry.set_settings_rebind_state(
             prepared.as_payload(),
@@ -241,7 +310,8 @@ class SettingsRebindStore:
         self,
         *,
         desired_revision: int,
-        selection: KnownVaultRef,
+        selection: KnownVaultRef | None,
+        default_change: tuple[str | None, str | None] | None = None,
     ) -> SettingsRebindRecord:
         """Atomically commit the prepared binding and compatibility selection."""
 
@@ -250,6 +320,7 @@ class SettingsRebindStore:
         snapshot = self._registry.commit_settings_rebind_selection(
             desired_revision=desired_revision,
             selection=selection,
+            default_change=default_change,
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         return SettingsRebindRecord.from_payload(snapshot.settings_rebind)
@@ -332,6 +403,33 @@ class SettingsRebindStore:
             )
         raise RegistryError("absent watcher cannot reconcile this settings rebind revision")
 
+    def compatibility_binding_id(self) -> str:
+        """Return the durable binding allowed to admit compatibility effects."""
+
+        current = self.read()
+        if current.phase == "prepared":
+            raise RegistryError("compatibility handoff is awaiting commit")
+        if current.candidate_binding_id is None:
+            raise RegistryError("compatibility binding is not selected")
+        if current.reload_revision not in {None, current.desired_revision}:
+            raise RegistryError("compatibility handoff is awaiting settings reload")
+        return current.candidate_binding_id
+
+
+def require_compatibility_binding_ready(
+    registry: VaultRegistryStore,
+    binding_id: str,
+) -> None:
+    """Fail closed unless the scalar worker matches durable rebind state."""
+
+    current = SettingsRebindStore(registry).read()
+    if current.phase == "prepared":
+        raise RegistryError("compatibility handoff is awaiting commit")
+    if current.candidate_binding_id != binding_id:
+        raise RegistryError("scalar worker binding is stale after compatibility rebind")
+    if current.reload_revision not in {None, current.desired_revision}:
+        raise RegistryError("compatibility handoff is awaiting settings reload")
+
 
 def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
     """Validate the candidate vault before any watcher adoption receipt."""
@@ -341,14 +439,18 @@ def validate_settings_rebind_candidate_root(candidate_root: Path) -> Path:
     manager = VaultManager()
     context = manager.validate_vault(candidate_root)
     if context.status != "selected":
-        raise RegistryError(
+        raise SettingsRebindCandidatePolicyError(
             "settings rebind candidate watcher root is not a selected vault"
         )
     if not manager.permissions_for_context(context).enable_vault_watcher:
-        raise RegistryError(
+        raise SettingsRebindCandidatePolicyError(
             "settings rebind candidate watcher root is disabled by local settings"
         )
     return candidate_root
+
+
+class SettingsRebindCandidatePolicyError(RegistryError):
+    """The candidate is invalid for watcher adoption, not a CAS failure."""
 
 
 def _activation_fault_point(stage: str) -> None:
@@ -417,9 +519,128 @@ class SettingsRebindActivation:
         candidate_binding_id: str,
         candidate_root: Path,
     ) -> SettingsRebindRecord:
+        prior = self.store.read()
+        try:
+            return self._activate_locked(
+                selection=selection,
+                candidate_binding_id=candidate_binding_id,
+                candidate_root=candidate_root,
+            )
+        except SettingsRebindCandidatePolicyError:
+            raise
+        except Exception:
+            self._cancel_before_commit(
+                prior,
+                expected_candidate_binding_id=candidate_binding_id,
+            )
+            raise
+
+    def activate_default(
+        self,
+        *,
+        binding_id: str | None,
+        provenance: str | None,
+        capability: _StorageMutationCapability | None = None,
+    ) -> SettingsRebindRecord:
+        """Run default SET/CLEAR through the same compatibility handoff."""
+
+        from app.instance._storage_boundary import _require_storage_mutation_capability
+        from app.instance.vault_registry import KnownVaultRef
+
+        _require_storage_mutation_capability(capability)
+        prior = self.store.read()
+        snapshot = self.store._registry.load()
+        registration = (
+            snapshot.registrations.get(binding_id) if binding_id is not None else None
+        )
+        if binding_id is not None and registration is None:
+            raise RegistryError("default target is not registered")
+        if prior.candidate_binding_id == binding_id and prior.reload_revision in {
+            None,
+            prior.desired_revision,
+        } and prior.phase in {"dormant", "committed", "no_lifecycle", "cancelled"}:
+            with compatibility_ingress_window(self.store._registry, transition=True):
+                snapshot = self.store._registry.load()
+                updated = self.store._registry.set_instance_default(
+                    binding_id,
+                    provenance=provenance or "explicit",
+                    expected_revision=snapshot.revision,
+                    _capability=capability,
+                )
+                return SettingsRebindRecord.from_payload(updated.settings_rebind)
+        selection = (
+            KnownVaultRef(
+                ref=registration.ref,
+                path=registration.path,
+                vault_id=registration.vault_id,
+                local_instance_id=registration.local_instance_id,
+                vault_name=registration.vault_name,
+                last_opened_at=registration.last_opened_at,
+            )
+            if registration is not None
+            else None
+        )
+        try:
+            return self._activate_locked(
+                selection=selection,
+                candidate_binding_id=binding_id,
+                candidate_root=Path(registration.path) if registration else None,
+                default_change=(binding_id, provenance),
+            )
+        except SettingsRebindCandidatePolicyError:
+            raise
+        except Exception:
+            self._cancel_before_commit(
+                prior,
+                expected_candidate_binding_id=binding_id,
+            )
+            raise
+
+    def _cancel_before_commit(
+        self,
+        prior: SettingsRebindRecord,
+        *,
+        expected_candidate_binding_id: str | None,
+    ) -> None:
+        """Consume a prepared revision while restoring the previous binding."""
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+
+        with compatibility_ingress_window(self.store._registry, transition=True):
+            snapshot = self.store._registry.load()
+            current = self.store.read()
+            if (
+                current.phase != "prepared"
+                or current.candidate_binding_id != expected_candidate_binding_id
+            ):
+                return
+            cancelled = replace(
+                current,
+                applied_revision=current.desired_revision,
+                phase="cancelled",
+                lifecycle_posture="watcher",
+                prior_binding_id=prior.candidate_binding_id,
+                candidate_binding_id=prior.candidate_binding_id,
+                reload_revision=current.desired_revision,
+                scalar_drain_revision=current.desired_revision,
+            )
+            self.store._registry.set_settings_rebind_state(
+                cancelled.as_payload(),
+                expected_revision=snapshot.revision,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+
+    def _activate_locked(
+        self,
+        *,
+        selection: KnownVaultRef | None,
+        candidate_binding_id: str | None,
+        candidate_root: Path | None,
+        default_change: tuple[str | None, str | None] | None = None,
+    ) -> SettingsRebindRecord:
         current = self.store.read()
         if current.candidate_binding_id == candidate_binding_id:
-            if current.phase in {"dormant", "no_lifecycle"}:
+            if current.phase in {"dormant", "no_lifecycle", "cancelled"}:
                 if current.phase == "no_lifecycle":
                     return self._reload_if_needed(current, candidate_root)
                 return current
@@ -435,7 +656,8 @@ class SettingsRebindActivation:
 
         _activation_fault_point("prepare")
         try:
-            prepared = self.store.prepare(candidate_binding_id=candidate_binding_id)
+            with compatibility_ingress_window(self.store._registry, transition=True):
+                prepared = self.store.prepare(candidate_binding_id=candidate_binding_id)
         except RegistryError:
             # Another foreground request may have committed this exact target
             # between the read above and prepare.  Its durable commit is the
@@ -458,18 +680,21 @@ class SettingsRebindActivation:
             _activation_fault_point("acknowledge")
             self._wait_for_stage(prepared, required_stage="acknowledged")
         else:
-            if self.watcher_requested:
+            if self.watcher_requested and candidate_root is not None:
                 validate_settings_rebind_candidate_root(candidate_root)
             _activation_fault_point("acknowledge")
-            prepared = self.store.acknowledge_no_lifecycle(
-                desired_revision=prepared.desired_revision
-            )
+            with compatibility_ingress_window(self.store._registry, transition=True):
+                prepared = self.store.acknowledge_no_lifecycle(
+                    desired_revision=prepared.desired_revision
+                )
 
         try:
-            committed = self.store.commit_selection(
-                desired_revision=prepared.desired_revision,
-                selection=selection,
-            )
+            with compatibility_ingress_window(self.store._registry, transition=True):
+                committed = self.store.commit_selection(
+                    desired_revision=prepared.desired_revision,
+                    selection=selection,
+                    default_change=default_change,
+                )
         except RegistryError:
             # A same-target request can win the lock after both callers have
             # observed the prepared revision.  Do not report API success until
@@ -499,7 +724,7 @@ class SettingsRebindActivation:
     def _reload_if_needed(
         self,
         record: SettingsRebindRecord,
-        candidate_root: Path,
+        candidate_root: Path | None,
     ) -> SettingsRebindRecord:
         # Re-read after any watcher wait or commit race.  A concurrent winner
         # may have completed the reload while this caller was waiting.
@@ -511,6 +736,17 @@ class SettingsRebindActivation:
             record = current
         if record.reload_revision == record.desired_revision:
             return record
+        if candidate_root is None:
+            if record.candidate_binding_id is not None:
+                raise RegistryError("settings rebind cannot reload without a selected candidate")
+            # Clearing the default has no vault-scoped SETTINGS-01 payload to
+            # ingest, but it still needs the same durable completion marker so
+            # a retry cannot mistake the no-target handoff for an unfinished
+            # reload.
+            return self.store.reload_once(
+                desired_revision=record.desired_revision,
+                reload_callback=lambda: None,
+            )
         # This is deliberately the existing production SETTINGS-01 call site,
         # not a second settings loader.  The registry lock serializes this
         # side effect with same-target callers and records completion durably.

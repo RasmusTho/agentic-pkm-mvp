@@ -903,6 +903,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "outbox_worker",
         (
             "app/workers/outbox_worker.py",
+            # The binding gate is the worker's admission/effect-window seam;
+            # keep its rebind regressions on the same worker-owned test lane.
+            "app/workers/outbox_binding_gate.py",
             # Opt-in /metrics endpoint for the outbox worker; its coverage
             # lives in tests/workers/test_worker_metrics.py.
             "app/workers/metrics.py",

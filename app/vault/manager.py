@@ -482,12 +482,16 @@ class VaultManager:
         return self.select_vault(Path(item.path), remember=False)
 
     def select_vault(self, vault_path: Path, *, remember: bool = True) -> VaultContext:
+        return self._select_vault_locked(vault_path, remember=remember)
+
+    def _select_vault_locked(self, vault_path: Path, *, remember: bool) -> VaultContext:
         previous = self._context
         context = self.validate_vault(vault_path)
-        if remember and context.status in {"selected", "uninitialized", "invalid", "missing"}:
+        if context.status in {"selected", "uninitialized", "invalid", "missing"}:
             rebind_selection = self._settings_rebind_selection(context, vault_path)
             if rebind_selection is None:
-                self._remember_context(context, vault_path)
+                if remember:
+                    self._remember_context(context, vault_path)
             else:
                 activation, registration, known = rebind_selection
                 activation.activate(
