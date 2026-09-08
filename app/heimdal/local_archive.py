@@ -1011,7 +1011,17 @@ def run_single_record_restore_operation(
     except raw_read_gate.RawReadRefusedError as exc:
         raise OperationTargetRefused("operation_target_changed") from exc
     transition: list[object] = []
-    receipt = run_restore_drill(proof.raw_ref, reader=service_reader, operation_id=request_id, transition_result_sink=transition.append)
+    try:
+        receipt = run_restore_drill(
+            proof.raw_ref,
+            reader=service_reader,
+            operation_id=request_id,
+            transition_result_sink=transition.append,
+            expected_raw_generation=proof.generation,
+            expected_representation_id=proof.representation_id,
+        )
+    except raw_read_gate.RawReadRefusedError as exc:
+        raise OperationTargetRefused("operation_target_changed") from exc
     if len(transition) != 1:
         raise ArchiveDegradedError("restore_transition_readback_unavailable")
     return HeimdalOperationResult(transition[0], receipt)
@@ -1055,6 +1065,8 @@ def run_restore_drill(
     key: Optional[bytes] = None,
     operation_id: str | None = None,
     transition_result_sink: Callable[[object], None] | None = None,
+    expected_raw_generation: int | None = None,
+    expected_representation_id: str | None = None,
 ) -> RestoreDrillReceipt:
     """Restore one archived identity through the production gated read path.
 
@@ -1073,6 +1085,13 @@ def run_restore_drill(
             f"reader {reader!r} is not permitted to read raw evidence"
         )
 
+    if expected_raw_generation is not None and type(expected_raw_generation) is not int:
+        raise ValueError("expected_raw_generation must be an integer")
+    if expected_representation_id is not None and (
+        not isinstance(expected_representation_id, str) or not expected_representation_id
+    ):
+        raise ValueError("expected_representation_id must be a non-empty string")
+
     record_id = raw_read_gate._record_id_from_raw_ref(raw_ref)  # noqa: SLF001
     record = raw_store.resolve_active_raw_record(record_id)
     if record is None:
@@ -1082,11 +1101,30 @@ def run_restore_drill(
     active = [item for item in raw_store.all_raw_representations(record.id) if item.active]
     if len(active) != 1:
         raise ArchiveDegradedError("archived_representation_unavailable")
+    if (
+        expected_raw_generation is not None
+        and active[0].raw_generation != expected_raw_generation
+    ):
+        raise raw_read_gate.RawReadRefusedError(
+            "restore generation changed before owner read"
+        )
+    if (
+        expected_representation_id is not None
+        and active[0].id != expected_representation_id
+    ):
+        raise raw_read_gate.RawReadRefusedError(
+            "restore representation changed before owner read"
+        )
     adapter = HeimdalRawMediaAdapter(
         record,
-        generation=active[0].raw_generation,
+        generation=(
+            expected_raw_generation
+            if expected_raw_generation is not None
+            else active[0].raw_generation
+        ),
         read_key=key,
         restore_operation_id=operation_id,
+        restore_representation_id=expected_representation_id or active[0].id,
     )
     authority = AccessAuthority(
         OwnerAuthority.CLASS_ADAPTER,

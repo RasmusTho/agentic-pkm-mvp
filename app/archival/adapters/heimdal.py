@@ -124,6 +124,7 @@ class HeimdalRawMediaAdapter:
         operation_reader: Callable[[str], Mapping[str, object] | None] | None = None,
         read_key: bytes | None = None,
         restore_operation_id: str | None = None,
+        restore_representation_id: str | None = None,
     ) -> None:
         self.record = record
         self.artifact = describe_raw_media(record, generation=generation)
@@ -131,6 +132,7 @@ class HeimdalRawMediaAdapter:
         self._operation_reader = operation_reader
         self._read_key = read_key
         self._restore_operation_id = restore_operation_id
+        self._restore_representation_id = restore_representation_id
         self._binding: OperationBinding | None = None
         self._archive_result: object | None = None
         self._validated_owner_archive_receipt: object | None = None
@@ -214,6 +216,17 @@ class HeimdalRawMediaAdapter:
         active = [item for item in raw_store.all_raw_representations(self.record.id) if item.active]
         if len(active) != 1:
             raise TransitionFailure(FaultStage.AUTHORIZATION, "active raw representation unavailable")
+        if (
+            self._restore_representation_id is not None
+            and active[0].id != self._restore_representation_id
+        ):
+            raise raw_read_gate.RawReadRefusedError(
+                "restore representation changed before owner read"
+            )
+        if active[0].raw_generation != artifact.generation.value:
+            raise raw_read_gate.RawReadRefusedError(
+                "restore generation changed before owner read"
+            )
         representation = self.ref_for(active[0])
         attempt = _RestoreAttempt(self._restore_operation_id or str(uuid4()), artifact, authority, representation)
         self._restore_attempt.set(attempt)

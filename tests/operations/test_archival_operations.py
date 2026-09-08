@@ -2,10 +2,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import fields
 
+import pytest
+
 from app.archival.contracts import ArtifactClass, Liveness, LivenessState, OpaqueReference, PolicyProfile, TransitionStage
 from app.operations import InMemoryReceiptStore, OperationContext, OperationExecutionKernel, OperationRequest, OperationStatus, PolicyDecision
 from app.operations.archival_operations import ARCHIVE_OPERATION_ID, RESTORE_OPERATION_ID, ArchivalOperationServerConfig, build_archival_operation_handlers
 from app.heimdal.raw_read_gate import OperationTargetProof
+from app.heimdal import local_archive
 from app.heimdal.local_archive import ArchiveDegradedError
 from app.heimdal.retention import RetentionWindowMissingError
 from app.ops.heimdal_cold_volume import ArchiveVolumeRefusedError
@@ -119,3 +122,43 @@ def test_pre_effect_provider_refusals_are_rejected_without_recovery(monkeypatch)
     assert restore_outcome.status is OperationStatus.REJECTED
     assert restore_outcome.warnings == ("retention_window_unavailable",)
     assert restore_outcome.receipt is not None and restore_outcome.receipt.payload["recovery"] is None
+
+
+def test_restore_forwards_exact_proof_fence_to_owner_read(monkeypatch) -> None:
+    proof = OperationTargetProof("raw-ref-raw-1", "raw-1", 7, "representation-1", "active")
+    monkeypatch.setattr(local_archive.raw_read_gate, "revalidate_operation_target", lambda current, *, service_reader: current)
+    observed: dict[str, object] = {}
+
+    def fake_restore_drill(raw_ref: str, **kwargs: object) -> object:
+        observed.update({"raw_ref": raw_ref, **kwargs})
+        callback = observed["transition_result_sink"]
+        assert callable(callback)
+        callback(SimpleNamespace())
+        return SimpleNamespace()
+
+    monkeypatch.setattr(local_archive, "run_restore_drill", fake_restore_drill)
+    result = local_archive.run_single_record_restore_operation(
+        proof,
+        service_reader=local_archive.OPERATION_RESTORE_SERVICE,
+        request_id="restore-request",
+    )
+    assert result.transition is not None
+    assert observed["expected_raw_generation"] == 7
+    assert observed["expected_representation_id"] == "representation-1"
+
+
+def test_restore_drill_rejects_a_newer_active_generation(monkeypatch) -> None:
+    record = SimpleNamespace(id="raw-1", content_identity="content")
+    current = SimpleNamespace(id="representation-8", raw_generation=8, active=True)
+    monkeypatch.setattr(local_archive.raw_read_gate, "resolve_read_allowlist", lambda: {"reader"})
+    monkeypatch.setattr(local_archive.raw_read_gate, "_record_id_from_raw_ref", lambda _raw_ref: "raw-1")
+    monkeypatch.setattr(local_archive.raw_store, "resolve_active_raw_record", lambda _record_id: record)
+    monkeypatch.setattr(local_archive.raw_store, "all_raw_representations", lambda _record_id: [current])
+
+    with pytest.raises(local_archive.raw_read_gate.RawReadRefusedError, match="generation"):
+        local_archive.run_restore_drill(
+            "opaque-raw-ref",
+            reader="reader",
+            expected_raw_generation=7,
+            expected_representation_id="representation-7",
+        )
