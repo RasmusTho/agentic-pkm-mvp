@@ -7899,6 +7899,24 @@ def test_receipt_allowlist_preserves_declared_spark_capability() -> None:
     assert sanitized["review_events"][0]["capability"] == "spark"
 
 
+def test_new_unknown_capability_is_rejected_outside_persisted_replay() -> None:
+    receipt = verified_attempt_receipt()
+    receipt["review_events"][0]["capability"] = "unknown-capability"
+    schema = (
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+    )
+
+    with pytest.raises(verification_consumer.ReceiptContractError):
+        verification_consumer.load_and_validate_verification_closer_receipt(
+            receipt,
+            schema,
+            trusted_repository=REPO,
+            trusted_evidence_urls=frozenset(),
+            capability_aliases={"sol": "sol"},
+        )
+
+
 def test_retry_verdict_receipt_is_diagnosable_without_raw_logs(tmp_path) -> None:
     """A retry/backoff terminal receipt stays diagnosable through the normal
     operator surface (``dispatcher verification-status``), not only via raw
