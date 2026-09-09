@@ -150,7 +150,10 @@ record the resulting single-writer evidence in `builderops_vm_rebuild_activation
 
 The VM 102 deployment host must run `gh attestation verify` locally immediately before deployment.
 A separate runner's exit result cannot be handed off to deployment; no prior remote verifier result
-is accepted. The validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the
+is accepted. Before invoking it, the wrapper requires the fixed `builderops` context to resolve to
+the existing local `unix:///run/docker-builderops.sock` endpoint. This execution-boundary check
+does not qualify VM identity or deployment readiness; those remain separate receipt gates. The
+validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the
 deployment host records its observed version and command exit without recording credentials. The
 exact command and fail-closed boundary are defined in [Independent Authenticated Deployment ::
 Approved candidate attestation runner](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#approved-candidate-attestation-runner).

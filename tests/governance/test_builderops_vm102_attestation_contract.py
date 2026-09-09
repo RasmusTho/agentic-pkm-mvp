@@ -32,6 +32,9 @@ def test_candidate_attestation_requires_vm102_local_verifier() -> None:
         assert "must run" in section
         assert "cannot be handed off to deployment" in section
         assert "prior remote verifier result" in section
+        assert "fixed `builderops` context" in section
+        assert "unix:///run/docker-builderops.sock" in section
+        assert "does not qualify vm identity" in section
         assert "vm 102 or from a named" not in section
         assert "may run on vm 102 or a named" not in section
 

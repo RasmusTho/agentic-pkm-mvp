@@ -65,7 +65,10 @@ live qualification.
 
 The VM 102 deployment host must run the exact verifier locally immediately before each live
 deployment attempt. A separate runner's exit result cannot be handed off to deployment; no prior
-remote verifier result is accepted. The validated runner baseline is GitHub CLI `2.83.2` with the
+remote verifier result is accepted. Before invoking it, the wrapper requires the fixed `builderops`
+context to resolve to the existing local `unix:///run/docker-builderops.sock` endpoint. This
+execution-boundary check does not qualify VM identity or deployment readiness; those remain
+separate receipt gates. The validated runner baseline is GitHub CLI `2.83.2` with the
 `attestation` subcommand available. A different CLI version is permitted only when it supports the
 same `gh attestation verify` command and flags; the observed version is recorded in the redacted
 operator receipt. The deployment host's GitHub authentication remains in its normal credential
