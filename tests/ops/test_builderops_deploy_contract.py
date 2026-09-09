@@ -263,7 +263,9 @@ set -eu
 printf 'docker %s\n' "$*" >> "$FAKE_EVENT_LOG"
 context=""
 if [ "${1:-}" = "--context" ]; then context="$2"; shift 2; fi
-if [ "${1:-}" = info ]; then
+if [ "${1:-}" = context ] && [ "${2:-}" = inspect ]; then
+  printf '%s\n' "${FAKE_BUILDEROPS_CONTEXT_SOCKET:-unix:///run/docker-builderops.sock}"
+elif [ "${1:-}" = info ]; then
   if [ "$context" = builderops ] && [ -n "${FAKE_ENGINE_INFO_OUTPUT:-}" ]; then
     printf '%s' "$FAKE_ENGINE_INFO_OUTPUT"
     exit 0
@@ -572,7 +574,7 @@ def test_deploy_rejects_unattested_candidate_pair_before_docker(tmp_path: Path) 
     assert "gh attestation verify" in events
     assert "--source-ref refs/heads/main" in events
     assert f"--source-digest {source_sha}" in events
-    assert "docker " not in events
+    assert "docker --context" not in events
 
 
 def test_deploy_refuses_unavailable_attestation_verifier_before_docker(
@@ -598,7 +600,34 @@ def test_deploy_refuses_unavailable_attestation_verifier_before_docker(
     assert result.returncode != 0
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "gh attestation verify" in events
-    assert "docker " not in events
+    assert "docker --context" not in events
+
+
+def test_deploy_refuses_nonlocal_builderops_context_before_attestation(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDEROPS_CONTEXT_SOCKET"] = "ssh://operator@example.invalid/run/docker.sock"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 75
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "docker context inspect --format" in events
+    assert "gh attestation verify" not in events
+    assert "docker --context" not in events
 
 
 def test_deploy_refuses_duplicate_builderops_engine_writers(tmp_path: Path) -> None:
