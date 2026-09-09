@@ -94,7 +94,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import (
+    read_create_once_winner_relative,
+    read_note_text_with_version,
+    write_note_relative,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -625,12 +629,61 @@ def read_settings_note(
     (the common "reconcile agent-authored fields, preserve human ones"
     pattern) never clobbers a human edit it did not itself request.
     """
+    note, _ = read_settings_note_with_version(
+        vault_root,
+        spec,
+        settings_dir=settings_dir,
+        **template_args,
+    )
+    return note
+
+
+def read_settings_note_with_version(
+    vault_root: Path,
+    spec: SettingsNoteSpec,
+    *,
+    settings_dir: str = DEFAULT_SETTINGS_DIR,
+    **template_args: str,
+) -> tuple[SettingsNote | None, str | None]:
+    """Read one note and hash the exact bytes used for its write CAS."""
     rel_path = note_rel_path(spec, settings_dir=settings_dir, **template_args)
     path = vault_root / rel_path
-    if not path.exists():
-        return None
-    text = path.read_text(encoding="utf-8")
-    return parse_note(spec, text)
+    if not path.exists() and not path.is_symlink():
+        return None, None
+    text, version = read_note_text_with_version(path)
+    return parse_note(spec, text), version
+
+
+def _write_settings_note(
+    vault_root: Path,
+    note: SettingsNote,
+    *,
+    expected_version: str | None,
+    settings_dir: str = DEFAULT_SETTINGS_DIR,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    action: str = SETTINGS_NOTE_WRITE_ACTION,
+    **template_args: str,
+) -> SettingsNote:
+    """Publish a note using the version snapshot owned by the caller."""
+    rel_path = note_rel_path(note.spec, settings_dir=settings_dir, **template_args)
+    content = render_note(note)
+    receipt = write_note_relative(
+        rel_path,
+        content,
+        vault_root=vault_root,
+        action=action,
+        write_guard=write_guard,
+        expected_version=expected_version,
+        writer_identity=action,
+        create_once=expected_version is None,
+    )
+    if receipt.outcome == "already_exists":
+        winner_text = read_create_once_winner_relative(
+            rel_path,
+            vault_root=vault_root,
+        )
+        return parse_note(note.spec, winner_text)
+    return note
 
 
 def write_settings_note(
@@ -640,8 +693,9 @@ def write_settings_note(
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     action: str = SETTINGS_NOTE_WRITE_ACTION,
+    _observed: tuple[SettingsNote | None, str | None] | None = None,
     **template_args: str,
-) -> None:
+) -> SettingsNote:
     """Write one `_heimdal/**` note through the governed vault-write seam.
 
     Uses `app.knowledge.write_ops.write_note_relative` (the same production
@@ -651,14 +705,23 @@ def write_settings_note(
     filesystem -- so a health-blocked runtime cannot silently corrupt the
     control surface either.
     """
-    rel_path = note_rel_path(note.spec, settings_dir=settings_dir, **template_args)
-    content = render_note(note)
-    write_note_relative(
-        rel_path,
-        content,
-        vault_root=vault_root,
-        action=action,
+    if _observed is None:
+        _, expected_version = read_settings_note_with_version(
+            vault_root,
+            note.spec,
+            settings_dir=settings_dir,
+            **template_args,
+        )
+    else:
+        _, expected_version = _observed
+    return _write_settings_note(
+        vault_root,
+        note,
+        expected_version=expected_version,
+        settings_dir=settings_dir,
         write_guard=write_guard,
+        action=action,
+        **template_args,
     )
 
 
@@ -669,6 +732,7 @@ def apply_agent_update(
     *,
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    _observed: tuple[SettingsNote | None, str | None] | None = None,
     **template_args: str,
 ) -> SettingsNote:
     """The honored-intent read/merge/write cycle an agent uses to update its
@@ -692,19 +756,27 @@ def apply_agent_update(
                 "agents may not silently overwrite human-editable fields"
             )
 
-    existing = read_settings_note(vault_root, spec, settings_dir=settings_dir, **template_args)
+    if _observed is None:
+        existing, expected_version = read_settings_note_with_version(
+            vault_root,
+            spec,
+            settings_dir=settings_dir,
+            **template_args,
+        )
+    else:
+        existing, expected_version = _observed
     merged_values: dict[str, Any] = dict(existing.values) if existing is not None else {}
     merged_values.update(agent_values)
 
     note = SettingsNote(spec=spec, values=merged_values)
-    write_settings_note(
+    return _write_settings_note(
         vault_root,
         note,
+        expected_version=expected_version,
         settings_dir=settings_dir,
         write_guard=write_guard,
         **template_args,
     )
-    return note
 
 
 __all__ = [
@@ -737,6 +809,7 @@ __all__ = [
     "note_rel_path",
     "parse_note",
     "read_settings_note",
+    "read_settings_note_with_version",
     "render_note",
     "write_settings_note",
 ]

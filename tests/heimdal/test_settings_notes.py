@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+import app.heimdal.settings_notes as settings_notes_module
 from app.heimdal.settings_notes import (
     ATTENTION_DAY,
     CONSENT,
@@ -51,6 +52,7 @@ from app.heimdal.settings_notes import (
     render_note,
     write_settings_note,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -281,6 +283,65 @@ def test_apply_agent_update_rejects_human_editable_field(tmp_path: Path) -> None
         )
     # No note should have been written by the rejected call.
     assert read_settings_note(vault_root, WATCHLIST) is None
+
+
+def test_apply_agent_update_refuses_concurrent_human_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agent merge must preserve bytes changed after its read snapshot."""
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    apply_agent_update(vault_root, WATCHLIST, {"last_synced": "before"}, write_guard=guard)
+    note_path = vault_root / note_rel_path(WATCHLIST)
+    original_write = settings_notes_module.write_note_relative
+
+    def write_after_human_edit(note_rel_path_value: str, content: str, **kwargs: object):
+        assert kwargs["expected_version"] is not None
+        note_path.write_bytes(b"human edit wins\n")
+        return original_write(note_rel_path_value, content, **kwargs)
+
+    monkeypatch.setattr(settings_notes_module, "write_note_relative", write_after_human_edit)
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict"):
+        apply_agent_update(vault_root, WATCHLIST, {"last_synced": "after"}, write_guard=guard)
+
+    assert note_path.read_bytes() == b"human edit wins\n"
+
+
+def test_write_settings_note_returns_concurrent_creator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A losing create reports the durable winner, never an unapplied note."""
+    vault_root = _vault(tmp_path)
+    note = SettingsNote(spec=WATCHLIST, values={"last_synced": "requested"})
+    winner = SettingsNote(spec=WATCHLIST, values={"last_synced": "winner"})
+    original_write = settings_notes_module.write_note_relative
+    injected = False
+
+    def create_winner_then_retry(note_rel_path_value: str, content: str, **kwargs: object):
+        nonlocal injected
+        if not injected:
+            injected = True
+            original_write(
+                note_rel_path_value,
+                render_note(winner),
+                vault_root=vault_root,
+                action=kwargs["action"],
+                write_guard=kwargs["write_guard"],
+                expected_version=None,
+                writer_identity="concurrent-writer",
+                create_once=True,
+            )
+        return original_write(note_rel_path_value, content, **kwargs)
+
+    monkeypatch.setattr(settings_notes_module, "write_note_relative", create_winner_then_retry)
+
+    persisted = write_settings_note(vault_root, note, write_guard=_allowing_guard())
+
+    assert persisted.values == winner.values
+    on_disk = read_settings_note(vault_root, WATCHLIST)
+    assert on_disk is not None
+    assert on_disk.values == winner.values
 
 
 def test_read_settings_note_returns_none_when_absent(tmp_path: Path) -> None:

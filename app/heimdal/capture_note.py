@@ -62,7 +62,11 @@ from typing import Any, Mapping
 
 from app.heimdal.asr_stage import TranscriptResult, TranscriptSegment
 from app.heimdal.attribution_stage import Attribution, AttributionResult, EntityMention
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import (
+    read_create_once_winner_relative,
+    read_note_text_with_version,
+    write_note_relative,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -272,11 +276,29 @@ def read_capture_note(
     captures_dir: str = DEFAULT_CAPTURES_DIR,
 ) -> CaptureNote | None:
     """Read one captured memo's dated note. Returns `None` if it does not exist yet."""
+    note, _ = _read_capture_note_with_version(
+        vault_root,
+        memo_id,
+        captured_date,
+        captures_dir=captures_dir,
+    )
+    return note
+
+
+def _read_capture_note_with_version(
+    vault_root: Path,
+    memo_id: str,
+    captured_date: str,
+    *,
+    captures_dir: str = DEFAULT_CAPTURES_DIR,
+) -> tuple[CaptureNote | None, str | None]:
+    """Read a capture note and hash the exact bytes used for the write CAS."""
     rel_path = capture_note_rel_path(memo_id, captured_date, captures_dir=captures_dir)
     path = vault_root / rel_path
-    if not path.exists():
-        return None
-    return parse_capture_note(path.read_text(encoding="utf-8"))
+    if not path.exists() and not path.is_symlink():
+        return None, None
+    text, version = read_note_text_with_version(path)
+    return parse_capture_note(text), version
 
 
 def _assert_monotonic(current: CaptureNote | None, target_status: str) -> None:
@@ -311,30 +333,48 @@ def write_capture_note(
     captures_dir: str = DEFAULT_CAPTURES_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     action: str = CAPTURE_NOTE_WRITE_ACTION,
+    _observed: tuple[CaptureNote | None, str | None] | None = None,
 ) -> CaptureNote:
     """Write one capture note through the governed vault-write seam, in place.
 
-    Enforces the monotonic `status:` walk (:data:`STATUS_ORDER`) against
-    whatever is currently on disk for this `memo_id`/`captured_date` before
-    writing -- raises :class:`CaptureNoteStatusError` rather than silently
-    moving the durable state backward. Uses
+    Enforces the monotonic `status:` walk (:data:`STATUS_ORDER`) against one
+    exact byte snapshot of the current note. Existing notes are rewritten
+    with compare-and-swap; an absent note is created atomically without
+    clobbering a concurrent creator. Uses
     `app.knowledge.write_ops.write_note_relative` (the same production write
     port `app.services.companion_note` and `app.heimdal.settings_notes`
     use), which itself asserts `write_guard.assert_writes_allowed(action)`
     before touching the filesystem.
     """
-    existing = read_capture_note(vault_root, note.memo_id, note.captured_date, captures_dir=captures_dir)
+    if _observed is None:
+        existing, expected_version = _read_capture_note_with_version(
+            vault_root,
+            note.memo_id,
+            note.captured_date,
+            captures_dir=captures_dir,
+        )
+    else:
+        existing, expected_version = _observed
     _assert_monotonic(existing, note.status)
 
     rel_path = capture_note_rel_path(note.memo_id, note.captured_date, captures_dir=captures_dir)
     content = render_capture_note(note)
-    write_note_relative(
+    receipt = write_note_relative(
         rel_path,
         content,
         vault_root=vault_root,
         action=action,
         write_guard=write_guard,
+        expected_version=expected_version,
+        writer_identity=action,
+        create_once=expected_version is None,
     )
+    if receipt.outcome == "already_exists":
+        winner_text = read_create_once_winner_relative(
+            rel_path,
+            vault_root=vault_root,
+        )
+        return parse_capture_note(winner_text)
     return note
 
 
@@ -364,7 +404,12 @@ def record_capture(
         updated=_now_iso(),
         sensor=dict(sensor or {}),
     )
-    return write_capture_note(vault_root, note, captures_dir=captures_dir, write_guard=write_guard)
+    return write_capture_note(
+        vault_root,
+        note,
+        captures_dir=captures_dir,
+        write_guard=write_guard,
+    )
 
 
 def record_processing(
@@ -384,7 +429,12 @@ def record_processing(
     this memo's `raw_ref`, the caller passes it here so the note's body and
     frontmatter carry the on-device transcript before attribution has run.
     """
-    existing = read_capture_note(vault_root, memo_id, captured_date, captures_dir=captures_dir)
+    existing, expected_version = _read_capture_note_with_version(
+        vault_root,
+        memo_id,
+        captured_date,
+        captures_dir=captures_dir,
+    )
     if existing is None:
         raise CaptureNoteError(
             f"record_processing: no capture note found for memo_id={memo_id!r} "
@@ -408,7 +458,13 @@ def record_processing(
         attributions=existing.attributions,
         entity_mentions=existing.entity_mentions,
     )
-    return write_capture_note(vault_root, note, captures_dir=captures_dir, write_guard=write_guard)
+    return write_capture_note(
+        vault_root,
+        note,
+        captures_dir=captures_dir,
+        write_guard=write_guard,
+        _observed=(existing, expected_version),
+    )
 
 
 def record_in_vault(
@@ -431,7 +487,12 @@ def record_in_vault(
     `in-vault` status with the attribution folded in, so the note is fully
     self-describing without the UI.
     """
-    existing = read_capture_note(vault_root, memo_id, captured_date, captures_dir=captures_dir)
+    existing, expected_version = _read_capture_note_with_version(
+        vault_root,
+        memo_id,
+        captured_date,
+        captures_dir=captures_dir,
+    )
     if existing is None:
         raise CaptureNoteError(
             f"record_in_vault: no capture note found for memo_id={memo_id!r} "
@@ -455,7 +516,13 @@ def record_in_vault(
         attributions=attributions,
         entity_mentions=entity_mentions,
     )
-    return write_capture_note(vault_root, note, captures_dir=captures_dir, write_guard=write_guard)
+    return write_capture_note(
+        vault_root,
+        note,
+        captures_dir=captures_dir,
+        write_guard=write_guard,
+        _observed=(existing, expected_version),
+    )
 
 
 def _segment_to_dict(segment: TranscriptSegment) -> dict[str, Any]:

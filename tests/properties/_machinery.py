@@ -784,8 +784,8 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "related repair the first time this census machinery is touched again "
         "after later Heimdal slices shifted the file."
     ),
-    ("app/heimdal/settings_notes.py", "write_settings_note", 1): (
-        "guarded_by_caller: write_settings_note passes write_guard through to "
+    ("app/heimdal/settings_notes.py", "_write_settings_note", 1): (
+        "guarded_by_port: _write_settings_note passes write_guard through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"
         "(action) at the port itself before any I/O (#2953); callers such as "
         "apply_agent_update never bypass this seam (#3034, Epic #3019 A14). "
@@ -887,6 +887,12 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ("app/heimdal/candidate_projection.py", "write_reading_candidate_note", 1): (
         "create_once: deterministic reading projection preserves an existing artifact."
     ),
+    ("app/heimdal/capture_note.py", "write_capture_note", 1): (
+        "create_once: deterministic capture note preserves a concurrent first writer."
+    ),
+    ("app/heimdal/settings_notes.py", "_write_settings_note", 1): (
+        "create_once: deterministic settings note preserves a concurrent first writer."
+    ),
     ("app/mcp/vault_tools.py", "append_note", 1): (
         "append_only: next-available note allocation preserves every earlier MCP artifact."
     ),
@@ -956,7 +962,12 @@ def find_write_note_relative_call_sites(
 def find_create_once_write_note_relative_call_sites(
     root: Path = APP_ROOT, *, repo_root: Path = REPO_ROOT
 ) -> list[tuple[str, str, int]]:
-    """AST-scan relative write sites that explicitly opt into create-once."""
+    """AST-scan relative write sites that explicitly opt into create-once.
+
+    A producer may select create-once conditionally when an exact version
+    snapshot is absent; the keyword itself is still the explicit producer
+    contract even when its value is not a literal ``True``.
+    """
     sites: list[tuple[str, str, int]] = []
     for path in sorted(root.rglob("*.py")):
         try:
@@ -997,12 +1008,7 @@ def find_create_once_write_note_relative_call_sites(
                     qualname = ".".join(self.scope) or "<module>"
                     ordinal = self.call_counts.get(qualname, 0) + 1
                     self.call_counts[qualname] = ordinal
-                    if any(
-                        keyword.arg == "create_once"
-                        and isinstance(keyword.value, ast.Constant)
-                        and keyword.value.value is True
-                        for keyword in node.keywords
-                    ):
+                    if any(keyword.arg == "create_once" for keyword in node.keywords):
                         sites.append((rel, qualname, ordinal))
                 self.generic_visit(node)
 
