@@ -148,13 +148,14 @@ before image pull, database/service activation, readiness probing, or Tailscale 
 preflight does not choose or stop either stack; an operator must make that bounded decision and
 record the resulting single-writer evidence in `builderops_vm_rebuild_activation.v1`.
 
-The attestation prerequisite may run on VM 102 or a named access-controlled operator runner. The
-validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the runner records its
-observed version and command exit without recording credentials. The exact command and fail-closed
-boundary are defined in [Independent Authenticated Deployment :: Approved candidate attestation
-runner](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#approved-candidate-attestation-runner). A verifier
-exit of `0` proves only the candidate source/image attestation; it does not prove VM identity,
-qualification, writer selection, migration, readiness, or deployment.
+The VM 102 deployment host must run `gh attestation verify` locally immediately before deployment.
+A separate runner's exit result cannot be handed off to deployment; no prior remote verifier result
+is accepted. The validated runner baseline is GitHub CLI `2.83.2` with `gh attestation`; the
+deployment host records its observed version and command exit without recording credentials. The
+exact command and fail-closed boundary are defined in [Independent Authenticated Deployment ::
+Approved candidate attestation runner](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#approved-candidate-attestation-runner).
+A verifier exit of `0` proves only the candidate source/image attestation; it does not prove VM
+identity, qualification, writer selection, migration, readiness, or deployment.
 
 The inventory-only boundary is executable through the
 [`devsystem_vm102_component_inventory.v1` schema](../../config/platform/devsystem_vm102_component_inventory.v1.schema.json)
