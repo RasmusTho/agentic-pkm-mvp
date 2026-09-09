@@ -87,6 +87,7 @@ load_attested_candidate_pair() {
   local receipt="${1:?candidate pair receipt required}"
   local expected_repository="RasmusTho/agentic-pkm-mvp"
   local expected_workflow="RasmusTho/agentic-pkm-mvp/.github/workflows/app-image-build.yml"
+  local builderops_socket
   command -v gh >/dev/null 2>&1 || {
     echo "gh CLI is required to verify the BuilderOps candidate pair attestation" >&2
     exit 69
@@ -121,6 +122,18 @@ for name, value in (("control-plane", control), ("PostgreSQL", postgres)):
 print(source_sha, control, postgres, sep="\t")
 PY
   )
+  [ "${BUILDEROPS_DOCKER_CONTEXT}" = "builderops" ] || {
+    echo "BuilderOps attestation must run with the fixed VM 102 builderops context" >&2
+    exit 75
+  }
+  builderops_socket="$(docker context inspect --format '{{.Endpoints.docker.Host}}' builderops 2>/dev/null)" || {
+    echo "BuilderOps attestation requires the local VM 102 Docker context" >&2
+    exit 75
+  }
+  [ "${builderops_socket}" = "unix:///run/docker-builderops.sock" ] || {
+    echo "BuilderOps attestation requires the local VM 102 Docker context" >&2
+    exit 75
+  }
   gh attestation verify "${receipt}" \
     --repo "${expected_repository}" \
     --signer-workflow "${expected_workflow}" \
