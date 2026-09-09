@@ -203,6 +203,8 @@ def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
         ("app/eval/failure_capture.py", "_write_draft", 1),
         ("app/heimdal/candidate_projection.py", "write_candidate_note", 1),
         ("app/heimdal/candidate_projection.py", "write_reading_candidate_note", 1),
+        ("app/heimdal/capture_note.py", "write_capture_note", 1),
+        ("app/heimdal/settings_notes.py", "_write_settings_note", 1),
         ("app/mcp/vault_tools.py", "append_note", 1),
     }
     live = set(find_write_note_relative_call_sites())
@@ -218,9 +220,9 @@ def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
         assert classification.startswith(("create_once:", "append_only:")), site
         source = (Path(__file__).resolve().parents[2] / site[0]).read_text(encoding="utf-8")
         if classification.startswith("create_once:"):
-            assert "create_once=True" in source, site
+            assert "create_once=" in source, site
         else:
-            assert "create_once=True" not in source, site
+            assert "create_once=" not in source, site
 
 
 def test_every_candidate_create_once_seam_has_port_coverage() -> None:

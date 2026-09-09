@@ -104,6 +104,7 @@ from app.heimdal.settings_notes import (
     ENTITY_REVIEW,
     SettingsNote,
     read_settings_note,
+    read_settings_note_with_version,
     write_settings_note,
 )
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -228,10 +229,19 @@ class ReviewQueueEntry:
 
 
 def _read_review_note(vault_root: Path, *, settings_dir: str) -> SettingsNote:
-    existing = read_settings_note(vault_root, ENTITY_REVIEW, settings_dir=settings_dir)
+    existing, _ = _read_review_note_with_version(vault_root, settings_dir=settings_dir)
+    return existing
+
+
+def _read_review_note_with_version(
+    vault_root: Path, *, settings_dir: str
+) -> tuple[SettingsNote, str | None]:
+    existing, expected_version = read_settings_note_with_version(
+        vault_root, ENTITY_REVIEW, settings_dir=settings_dir
+    )
     if existing is not None:
-        return existing
-    return SettingsNote(spec=ENTITY_REVIEW, values={"pending": [], "decisions": []})
+        return existing, expected_version
+    return SettingsNote(spec=ENTITY_REVIEW, values={"pending": [], "decisions": []}), None
 
 
 def queue_for_review(
@@ -266,7 +276,7 @@ def queue_for_review(
         candidate_entity_ids=tuple(candidate_entity_ids),
     )
 
-    note = _read_review_note(vault_root, settings_dir=settings_dir)
+    note, expected_version = _read_review_note_with_version(vault_root, settings_dir=settings_dir)
     pending = list(note.values.get("pending") or [])
     # Idempotent: re-queuing the same mention_id replaces its stale entry
     # rather than duplicating it (a stage re-run is a revision, not a rewrite
@@ -287,14 +297,28 @@ def queue_for_review(
         spec=ENTITY_REVIEW,
         values={**note.values, "pending": pending},
     )
-    write_settings_note(
+    persisted_note = write_settings_note(
         vault_root,
         updated_note,
         settings_dir=settings_dir,
         write_guard=write_guard,
         action=ENTITY_CONFIRM_WRITE_ACTION,
+        _observed=(note, expected_version),
     )
-    return entry
+    persisted_entry = next(
+        (
+            ReviewQueueEntry.from_dict(candidate)
+            for candidate in (persisted_note.values.get("pending") or ())
+            if candidate.get("queue_entry_id") == entry.queue_entry_id
+        ),
+        None,
+    )
+    if persisted_entry is None:
+        raise EntityConfirmError(
+            f"queue_for_review: concurrent settings-note creator won without "
+            f"queue entry {entry.queue_entry_id!r}; the requested entry was not persisted"
+        )
+    return persisted_entry
 
 
 def pending_review_entries(
@@ -523,7 +547,7 @@ def _apply_human_review_decisions_locked(
     re-merged -- re-running this function is always safe, and a re-run after
     a crash resumes each in-flight operation at its journaled state.
     """
-    note = _read_review_note(vault_root, settings_dir=settings_dir)
+    note, expected_version = _read_review_note_with_version(vault_root, settings_dir=settings_dir)
     pending = list(note.values.get("pending") or [])
     raw_decisions = list(note.values.get("decisions") or ())
     decisions = [ReviewDecision.from_dict(d) for d in raw_decisions]
@@ -881,13 +905,23 @@ def _apply_human_review_decisions_locked(
                 "decisions": raw_decisions,
             },
         )
-        write_settings_note(
+        persisted_note = write_settings_note(
             vault_root,
             updated_note,
             settings_dir=settings_dir,
             write_guard=write_guard,
             action=ENTITY_CONFIRM_WRITE_ACTION,
+            _observed=(note, expected_version),
         )
+        if (
+            persisted_note.values.get("pending") != remaining_pending
+            or persisted_note.values.get("decisions") != raw_decisions
+        ):
+            raise EntityConfirmError(
+                "apply_human_review_decisions: concurrent settings-note creator "
+                "won before the review projection was persisted; durable note state "
+                "does not match the applied decision"
+            )
 
     if refused:
         details = "; ".join(f"{queue_id}: {reason}" for queue_id, reason in refused)

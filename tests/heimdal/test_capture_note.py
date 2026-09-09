@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+import app.heimdal.capture_note as capture_note_module
 from app.heimdal.asr_stage import TranscriptResult, TranscriptSegment
 from app.heimdal.attribution_stage import (
     Attribution,
@@ -55,6 +56,7 @@ from app.heimdal.capture_note import (
     write_capture_note,
     CaptureNote,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import WriteGuard, WritesBlockedError
 
 pytestmark = pytest.mark.not_pg
@@ -223,6 +225,60 @@ def test_status_is_monotonic_refuses_backward_write(tmp_path: Path) -> None:
     still_processing = read_capture_note(vault_root, _MEMO_ID, _CAPTURED_DATE)
     assert still_processing is not None
     assert still_processing.status == STATUS_PROCESSING
+
+
+def test_status_transition_refuses_concurrent_note_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A status transition must not overwrite bytes changed after its snapshot."""
+    vault_root = _vault(tmp_path)
+    guard = _allowing_guard()
+    record_capture(vault_root, memo_id=_MEMO_ID, captured_date=_CAPTURED_DATE, write_guard=guard)
+    note_path = vault_root / capture_note_rel_path(_MEMO_ID, _CAPTURED_DATE)
+    original_write = capture_note_module.write_note_relative
+
+    def write_after_human_edit(note_rel_path: str, content: str, **kwargs: object):
+        assert kwargs["expected_version"] is not None
+        note_path.write_bytes(b"human edit wins\n")
+        return original_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(capture_note_module, "write_note_relative", write_after_human_edit)
+
+    with pytest.raises(KnowledgeWriteConflict, match="conflict"):
+        record_processing(
+            vault_root,
+            memo_id=_MEMO_ID,
+            captured_date=_CAPTURED_DATE,
+            transcript=_sample_transcript(),
+            write_guard=guard,
+        )
+
+    assert note_path.read_bytes() == b"human edit wins\n"
+
+
+def test_create_capture_note_does_not_claim_existing_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent capture target uses create-once, never a fabricated CAS token."""
+    vault_root = _vault(tmp_path)
+    seen: dict[str, object] = {}
+    original_write = capture_note_module.write_note_relative
+
+    def recording_write(note_rel_path: str, content: str, **kwargs: object):
+        seen.update(kwargs)
+        return original_write(note_rel_path, content, **kwargs)
+
+    monkeypatch.setattr(capture_note_module, "write_note_relative", recording_write)
+    record_capture(
+        vault_root,
+        memo_id=_MEMO_ID,
+        captured_date=_CAPTURED_DATE,
+        write_guard=_allowing_guard(),
+    )
+
+    assert seen["expected_version"] is None
+    assert seen["create_once"] is True
+    assert seen["writer_identity"] == CAPTURE_NOTE_WRITE_ACTION
 
 
 def test_capture_note_write_goes_through_write_guard(tmp_path: Path) -> None:

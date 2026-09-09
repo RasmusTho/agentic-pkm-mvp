@@ -31,11 +31,12 @@ Add a centralized note-class/operation classifier aligned with the committed Mim
 
 This resolves the earlier "structured non-write outcome vs. hard raise" tension in favour of the opt-in model: a versionless rewrite is a normal write plus a classified receipt, an initially stale opted-in rewrite has the structured staged-conflict outcome supplied by VMW-02 at the low-level adapter, the production helpers preserve hard-failure semantics for unaware consumers, and an in-flight race remains a hard failure. The shared artifact helper owns the sibling filename grammar and `is_conflict_artifact` predicate.
 
-## Classification ledger (#5140)
+## Classification ledger (#5140, #5134)
 
-The relative write seam owns the explicit create-once mode for the seven producers below. The MCP
-collection writer remains append-only; it is listed so the census is complete without treating its
-unique-path allocation as a rewritten-note migration.
+The relative write seam owns the explicit create-once mode for the producers below. The Heimdal
+single-note writers use it only when their exact-byte read finds an absent target; existing targets
+use the rewritten-note CAS path. The MCP collection writer remains append-only; it is listed so the
+census is complete without treating its unique-path allocation as a rewritten-note migration.
 
 | Producer | Disposition | Enforcement / preservation rule |
 | --- | --- | --- |
@@ -46,6 +47,8 @@ unique-path allocation as a rewritten-note migration.
 | `app/eval/failure_capture.py::_write_draft` | create-once | initial draft is first-write-wins; `_decide` remains a separate rewrite/CAS child |
 | `app/heimdal/candidate_projection.py::write_candidate_note` | create-once | deterministic candidate projection is idempotent and preserves a prior artifact |
 | `app/heimdal/candidate_projection.py::write_reading_candidate_note` | create-once | deterministic reading projection is idempotent and preserves a prior artifact |
+| `app/heimdal/capture_note.py::write_capture_note` | create-once/CAS | absent capture targets are first-writer-wins; existing transitions use exact-byte CAS |
+| `app/heimdal/settings_notes.py::_write_settings_note` | create-once/CAS | absent control targets are first-writer-wins; existing updates use exact-byte CAS |
 | `app/mcp/vault_tools.py::append_note` | append-only | next-available MCP note paths preserve every earlier artifact; no create-once mode is added |
 
 The ledger is an intent classification, not a new generic write primitive. Any writer discovered to

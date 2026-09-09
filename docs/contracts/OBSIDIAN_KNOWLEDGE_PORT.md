@@ -46,8 +46,9 @@ fairness, network-filesystem, or distributed-writer contract.
 
 The existing relative write seam also exposes one explicit, scoped creation mode:
 `write_note_relative(..., create_once=True)`. This is not a new `KnowledgePort` method or a
-generic replacement for `write_note`; it is reserved for the seven #5140 producers recorded in the
-multi-writer classification ledger. It asserts `WriteGuard`, stages complete UTF-8 bytes, and
+generic replacement for `write_note`; it is reserved for the explicit create-once producers
+recorded in the multi-writer classification ledger, including the Heimdal single-note writers'
+create branch. It asserts `WriteGuard`, stages complete UTF-8 bytes, and
 publishes with the same atomic no-replace primitive used by candidate creation. The first publisher
 returns `WriteReceipt(outcome="written", note_class="create-once", ...)`; a losing create returns
 `WriteReceipt(outcome="already_exists", ...)` and leaves the existing regular target byte-for-byte

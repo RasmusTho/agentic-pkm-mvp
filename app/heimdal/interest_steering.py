@@ -97,6 +97,7 @@ from app.heimdal.settings_notes import (
     apply_agent_update,
     note_rel_path,
     read_settings_note,
+    read_settings_note_with_version,
     render_note,
     write_settings_note,
 )
@@ -190,7 +191,7 @@ def apply_interest_derived_updates(
     this function only shapes `InterestDerivedUpdate` rows into the
     per-column mapping `apply_agent_update` expects.
     """
-    existing = read_settings_note(vault_root, INTERESTS)
+    existing, expected_version = read_settings_note_with_version(vault_root, INTERESTS)
     existing_confidence: dict[str, Any] = {}
     existing_evidence: dict[str, Any] = {}
     existing_decay: dict[str, Any] = {}
@@ -222,6 +223,7 @@ def apply_interest_derived_updates(
         INTERESTS,
         agent_values,
         write_guard=write_guard,
+        _observed=(existing, expected_version),
     )
 
 
@@ -244,15 +246,20 @@ def set_interest_weight(
     note and both are honored identically by `apply_interest_derived_updates`
     afterward).
     """
-    existing = read_settings_note(vault_root, INTERESTS)
+    existing, expected_version = read_settings_note_with_version(vault_root, INTERESTS)
     values: dict[str, Any] = dict(existing.values) if existing is not None else {}
     weights = dict(values.get("weights") or {})
     weights[interest] = weight
     values["weights"] = weights
     note = SettingsNote(spec=INTERESTS, values=values)
     write_guard.assert_writes_allowed(INTEREST_WEIGHT_WRITE_ACTION)
-    write_settings_note(vault_root, note, write_guard=write_guard, action=INTEREST_WEIGHT_WRITE_ACTION)
-    return note
+    return write_settings_note(
+        vault_root,
+        note,
+        write_guard=write_guard,
+        action=INTEREST_WEIGHT_WRITE_ACTION,
+        _observed=(existing, expected_version),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -599,20 +606,22 @@ def update_source_filters(
     the A14 `SOURCE_CONFIG` spec; `last_fetched`/`last_error` stay untouched
     here (agent-authored, reconciled elsewhere by whatever runs the fetch,
     out of scope for this slice)."""
-    existing = read_settings_note(vault_root, SOURCE_CONFIG, source_id=source_id)
+    existing, expected_version = read_settings_note_with_version(
+        vault_root, SOURCE_CONFIG, source_id=source_id
+    )
     values: dict[str, Any] = dict(existing.values) if existing is not None else {}
     values["source_id"] = source_id
     values["filters"] = list(filters)
     note = SettingsNote(spec=SOURCE_CONFIG, values=values)
     write_guard.assert_writes_allowed(SOURCE_FILTER_WRITE_ACTION)
-    write_settings_note(
+    return write_settings_note(
         vault_root,
         note,
         write_guard=write_guard,
         action=SOURCE_FILTER_WRITE_ACTION,
         source_id=source_id,
+        _observed=(existing, expected_version),
     )
-    return note
 
 
 __all__ = [

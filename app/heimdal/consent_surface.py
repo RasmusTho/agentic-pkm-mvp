@@ -234,8 +234,7 @@ def write_consent_readout(
     write here can never diverge from the ledger it just read.
     """
     note = render_consent_readout(at=at)
-    write_settings_note(vault_root, note, write_guard=write_guard, action=action)
-    return note
+    return write_settings_note(vault_root, note, write_guard=write_guard, action=action)
 
 
 def read_consent_readout(vault_root: Path) -> Optional[SettingsNote]:

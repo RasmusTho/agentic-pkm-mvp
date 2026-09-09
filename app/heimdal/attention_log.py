@@ -63,8 +63,10 @@ from app.heimdal.settings_notes import (
     DEFAULT_SETTINGS_DIR,
     SettingsNote,
     read_settings_note,
+    read_settings_note_with_version,
     write_settings_note,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 ATTENTION_LOG_WRITE_ACTION = "heimdal.attention_log.write"
@@ -181,10 +183,19 @@ class AttentionDaySummary:
 
 
 def _read_day_note(vault_root: Path, date: str, *, settings_dir: str) -> SettingsNote:
-    existing = read_settings_note(vault_root, ATTENTION_DAY, settings_dir=settings_dir, date=date)
+    existing, _ = _read_day_note_with_version(vault_root, date, settings_dir=settings_dir)
+    return existing
+
+
+def _read_day_note_with_version(
+    vault_root: Path, date: str, *, settings_dir: str
+) -> tuple[SettingsNote, str | None]:
+    existing, expected_version = read_settings_note_with_version(
+        vault_root, ATTENTION_DAY, settings_dir=settings_dir, date=date
+    )
     if existing is not None:
-        return existing
-    return SettingsNote(spec=ATTENTION_DAY, values={"counts": {}, "reasons": [], "overrides": []})
+        return existing, expected_version
+    return SettingsNote(spec=ATTENTION_DAY, values={"counts": {}, "reasons": [], "overrides": []}), None
 
 
 def fold_day_summary(date: str, events: Iterable[AttentionEvent]) -> AttentionDaySummary:
@@ -234,7 +245,7 @@ def record_attention_events(
     event set for the day, mirroring the projector's replay-from-batch
     posture rather than inventing a separate merge mechanism.
     """
-    existing = _read_day_note(vault_root, date, settings_dir=settings_dir)
+    existing, expected_version = _read_day_note_with_version(vault_root, date, settings_dir=settings_dir)
     summary = fold_day_summary(date, events)
 
     merged_values: dict[str, Any] = dict(existing.values)
@@ -245,19 +256,20 @@ def record_attention_events(
     merged_values.setdefault("overrides", [])
 
     note = SettingsNote(spec=ATTENTION_DAY, values=merged_values)
-    write_settings_note(
+    persisted_note = write_settings_note(
         vault_root,
         note,
         settings_dir=settings_dir,
         write_guard=write_guard,
         action=ATTENTION_LOG_WRITE_ACTION,
         date=date,
+        _observed=(existing, expected_version),
     )
     return AttentionDaySummary(
         date=date,
-        counts=merged_values["counts"],
-        reasons=merged_values["reasons"],
-        overrides=tuple(merged_values["overrides"]),
+        counts=dict(persisted_note.values.get("counts") or {}),
+        reasons=tuple(persisted_note.values.get("reasons") or ()),
+        overrides=tuple(persisted_note.values.get("overrides") or ()),
     )
 
 
@@ -331,7 +343,7 @@ def record_override(
     Idempotent on exact-duplicate entries: replaying the exact same override
     does not duplicate it.
     """
-    existing = _read_day_note(vault_root, date, settings_dir=settings_dir)
+    existing, expected_version = _read_day_note_with_version(vault_root, date, settings_dir=settings_dir)
     overrides = list(existing.values.get("overrides") or [])
     new_entry = override.to_dict()
     if new_entry not in overrides:
@@ -343,19 +355,25 @@ def record_override(
     merged_values.setdefault("reasons", [])
 
     note = SettingsNote(spec=ATTENTION_DAY, values=merged_values)
-    write_settings_note(
+    persisted_note = write_settings_note(
         vault_root,
         note,
         settings_dir=settings_dir,
         write_guard=write_guard,
         action=ATTENTION_LOG_WRITE_ACTION,
         date=date,
+        _observed=(existing, expected_version),
     )
+    if new_entry not in (persisted_note.values.get("overrides") or ()):
+        raise KnowledgeWriteConflict(
+            f"record_override: concurrent settings-note creator won without "
+            f"persisting override for {override.item_id!r}"
+        )
     return AttentionDaySummary(
         date=date,
-        counts=merged_values["counts"],
-        reasons=merged_values["reasons"],
-        overrides=tuple(merged_values["overrides"]),
+        counts=dict(persisted_note.values.get("counts") or {}),
+        reasons=tuple(persisted_note.values.get("reasons") or ()),
+        overrides=tuple(persisted_note.values.get("overrides") or ()),
     )
 
 
