@@ -116,6 +116,14 @@ Error contract (a client must handle each named state; never retry blindly):
 | — | vault-selection state (structured JSON: `{state: "vault_selection_required", reason, …}` — `reason` ∈ `vault_root_misconfigured` / `no_vault_bound` / `uninitialized`; there is no `error` field) | No active vault selected | Match on `state`, not `error`; surface; the human selects a vault; never guess a vault |
 | 500 | `authority_receipt_persistence_failed`, state `not_acknowledged` | **The append may have landed** but its AuthorityReceipt could not be persisted | Do NOT blind-retry (duplicate-append risk). Verify by reading the inbox note (§6 W5) or hand to the human |
 
+When the MCP adapter cannot obtain a usable response from this capture call (for example, a
+transport timeout or connection failure), `mimer.capture` returns the explicit error envelope
+`{error: "capture_ambiguous", state: "not_acknowledged", retryable: false, trace_id, message}`.
+The append may have landed. Preserve the returned `trace_id` for correlation, verify the inbox
+note before any retry, and never replay the capture blindly. A governed HTTP `500` response keeps
+its `not_acknowledged` detail inside the adapter error result; it follows the same verify-before-
+retry rule.
+
 ### 4.2 Read surface and the uuid→path gap
 
 - `GET /search?q=` returns `{"results": [{uuid, title}, …]}`, fixed k=10. A retrieval failure propagates as an error — no silent filler (#2989).
@@ -130,6 +138,14 @@ Error contract (a client must handle each named state; never retry blindly):
 **The gap, stated honestly:** search returns *uuid*; note-fetch keys by *path*; no endpoint resolves uuid→path. **v1 posture: thin read + filesystem enrichment.** A client that needs the body behind a search hit either (a) uses `/api/ask`, whose sources include `path`, or (b) resolves the uuid itself against its filesystem view of the vault (frontmatter `uuid` field). A uuid-resolving fetch or enriched search payload is follow-on work (§9 F3), not something a client may emulate by inventing a hidden uuid→path store it treats as authoritative (invariant 3: any such cache is rebuildable and disposable).
 
 **Index-lag honesty:** the retrieval index is a rebuildable projection that trails the vault (watcher → ingest → index). A client MUST NOT present a retrieval miss as absence-of-knowledge without saying the index may lag, and MUST NOT assume read-your-write through `/search` after any write (§6 W6). The vault note outranks any projection of it (AGENT-FLOWS §10).
+
+**MCP adapter timing boundary:** `mimer.ask` and `mimer.capture` use the runtime-managed response
+deadline: the adapter allows the runtime's 60-second operation timeout plus a bounded response
+margin (75 seconds by default). `mimer.retrieve`, `mimer.read_note`, and `mimer.health` use the
+adapter's bounded short-operation timeout (10 seconds). A timeout on ask/retrieve/note-read/health
+is surfaced as `error: "timeout"` with its `trace_id`; a lost capture response is instead the
+`capture_ambiguous` / `not_acknowledged` envelope above, because the write outcome must be verified
+before retry.
 
 ### 4.3 `POST /api/ask/voice` (read-only voice ASK turn)
 
@@ -388,7 +404,7 @@ Therefore: the rules below remain **binding client discipline around the progres
 - **W2 — Read-fresh, write-promptly, verify-staleness.** Before any whole-file write: read the file and record its raw-byte content hash; keep the read→write window as short as possible; immediately before writing, re-check the hash. Callers using the shared Mimer filesystem seam pass that hash as `expected_version` with their `writer_identity`, so VMW-02 can write atomically or stage an initially stale proposal. A direct filesystem client outside that seam must still re-read and re-apply its edit when the hash changed; its check remains advisory and the TOCTOU window remains real.
 - **W3 — Ownership courtesy.** Default to creating and editing files the client itself authored (workspace roots, §5). Edit a human-authored note only on explicit human direction in the live session, and prefer append/patch-shaped edits over whole-file rewrites of prose the human may have open in Obsidian.
 - **W4 — Atomic replace.** Whole-file writes land as write-to-temp-then-rename within the same directory, so the watcher and other readers never observe a half-written note. Never leave temp files in the vault on failure.
-- **W5 — Idempotency by verification, not by retry — except on the receipted media/meeting lanes.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target before any retry. Direct FS whole-file writes are idempotent by content; appends are not. **The §4.4/§4.5 lanes are the exception:** retain the original/note revision until a durable ack, then resolve ambiguity through the stable capture/session/note identity and the matching receipt or ledger query. Never mint a replacement identity for a retry. `erased` / `media_evidence_erased` is not an ambiguous retry: preserve the original, surface the terminal retention state, and follow an explicitly governed recovery path rather than deleting or silently reminting identity.
+- **W5 — Idempotency by verification, not by retry — except on the receipted media/meeting lanes.** No client-supplied idempotency key exists on the *text* capture endpoint today (the runtime derives an idempotency key for the outbox *event*, not the write — §9 F5). So for `POST /api/companion/capture` and direct FS writes: after `not_acknowledged` (500) or a transport timeout where the response was lost, the write may have landed. Verify by reading the target before any retry. The MCP adapter makes this explicit for `mimer.capture` with `error: "capture_ambiguous"`, `state: "not_acknowledged"`, `retryable: false`, and the correlated `trace_id`; this is a verification obligation, not permission to replay. Direct FS whole-file writes are idempotent by content; appends are not. **The §4.4/§4.5 lanes are the exception:** retain the original/note revision until a durable ack, then resolve ambiguity through the stable capture/session/note identity and the matching receipt or ledger query. Never mint a replacement identity for a retry. `erased` / `media_evidence_erased` is not an ambiguous retry: preserve the original, surface the terminal retention state, and follow an explicitly governed recovery path rather than deleting or silently reminting identity.
 - **W6 — Write-ordering vs the watcher.** The watcher detects changes by mtime + sha256 and feeds ingest; the index trails the file. After a write, the file is truth and the index is eventually consistent. Never re-write a file to "fix" perceived index lag, and never treat index state as evidence the write failed.
 - **W7 — One transport per note; reconciling FS vs API writes.** The only note both transports touch by design is excluded from FS writes (the capture inbox, §5), so a governed API write and a direct FS write to the same note should not occur under this contract. If a client nevertheless observes it caused such a collision (e.g. it rewrote a note between another writer's read and write), the reconciliation is: the file's current content is the outcome (LWW), the AuthorityReceipt/outbox event remains the truthful record of *what the governed write did at its time*, and the client surfaces the suspected collision to the human rather than silently re-asserting its own version. Receipts are authoritative for what happened, never for what is currently true (AGENT-FLOWS §10).
 - **W8 — iCloud conflict artifacts.** If a client encounters a `… (conflicted copy …)` sibling, it must not merge, delete, or adopt it silently: surface it to the human. The production vault Markdown iterator uses the VMW-01 shared classifier to quarantine both iCloud and runtime-staged conflict artifacts before watcher/ingest/index parsing, preserves the artifact on disk, and emits a legible classification receipt (VMW-03 / #3452). VMW-04 / #3453 reconciled this as shipped INV-VW3 enforcement.
@@ -410,6 +426,10 @@ Therefore: the rules below remain **binding client discipline around the progres
 - Check `GET /healthz` (or `/api/status`) before entering a write flow; use `GET /version` to record which runtime build served a session when reporting anomalies.
 - Send `x-trace-id` on every call and log it client-side, so a capture, its receipt, and its outbox event are joinable across the seam.
 - Surface — verbatim, to the human — every named error state in §4.1. Degradation must be legible (`docs/INTEGRATION_FABRIC_CONTRACT.md` health field): a client that silently absorbs `writeguard_blocked` or `not_acknowledged` violates this contract.
+- The MCP adapter preserves the runtime/adapter timeout split in §4.2: runtime-managed timing
+  applies to ask/capture, while health/search/note-read use bounded adapter timeouts. Preserve the
+  trace correlation on every result; a lost MCP capture response is `capture_ambiguous` /
+  `not_acknowledged` and must be verified before retry rather than treated as an ordinary timeout.
 - Direct FS writes have no runtime receipt; the client's own log plus the provenance block (§5) is the audit trail until ADR-0055's item 4 (writer provenance) enactment lands at the substrate.
 
 ## 8. Integration-fabric contract fields
