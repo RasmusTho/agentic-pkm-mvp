@@ -88,6 +88,7 @@ from collections.abc import Iterator
 import yaml
 
 from app.heimdal.settings_notes import (
+    CREATE_ONCE_LOSS_RAISE,
     INTERESTS,
     NEVER_LIST,
     SOURCE_CONFIG,
@@ -258,6 +259,7 @@ def set_interest_weight(
         note,
         write_guard=write_guard,
         action=INTEREST_WEIGHT_WRITE_ACTION,
+        create_once_loss=CREATE_ONCE_LOSS_RAISE,
         _observed=(existing, expected_version),
     )
 
@@ -619,6 +621,7 @@ def update_source_filters(
         note,
         write_guard=write_guard,
         action=SOURCE_FILTER_WRITE_ACTION,
+        create_once_loss=CREATE_ONCE_LOSS_RAISE,
         source_id=source_id,
         _observed=(existing, expected_version),
     )

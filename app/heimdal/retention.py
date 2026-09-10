@@ -64,6 +64,7 @@ from typing import Callable, List, Optional
 from app.heimdal import raw_liveness, raw_store
 from app.heimdal.raw_liveness import DeletionReceipt
 from app.heimdal.settings_notes import (
+    CREATE_ONCE_LOSS_RAISE,
     DEFAULT_SETTINGS_DIR,
     SETTINGS,
     apply_agent_update,
@@ -428,6 +429,7 @@ def enforce_hard_retention_bound(
             SETTINGS,
             {"last_enforced_at": reference_time.isoformat().replace("+00:00", "Z")},
             settings_dir=settings_dir,
+            create_once_loss=CREATE_ONCE_LOSS_RAISE,
         )
 
     return RetentionEnforcementReceipt(

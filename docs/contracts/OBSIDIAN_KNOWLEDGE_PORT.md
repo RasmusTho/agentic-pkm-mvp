@@ -52,7 +52,15 @@ create branch. It asserts `WriteGuard`, stages complete UTF-8 bytes, and
 publishes with the same atomic no-replace primitive used by candidate creation. The first publisher
 returns `WriteReceipt(outcome="written", note_class="create-once", ...)`; a losing create returns
 `WriteReceipt(outcome="already_exists", ...)` and leaves the existing regular target byte-for-byte
-unchanged. Callers must treat `already_exists` as an idempotent no-op, not as a fresh write.
+unchanged. Callers must not treat `already_exists` as a fresh write: they must choose the policy
+matching their mutation. The settings-note seam makes that choice explicit with `create_once_loss`:
+the default
+`"return_winner"` is for idempotent derived/readout callers that may converge on the durable
+winner, while `"raise"` raises `KnowledgeWriteConflict` with the `already_exists` receipt attached.
+The bounded non-idempotent settings callers (`set_interest_weight`, `update_source_filters`,
+`record_attention_events`, and retention's `last_enforced_at` producer) must use `"raise"`; a
+losing create is never a successful acknowledgement of their requested mutation. Neither policy
+retries by overwriting the winner.
 `create_once=True` cannot be combined with `expected_version`, so the rewritten-note CAS policy is
 unchanged. The MCP `append_note` collection writer remains append-only and outside this scoped
 create-once mode: it keeps allocating the next available note path and never rewrites prior MCP
