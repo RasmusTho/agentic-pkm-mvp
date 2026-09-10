@@ -685,6 +685,7 @@ def test_overview_route_uses_live_composition_and_delivered_composer(monkeypatch
         "composition": {
             "cockpit_reader": devui_route.read_cockpit_registry,
             "ckm_reader": devui_route._read_ckm_capabilities,
+            "receipt_reader": devui_route.read_vm102_receipt_provider,
         },
         "overview": {"composition": composition, "candidates": {"now": []}},
     }
@@ -790,3 +791,111 @@ def test_overview_get_uses_live_working_threads_without_injected_candidates(monk
             "limitations": [],
         }
     ]
+
+
+def _vm102_receipt_provider(*, status: str = "available") -> dict:
+    if status != "available":
+        return {
+            "provider": "builderops_vm102_receipts",
+            "status": "refused",
+            "authority": "builderops_vm102_receipt_source",
+            "captured_at": None,
+            "snapshot": None,
+            "completeness": None,
+            "refusal": {
+                "code": "evidence_unavailable",
+                "message": "VM-102 deployment evidence is unavailable or invalid",
+                "details": {"reason": "receipt-backed status withdrawn"},
+            },
+        }
+    refs = [
+        f"receipt:{kind}:{'a' * 64}"
+        for kind in (
+            "devui_vm102_runtime_qualification.v1",
+            "devsystem_vm102_deploy.v1",
+            "devsystem_vm102_health.v1",
+        )
+    ]
+    payload = {
+        "captured_at": "2026-09-10T11:00:00+00:00",
+        "target_vm": {"vmid": 102, "name": "builder-system"},
+        "component_id": "devui_projection",
+        "candidate_source_sha": "8914d51a6551e8ebfe132c3bf1bc22a8938d7872",
+        "receipt_refs": refs,
+        "observed_at": "2026-09-10T11:00:00+00:00",
+    }
+    return {
+        "provider": "builderops_vm102_receipts",
+        "status": "available",
+        "authority": "builderops_vm102_receipt_source",
+        "captured_at": payload["captured_at"],
+        "snapshot": {
+            "target_vm": payload["target_vm"],
+            "component_id": payload["component_id"],
+            "candidate_source_sha": payload["candidate_source_sha"],
+            "receipt_refs": refs,
+            "chain": "qualification→deploy→health",
+        },
+        "completeness": {
+            "required_receipts": refs,
+            "observed_at": payload["observed_at"],
+            "linkage": "linked",
+        },
+        "payload": payload,
+    }
+
+
+def _overview_cockpit() -> dict:
+    captured_at = "2026-09-10T11:00:00+00:00"
+    return {
+        "authority": "read_time_join",
+        "generated_at": captured_at,
+        "claim": {"kind": "counted", "text": "no working items", "as_of": captured_at},
+        "sources": [_dispatcher_source(captured_at)],
+        "unread_planes": [],
+        "withdrawn_counts": [],
+        "bands": [{"key": "working", "countable": True, "count": 0, "items": []}],
+    }
+
+
+def test_overview_projects_vm102_receipt_candidate_and_withdraws_degraded_evidence(monkeypatch) -> None:
+    monkeypatch.setattr(devui_route, "read_cockpit_registry", _overview_cockpit)
+    monkeypatch.setattr(devui_route, "_read_ckm_capabilities", _empty_ckm_envelope)
+    monkeypatch.setattr(devui_route, "read_vm102_receipt_provider", _vm102_receipt_provider)
+
+    available = TestClient(app).get("/api/devui/overview").json()
+    assert [item["subject_ref"]["source_id"] for item in available["ready_to_try"]] == [
+        "vm102:devui_projection"
+    ]
+    assert available["ready_to_try"][0]["delivery_facts"]["ready_to_try"]["state"] == "evidenced"
+
+    monkeypatch.setattr(
+        devui_route,
+        "read_vm102_receipt_provider",
+        lambda: _vm102_receipt_provider(status="refused"),
+    )
+    withdrawn = TestClient(app).get("/api/devui/overview").json()
+    assert withdrawn["ready_to_try"] == []
+    assert any(
+        item["zone"] == "ready_to_try"
+        and item["kind"] == "classification_withdrawn"
+        for item in withdrawn["limitations"]
+    )
+
+
+def test_devui_vm102_receipt_path_is_get_only_stateless_and_non_mutating(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def receipt_reader() -> dict:
+        calls.append("read")
+        return _vm102_receipt_provider()
+
+    monkeypatch.setattr(devui_route, "read_cockpit_registry", _overview_cockpit)
+    monkeypatch.setattr(devui_route, "_read_ckm_capabilities", _empty_ckm_envelope)
+    monkeypatch.setattr(devui_route, "read_vm102_receipt_provider", receipt_reader)
+    client = TestClient(app)
+
+    assert client.get("/api/devui/composition").status_code == 200
+    assert client.get("/api/devui/composition").status_code == 200
+    assert calls == ["read", "read"]
+    assert client.post("/api/devui/composition").status_code == 405

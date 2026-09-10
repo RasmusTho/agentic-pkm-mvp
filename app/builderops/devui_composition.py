@@ -49,6 +49,7 @@ _COCKPIT_WITHDRAWALS = {
 
 CockpitReader = Callable[[], Mapping[str, Any]]
 CkmReader = Callable[[], ResultEnvelope | ErrorEnvelope]
+ReceiptReader = Callable[[], Mapping[str, Any]]
 Now = Callable[[], datetime]
 
 
@@ -57,6 +58,38 @@ def _cockpit_payload(reader: CockpitReader) -> Mapping[str, Any]:
     if not isinstance(result, Mapping):
         raise TypeError("provider returned a non-object payload")
     return _json_object(result)
+
+
+def _receipt_contribution(reader: ReceiptReader) -> dict[str, Any]:
+    """Carry one source-owned receipt contribution without copying diagnostics."""
+
+    try:
+        result = reader()
+        if not isinstance(result, Mapping):
+            raise TypeError("receipt provider returned a non-object payload")
+        payload = _json_object(result)
+        if payload.get("status") not in {"available", "refused"}:
+            raise ValueError("receipt provider returned an unsupported status")
+        if not isinstance(payload.get("provider"), str) or not isinstance(
+            payload.get("authority"), str
+        ):
+            raise ValueError("receipt provider identity is malformed")
+        return payload
+    except Exception:
+        logger.exception("VM-102 receipt provider read failed")
+        return {
+            "provider": "builderops_vm102_receipts",
+            "status": "refused",
+            "authority": "builderops_vm102_receipt_source",
+            "captured_at": None,
+            "snapshot": None,
+            "completeness": None,
+            "refusal": {
+                "code": "provider_unavailable",
+                "message": "VM-102 deployment evidence is unavailable or invalid",
+                "details": {"reason": "provider read failed"},
+            },
+        }
 
 
 def _json_object(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -441,6 +474,7 @@ def compose_owner_snapshot(
     *,
     cockpit_reader: CockpitReader,
     ckm_reader: CkmReader,
+    receipt_reader: ReceiptReader | None = None,
     now: Now | None = None,
 ) -> dict[str, Any]:
     """Capture independent provider reads beneath one projection envelope."""
@@ -448,14 +482,17 @@ def compose_owner_snapshot(
     captured_at = (now or (lambda: datetime.now(timezone.utc)))()
     if captured_at.tzinfo is None:
         raise ValueError("composition capture time must be timezone-aware")
+    providers = {
+        "work": _cockpit_contribution(cockpit_reader),
+        "capabilities": _ckm_contribution(ckm_reader),
+    }
+    if receipt_reader is not None:
+        providers["vm102_evidence"] = _receipt_contribution(receipt_reader)
     return {
         "contract_version": CONTRACT_VERSION,
         "authority": "projection_only",
         "captured_at": captured_at.isoformat(),
-        "providers": {
-            "work": _cockpit_contribution(cockpit_reader),
-            "capabilities": _ckm_contribution(ckm_reader),
-        },
+        "providers": providers,
     }
 
 
