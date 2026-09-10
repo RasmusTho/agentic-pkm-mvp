@@ -48,11 +48,17 @@ census is complete without treating its unique-path allocation as a rewritten-no
 | `app/heimdal/candidate_projection.py::write_candidate_note` | create-once | deterministic candidate projection is idempotent and preserves a prior artifact |
 | `app/heimdal/candidate_projection.py::write_reading_candidate_note` | create-once | deterministic reading projection is idempotent and preserves a prior artifact |
 | `app/heimdal/capture_note.py::write_capture_note` | create-once/CAS | absent capture targets are first-writer-wins; existing transitions use exact-byte CAS |
-| `app/heimdal/settings_notes.py::_write_settings_note` | create-once/CAS | absent control targets are first-writer-wins; existing updates use exact-byte CAS |
+| `app/heimdal/settings_notes.py::_write_settings_note` | create-once/CAS | absent control targets are first-writer-wins; existing updates use exact-byte CAS; bounded non-idempotent callers fail loudly on a losing create while idempotent readouts may return the winner |
 | `app/mcp/vault_tools.py::append_note` | append-only | next-available MCP note paths preserve every earlier artifact; no create-once mode is added |
 
 The ledger is an intent classification, not a new generic write primitive. Any writer discovered to
 rewrite an existing artifact belongs in a follow-up CAS child rather than this census.
+
+For the settings-note create branch, `WriteReceipt(outcome="already_exists")` is an explicit
+non-canonical result. Idempotent derived/readout callers may return the verified durable winner;
+non-idempotent callers must select the settings-note seam's fail-loud policy and receive
+`KnowledgeWriteConflict` with the receipt attached. They must not acknowledge the requested
+mutation or overwrite the concurrent winner.
 
 ## Why This Matters
 

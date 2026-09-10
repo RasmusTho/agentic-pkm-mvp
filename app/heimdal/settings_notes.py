@@ -92,8 +92,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import (
     read_create_once_winner_relative,
     read_note_text_with_version,
@@ -109,6 +110,13 @@ from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 SETTINGS_NOTE_WRITE_ACTION = "heimdal.settings_notes.write"
 ARTIFACT_CLASS = "heimdal_settings_note"
 DEFAULT_SETTINGS_DIR = "_heimdal"
+
+CreateOnceLossPolicy = Literal["return_winner", "raise"]
+CREATE_ONCE_LOSS_RETURN_WINNER: CreateOnceLossPolicy = "return_winner"
+CREATE_ONCE_LOSS_RAISE: CreateOnceLossPolicy = "raise"
+_VALID_CREATE_ONCE_LOSS_POLICIES = frozenset(
+    {CREATE_ONCE_LOSS_RETURN_WINNER, CREATE_ONCE_LOSS_RAISE}
+)
 
 # Field-authority markers (per-section split; "persistence is not read-only").
 FIELD_HUMAN_EDITABLE = "human_editable"
@@ -662,9 +670,21 @@ def _write_settings_note(
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     action: str = SETTINGS_NOTE_WRITE_ACTION,
+    create_once_loss: CreateOnceLossPolicy = CREATE_ONCE_LOSS_RETURN_WINNER,
     **template_args: str,
 ) -> SettingsNote:
-    """Publish a note using the version snapshot owned by the caller."""
+    """Publish a note using the version snapshot owned by the caller.
+
+    A create-once loser is a valid result for idempotent derived/readout
+    callers, but it is not evidence that this caller's requested mutation was
+    persisted. Callers with non-idempotent intent select ``create_once_loss``
+    ``"raise"`` so the low-level receipt remains attached to the failure.
+    """
+    if create_once_loss not in _VALID_CREATE_ONCE_LOSS_POLICIES:
+        raise SettingsNoteError(
+            f"create_once_loss must be one of {sorted(_VALID_CREATE_ONCE_LOSS_POLICIES)}, "
+            f"got {create_once_loss!r}"
+        )
     rel_path = note_rel_path(note.spec, settings_dir=settings_dir, **template_args)
     content = render_note(note)
     receipt = write_note_relative(
@@ -678,6 +698,11 @@ def _write_settings_note(
         create_once=expected_version is None,
     )
     if receipt.outcome == "already_exists":
+        if create_once_loss == CREATE_ONCE_LOSS_RAISE:
+            raise KnowledgeWriteConflict(
+                "settings-note create-once lost the race; requested mutation was not persisted",
+                receipt=receipt,
+            )
         winner_text = read_create_once_winner_relative(
             rel_path,
             vault_root=vault_root,
@@ -693,6 +718,7 @@ def write_settings_note(
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     action: str = SETTINGS_NOTE_WRITE_ACTION,
+    create_once_loss: CreateOnceLossPolicy = CREATE_ONCE_LOSS_RETURN_WINNER,
     _observed: tuple[SettingsNote | None, str | None] | None = None,
     **template_args: str,
 ) -> SettingsNote:
@@ -721,6 +747,7 @@ def write_settings_note(
         settings_dir=settings_dir,
         write_guard=write_guard,
         action=action,
+        create_once_loss=create_once_loss,
         **template_args,
     )
 
@@ -732,6 +759,7 @@ def apply_agent_update(
     *,
     settings_dir: str = DEFAULT_SETTINGS_DIR,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    create_once_loss: CreateOnceLossPolicy = CREATE_ONCE_LOSS_RETURN_WINNER,
     _observed: tuple[SettingsNote | None, str | None] | None = None,
     **template_args: str,
 ) -> SettingsNote:
@@ -775,6 +803,7 @@ def apply_agent_update(
         expected_version=expected_version,
         settings_dir=settings_dir,
         write_guard=write_guard,
+        create_once_loss=create_once_loss,
         **template_args,
     )
 
@@ -787,6 +816,9 @@ __all__ = [
     "AUTHORITY_DURABLE_SLICE",
     "AUTHORITY_REFERENCED_SUBSTRATE",
     "CONSENT",
+    "CREATE_ONCE_LOSS_RAISE",
+    "CREATE_ONCE_LOSS_RETURN_WINNER",
+    "CreateOnceLossPolicy",
     "DEFAULT_SETTINGS_DIR",
     "DEVICE_CONFIG",
     "ENTITY_REVIEW",

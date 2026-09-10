@@ -21,11 +21,13 @@ temp-vault-fixture convention: no network, no real Postgres, no real vault.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 import app.heimdal.settings_notes as settings_notes_module
+from app.heimdal.interest_steering import InterestDerivedUpdate, apply_interest_derived_updates
 from app.heimdal.settings_notes import (
     ATTENTION_DAY,
     CONSENT,
@@ -75,6 +77,35 @@ def _allowing_guard() -> WriteGuard:
 
 def _blocking_guard() -> WriteGuard:
     return WriteGuard(lambda: {"state": "safe_mode", "reason": "test-induced block"})
+
+
+def _force_losing_create(
+    monkeypatch: pytest.MonkeyPatch,
+    vault_root: Path,
+    winner: SettingsNote,
+) -> None:
+    """Make the next settings-note write lose an actual create-once race."""
+    original_write = settings_notes_module.write_note_relative
+    injected = False
+
+    def create_winner_then_retry(note_rel_path_value: str, content: str, **kwargs: object):
+        nonlocal injected
+        if not injected:
+            injected = True
+            winner_receipt = original_write(
+                note_rel_path_value,
+                render_note(winner),
+                vault_root=vault_root,
+                action=kwargs["action"],
+                write_guard=kwargs["write_guard"],
+                expected_version=None,
+                writer_identity="concurrent-writer",
+                create_once=True,
+            )
+            assert winner_receipt.outcome == "written"
+        return original_write(note_rel_path_value, content, **kwargs)
+
+    monkeypatch.setattr(settings_notes_module, "write_note_relative", create_winner_then_retry)
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +371,121 @@ def test_write_settings_note_returns_concurrent_creator(
 
     assert persisted.values == winner.values
     on_disk = read_settings_note(vault_root, WATCHLIST)
+    assert on_disk is not None
+    assert on_disk.values == winner.values
+
+
+def test_non_idempotent_create_reports_losing_creator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = _vault(tmp_path)
+    requested = SettingsNote(spec=WATCHLIST, values={"last_synced": "requested"})
+    winner = SettingsNote(spec=WATCHLIST, values={"last_synced": "winner"})
+    _force_losing_create(monkeypatch, vault_root, winner)
+
+    with pytest.raises(KnowledgeWriteConflict, match="create-once") as exc_info:
+        write_settings_note(
+            vault_root,
+            requested,
+            write_guard=_allowing_guard(),
+            create_once_loss="raise",
+        )
+
+    assert exc_info.value.receipt is not None
+    assert exc_info.value.receipt.outcome == "already_exists"
+    persisted = read_settings_note(vault_root, WATCHLIST)
+    assert persisted is not None
+    assert persisted.values == winner.values
+
+
+def test_non_idempotent_settings_callers_preserve_requested_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every bounded non-idempotent settings caller fails after a lost create."""
+    from app.heimdal import consent_ledger, retention as retention_module
+    from app.heimdal.attention_log import AttentionEvent, record_attention_events
+    from app.heimdal.interest_steering import set_interest_weight, update_source_filters
+    from app.heimdal.retention import enforce_hard_retention_bound
+
+    guard = _allowing_guard()
+
+    interest_root = _vault(tmp_path / "interest")
+    interest_winner = SettingsNote(spec=INTERESTS, values={"weights": {"winner": 0.1}})
+    with monkeypatch.context() as case:
+        _force_losing_create(case, interest_root, interest_winner)
+        with pytest.raises(KnowledgeWriteConflict, match="create-once"):
+            set_interest_weight(interest_root, "requested", 0.9, write_guard=guard)
+    persisted_interest = read_settings_note(interest_root, INTERESTS)
+    assert persisted_interest is not None
+    assert persisted_interest.values == interest_winner.values
+
+    source_root = _vault(tmp_path / "source")
+    source_winner = SettingsNote(
+        spec=SOURCE_CONFIG,
+        values={"source_id": "requested", "filters": ["winner"]},
+    )
+    with monkeypatch.context() as case:
+        _force_losing_create(case, source_root, source_winner)
+        with pytest.raises(KnowledgeWriteConflict, match="create-once"):
+            update_source_filters(source_root, "requested", ["requested"], write_guard=guard)
+    persisted_source = read_settings_note(source_root, SOURCE_CONFIG, source_id="requested")
+    assert persisted_source is not None
+    assert persisted_source.values == source_winner.values
+
+    attention_root = _vault(tmp_path / "attention")
+    attention_winner = SettingsNote(
+        spec=ATTENTION_DAY,
+        values={"counts": {"attended:other": 1}, "reasons": ["other"], "overrides": []},
+    )
+    with monkeypatch.context() as case:
+        _force_losing_create(case, attention_root, attention_winner)
+        with pytest.raises(KnowledgeWriteConflict, match="create-once"):
+            record_attention_events(
+                attention_root,
+                "2026-07-06",
+                [AttentionEvent("requested", "skipped", "requested")],
+                write_guard=guard,
+            )
+    persisted_attention = read_settings_note(attention_root, ATTENTION_DAY, date="2026-07-06")
+    assert persisted_attention is not None
+    assert persisted_attention.values == attention_winner.values
+
+    retention_root = _vault(tmp_path / "retention")
+    retention_winner = SettingsNote(
+        spec=SETTINGS,
+        values={"retention_window_days": 30, "last_enforced_at": "winner"},
+    )
+    with monkeypatch.context() as case:
+        _force_losing_create(case, retention_root, retention_winner)
+        case.setattr(retention_module, "_resolve_retention_window_days", lambda *_args, **_kwargs: 30)
+        case.setattr(retention_module.raw_store, "expired_raw_record_metadata", lambda **_kwargs: ())
+        case.setattr(retention_module, "_reconcile_pending_cold_cleanup", lambda **_kwargs: None)
+        case.setattr(consent_ledger, "reconcile_revoked_consent_erasure", lambda: None)
+        with pytest.raises(KnowledgeWriteConflict, match="create-once"):
+            enforce_hard_retention_bound(
+                vault_root=retention_root,
+                now=datetime(2026, 7, 6, tzinfo=timezone.utc),
+            )
+    persisted_retention = read_settings_note(retention_root, SETTINGS)
+    assert persisted_retention is not None
+    assert persisted_retention.values == retention_winner.values
+
+
+def test_idempotent_create_once_returns_durable_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = _vault(tmp_path)
+    winner = SettingsNote(spec=INTERESTS, values={"confidence": {"winner": 0.2}})
+    _force_losing_create(monkeypatch, vault_root, winner)
+
+    persisted = apply_interest_derived_updates(
+        vault_root,
+        [InterestDerivedUpdate(interest="requested", confidence=0.9)],
+        write_guard=_allowing_guard(),
+    )
+
+    assert persisted.values == winner.values
+    on_disk = read_settings_note(vault_root, INTERESTS)
     assert on_disk is not None
     assert on_disk.values == winner.values
 

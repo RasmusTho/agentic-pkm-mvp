@@ -60,6 +60,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from app.heimdal.settings_notes import (
     ATTENTION_DAY,
+    CREATE_ONCE_LOSS_RAISE,
     DEFAULT_SETTINGS_DIR,
     SettingsNote,
     read_settings_note,
@@ -262,6 +263,7 @@ def record_attention_events(
         settings_dir=settings_dir,
         write_guard=write_guard,
         action=ATTENTION_LOG_WRITE_ACTION,
+        create_once_loss=CREATE_ONCE_LOSS_RAISE,
         date=date,
         _observed=(existing, expected_version),
     )
