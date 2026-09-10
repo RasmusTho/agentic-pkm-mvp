@@ -117,12 +117,13 @@ Error contract (a client must handle each named state; never retry blindly):
 | 500 | `authority_receipt_persistence_failed`, state `not_acknowledged` | **The append may have landed** but its AuthorityReceipt could not be persisted | Do NOT blind-retry (duplicate-append risk). Verify by reading the inbox note (§6 W5) or hand to the human |
 
 When the MCP adapter cannot obtain a usable response from this capture call (for example, a
-transport timeout or connection failure), `mimer.capture` returns the explicit error envelope
+transport timeout, connection failure, or a `2xx` response that lacks a complete governed receipt),
+`mimer.capture` returns the explicit error envelope
 `{error: "capture_ambiguous", state: "not_acknowledged", retryable: false, trace_id, message}`.
-The append may have landed. Preserve the returned `trace_id` for correlation, verify the inbox
-note before any retry, and never replay the capture blindly. A governed HTTP `500` response keeps
-its `not_acknowledged` detail inside the adapter error result; it follows the same verify-before-
-retry rule.
+The append may have landed. Preserve the response `trace_id` for correlation, verify the inbox note
+before any retry, and never replay the capture blindly. A governed HTTP `500` response keeps its
+`not_acknowledged` detail inside the adapter error result; it follows the same verify-before-retry
+rule.
 
 ### 4.2 Read surface and the uuid→path gap
 

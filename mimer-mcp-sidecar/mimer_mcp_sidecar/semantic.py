@@ -311,14 +311,7 @@ class MimerMcpServer:
             if name == "mimer.capture" and not _complete_capture_envelope(
                 payload, outbound_trace_id=trace_id
             ):
-                return McpToolResult(
-                    error={
-                        "error": "invalid_governed_capture_response",
-                        "message": "Mimer capture acknowledgement lacked its governed receipt envelope.",
-                        "trace_id": response_trace_id,
-                    },
-                    trace_id=response_trace_id,
-                )
+                return _ambiguous_capture_result(response_trace_id)
             # The capture envelope, including policy decision/token/receipt and trace, is
             # returned unchanged. There is intentionally no retry or local receipt state.
             return McpToolResult(content=payload, trace_id=response_trace_id)

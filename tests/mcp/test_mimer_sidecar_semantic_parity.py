@@ -10,7 +10,10 @@ from typing import Any
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mimer-mcp-sidecar"))
-from mimer_mcp_sidecar.semantic import MimerMcpServer as SidecarServer
+from mimer_mcp_sidecar.semantic import (
+    MimerMcpServer as SidecarServer,
+    _GovernedMimerHttpOperations,
+)
 from app.mimer_mcp.server import MimerMcpServer as CompatibilityServer
 
 
@@ -89,3 +92,56 @@ def test_standalone_sidecar_is_single_implementation_with_v1_parity() -> None:
         and error.trace_id == trace_id
     )
     assert timeout.calls == ["capture"]
+
+
+def test_invalid_capture_ack_is_ambiguous_and_non_retryable() -> None:
+    invalid_ack = {"outcome": "written", "trace_id": "response-trace"}
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json=invalid_ack)
+
+    client = httpx.Client(
+        base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(handler)
+    )
+    try:
+        result = SidecarServer(_GovernedMimerHttpOperations(client)).call_tool(
+            "mimer.capture", {"text": "remember this", "trace_id": "outbound-trace"}
+        )
+    finally:
+        client.close()
+
+    assert result.error == {
+        "error": "capture_ambiguous",
+        "state": "not_acknowledged",
+        "message": "Capture response was not acknowledged; the append may have landed. Verify before retrying.",
+        "retryable": False,
+        "trace_id": "response-trace",
+    }
+    assert result.trace_id == "response-trace"
+    assert observed[0].url.path == "/api/companion/capture"
+    assert observed[0].headers["x-trace-id"] == "outbound-trace"
+
+
+def test_capture_transport_timeout_is_ambiguous_and_non_retryable() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("response lost")
+
+    client = httpx.Client(
+        base_url="http://127.0.0.1:8000", transport=httpx.MockTransport(handler)
+    )
+    try:
+        result = SidecarServer(_GovernedMimerHttpOperations(client)).call_tool(
+            "mimer.capture", {"text": "remember this", "trace_id": "capture-trace"}
+        )
+    finally:
+        client.close()
+
+    assert result.error == {
+        "error": "capture_ambiguous",
+        "state": "not_acknowledged",
+        "message": "Capture response was not acknowledged; the append may have landed. Verify before retrying.",
+        "retryable": False,
+        "trace_id": "capture-trace",
+    }
