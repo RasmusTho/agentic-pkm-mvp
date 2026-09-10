@@ -190,7 +190,81 @@ def _candidate(*, item: Any, captured_at: str) -> dict[str, Any] | None:
     }
 
 
-def derive_overview_inputs(*, work_provider: Any) -> dict[str, list[dict[str, Any]]]:
+def _receipt_candidate(receipt_provider: Any) -> dict[str, Any] | None:
+    """Map only an admitted receipt chain to the existing ready-to-try shape."""
+
+    provider = _object(receipt_provider)
+    if (
+        provider is None
+        or provider.get("provider") != "builderops_vm102_receipts"
+        or provider.get("status") != "available"
+        or provider.get("authority") != "builderops_vm102_receipt_source"
+    ):
+        return None
+    captured_at = _timestamp(provider.get("captured_at"))
+    snapshot = _object(provider.get("snapshot"))
+    payload = _object(provider.get("payload"))
+    if snapshot is None or payload is None:
+        return None
+    component_id = _nonblank(snapshot.get("component_id"))
+    candidate_sha = _nonblank(snapshot.get("candidate_source_sha"))
+    receipt_refs = _items(snapshot.get("receipt_refs"))
+    if (
+        component_id is None
+        or candidate_sha is None
+        or receipt_refs is None
+        or len(receipt_refs) != 3
+        or any(_nonblank(item) is None for item in receipt_refs)
+        or _nonblank(payload.get("observed_at")) is None
+    ):
+        return None
+    source_ref = {
+        "source_type": "builderops_vm102_receipt",
+        "source_id": str(receipt_refs[-1]),
+        "locator": str(receipt_refs[-1]),
+        "version": candidate_sha,
+    }
+    evidence_id = f"builderops-vm102-chain:{component_id}:{candidate_sha}"
+    return {
+        "subject_ref": {
+            "source_type": "builderops_vm102_component",
+            "source_id": f"vm102:{component_id}",
+            "locator": str(receipt_refs[-1]),
+            "version": candidate_sha,
+        },
+        "display_label": "DevUI on VM 102",
+        "reason": "BuilderOps qualification, deployment, and health receipts bind this candidate to VM 102.",
+        "evidence": [
+            {
+                "evidence_id": evidence_id,
+                "claim": "The source-owned VM-102 receipt chain is current and linked to this component.",
+                "source_ref": source_ref,
+                "availability": "available",
+                "freshness": "fresh",
+                "completeness": "complete",
+                "cardinality": "nonempty",
+                "linkage": "linked",
+                "captured_at": captured_at,
+                "read_watermark": payload["observed_at"],
+                "limitation": None,
+            }
+        ],
+        "delivery_facts": {
+            "ready_to_try": {
+                "state": "evidenced",
+                "source_ref": source_ref,
+                "receipt_ref": source_ref,
+                "evidence_id": evidence_id,
+            }
+        },
+        "navigation_refs": [],
+        "limitations": [],
+    }
+
+
+def derive_overview_inputs(
+    *, work_provider: Any, receipt_provider: Any = None
+) -> dict[str, list[dict[str, Any]]]:
     """Derive only trusted source-ordered ``Now`` candidates from one contribution.
 
     A malformed or refused contribution remains visible in the Overview trust
@@ -199,16 +273,20 @@ def derive_overview_inputs(*, work_provider: Any) -> dict[str, list[dict[str, An
     """
 
     trusted = _trusted_working_items(work_provider)
-    if trusted is None:
-        return {"now": []}
-    captured_at, items = trusted
     candidates: list[dict[str, Any]] = []
-    for item in items:
-        candidate = _candidate(item=item, captured_at=captured_at)
-        if candidate is None:
-            return {"now": []}
-        candidates.append(candidate)
-    return copy.deepcopy({"now": candidates})
+    if trusted is not None:
+        captured_at, items = trusted
+        for item in items:
+            candidate = _candidate(item=item, captured_at=captured_at)
+            if candidate is None:
+                candidates = []
+                break
+            candidates.append(candidate)
+    result: dict[str, list[dict[str, Any]]] = {"now": candidates}
+    receipt_candidate = _receipt_candidate(receipt_provider)
+    if receipt_candidate is not None:
+        result["ready_to_try"] = [receipt_candidate]
+    return copy.deepcopy(result)
 
 
 __all__ = ["derive_overview_inputs"]

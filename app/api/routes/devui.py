@@ -21,6 +21,7 @@ from app.builderops.devui_focus import (
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs
+from app.builderops.devui_receipts import read_vm102_receipt_provider
 from app.builderops.devui_owner_synthesis import (
     OwnerSynthesisInputError,
     synthesize_owner_overview,
@@ -156,6 +157,7 @@ async def composition() -> dict[str, Any]:
     return compose_owner_snapshot(
         cockpit_reader=read_cockpit_registry,
         ckm_reader=_read_ckm_capabilities,
+        receipt_reader=read_vm102_receipt_provider,
     )
 
 
@@ -166,10 +168,15 @@ async def overview() -> dict[str, Any]:
     composition = compose_owner_snapshot(
         cockpit_reader=read_cockpit_registry,
         ckm_reader=_read_ckm_capabilities,
+        receipt_reader=read_vm102_receipt_provider,
     )
     work_provider = composition.get("providers", {}).get("work")
+    receipt_provider = composition.get("providers", {}).get("vm102_evidence")
     candidates = _bind_visual_focus_targets(
-        derive_overview_inputs(work_provider=work_provider)
+        derive_overview_inputs(
+            work_provider=work_provider,
+            receipt_provider=receipt_provider,
+        )
     )
     return compose_overview_view(composition=composition, candidates=candidates)
 
