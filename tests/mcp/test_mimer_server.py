@@ -72,6 +72,17 @@ def _complete_capture(trace_id: str = "trace-capture") -> dict[str, Any]:
     }
 
 
+def _assert_capture_ambiguous_result(result: Any, trace_id: str) -> None:
+    assert result.error == {
+        "error": "capture_ambiguous",
+        "state": "not_acknowledged",
+        "message": "Capture response was not acknowledged; the append may have landed. Verify before retrying.",
+        "retryable": False,
+        "trace_id": trace_id,
+    }
+    assert result.trace_id == trace_id
+
+
 @dataclass
 class _Response:
     status_code: int
@@ -360,8 +371,7 @@ def test_capture_2xx_without_complete_governed_receipt_fails_closed() -> None:
 
     result = MimerMcpServer(operations).call_tool("mimer.capture", {"text": "x"})
 
-    assert result.error and result.error["error"] == "invalid_governed_capture_response"
-    assert result.error["trace_id"] == "trace-capture"
+    _assert_capture_ambiguous_result(result, "trace-capture")
     assert len(operations.calls) == 1
 
 
@@ -372,7 +382,7 @@ def test_capture_2xx_with_mismatched_governed_bindings_fails_closed() -> None:
 
     result = MimerMcpServer(operations).call_tool("mimer.capture", {"text": "x"})
 
-    assert result.error and result.error["error"] == "invalid_governed_capture_response"
+    _assert_capture_ambiguous_result(result, "trace-capture")
     assert len(operations.calls) == 1
 
 
@@ -404,7 +414,7 @@ def test_capture_2xx_with_wrong_invocation_binding_fails_closed(
         "mimer.capture", {"text": "x", "trace_id": "trace-capture"}
     )
 
-    assert result.error and result.error["error"] == "invalid_governed_capture_response", label
+    _assert_capture_ambiguous_result(result, capture["trace_id"])
     assert len(operations.calls) == 1
 
 
