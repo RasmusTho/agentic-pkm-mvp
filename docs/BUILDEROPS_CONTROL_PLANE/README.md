@@ -150,6 +150,8 @@ The repository-side producers for `devui_vm102_runtime_qualification.v1`,
 `devsystem_vm102_deploy.v1`, and `devsystem_vm102_health.v1` are
 [`app/ops/devui_vm102_runtime_receipts.py`](../../app/ops/devui_vm102_runtime_receipts.py),
 with separate closed schemas under `config/platform/` bearing those exact names.
+The Builder image includes the three schemas plus inventory/activation schemas and pinned
+`jsonschema`; the producer can run in that neutral dependency closure without Product packages.
 They consume redacted caller-supplied evidence and validated prerequisite receipts; they perform
 no SSH, Docker, Proxmox, service activation, network request, or receipt persistence. The operator
 retains responsibility for authentic evidence collection and storage in the existing BuilderOps

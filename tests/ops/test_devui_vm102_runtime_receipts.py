@@ -475,3 +475,41 @@ def test_cli_generates_and_verifies_each_type(tmp_path: Path, kind: str) -> None
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads(result.stdout) == receipt
+
+
+def test_receipt_cli_in_declared_builder_image_closure(tmp_path: Path) -> None:
+    import shutil
+
+    # Mirror the declared COPY closure without a daemon, network or service start.
+    image_root = tmp_path / "image"
+    image_root.mkdir()
+    shutil.copytree(ROOT / "app", image_root / "app", ignore=shutil.ignore_patterns("__pycache__"))
+    for line in (ROOT / "Dockerfile.builderops").read_text().splitlines():
+        if line.startswith("COPY config/platform/"):
+            *sources, destination = line.split()[1:]
+            target = image_root / destination
+            target.mkdir(parents=True)
+            for source in sources:
+                shutil.copyfile(ROOT / source, target / Path(source).name)
+    assert "jsonschema==4.23.0" in (ROOT / "requirements-builderops.txt").read_text()
+    bundle = _bundle()
+    for kind, receipt in zip(TYPES, _chain(bundle)):
+        path = tmp_path / "bundle.json"
+        path.write_text(json.dumps({"receipt": receipt, "prerequisites": bundle["prerequisites"]}))
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "app.ops.devui_vm102_runtime_receipts",
+                "--kind",
+                kind,
+                "--verify",
+                "--bundle",
+                str(path),
+            ],
+            cwd=image_root,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads(result.stdout) == receipt
