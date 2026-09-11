@@ -248,7 +248,6 @@ services:
       - -c
       - >-
         mkdir -p /app/tmp &&
-        test -d "$${DEVUI_VM102_RECEIPT_DIR}" && test -r "$${DEVUI_VM102_RECEIPT_DIR}" && test -x "$${DEVUI_VM102_RECEIPT_DIR}" || { echo 'VM-102 receipt source mount unavailable' >&2; exit 75; } &&
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer api;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
@@ -258,6 +257,9 @@ services:
           for deployment_fence in /app/instance-ownership/deployment-*-restart-fence.json; do [ ! -e "$${deployment_fence}" ] || { echo 'legacy rollback blocked by deployment restart fence' >&2; exit 75; }; done;
         else
           echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
+        fi &&
+        if [ -n "$${DEVUI_VM102_RECEIPT_DIR:-}" ]; then
+          test -d "$${DEVUI_VM102_RECEIPT_DIR}" && test -r "$${DEVUI_VM102_RECEIPT_DIR}" && test -x "$${DEVUI_VM102_RECEIPT_DIR}" || { echo 'VM-102 receipt source mount unavailable' >&2; exit 75; };
         fi &&
         exec bash /app/scripts/start_api.sh
     environment:
