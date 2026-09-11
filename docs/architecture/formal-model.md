@@ -338,7 +338,7 @@ event-completeness invariant (gap 2) to close fully.
 | Domain | Fails together | Rebuildable from | Non-rebuildable content (blast radius) |
 |---|---|---|---|
 | FD-V (vault, iCloud fs) | notes, companions, commitments, settings, memories, chats | — (canonical; iCloud sync is the only replica) | everything human-authored |
-| FD-P (Postgres) | objects, file_state, vectors, relations, outbox, decisions, audit, memkv | objects/file_state/vectors/relations: V + re-ingest (with new object_ids — see caveat) | **outbox history, decisions, audit** — canonical logs with NO backup (observability audit: no DB backup) |
+| FD-P (Postgres) | objects, file_state, vectors, relations, outbox, decisions, audit, memkv | objects/file_state/vectors/relations: V + re-ingest (with new object_ids — see caveat) | **outbox history and audit** — non-rebuildable operational history; loss is accepted under the 2026-09-11 Product Runtime continuity decision. `decisions` is now vault-receipt-backed and its DB table is a rebuildable projection. |
 | FD-S (per file) | each sqlite independent | proposals: re-propose; reviews: NOT rebuildable | review decisions (promotion preconditions) |
 | FD-J | each JSONL independent | advisory — losable by declaration | activation/recall audit trail |
 | FD-M | process | restart | session context (D-4 until chat-as-artifact), settings receipts (D-1) |
@@ -349,6 +349,10 @@ event-completeness invariant (gap 2) to close fully.
 with* the objects rows they reference. Tombstone ratification (D-2) makes those rows stable
 anchors; a vault-uuid-keyed identity (or persisted object_id↔uuid map) would decouple the
 domains. Flagged to CES as an extend-candidate, not enacted here.
+
+This table is an advisory loss classification, not a backup requirement. The current Product Runtime
+posture accepts loss of non-rebuildable operational history and relies on the continuity/rebuild review
+and fresh-bootstrap/readback rules for the implications of that loss.
 
 ## 6. SBS reconciliation (binding, per `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`)
 

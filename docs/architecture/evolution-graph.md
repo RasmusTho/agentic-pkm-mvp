@@ -24,9 +24,7 @@ graph TD
     K0[Kernel P0-P4 14/16<br/>built] --> K10[KERNEL-10 #2772 prefilter+envelope<br/>in-flight]
     K10 --> KCLOSE[Kernel closeout: #2899 audit + #2901 single-writer<br/>in-flight]
     KCLOSE --> PROPS[Property layer P-1..P-7<br/>next  · from #2781]
-    KCLOSE --> BACKUP[FD-P backup: outbox/decisions/audit<br/>next]
     PROPS --> IDENT[object_id↔uuid identity decoupling<br/>next]
-    BACKUP --> IDENT
   end
 
   subgraph Cognition["Retrieval / memory / cognition"]
@@ -76,7 +74,7 @@ produces wrong or untrustworthy behavior). Dotted = soft prerequisites (cheaper-
 | KERNEL-10 #2772 prefilter + envelope | in-flight | M | H | H | L | L | Last kernel slice; converts the admissibility model from test-only to live |
 | Kernel closeout (#2899 audit, #2901 single-writer) | in-flight | L | M | M | L | L | #2901 is a live I-S1 violation — a *regression of the kernel's own class* |
 | Property layer P-1…P-7 (from #2781) | next | L | M | H | M | L | Turns the formal model into standing machine-checked law; O=H because every later change gets cheaper to verify |
-| FD-P backup (outbox/decisions/audit) | next | L | H | M | L | L | The only canonical, non-rebuildable stores with **zero backup** (formal-model §5); pure ops, no code risk |
+| FD-P backup (outbox/decisions/audit) | superseded-by-decision | — | — | M | L | L | Product Runtime has no general DB-backup obligation; non-rebuildable operational history may be lost. Rebuildability and loss implications are reviewed under #5258. |
 | object_id↔uuid identity decoupling | next | M | H | H | M | H | Kills the §5 coupling caveat (DB rebuild orphans decisions/audit); X=H: forward-only migration + backfill |
 | #2314 RAG/memory epic (Gate0–W3, W5) | in-flight | M | H | H | M | M | Now standing on an honest substrate (KERNEL-05/06 landed); lexical-mirror half of W4-RET-01 still epic-owned |
 | Expansion activation (test→prod) | next | M | L | M | L | L | Gated work already passed TEST; remaining: promote + answer-quality pass |
@@ -101,25 +99,23 @@ produces wrong or untrustworthy behavior). Dotted = soft prerequisites (cheaper-
 
 ### (a) Critical path to a trustworthy substrate
 
-`#2772 → kernel closeout (#2899 + #2901) → property layer (P-1/P-2/P-5 first) → FD-P backup →
-identity decoupling`. Everything on this path is L/M delivery risk and removes H debt; nothing else
-in the graph is safe to *trust* (as opposed to build) before it: evals over a divergent store
-measure noise (audit §7 dependency spine), and every capability that records decisions/receipts
-inherits FD-P's zero-backup exposure. FD-P backup is the single cheapest H-debt node in the graph —
-it is an ops task, not a code project.
+`#2772 → kernel closeout (#2899 + #2901) → property layer (P-1/P-2/P-5 first) →
+identity decoupling`. The continuity review under #5258 is a classification and proof activity, not
+a backup implementation gate: it records which state rebuilds, which history is lossy, and which
+fresh-bootstrap/readback protections apply.
 
 ### (b) Highest optionality-per-risk next moves
 
 1. **Property layer** (L risk, H optionality — makes all future change cheaper to verify).
-2. **FD-P backup** (L risk, H debt removed — one runbook + one cron).
-3. **SoS enactment** (L risk docs-only; unblocks clean naming for every ecosystem workstream).
-4. **#2807 chat-WriteGuard** (L risk, closes a governance gap; already in flight).
-5. **KAP Phase 2 vertical** (M risk, H optionality — proves the acquisition-constituent pattern
+2. **SoS enactment** (L risk docs-only; unblocks clean naming for every ecosystem workstream).
+3. **#2807 chat-WriteGuard** (L risk, closes a governance gap; already in flight).
+4. **KAP Phase 2 vertical** (M risk, H optionality — proves the acquisition-constituent pattern
    end-to-end that Heimdal will reuse; ends at candidate so contamination risk is bounded).
 
 ### (c) Capabilities whose cost rises the longer they wait
 
-- **FD-P backup** — every day adds unrecoverable canonical rows (decisions, audit, outbox history).
+- **Rebuildability review (#5258)** — every unresolved path needs an explicit rebuild, loss, or
+  fresh-bootstrap/readback classification before its operational consequence is hidden.
 - **Identity decoupling** — the decisions/audit corpus anchored to runtime `object_id`s grows
   monotonically; backfill cost grows with it.
 - **#2901 second-writer removal** — dual-writer drift compounds; each week of coexistence widens
@@ -131,7 +127,8 @@ it is an ops task, not a code project.
 
 ### What this graph recommends deferring (deferral is a decision)
 
-- **Layer-2 event bus + Heimdal build** — until kernel closeout + FD-P backup land. Heimdal's
+- **Layer-2 event bus + Heimdal build** — until kernel closeout + the continuity/rebuildability
+  review land. Heimdal's
   event stream inherits whatever event-log honesty the substrate has; building the ecosystem's most
   privacy-sensitive constituent on an unfinished journal contract is the one sequencing error this
   graph exists to prevent. (KAP Phase 2 is the right precursor instead — same pattern, bounded.)
@@ -212,6 +209,11 @@ protection") — a prior owner decision this task does not re-litigate. No new i
 already executed for the scope this OD names, and the residual off-machine scope's own owner
 deferral stands.
 
+**Current owner disposition (2026-09-11):** no general Product DB backup or cold-storage program is
+required. Product Runtime rebuilds from retained Markdown, companions, and document-backed receipts;
+loss of non-rebuildable operational history is accepted as bounded history loss. #2965 is closed as
+`not planned`; #5258 remains the review authority for the exact loss/rebuild/fresh-bootstrap impact.
+
 ## SBS reconciliation (binding)
 
 Per-claim reconciliation against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/architecture/SBS_*`:
@@ -222,8 +224,8 @@ Per-claim reconciliation against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/
   contract-first/module-lazy (ADR-0016) and SFC single-node V1 (ADR-0020); the Heimdal/event-bus
   nodes conform to the three-layer model in `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` (substrate
   promotion is Layer-1-governed, enacted via ADR/CES, not by this graph).
-- **Extends:** (a) "FD-P backup" names a durability obligation the SBS assigns PDM but no fitness
-  rule or roadmap track owns — flagged to CES as a fitness-rule extend-candidate; (b) the
+- **Extends:** (a) "FD-P backup" is superseded by the accepted Product Runtime loss/rebuildability
+  posture; #5258 owns the remaining classification review; (b) the
   identity-decoupling node operationalizes the formal model's §5 coupling caveat, already flagged to
   CES by RESEARCH-02 — this graph only sequences it.
 - **Proposes reshaping:** none. (The SoS-enactment node *routes* the already-owner-decided ADR-0043

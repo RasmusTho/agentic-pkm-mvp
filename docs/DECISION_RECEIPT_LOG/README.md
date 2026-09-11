@@ -1,4 +1,4 @@
-State: Specification directory (design + bounded slice breakdown). Advisory until the child issues are delivered; the prod migration slice is operator-gated and lands staged, not implicitly. Owner-authorized direction (2026-07-05): make the judgment/decision log a human-readable, backup-bearing durable record with Postgres as a rebuildable projection.
+State: Delivered design and implementation slices; the historical production backfill found no rows to migrate. Owner-authorized direction (2026-07-05): make the judgment/decision log a human-readable durable record with Postgres as a rebuildable projection. Current Product Runtime posture (2026-09-11): no general Product DB backup is required; non-rebuildable operational history may be lost as bounded history loss.
 Doc role: Specification (feature design + decomposition)
 Authority: Design proposal grounded in current code (`app/services/decisions.py`, the two writer paths, four reader paths) and the owner contract `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md`. Subordinate to that contract and the doctrine; where it changes a claim, it updates the owning doc in the same slice.
 
@@ -7,9 +7,9 @@ Authority: Design proposal grounded in current code (`app/services/decisions.py`
 ## Why (owner ask + contract grounding)
 
 The judgment log (`decisions`: the `review` / `evaluate` / `classification` verdicts the governance
-pipeline records per object) lives **only in Postgres** today. It is one of three canonical,
-non-rebuildable stores (`formal-model.md :: 5`, with `audit` and `outbox`) — losing the DB loses it,
-and it is not backed up by the vault's iCloud/git durability like everything human-meaningful is.
+pipeline records per object) was historically DB-only. The delivered receipt-log slices place its
+canonical record on the readable vault surface and keep Postgres as a rebuildable query projection.
+Loss of the projection loses runtime efficiency until rebuild; it does not lose the decision receipt.
 
 The owner asked (2026-07-05) to make it human-readable and naturally backed up. The design that
 follows is not an invention — it *closes a stated contract violation*:
@@ -91,11 +91,12 @@ index; the in-memory store is a cache-through), applied to the judgment log.
   projection. That doc update *resolves* the rule-4 tension the recon found (it aligns the advisory
   doc with the owner contract), and is bundled into the read-cutover slice.
 
-### Backup consequence (closes the loop with the owner's original point)
+### Continuity consequence (closes the loop with the owner's current posture)
 
-Once decisions live in the vault, they ride iCloud/git backup automatically. The prod DB backup
-(`local.prod-pgdump` → external SSD, hardened 2026-07-05) then only needs `outbox` + `audit` as
-genuinely DB-only content — shrinking what the off-machine cold-storage work (#2965) must protect.
+Once decisions live in the vault, they ride the vault's iCloud/Git durability. The 2026-09-11 owner
+decision does not require an external Product DB backup for the remaining operational history either;
+if `outbox` or `audit` records cannot be reconstructed, their loss is accepted as bounded history
+loss. The rebuildability review in #5258 records the exact impact and fresh-bootstrap/readback posture.
 
 ## Slice breakdown (bounded; only Slice 1 is buildable-now, nothing prod-touching until Slice 4)
 
@@ -111,19 +112,11 @@ genuinely DB-only content — shrinking what the off-machine cold-storage work (
    `runtime-semantics.md` row 12 and reconcile `MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md` (owner
    doc — bundled here, not a follow-up). Readers unchanged (still hit the fast projection). `Verify:`
    doc writeback + a rebuild-from-log-only integration test. TCD: Opus/high (owner-doc + authority).
-4. **Prod backfill + backup-scope reduction (operator-gated, staged).** One-time export of existing
-   prod `decisions` rows → the log; verify row counts; flip canonical; confirm the projection rebuilds
-   identically; update the DB-backup scope note (#2965 / `reference_prod_db_backup`). I-C2 evolution
-   protocol (backfill + dual-read window + doctor). **Not executed without operator ack.** TCD:
-   Opus/xhigh (prod data migration).
-
-   **Build-only portion delivered (issue #2973):** `export_decisions_to_receipt_log()`
-   (`app/jobs/decisions_export.py`) — the DB→log export function itself — is built, tested
-   (`tests/jobs/test_decisions_export.py`), and wired into a CLI group (`python -m app.cli decisions
-   export|doctor|rebuild`). It is read-only over the DB, idempotent (safe to re-run), and fails loud
-   rather than silently dropping a row it cannot faithfully place in the log. **Running it against
-   prod, and the remaining flip-canonical / backup-scope-note steps, stay operator-gated** — the
-   function existing does not execute the migration.
+4. **Prod backfill + continuity-scope reduction (operator-gated, staged).** The read-only production
+   preflight for issue #2973 found zero decision rows and zero receipt-log rows, so no historical
+   export, replay, or production mutation remained applicable. The canonical log/projection contract
+   is delivered; the remaining operational-history classification belongs to the rebuildability review
+   in #5258, not to a DB-backup implementation.
 
 ## SBS reconciliation (binding)
 
