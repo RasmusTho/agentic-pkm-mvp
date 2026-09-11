@@ -1,0 +1,29 @@
+# Prepared Linux-only listener. Future operator deployment must first qualify
+# the fixed builderops engine/socket and attest the immutable Builder image.
+name: builderops-devui
+services:
+  devui:
+    image: ghcr.io/rasmustho/builderops-control-plane@${DEVUI_IMAGE_DIGEST:?attested immutable Builder image required}
+    command: ["python", "-m", "app.builderops.devui_runtime"]
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      DEVUI_SOURCE_SHA: ${DEVUI_SOURCE_SHA:?exact source SHA required}
+      DEVUI_IMAGE_DIGEST: ${DEVUI_IMAGE_DIGEST:?immutable image digest required}
+      DEVUI_CONFIG_FINGERPRINT: ${DEVUI_CONFIG_FINGERPRINT:?pinned configuration fingerprint required}
+      DEVUI_VM102_RECEIPT_DIR: /run/builderops/devui-receipts
+    volumes:
+      - type: bind
+        source: /opt/builderops/receipts
+        target: /run/builderops/devui-receipts
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8113/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

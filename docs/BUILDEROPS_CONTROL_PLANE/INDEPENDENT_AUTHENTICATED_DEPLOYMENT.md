@@ -61,6 +61,48 @@ secret-bearing evidence, unqualified hosts, missing component gaps, and rollback
 compatible runnable baseline; the repository-side candidate qualification remains insufficient for
 live qualification.
 
+### Prepared standalone DevUI listener
+
+[`docker-compose.devui.yml`](../../docker-compose.devui.yml) declares the separate
+`builderops-devui` project and its single `devui` service, owned by the Builder System release
+operator. It reuses the digest-pinned Builder control-plane image and its non-root `builderops`
+user, but starts `python -m app.builderops.devui_runtime`. It does not start the control-plane
+worker, Product API, Product settings, migrations, or any Product store. The image must contain
+this entrypoint at the newly attested candidate; an older candidate is not sufficient.
+
+This is a prepared Linux managed listener, not a deployment executor. A later operator execution
+must qualify the fixed `builderops` context at `unix:///run/docker-builderops.sock`, authenticate
+the candidate on VM102, satisfy the ordered receipts and operator gates, and install it through
+the governed release path. Neither `deploy_channel.sh` nor an ad hoc process start is that path.
+The declaration is not installed or enabled by this repository change.
+
+The container uses host networking with a fixed process bind to `127.0.0.1:8113`, a read-only
+root filesystem, dropped capabilities and managed restart. The sole mount is the existing
+`/opt/builderops/receipts` source, read-only at `/run/builderops/devui-receipts`; Compose must not
+create an absent source directory. No Product mounts, secret mounts, env files, public port or
+generic upstream selector are supplied. Source SHA must equal image-baked `VCS_REF`; image and
+DevUI configuration fingerprints and a readable receipt directory are mandatory before binding.
+Missing or malformed configuration refuses startup loudly. Candidate markers remain diagnostic
+inputs to the external image/config readback, not attestation proof by themselves.
+
+The admitted application path is exact GET `/api/devui/overview`. Direct callers must have an
+immediate loopback peer and the exact local Host header; forwarded identity, query parameters,
+nonlocal callers and alternate/write routes are rejected before source reads. Only `/version`
+and `/healthz` accompany it. Private authenticated operator access must preserve this direct local
+boundary, for example through the approved SSH tunnel; this declaration does not provision ingress
+or enable Funnel. It is not a general Companion gateway and does not deliver a browser/Focus pilot.
+
+The process composes the existing pure Overview functions and the B1 receipt reader. Work and CKM
+transports are explicitly unavailable in this bounded runtime until their owning boundaries admit
+them; no legacy SQLite selector, Product authentication module, or synthetic source is substituted.
+The mounted source must retain `devui-runtime-prerequisites.json` as specified by the receipt owner.
+The listener validates all three typed receipts with those prerequisites before publishing status.
+An empty/invalid receipt source or missing verification input withdraws deployment status.
+Even a valid chain is withdrawn when
+its source SHA, DevUI image, or DevUI configuration differs from this listener. Liveness explicitly
+reports `complete_dev_system_health: false`; it cannot satisfy the complete health/owner-pilot
+contract. These remaining source and browser gates stay visible under #5181 and #4749.
+
 ### Approved candidate attestation runner
 
 The VM 102 deployment host must run the exact verifier locally immediately before each live

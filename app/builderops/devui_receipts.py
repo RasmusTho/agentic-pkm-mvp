@@ -25,6 +25,7 @@ AUTHORITY = "builderops_vm102_receipt_source"
 DEFAULT_RECEIPT_DIR = Path("/opt/builderops/receipts")
 RECEIPT_DIR_ENV = "DEVUI_VM102_RECEIPT_DIR"
 MAX_AGE_ENV = "DEVUI_VM102_RECEIPT_MAX_AGE_SECONDS"
+RUNTIME_PREREQUISITES_FILE = "devui-runtime-prerequisites.json"
 TARGET_VM = {"vmid": 102, "name": "builder-system"}
 SUBJECT_COMPONENT = "devui_projection"
 REQUIRED_RECEIPT_TYPES = (
@@ -178,11 +179,19 @@ def _validate_receipt(
     if verdict not in _POSITIVE_VERDICTS:
         raise Vm102ReceiptError(f"receipt {expected_type} has no positive verdict")
     digest = _digest(receipt)
+    candidate_identity = {"source_sha": source_sha}
+    raw_identity = receipt.get("candidate_identity")
+    if isinstance(raw_identity, Mapping):
+        for field in ("devui_image_digest", "devui_config_fingerprint"):
+            value = raw_identity.get(field)
+            if isinstance(value, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", value):
+                candidate_identity[field] = value
     return {
         "receipt_type": expected_type,
         "receipt_version": receipt.get("receipt_version"),
         "observed_at": observed_at.isoformat(),
         "source_sha": source_sha,
+        "candidate_identity": candidate_identity,
         "component_id": SUBJECT_COMPONENT,
         "verdict": verdict,
         "source_ref": _source_ref(expected_type, digest),
@@ -240,12 +249,26 @@ def read_vm102_receipt_evidence(
     receipt_dir: Path | str | None = None,
     *,
     now: datetime | None = None,
+    require_typed_runtime: bool = False,
 ) -> dict[str, Any]:
     """Read and bind the current VM-102 qualification/deploy/health chain."""
 
     captured = (now or _utc_now()).astimezone(timezone.utc)
     max_age = _max_age()
     receipts = _load_latest_by_type(_receipt_dir(receipt_dir))
+    if require_typed_runtime:
+        # Use the owner's retained producer prerequisites and the same raw receipts
+        # that will be normalized below; never reread a second, unvalidated chain.
+        from app.ops.devui_vm102_runtime_receipts import validate_receipt
+
+        path = _receipt_dir(receipt_dir) / RUNTIME_PREREQUISITES_FILE
+        if path.is_symlink() or not path.is_file():
+            raise Vm102ReceiptError("typed runtime verification prerequisites are unavailable")
+        prerequisites = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(prerequisites, Mapping):
+            raise Vm102ReceiptError("typed runtime verification prerequisites are malformed")
+        for receipt in receipts.values():
+            validate_receipt(receipt, prerequisites, now=captured)
     normalized = {
         kind: _validate_receipt(
             receipts[kind], expected_type=kind, now=captured, max_age=max_age
@@ -279,11 +302,14 @@ def read_vm102_receipt_provider(
     receipt_dir: Path | str | None = None,
     *,
     now: datetime | None = None,
+    require_typed_runtime: bool = False,
 ) -> dict[str, Any]:
     """Return a composition contribution, refusing without diagnostic leakage."""
 
     try:
-        evidence = read_vm102_receipt_evidence(receipt_dir, now=now)
+        evidence = read_vm102_receipt_evidence(
+            receipt_dir, now=now, require_typed_runtime=require_typed_runtime
+        )
     except Exception as exc:
         LOGGER.info("VM-102 DevUI evidence withdrawn: %s", exc.__class__.__name__)
         return {
