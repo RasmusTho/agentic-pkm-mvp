@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MVR_README = REPO_ROOT / "docs" / "MULTI_VAULT_RUNTIME" / "README.md"
 BOOTSTRAP_HEADING = "### Fresh bootstrap after operational-lineage loss"
+READBACK_PARAGRAPH_ANCHOR = "The readback set is owner-native:"
 
 
 def _bootstrap_section() -> str:
@@ -28,6 +29,13 @@ def _transition_rows(section: str) -> list[dict[str, str]]:
         dict(zip(headers, (cell.strip() for cell in line.strip().strip("|").split("|"))))
         for line in table_lines[2:]
     ]
+
+
+def _readback_paragraph(section: str) -> str:
+    start = section.index(READBACK_PARAGRAPH_ANCHOR)
+    remainder = section[start:]
+    end = remainder.index("\n\n")
+    return remainder[:end]
 
 
 def test_missing_operational_lineage_requires_fresh_fenced_epoch() -> None:
@@ -77,7 +85,7 @@ def test_bootstrap_contract_requires_authoritative_readback_and_receipt() -> Non
         assert receipt_field in lowered
 
     conflict = next(row for row in rows if "ownership conflict" in row["Event"].lower())
-    assert conflict["To"] == "ownership_conflict_refused"
+    assert conflict["To"] == "inactive_fenced"
     unavailable = next(row for row in rows if "readback unavailable" in row["Event"].lower())
     assert unavailable["To"] == "inactive_fenced"
 
@@ -98,3 +106,31 @@ def test_bootstrap_contract_requires_authoritative_readback_and_receipt() -> Non
         "parallel recovery",
     ):
         assert forbidden in reconciliation
+
+
+def test_ownership_conflict_refusal_has_one_persisted_state() -> None:
+    section = _bootstrap_section()
+    rows = _transition_rows(section)
+    readback_paragraph = _readback_paragraph(section)
+    normalized_readback_paragraph = " ".join(readback_paragraph.lower().split())
+
+    conflict = next(row for row in rows if "ownership conflict" in row["Event"].lower())
+    persisted_conflict_state = "inactive_fenced"
+    assert conflict["To"] == persisted_conflict_state
+    assert "ownership_conflict_refused" in conflict["Required evidence / refusal"]
+    assert persisted_conflict_state in conflict["Required evidence / refusal"]
+    assert "ownership_conflict_refused" not in {row["To"] for row in rows}
+    assert (
+        "a missing or conflicting source produces a typed refusal (`readback_unavailable` or "
+        f"`ownership_conflict_refused`) and leaves the epoch `{persisted_conflict_state}`."
+        in normalized_readback_paragraph
+    )
+    assert (
+        "the typed refusal is an outcome, not a persisted epoch state"
+        in normalized_readback_paragraph
+    )
+    assert "ownership_conflict_accepted" not in normalized_readback_paragraph
+    assert "may be interpreted as proof of ownership" in normalized_readback_paragraph
+    assert f"leaves the epoch `{persisted_conflict_state}`" in normalized_readback_paragraph
+    assert "restart must preserve or reload the same fenced epoch" in normalized_readback_paragraph
+    assert "new attempt requires a new authoritative readback" in normalized_readback_paragraph
