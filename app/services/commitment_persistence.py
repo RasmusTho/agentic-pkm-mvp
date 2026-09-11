@@ -40,7 +40,7 @@ from app.domain.commitments import (
     normalize_commitment_kind,
     normalize_commitment_state,
 )
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -135,9 +135,26 @@ def persist_commitment(
 
     # WriteGuard first: nothing on disk is created when the guard blocks.
     write_guard.assert_writes_allowed(COMMITMENT_PERSIST_ACTION)
-    # Single complete file write (write_note_relative writes the whole artefact atomically
-    # via the knowledge port, creating parent dirs as needed).
-    write_note_relative(artifact_path, content, vault_root=vault_root)
+    artifact = vault_root / artifact_path
+    if artifact.exists():
+        # Existing artifacts are replacements: bind the write to the exact bytes read,
+        # including line endings, so an owner edit cannot be clobbered after this read.
+        _observed_content, expected_version = read_note_text_with_version(artifact)
+        write_note_relative(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            expected_version=expected_version,
+        )
+    else:
+        # Creation is intentionally first-write-wins; an absent-target race must not
+        # turn into an overwrite of the winner.
+        write_note_relative(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            create_once=True,
+        )
     return artifact_path
 
 
