@@ -1058,6 +1058,23 @@ if [ -z "$runtime_env_path" ]; then
 fi
 RUNTIME_ENV_PATH="$runtime_env_path"
 NO_VAULT_MODE="$NO_VAULT_MODE" bash scripts/export_runtime_env.sh
+# The current main-tracking production path enforces migration classification
+# in the compose `migrate` producer before it can run `alembic upgrade head`.
+# Keep the target identity in the generated env so a forward-only decision is
+# bound to pkm-prod/app; the durable promotion-plan acknowledgement workflow
+# remains deferred promotion hardening. Dev/test intentionally receive no gate
+# marker and retain their existing migration defaults.
+if [ "$_pkm_resolved_channel" = "prod" ]; then
+  printf '%s\n' "MIGRATION_PRODUCTION_GATE=1" >> "$runtime_env_path"
+  printf '%s\n' "MIGRATION_TARGET_IDENTITY=pkm-prod/app" >> "$runtime_env_path"
+  if [ -n "${PROD_MIGRATION_FORWARD_ONLY_ACK:-}" ]; then
+    if ! [[ "$PROD_MIGRATION_FORWARD_ONLY_ACK" =~ ^prod-migration-ack\.v1:[0-9a-f]{64}$ ]]; then
+      echo "ERROR: PROD_MIGRATION_FORWARD_ONLY_ACK has an invalid decision-token format" >&2
+      exit 78
+    fi
+    printf 'PROD_MIGRATION_FORWARD_ONLY_ACK=%s\n' "$PROD_MIGRATION_FORWARD_ONLY_ACK" >> "$runtime_env_path"
+  fi
+fi
 scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
 scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
 scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"

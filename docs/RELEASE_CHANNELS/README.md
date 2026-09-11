@@ -73,7 +73,8 @@ Use `make prod-start-full` for the canonical prod startup that enforces all four
 
 Once the prod baseline is stable, the promotion workflow (prepare → execute → verify → rollback) will be hardened as a separate governance layer. The test channel (`pkm-test`) is a deliberate intermediate stage in that path. What belongs to future promotion hardening and not to the current baseline:
 - the `promote-to-test` and `promote-test-to-prod` staged workflows
-- automated enforcement of migration reversibility classification
+- automated enforcement of migration reversibility classification in the gated promotion-plan
+  workflow (the current production-startup gate is enforced now)
 - durable promotion-plan acknowledgement receipts for forward-only migrations
 - CI/UAT-as-test for the test channel: `.github/workflows/harness-selfverify.yml` still runs the
   harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) and writes **no**
@@ -257,10 +258,16 @@ compose project `pkm-prod`, it must be classified as reversible or forward-only.
 unclassified migration blocks the current prod migration operation. A forward-only migration
 requires an explicit operator decision before it runs.
 
-The current baseline does not yet automate that check or create the target promotion-plan
-acknowledgement receipt. Those mechanisms belong to the deferred gated-`stable` promotion workflow;
-they make the existing active applicability enforceable and auditable, rather than changing which
-production database the classification protects.
+The current baseline now enforces that check in the canonical production startup path: `make
+prod-start-full` writes a production-only gate marker, and `scripts/run_migrations.sh` resolves and
+classifies the pending migrations before the first `alembic upgrade head`. Unclassified migrations
+fail closed, and forward-only migrations require a decision token bound to `pkm-prod/app`, the
+current database revision, and the exact pending migration contents.
+
+The current baseline does not yet create a durable target promotion-plan acknowledgement receipt.
+That receipt and the surrounding gated-`stable` promotion workflow remain deferred promotion
+hardening; they make the existing active applicability auditable across a promotion plan rather
+than changing which production database the startup gate protects.
 
 The read-only `cutover_readiness` preflight is local/CI evidence only, not a deployment or migration
 receipt. When Alembic reports more than one current head, it treats the union of their ancestor
