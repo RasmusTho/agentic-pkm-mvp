@@ -31,6 +31,11 @@
   Missing, stale, or stripped carriers return `reselection_required`; a scoped request never
   retries through a carrier-free legacy route. These bearers name no path and grant no write
   authority. The browser forwarding change is owned by the picker migration in MVR-05B.
+  Compatibility mutations have distinct same-origin routes (`/api/companion/capture/compatibility`
+  and `/api/companion/note/save/compatibility`). The proxy forwards the authenticated API key,
+  active-context carriers, and opaque `X-Compatibility-Write-Precondition` unchanged. These
+  routes are callable migration infrastructure only; shipped HTML remains on the legacy journey
+  until #3860 integrates the complete MVR-05B chain.
 - The browser only ever talks to the UI origin. The UI server proxies an
   **explicit allowlist** of consumed routes (not a `/api/companion/*` wildcard)
   through to the configured runtime API base (`COMPANION_API_BASE_URL`, default

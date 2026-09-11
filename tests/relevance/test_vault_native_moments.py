@@ -8,7 +8,9 @@ reads no external source and emits no notification.
 from __future__ import annotations
 
 from datetime import date
+import hashlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -19,6 +21,9 @@ from app.relevance import (
     materialize_moment,
     query_moment_receipts,
 )
+from app.relevance import materialization as materialization_module
+from app.relevance.materialization import MomentMaterializationError
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.vault.manager import VaultContext
 
 TODAY = date(2026, 6, 13)
@@ -123,3 +128,67 @@ def test_no_external_source_and_no_notification(
     # The glance projection is pull-only: rendering it reads, never reaches out.
     views = collect_now_moments(_vault_context(vault))
     assert views and views[0]["moment_id"] == result.moment_uuid
+
+
+def test_rematerialization_refuses_concurrent_lifecycle_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _build_vault(tmp_path)
+    receipts = tmp_path / "moment_receipts.jsonl"
+    moment = DeterministicRelevanceEvaluator(vault, today=TODAY).evaluate()[0]
+    initial = materialize_moment(
+        moment, vault_context=_vault_context(vault), outbox_path=receipts
+    )
+    assert initial.artifact_path is not None
+    artifact = vault / initial.artifact_path
+    original_write = materialization_module.write_note_relative
+
+    def edit_lifecycle_before_write(*args: Any, **kwargs: Any) -> Any:
+        artifact.write_bytes(
+            artifact.read_bytes().replace(b"lifecycle: proposed", b"lifecycle: engaged")
+        )
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        materialization_module, "write_note_relative", edit_lifecycle_before_write
+    )
+    latest_bytes = artifact.read_bytes().replace(
+        b"lifecycle: proposed", b"lifecycle: engaged"
+    )
+
+    with pytest.raises(MomentMaterializationError) as exc_info:
+        materialize_moment(
+            moment, vault_context=_vault_context(vault), outbox_path=receipts
+        )
+
+    assert isinstance(exc_info.value.__cause__, KnowledgeWriteConflict)
+    assert artifact.read_bytes() == latest_bytes
+
+
+def test_rematerialization_uses_observed_artifact_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _build_vault(tmp_path)
+    receipts = tmp_path / "moment_receipts.jsonl"
+    moment = DeterministicRelevanceEvaluator(vault, today=TODAY).evaluate()[0]
+    initial = materialize_moment(
+        moment, vault_context=_vault_context(vault), outbox_path=receipts
+    )
+    assert initial.artifact_path is not None
+    artifact = vault / initial.artifact_path
+    observed_version = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    captured: dict[str, object] = {}
+    original_write = materialization_module.write_note_relative
+
+    def capture_write(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(materialization_module, "write_note_relative", capture_write)
+    result = materialize_moment(
+        moment, vault_context=_vault_context(vault), outbox_path=receipts
+    )
+
+    assert result.status == "materialized"
+    assert result.moment_uuid == moment.uuid
+    assert captured["expected_version"] == observed_version

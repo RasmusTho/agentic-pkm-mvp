@@ -173,6 +173,13 @@ from companion_ui.workspace.workspace_posture import (
     vault_state_from_provenance,
 )
 
+_COMPATIBILITY_PRECONDITION_HEADER = "X-Compatibility-Write-Precondition"
+_ACTIVE_CONTEXT_HEADERS = (
+    "X-Active-Context-Session",
+    "X-Active-Context-Override",
+    _COMPATIBILITY_PRECONDITION_HEADER,
+)
+
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
@@ -16758,7 +16765,9 @@ def make_handler(
                 "/api/companion/workspace/update",
                 "/api/companion/journaling/reflection/start",
                 "/api/companion/capture",
+                "/api/companion/capture/compatibility",
                 "/api/companion/note/save",  # direct human note edit
+                "/api/companion/note/save/compatibility",
                 "/api/companion/tts/plan",
                 "/api/companion/tts/synthesize",
                 "/api/ask/voice",
@@ -16790,6 +16799,7 @@ def make_handler(
                 "/api/companion/workspace/update",
                 "/api/companion/journaling/reflection/start",
                 "/api/companion/capture",
+                "/api/companion/capture/compatibility",
                 "/api/companion/note/save",
                 "/api/companion/vault-browser/actions/queue-review",
             }
@@ -16862,18 +16872,20 @@ def make_handler(
             return getattr(self, attr_name)
 
         def _forwarded_client_headers(self, path: str) -> dict[str, str]:
-            if path not in self._FORWARDED_CLIENT_AUTH_PATHS:
-                return {}
             client_address = getattr(self, "client_address", None)
             client_host = ""
             if isinstance(client_address, tuple) and client_address:
                 client_host = str(client_address[0]).strip()
             headers: dict[str, str] = {}
-            if client_host:
+            if client_host and path in self._FORWARDED_CLIENT_AUTH_PATHS:
                 headers["X-Forwarded-For"] = client_host
             api_key = self.headers.get("X-API-Key")
             if api_key:
                 headers["X-API-Key"] = api_key
+            for name in _ACTIVE_CONTEXT_HEADERS:
+                value = self.headers.get(name)
+                if value:
+                    headers[name] = value
             return headers
 
         def do_POST(self) -> None:
@@ -16941,7 +16953,11 @@ def make_handler(
                 self._send_json(404, {"error": "not_found", "message": "Unknown Companion UI route"})
                 return
             try:
-                data = self._client.delete(parsed.path, params={})
+                headers = self._forwarded_client_headers(parsed.path)
+                if headers:
+                    data = self._client.delete(parsed.path, params={}, headers=headers)
+                else:
+                    data = self._client.delete(parsed.path, params={})
             except WorkspaceClientError as exc:
                 self._proxy_error(exc)
                 return

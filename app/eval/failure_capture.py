@@ -82,7 +82,7 @@ from app.knowledge.errors import KnowledgeWriteConflict
 
 import yaml
 
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -558,6 +558,9 @@ def _decide(
         raise PromotionDecisionError(f"draft already decided: {draft_id} (status={draft.status})")
 
     write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION)
+    _, expected_version = read_note_text_with_version(
+        vault_root / (draft.draft_path or _draft_path(vault_root, draft_id))
+    )
     decided_at = _now_iso()
     updated = DraftEvalCase(
         draft_id=draft.draft_id,
@@ -572,7 +575,15 @@ def _decide(
     title = f"{_VALID_DECISIONS[target_status].capitalize()}d draft: {draft.kind}"
     content = _render_draft_note(updated, title=title)
     rel_path = draft.draft_path or _safe_rel_path(str(_draft_path(vault_root, draft_id)))
-    write_note_relative(rel_path, content, vault_root=vault_root)
+    write_note_relative(
+        rel_path,
+        content,
+        vault_root=vault_root,
+        action=FAILURE_CAPTURE_DRAFT_ACTION,
+        write_guard=write_guard,
+        expected_version=expected_version,
+        writer_identity="eval.failure_capture.decision",
+    )
 
     return PromotionDecision(
         draft_id=draft_id,

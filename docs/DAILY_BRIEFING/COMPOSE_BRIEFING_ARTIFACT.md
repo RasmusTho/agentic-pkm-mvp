@@ -25,7 +25,7 @@ The three sources this capability depends on already exist and are already live 
 3. **Fail-legible partial generation.** If any one source read fails or raises (e.g. the receipt log is unreadable, the commitment store is empty because of a degraded read), the composer still produces a briefing note — with that section **explicitly named as missing** (e.g. a `degraded_sections: ["decision_receipts"]` marker plus a rendered "this section could not be generated" line), never a silently thinner briefing that looks complete.
 4. **Writes through the governed vault-write path**, following the existing companion-note / commitment-persistence pattern (`app/services/companion_note.py`, `app/services/commitment_persistence.py::persist_commitment`): asserts `DEFAULT_WRITE_GUARD.assert_writes_allowed("briefing.write_note")` before any filesystem mutation, writes one complete file (atomic-or-absent), returns a `WriteReceipt` (`app/knowledge/contracts.py::WriteReceipt`). A blocked guard raises and leaves no file.
 5. **Storage location**: one dated note per day, `<system_dir>/briefings/YYYY-MM-DD.md` (`app/vault/paths.py::get_vault_system_dir_rel`), matching the `moments/*.md` / commitment-artefact family precedent — a new note class, not an overwrite of any human-authored note.
-6. **Determinism**: composing from the same inputs on the same day produces the same content — this is what makes BRIEF-02's once-per-day trigger safe to call more than once without corrupting state, and what makes an explicit regenerate (any task's future concern) a harmless overwrite rather than a risky mutation.
+6. **Determinism and conflict-aware regeneration**: composing from the same inputs on the same day produces the same content. A regeneration that finds an existing briefing reads its exact target bytes and passes their hash as the expected version to the canonical guarded rewrite path. The complete proposal remains privately staged until that path atomically replaces the target; if the target changed after observation, the rewrite fails closed and preserves the concurrent edit.
 
 ## Concretely
 
@@ -75,7 +75,7 @@ Scheduling or triggering when composition runs (BRIEF-02); audio rendering (BRIE
 
 ## Restart / Durability Posture
 
-The composed briefing note is vault-durable (written through the governed write path, same durability class as commitment artefacts and Moments). No in-memory state survives or needs to survive a restart: the composer is a pure read-then-write function invoked fresh each time, and its output is fully recoverable from the note itself. A process restart mid-compose leaves either no file (guard blocked or crash before the atomic write) or a complete file — never a partial one.
+The composed briefing note is vault-durable (written through the governed write path, same durability class as commitment artefacts and Moments). No in-memory state survives or needs to survive a restart: the composer is a pure read-then-write function invoked fresh each time, and its output is fully recoverable from the note itself. A process restart mid-compose leaves either no file (guard blocked or crash before the atomic write) or a complete file — never a partial one. Regeneration does not constitute permission to overwrite a newer target: an exact-byte version mismatch fails closed and leaves the newer briefing intact.
 
 ## Related Docs
 
