@@ -34,7 +34,7 @@ from app.episodes.notes import EPISODE_NOTES_DIR, parse_validated_episode_note
 from app.episodes.schema import EpisodeSchemaValidationError
 from app.episodes.stream_registry import STATUS_LIVE, load_registry
 from app.knowledge.contracts import WriteReceipt
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
 from app.relevance.now_surface import collect_now_moments
 from app.relevance.schema import NeedBasis, URGENCY_ORDER
@@ -192,6 +192,14 @@ def compose_briefing(
     )
     content = _render_note(note)
 
+    target = briefing_note_path(vault_context=vault_context, for_date=for_date)
+    expected_version: str | None = None
+    if target.exists():
+        # The version token is for the exact bytes observed from the canonical
+        # target. A regeneration must never replace an owner edit made after
+        # this read.
+        _observed_content, expected_version = read_note_text_with_version(target)
+
     # The production seam is guarded before the adapter creates a directory or temp file.
     write_guard.assert_writes_allowed(BRIEFING_WRITE_ACTION)
     return _atomic_write(
@@ -199,6 +207,7 @@ def compose_briefing(
         note_rel_path=note_rel_path,
         content=content,
         write_guard=write_guard,
+        expected_version=expected_version,
     )
 
 
@@ -254,6 +263,7 @@ def _atomic_write(
     note_rel_path: str,
     content: str,
     write_guard: WriteGuard,
+    expected_version: str | None,
 ) -> WriteReceipt:
     """Stage through the FS adapter, then atomically install its complete file.
 
@@ -300,6 +310,18 @@ def _atomic_write(
             write_guard=adapter_guard,
         )
         staged_file = staging_root / note_rel_path
+        if expected_version is not None:
+            # The private stage proves the complete proposal exists before the
+            # canonical expected-version-aware path performs its atomic exchange.
+            # The canonical path rechecks the target and preserves it on conflict.
+            return write_note_relative(
+                note_rel_path,
+                content,
+                vault_root=vault_root,
+                action=BRIEFING_WRITE_ACTION,
+                write_guard=write_guard,
+                expected_version=expected_version,
+            )
         os.replace(staged_file, target)
         return receipt
 
