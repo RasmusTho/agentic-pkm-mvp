@@ -208,11 +208,20 @@ class WorkspaceHttpClient:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
 
-    def delete(self, url: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def delete(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """DELETE request to the runtime API. Raises WorkspaceClientError on failure."""
         full_url = self._base_url + url
         try:
-            resp = httpx.delete(full_url, params=params, timeout=self._timeout)
+            request_kwargs: dict[str, Any] = {"params": params, "timeout": self._timeout}
+            if headers:
+                request_kwargs["headers"] = headers
+            resp = httpx.delete(full_url, **request_kwargs)
         except httpx.RequestError as exc:
             raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
         if resp.status_code >= 400:

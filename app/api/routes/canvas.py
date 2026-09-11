@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -40,6 +40,7 @@ from app.api.routes.vault_resolution import (
     active_vault_root_or_selection_required,
     resolve_active_vault_root,
 )
+from app.api.compatibility_mutation import reject_scoped_vault_mutation
 from app.reasoning.facade import ReasoningModeFacade, get_reasoning_mode_facade
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
@@ -47,7 +48,11 @@ from app.panel.confirmation import _proposal_store as _panel_proposal_store
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/canvas", tags=["canvas"])
+router = APIRouter(
+    prefix="/canvas",
+    tags=["canvas"],
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 
 # In-memory session registry — process lifetime only.
 _sessions: dict[str, SessionLog] = {}

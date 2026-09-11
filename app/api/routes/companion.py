@@ -80,6 +80,12 @@ from app.domain.commitments import (
 from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.api.request_active_context import require_scoped_read_context
+from app.api.compatibility_mutation import (
+    HEADER_COMPATIBILITY_PRECONDITION,
+    reject_scoped_vault_mutation,
+    require_compatibility_mutation,
+    issue_compatibility_precondition,
+)
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -152,7 +158,11 @@ from app.vault.settings_service import (
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import register_question_explicitly
 
-router = APIRouter(prefix="/companion", tags=["companion"])
+router = APIRouter(
+    prefix="/companion",
+    tags=["companion"],
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2316,7 +2326,14 @@ def list_scoped_vault_notes(
             )
             # Serialize before releasing the shared effect lease; otherwise a
             # revocation can complete between filesystem read and publication.
-            return JSONResponse(content=response.model_dump(mode="json"))
+            payload = JSONResponse(content=response.model_dump(mode="json"))
+            if len(context.source_bindings) == 1:
+                payload.headers[HEADER_COMPATIBILITY_PRECONDITION] = issue_compatibility_precondition(
+                    binding_id=context.source_bindings[0].vault_binding_id,
+                    principal_id=context.principal_context.principal_id,
+                    registry=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
+                )
+            return payload
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
 
@@ -5010,7 +5027,9 @@ class NoteSaveResponse(BaseModel):
     "/note/save",
     response_model=NoteSaveResponse | VaultSelectionRequiredResponse,
 )
-def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionRequiredResponse:
+def save_note_body(
+    req: NoteSaveRequest, request: Request
+) -> NoteSaveResponse | VaultSelectionRequiredResponse:
     """Human-initiated direct edit of the active note body.
 
     This is a first-class human operation over the user's own vault. It is
@@ -5024,6 +5043,7 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
     never trips in normal operation. Frontmatter is preserved verbatim; the body
     must not carry its own frontmatter block.
     """
+    reject_scoped_vault_mutation(request)
     try:
         DEFAULT_WRITE_GUARD.assert_writes_allowed("companion.note.human_edit")
     except WritesBlockedError as exc:
@@ -5102,6 +5122,19 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
         note_path=safe_note_path,
         content_hash=_content_hash(written),
     )
+
+
+@router.post(
+    "/note/save/compatibility",
+    response_model=NoteSaveResponse,
+    dependencies=[Depends(require_compatibility_mutation)],
+)
+def save_note_body_compatibility(
+    req: NoteSaveRequest, request: Request
+) -> NoteSaveResponse | VaultSelectionRequiredResponse:
+    """Callable migrated route; shipped client activation belongs to #3860."""
+
+    return save_note_body(req, request)
 
 
 # ---------------------------------------------------------------------------
