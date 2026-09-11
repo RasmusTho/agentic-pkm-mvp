@@ -258,11 +258,13 @@ compose project `pkm-prod`, it must be classified as reversible or forward-only.
 unclassified migration blocks the current prod migration operation. A forward-only migration
 requires an explicit operator decision before it runs.
 
-The current baseline now enforces that check in the canonical production startup path: `make
-prod-start-full` writes a production-only gate marker, and `scripts/run_migrations.sh` resolves and
-classifies the pending migrations before the first `alembic upgrade head`. Unclassified migrations
-fail closed, and forward-only migrations require a decision token bound to `pkm-prod/app`, the
-current database revision, and the exact pending migration contents.
+The current baseline now enforces that check in the canonical production startup path: the
+production Compose overlay supplies the production-only gate marker and target identity, while
+`scripts/run_migrations.sh` resolves and classifies the pending migrations before the first
+`alembic upgrade head`. Unclassified migrations fail closed, and forward-only migrations require a
+decision token bound to `pkm-prod/app`, the current database revision, and the exact pending
+migration contents. The production deploy path in `scripts/deploy_channel.sh` obtains that token
+through a read-only probe before writer stop.
 
 The current baseline does not yet create a durable target promotion-plan acknowledgement receipt.
 That receipt and the surrounding gated-`stable` promotion workflow remain deferred promotion
