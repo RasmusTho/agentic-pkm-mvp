@@ -11,7 +11,7 @@ runtime-declared Panel checkbox option to the canonical checked Markdown state.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 import app.panel.confirmation as confirm_module
 import app.panel.checkbox_projection as checkbox_projection_module
@@ -27,8 +27,13 @@ from app.panel.confirmation import (
     SameTurnExecutionError,
     UnknownProposalError,
 )
+from app.api.compatibility_mutation import reject_scoped_vault_mutation
 
-router = APIRouter(prefix="/panel", tags=["panel"])
+router = APIRouter(
+    prefix="/panel",
+    tags=["panel"],
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 
 
 @router.post("/confirm", response_model=ConfirmResponse)

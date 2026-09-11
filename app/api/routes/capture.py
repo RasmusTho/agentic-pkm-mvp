@@ -50,11 +50,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.routes.ingest_binding import ingest_binding_status
+from app.api.compatibility_mutation import (
+    reject_scoped_vault_mutation,
+    require_compatibility_mutation,
+)
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
@@ -268,6 +272,7 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
 def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
     """Append a capture to the vault inbox note through the governed pipeline."""
     trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
+    reject_scoped_vault_mutation(request)
 
     # Validation — never silently drop text: whitespace-only is an explicit,
     # named rejection (schema validation already rejected missing/empty text
@@ -412,6 +417,17 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
         registration_state=registration_state,
         registration_proposal_id=registration.proposal_id if registration else None,
     )
+
+
+@router.post(
+    "/capture/compatibility",
+    response_model=CaptureResponse,
+    dependencies=[Depends(require_compatibility_mutation)],
+)
+def capture_to_inbox_compatibility(req: CaptureRequest, request: Request) -> CaptureResponse | JSONResponse:
+    """Callable migrated route; activation in shipped HTML remains deferred."""
+
+    return capture_to_inbox(req, request)
 
 
 __all__ = ["router", "CaptureRequest", "CaptureResponse", "CAPTURE_APPENDED_EVENT"]
