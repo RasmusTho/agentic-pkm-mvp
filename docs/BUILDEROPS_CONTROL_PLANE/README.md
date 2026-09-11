@@ -177,6 +177,7 @@ configuration fingerprint. DevUI uses the same immutable Builder image; its mana
 has a separate fingerprint. Deployment rechecks the activation candidate, dedicated engine and
 the control-plane topology's exact project against the activation's dedicated-engine project;
 later receipts must retain the exact candidate, runtime and stable component identities.
+The fixed `builderops-control-plane` project also applies to prepared and retained baseline evidence.
 Qualification uses resident state `prepared`, deploy uses `deployed`, and health uses `healthy`.
 External dependencies remain `external` and Product Runtime remains `excluded`. Health/version
 is `not_observed` before health, `verified` in health, and `excluded` for Product Runtime.

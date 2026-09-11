@@ -210,6 +210,8 @@ def _local_evidence(receipt: Mapping[str, Any], kind: str, captured: datetime) -
     }:
         raise ReceiptValidationError("DevUI topology must bind the exact immutable candidate")
     control_row = next(row for row in rows if row["component_id"] == "builderops_control_plane")
+    if control_row["service_or_project"] != "builderops-control-plane":
+        raise ReceiptValidationError("control-plane project identity is unsupported")
     if control_row["source_identity"] != {
         "source_sha": candidate["source_sha"],
         "image_digest": candidate["control_plane_image_digest"],

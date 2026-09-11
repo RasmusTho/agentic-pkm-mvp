@@ -574,13 +574,22 @@ def _refingerprint(receipt: dict) -> None:
     )
 
 
-def test_rollback_rejects_rehashed_candidate_topology_mismatch() -> None:
+@pytest.mark.parametrize("failure", ["candidate", "project"])
+def test_rollback_rejects_rehashed_candidate_topology_mismatch(failure: str) -> None:
     bundle = _bundle()
     _, deploy, health = _chain(bundle)
     prior_deploy, prior_health = copy.deepcopy(deploy), copy.deepcopy(health)
     old_ref = "receipt:" + TYPES["deploy"] + ":" + canonical_digest(prior_deploy)
     for prior in (prior_deploy, prior_health):
-        prior["candidate_identity"]["source_sha"] = "d" * 40
+        if failure == "candidate":
+            prior["candidate_identity"]["source_sha"] = "d" * 40
+        else:
+            row = next(row for row in prior["topology"] if row["component_id"] == "builderops_control_plane")
+            row["service_or_project"] = "unrelated-project"
+            row["evidence_digest"] = canonical_digest({
+                key: value for key, value in row.items()
+                if key not in {"evidence_digest", "source_identity_digest"}
+            })
     _refingerprint(prior_deploy)
     prior_health["source_refs"] = [ref for ref in prior_health["source_refs"] if ref != old_ref] + [
         "receipt:" + TYPES["deploy"] + ":" + canonical_digest(prior_deploy)
@@ -596,7 +605,10 @@ def test_rollback_rejects_rehashed_candidate_topology_mismatch() -> None:
     evidence.update(
         rollback_baseline_state="available", previous_identity=prior_deploy["candidate_identity"]
     )
-    with pytest.raises(ReceiptValidationError, match="topology must bind"):
+    with pytest.raises(
+        ReceiptValidationError,
+        match="topology must bind" if failure == "candidate" else "control-plane project",
+    ):
         build_receipt("deploy", evidence, prerequisites)
 
 
