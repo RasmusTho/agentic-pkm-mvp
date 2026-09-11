@@ -146,6 +146,7 @@ def test_receipt_preflight_is_skipped_for_rollback() -> None:
     receipt_block = text.split('receipt_host_dir="$(_deploy_channel_env_value', 1)[1]
     receipt_block = receipt_block.split("vault_container_root=", 1)[0]
     assert 'if [ "${action:-deploy}" != "rollback" ]' in receipt_block
+    assert "pwd -P" in receipt_block
 
 
 def test_pin_write_preserves_channel_runtime_env() -> None:

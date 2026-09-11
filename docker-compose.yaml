@@ -259,7 +259,13 @@ services:
           echo 'instance-state preflight module is unavailable outside an explicit rollback' >&2; exit 75;
         fi &&
         case "$${DEVUI_VM102_RECEIPT_HOST_DIR:-}" in
-          /Users|/Users/*|/Volumes|/Volumes/*) echo 'VM-102 receipt source overlaps writable host alias' >&2; exit 75;;
+          "") ;;
+          *)
+            canonical_receipt_host_dir="$$(cd -- "$${DEVUI_VM102_RECEIPT_HOST_DIR}" 2>/dev/null && pwd -P)" || { echo 'VM-102 receipt source cannot be canonicalized' >&2; exit 75; };
+            case "$${canonical_receipt_host_dir}" in
+              /Users|/Users/*|/Volumes|/Volumes/*) echo 'VM-102 receipt source overlaps writable host alias' >&2; exit 75;;
+            esac
+            ;;
         esac &&
         if [ -n "$${DEVUI_VM102_RECEIPT_DIR:-}" ]; then
           test -d "$${DEVUI_VM102_RECEIPT_DIR}" && test -r "$${DEVUI_VM102_RECEIPT_DIR}" && test -x "$${DEVUI_VM102_RECEIPT_DIR}" || { echo 'VM-102 receipt source mount unavailable' >&2; exit 75; };
