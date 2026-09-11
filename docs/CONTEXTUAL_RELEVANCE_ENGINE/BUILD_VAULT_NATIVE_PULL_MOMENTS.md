@@ -23,6 +23,9 @@ is the smallest slice that makes the engine real and useful.
   existing tasks/commitments in the commitment layer).
 - Materializes each moment as the vault-native artifact defined in CRE-01 (with provenance + receipt,
   via the write guard).
+- Re-materialization of an existing moment is guarded by an exact-byte CAS
+  (`expected_version`); concurrent lifecycle edits are refused, while deferred
+  moments remain durable and are never silently dropped or regressed.
 - Renders moments at the **glance surface** (the companion-UI "now" view) — **pull-only**: the human
   opens it; the system does not yet reach out.
 - Uses the relevance evaluator contract from CRE-02 (a deterministic-fallback path is acceptable for
