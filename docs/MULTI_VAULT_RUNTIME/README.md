@@ -247,7 +247,7 @@ The state machine is deliberately monotonic and fail-closed:
 | Missing operational lineage (journal, lease, ownership, or recovery lineage) | unknown_or_missing | inactive_fenced | Mint a new epoch ID, hold the inactive fence, and refuse owner/effect claims. |
 | Fenced bootstrap begins | inactive_fenced | source_config_discovery | Discover the owner-native MVR registry/config without enabling writers or effects. |
 | Source/config discovery complete | source_config_discovery | authoritative_readback | Bind the discovered source digest to the new epoch before reading external state. |
-| Ownership conflict or overlap detected | authoritative_readback | ownership_conflict_refused | Refuse activation and preserve the conflict evidence; never choose an owner by recency or guess. |
+| Ownership conflict or overlap detected | authoritative_readback | inactive_fenced | Return the typed refusal `ownership_conflict_refused`, preserve the conflict evidence, and remain `inactive_fenced`; never choose an owner by recency or guess. |
 | Readback unavailable, stale, or incomplete | authoritative_readback | inactive_fenced | Remain fenced and retry only with a new readback; absence is not proof of no owner or no effect. |
 | Authoritative readback complete with no conflict | authoritative_readback | convergence_receipt_pending | Require owner-native MVR registry/config, host-global ownership ledger, live channel/process readback, and external effect readback. |
 | Convergence receipt complete | convergence_receipt_pending | activation_ready | Receipt binds epoch ID, source digest, readback digest, and decision digest; every required source must agree. |
@@ -259,10 +259,12 @@ The readback set is owner-native: the existing MVR registry/config establishes t
 mechanical state; the host-global ownership ledger and live channel/process readback establish
 current ownership and quiescence; and external effect readback establishes what can be known about
 prior effects. A missing or conflicting source produces a typed refusal (`readback_unavailable` or
-`ownership_conflict_refused`) and leaves the epoch `inactive_fenced`. Neither an empty local record,
-a retained journal/backup, nor a stale lease may be interpreted as proof of ownership, completion,
-or an absent effect. Activation must consume the complete convergence receipt; it cannot create
-ownership or a prior effect result by inference.
+`ownership_conflict_refused`) and leaves the epoch `inactive_fenced`. The typed refusal is an
+outcome, not a persisted epoch state: restart must preserve or reload the same fenced epoch, and a
+new attempt requires a new authoritative readback. Neither an empty local record, a retained
+journal/backup, nor a stale lease may be interpreted as proof of ownership, completion, or an absent
+effect. Activation must consume the complete convergence receipt; it cannot create ownership or a
+prior effect result by inference.
 
 ## Reconciliation — do not duplicate
 

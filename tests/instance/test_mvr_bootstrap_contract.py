@@ -77,7 +77,7 @@ def test_bootstrap_contract_requires_authoritative_readback_and_receipt() -> Non
         assert receipt_field in lowered
 
     conflict = next(row for row in rows if "ownership conflict" in row["Event"].lower())
-    assert conflict["To"] == "ownership_conflict_refused"
+    assert conflict["To"] == "inactive_fenced"
     unavailable = next(row for row in rows if "readback unavailable" in row["Event"].lower())
     assert unavailable["To"] == "inactive_fenced"
 
@@ -98,3 +98,19 @@ def test_bootstrap_contract_requires_authoritative_readback_and_receipt() -> Non
         "parallel recovery",
     ):
         assert forbidden in reconciliation
+
+
+def test_ownership_conflict_refusal_has_one_persisted_state() -> None:
+    section = _bootstrap_section()
+    lowered = section.lower()
+    rows = _transition_rows(section)
+
+    conflict = next(row for row in rows if "ownership conflict" in row["Event"].lower())
+    persisted_conflict_state = "inactive_fenced"
+    assert conflict["To"] == persisted_conflict_state
+    assert "ownership_conflict_refused" in conflict["Required evidence / refusal"]
+    assert persisted_conflict_state in conflict["Required evidence / refusal"]
+    assert "ownership_conflict_refused" not in {row["To"] for row in rows}
+    assert f"leaves the epoch `{persisted_conflict_state}`" in lowered
+    assert "restart" in lowered
+    assert "fenced epoch" in lowered
