@@ -112,7 +112,7 @@ def test_ownership_conflict_refusal_has_one_persisted_state() -> None:
     section = _bootstrap_section()
     rows = _transition_rows(section)
     readback_paragraph = _readback_paragraph(section)
-    lowered_readback_paragraph = readback_paragraph.lower()
+    normalized_readback_paragraph = " ".join(readback_paragraph.lower().split())
 
     conflict = next(row for row in rows if "ownership conflict" in row["Event"].lower())
     persisted_conflict_state = "inactive_fenced"
@@ -120,6 +120,17 @@ def test_ownership_conflict_refusal_has_one_persisted_state() -> None:
     assert "ownership_conflict_refused" in conflict["Required evidence / refusal"]
     assert persisted_conflict_state in conflict["Required evidence / refusal"]
     assert "ownership_conflict_refused" not in {row["To"] for row in rows}
-    assert f"leaves the epoch `{persisted_conflict_state}`" in lowered_readback_paragraph
-    assert "restart must preserve or reload the same fenced epoch" in lowered_readback_paragraph
-    assert "new attempt requires a new authoritative readback" in lowered_readback_paragraph
+    assert (
+        "a missing or conflicting source produces a typed refusal (`readback_unavailable` or "
+        f"`ownership_conflict_refused`) and leaves the epoch `{persisted_conflict_state}`."
+        in normalized_readback_paragraph
+    )
+    assert (
+        "the typed refusal is an outcome, not a persisted epoch state"
+        in normalized_readback_paragraph
+    )
+    assert "ownership_conflict_accepted" not in normalized_readback_paragraph
+    assert "may be interpreted as proof of ownership" in normalized_readback_paragraph
+    assert f"leaves the epoch `{persisted_conflict_state}`" in normalized_readback_paragraph
+    assert "restart must preserve or reload the same fenced epoch" in normalized_readback_paragraph
+    assert "new attempt requires a new authoritative readback" in normalized_readback_paragraph
