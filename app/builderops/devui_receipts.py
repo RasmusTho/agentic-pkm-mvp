@@ -8,6 +8,7 @@ replace the receipt contracts with a DevUI-owned schema.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -139,8 +140,20 @@ def _validate_receipt(
         not isinstance(ref, str) or not ref.strip() for ref in source_refs
     ):
         raise Vm102ReceiptError(f"receipt {expected_type} has no source linkage")
-    if not isinstance(receipt.get("evidence_fingerprint"), str) or not receipt["evidence_fingerprint"].strip():
+    evidence_fingerprint = receipt.get("evidence_fingerprint")
+    if not isinstance(evidence_fingerprint, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", evidence_fingerprint
+    ):
         raise Vm102ReceiptError(f"receipt {expected_type} has no evidence fingerprint")
+    unsigned = {
+        key: value for key, value in receipt.items() if key != "evidence_fingerprint"
+    }
+    if not hmac.compare_digest(evidence_fingerprint, _digest(unsigned)):
+        raise Vm102ReceiptError(f"receipt {expected_type} evidence fingerprint is invalid")
+    gaps = receipt.get("gaps")
+    refusals = receipt.get("refusals")
+    if gaps != [] or refusals != []:
+        raise Vm102ReceiptError(f"receipt {expected_type} contains blocking gaps or refusals")
     verdict = _verdict(receipt)
     if verdict not in _POSITIVE_VERDICTS:
         raise Vm102ReceiptError(f"receipt {expected_type} has no positive verdict")
@@ -154,7 +167,7 @@ def _validate_receipt(
         "verdict": verdict,
         "source_ref": _source_ref(expected_type, digest),
         "source_refs": list(source_refs),
-        "evidence_fingerprint": receipt["evidence_fingerprint"],
+        "evidence_fingerprint": evidence_fingerprint,
     }
 
 

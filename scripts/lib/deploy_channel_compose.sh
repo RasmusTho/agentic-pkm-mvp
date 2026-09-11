@@ -484,7 +484,7 @@ deploy_channel_compose() {
   resolve_instance_ownership_host_state_dir || return $?
 
   local runtime_env_ref runtime_env_file llm_provider runtime_llm_provider
-  local vault_host_root vault_container_root
+  local vault_host_root vault_container_root receipt_host_dir
   local -a compose_args
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
@@ -511,6 +511,24 @@ deploy_channel_compose() {
   vault_host_root="$(_deploy_channel_env_value "${channel_env_file}" VAULT_HOST_ROOT)"
   if [ -z "${vault_host_root}" ] && [ -n "${runtime_env_file}" ] && [ -f "${runtime_env_file}" ]; then
     vault_host_root="$(_deploy_channel_env_value "${runtime_env_file}" VAULT_HOST_ROOT)"
+  fi
+
+  receipt_host_dir="$(_deploy_channel_env_value "${channel_env_file}" DEVUI_VM102_RECEIPT_HOST_DIR)"
+  if [ -z "${receipt_host_dir}" ] && [ -n "${runtime_env_file}" ] && [ -f "${runtime_env_file}" ]; then
+    receipt_host_dir="$(_deploy_channel_env_value "${runtime_env_file}" DEVUI_VM102_RECEIPT_HOST_DIR)"
+  fi
+  if [ -n "${receipt_host_dir}" ]; then
+    case "${receipt_host_dir}" in
+      /*) ;;
+      *)
+        echo "VM-102 receipt source preflight: blocked reason=relative_path" >&2
+        return 78
+        ;;
+    esac
+    if [ ! -d "${receipt_host_dir}" ] || [ ! -r "${receipt_host_dir}" ] || [ ! -x "${receipt_host_dir}" ]; then
+      echo "VM-102 receipt source preflight: blocked reason=unavailable" >&2
+      return 78
+    fi
   fi
 
   vault_container_root=""
@@ -613,6 +631,11 @@ deploy_channel_compose() {
     else
       unset VAULT_HOST_ROOT
       unset DEPLOY_VAULT_CONTAINER_ROOT
+    fi
+    if [ -n "${receipt_host_dir}" ]; then
+      export DEVUI_VM102_RECEIPT_HOST_DIR="${receipt_host_dir}"
+    else
+      unset DEVUI_VM102_RECEIPT_HOST_DIR
     fi
 
     local -a compose_command

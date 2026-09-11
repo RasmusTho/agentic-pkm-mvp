@@ -137,6 +137,29 @@ def test_base_services_do_not_shadow_governed_runtime_env_keys() -> None:
     assert CAPTURE_GOVERNED_KEYS.isdisjoint(capture_environment)
 
 
+def test_devui_vm102_receipt_source_is_read_only_and_fail_closed() -> None:
+    api = _load_compose(BASE_COMPOSE)["services"]["api"]
+    environment = _environment(api)
+
+    assert environment["DEVUI_VM102_RECEIPT_DIR"] == "/opt/builderops/receipts"
+    receipt_mounts = [
+        mount
+        for mount in api["volumes"]
+        if isinstance(mount, dict)
+        and mount.get("target") == "/opt/builderops/receipts"
+    ]
+    assert receipt_mounts == [
+        {
+            "type": "bind",
+            "source": "${DEVUI_VM102_RECEIPT_HOST_DIR:-./config/vm102-receipts-disabled}",
+            "target": "/opt/builderops/receipts",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        }
+    ]
+    assert "VM-102 receipt source mount unavailable" in api["command"][-1]
+
+
 @requires_docker
 def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
     watcher = _load_compose(BASE_COMPOSE)["services"]["watcher"]

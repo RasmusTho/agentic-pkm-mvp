@@ -27,7 +27,7 @@ def _receipt(
     observed_at: str = "2026-09-10T11:00:00Z",
     source_refs: list[str] | None = None,
 ) -> dict:
-    return {
+    payload = {
         "receipt_type": receipt_type,
         "receipt_version": 1,
         "target_vm": {"vmid": 102, "name": "builder-system"},
@@ -35,11 +35,19 @@ def _receipt(
         "candidate_identity": {"source_sha": SOURCE_SHA},
         "source_refs": source_refs
         or ["receipt:devsystem_vm102_component_inventory.v1:" + "a" * 64],
-        "evidence_fingerprint": "b" * 64,
         "observed_at": observed_at,
         "secret_material": "absent",
+        "gaps": [],
+        "refusals": [],
         "verdict": "pass",
     }
+    unsigned = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    payload["evidence_fingerprint"] = hashlib.sha256(
+        unsigned.encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 def _write_chain(root: Path, *, observed_at: str = "2026-09-10T11:00:00Z") -> None:
@@ -123,3 +131,28 @@ def test_withdraws_unlinked_receipt(tmp_path: Path) -> None:
 
     with pytest.raises(Vm102ReceiptError):
         read_vm102_receipt_evidence(tmp_path, now=NOW)
+
+
+def test_withdraws_tampered_evidence_fingerprint(tmp_path: Path) -> None:
+    _write_chain(tmp_path)
+    path = tmp_path / f"2-{REQUIRED_RECEIPT_TYPES[2]}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["verdict"] = "healthy"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"
+
+
+def test_withdraws_missing_or_blocking_gaps_or_refusals(tmp_path: Path) -> None:
+    _write_chain(tmp_path)
+    path = tmp_path / f"2-{REQUIRED_RECEIPT_TYPES[2]}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    payload.pop("gaps")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"
+
+    payload["gaps"] = []
+    payload["refusals"] = ["deployment_not_proven"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"

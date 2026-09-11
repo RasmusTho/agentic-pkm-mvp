@@ -110,6 +110,9 @@ ENV
   if [ -n "${TTS_HOST_ROOT:-}" ]; then
     printf "TTS_HOST_ROOT=%s\n" "$TTS_HOST_ROOT" >> "$runtime_env_output_path"
   fi
+  if [ -n "${DEVUI_VM102_RECEIPT_HOST_DIR:-}" ]; then
+    printf "DEVUI_VM102_RECEIPT_HOST_DIR=%s\n" "$DEVUI_VM102_RECEIPT_HOST_DIR" >> "$runtime_env_output_path"
+  fi
   if [ -n "${SIGNBOARD_ROOT:-}" ]; then
     printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_output_path"
   fi
@@ -340,6 +343,9 @@ if [ -n "${TTS_ENABLED:-}" ]; then
 fi
 if [ -n "${TTS_HOST_ROOT:-}" ]; then
   printf "%s\n" "TTS_HOST_ROOT=${TTS_HOST_ROOT}" >> "$runtime_env_output_path"
+fi
+if [ -n "${DEVUI_VM102_RECEIPT_HOST_DIR:-}" ]; then
+  printf "%s\n" "DEVUI_VM102_RECEIPT_HOST_DIR=${DEVUI_VM102_RECEIPT_HOST_DIR}" >> "$runtime_env_output_path"
 fi
 
 # Determine whether we are generating a test-channel env file.
