@@ -141,6 +141,13 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_receipt_preflight_is_skipped_for_rollback() -> None:
+    text = (REPO_ROOT / "scripts/lib/deploy_channel_compose.sh").read_text(encoding="utf-8")
+    receipt_block = text.split('receipt_host_dir="$(_deploy_channel_env_value', 1)[1]
+    receipt_block = receipt_block.split("vault_container_root=", 1)[0]
+    assert 'if [ "${action:-deploy}" != "rollback" ]' in receipt_block
+
+
 def test_pin_write_preserves_channel_runtime_env() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     write_pin = text.split("write_pin() {", 1)[1].split("\n}\n", 1)[0]
