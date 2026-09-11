@@ -1,4 +1,4 @@
-State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here. Amended 2026-07-16 (A1-A3) and 2026-08-29 (A4, owner ruling): A4 moves the complete Dev System runtime target from Demerzel to TARS VM 102 and adopts the rebuildable, backup-deferred posture.
+State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here. Amended 2026-07-16 (A1-A3) and 2026-08-29 (A4, owner ruling): A4 moves the complete Dev System runtime target from Demerzel to TARS VM `bob-1` (VM ID `102`, formerly `vm102`) and adopts the rebuildable, backup-deferred posture.
 Doc role: Decision record (ADR)
 Authority: Authoritative for BuilderOps scope, deployment/trust boundary, operational authority, client access, and extraction posture. Layers on ADR-0010 without changing repo/GitHub delivery authority.
 Owner: BuilderOps governance / Architecture spine (Rasmus)
@@ -268,7 +268,7 @@ Source-repository extraction remains a separate future decision. Revisit it when
 
 Owner-settled on 2026-07-15 and amended by A4 on 2026-08-29:
 
-1. permanent API-first control plane in the complete Dev System runtime on TARS VM 102;
+1. permanent API-first control plane in the complete Dev System runtime on TARS VM `bob-1` (VM ID `102`), running guest/system `builder-system`;
 2. authenticated MacBook clients with no direct-database or local-authority fallback;
 3. one PostgreSQL operational authority, with SQLite limited to migration/tests;
 4. independent Compose/data/credential/release/health trust zone with a rebuildable,
@@ -300,7 +300,7 @@ requires an owner decision before specification and backlog preparation.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
   identity/provenance, limits plain quarantine to evidence-only material, and emits a reviewable
   duplicate-preventing tombstone/conflict receipt for unresolved authority-bearing inputs.
-- BuilderOps on VM 102 is rebuilt from exact source, attested images, pinned configuration, and
+- BuilderOps on Bob-1 (VM ID `102`, guest/system `builder-system`) is rebuilt from exact source, attested images, pinned configuration, and
   host-managed secrets. A4 supersedes A1's restore-from-backup launch gate: backup, WAL archive, and
   restore remain deferred capabilities requiring a separate owner decision and bounded delivery.
 - Product availability and BuilderOps availability are independent: either may be down without the
@@ -369,19 +369,20 @@ through that substrate, while D6's inventory did not name CKM.
 - At cutover, ADR-0057 OD-K4's substrate clause is superseded by D3: the CEG lives in the BuilderOps
   PostgreSQL authority. ADR-0057's capability model and projection-only semantics are unchanged.
 
-### A4 (2026-08-29, owner ruling) — Complete Dev System placement on VM 102
+### A4 (2026-08-29, owner ruling) — Complete Dev System placement on Bob-1 (VM ID 102)
 
 The owner requires one cohesive runtime home for the complete Builder System / Dev System rather
 than a Dev UI-only target or a Demerzel-only BuilderOps placement.
 
-- VM 102 is the intended cohesive runtime home for BuilderOps, BuilderOps-owned providers, and Dev
-  UI. This is target architecture only; no live deployment, host qualification, authority cutover,
+- TARS VM `bob-1` (VM ID `102`, formerly `vm102`) is the intended cohesive runtime home for
+  BuilderOps, BuilderOps-owned providers, and Dev UI; its guest/system identity is
+  `builder-system`. This is target architecture only; no live deployment, host qualification, authority cutover,
   health, or owner-acceptance receipt is created by this amendment.
 - Demerzel is an external authenticated client and operator dependency where fresh evidence proves
   that role. It is no longer the mandatory control-plane, PostgreSQL, executor, or secret-custody
   runtime host. API-only access, scoped credentials, fencing, deterministic reconciliation, and
   GitHub/repository authority remain unchanged.
-- The VM-102 system is rebuildable from source, images, configuration, and host-managed secrets.
+- The Bob-1/VM-ID-102 system is rebuildable from source, images, configuration, and host-managed secrets.
   Local disk/WAL guardrails remain fail-closed; manual `pg_wal` deletion, `pg_resetwal`, and
   reset/cleanup recovery remain forbidden.
 - In the accepted current posture, backup, WAL archive, and restore drill are deferred capabilities,

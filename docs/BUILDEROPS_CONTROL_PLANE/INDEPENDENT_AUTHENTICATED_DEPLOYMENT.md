@@ -11,8 +11,9 @@ Builder package, a retained neutral runtime dependency manifest, immutable contr
 PostgreSQL image pins, an isolated Docker context/engine preflight, VM-local secret references,
 migration-gated API and worker startup, loopback API exposure, private authenticated ingress,
 authenticated probes, rebuild/rollback receipts, and a local disk/WAL guard. The deployment target
-for the complete Dev System is TARS VM 102 (`builder-system`), with Dev UI as one read-only
-component; this contract does not activate a live VM or make a backup/restore claim.
+for the complete Dev System is TARS VM `bob-1` (VM ID `102`, formerly `vm102`), running guest/system
+`builder-system`, with Dev UI as one read-only component; this contract does not activate a live VM
+or make a backup/restore claim.
 
 ## Rebuildable VM deployment contract
 
@@ -105,15 +106,17 @@ contract. These remaining source and browser gates stay visible under #5181 and 
 
 ### Approved candidate attestation runner
 
-The VM 102 deployment host must run the exact verifier locally immediately before each live
-deployment attempt. A separate runner's exit result cannot be handed off to deployment; no prior
-remote verifier result is accepted. Before invoking it, the wrapper requires the fixed `builderops`
-context to resolve to the existing local `unix:///run/docker-builderops.sock` endpoint. This
-execution-boundary check does not qualify VM identity or deployment readiness; those remain
-separate receipt gates. The validated runner baseline is GitHub CLI `2.83.2` with the
-`attestation` subcommand available. A different CLI version is permitted only when it supports the
-same `gh attestation verify` command and flags; the observed version is recorded in the redacted
-operator receipt. The deployment host's GitHub authentication remains in its normal credential
+The candidate pair must be verified from Bob-1/guest `builder-system` or from a named,
+access-controlled operator runner before a live deployment attempt. The selected deployment host
+must run the exact verifier locally immediately before that attempt. A separate runner's exit
+result cannot be handed off to deployment; no prior remote verifier result is accepted. Before
+invoking it, the wrapper requires the fixed `builderops` context to resolve to the existing local
+`unix:///run/docker-builderops.sock` endpoint. This execution-boundary check does not qualify VM
+identity or deployment readiness; those remain separate receipt gates. The validated runner baseline
+is GitHub CLI `2.83.2` with the `attestation` subcommand available. A different CLI version is
+permitted only when it supports the same `gh attestation verify` command and flags; the observed
+version is recorded in the redacted operator receipt. The runner's GitHub authentication remains
+in its normal credential
 store or environment and is never copied into the repository, command output, or receipt.
 
 Run the following command on the VM 102 deployment host with the exact candidate-pair receipt and

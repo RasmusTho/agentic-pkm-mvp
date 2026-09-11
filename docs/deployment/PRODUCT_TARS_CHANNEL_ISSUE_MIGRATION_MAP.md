@@ -57,8 +57,8 @@ silently excluded. A later readback is a new snapshot and must refresh both this
 | Issue | Disposition | Topology-correct next action |
 | --- | --- | --- |
 | #5237 | topology reconciliation | Deliver this repository-only contract, then refresh the #4913 validation ledger. |
-| #5181 | topology reconciliation | Consume #5237 and reconcile the separate VM 102 Builder System target; do not treat it as Product Runtime placement. |
-| #5056 | protected in-progress | Continue the BuilderOps VM 102 rebuildable slice under its own contract; no Product Runtime placement is implied. |
+| #5181 | topology reconciliation | Consume #5237 and reconcile the separate Bob-1-hosted Builder System target (VM ID 102); do not treat it as Product Runtime placement. |
+| #5056 | protected in-progress | Continue the Bob-1/VM-ID-102 BuilderOps rebuildable slice under its own contract; no Product Runtime placement is implied. |
 | #5052 | topology reconciliation | Reconcile the TARS/BuilderOps migration against the separate Product Runtime channel contract before any live operation. |
 | #4918 | human gate after prerequisites | Keep the topology-only cutover blocked until #5237, qualification, rehearsal, backup, rollback, and operator authorization are complete. |
 | #4913 | topology reconciliation | Consume #5237 before advancing the STARTUP-05/06 chain; retain the parent as validation hub. |
@@ -72,12 +72,12 @@ silently excluded. A later readback is a new snapshot and must refresh both this
 | #4076 | human gate after prerequisites | Install/verify the deploy-host alert path through the named operator boundary; do not infer it from workstation state. |
 | #3925 | protected in-progress | Continue the YouTubeSync CLI contract; local loopback remains a client transport option, not Product Runtime placement. |
 | #3843 | human gate after prerequisites | Continue Keychain provisioning only through its owner-authorized credential contract. |
-| #3793 | topology reconciliation | Reconcile BuilderOps PostgreSQL authority with the VM 102 target; do not move Product Runtime channel authority. |
-| #3788 | topology reconciliation | Reconcile the older BuilderOps VM 102/API-first contract with #5052 and #5181 before any activation. |
-| #3690 | protected in-progress | Apply ADR-0062 only through its own BuilderOps cutover prerequisites and current VM 102 authority. |
+| #3793 | topology reconciliation | Reconcile BuilderOps PostgreSQL authority with the Bob-1/VM-ID-102 target; do not move Product Runtime channel authority. |
+| #3788 | topology reconciliation | Reconcile the older BuilderOps VM-ID-102/API-first contract with #5052 and #5181 before any activation. |
+| #3690 | protected in-progress | Apply ADR-0062 only through its own BuilderOps cutover prerequisites and current Bob-1/VM-ID-102 authority. |
 | #3657 | human gate after prerequisites | Resolve the Codex execution-schema access boundary through the named owner/operator path. |
 | #3604 | protected in-progress | Continue post-merge closure recovery under Builder System governance; Demerzel wording is not Product Runtime placement. |
-| #3603 | protected in-progress | Continue the verification/merge service contract against VM 102; preserve its scoped control-plane role. |
+| #3603 | protected in-progress | Continue the verification/merge service contract against Bob-1/VM ID 102; preserve its scoped control-plane role. |
 | #3409 | human gate after prerequisites | Run the host-load capacity work only with its explicit operator/runtime prerequisites; do not assume Mac mini placement. |
 | #3376 | protected in-progress | Reconcile Karakeep acceptance against the current TARS channel contract before live validation. |
 | #3367 | valid control/client use | Keep the managed mac-mini Karakeep service context separate from Product Runtime placement; route any Product Runtime acceptance to qualified TARS channels. |
@@ -98,7 +98,7 @@ silently excluded. A later readback is a new snapshot and must refresh both this
 
 This map is not a closure list. A disposition does not close, relabel, claim, or make an Issue ready,
 and it does not convert repository tests into host qualification or deployment evidence. The exact
-Issue contract, current labels, linked PR, and owner acceptance remain authoritative. VM 102 remains
-the complete Builder System / Dev System target; Product Runtime channel placement remains the
+Issue contract, current labels, linked PR, and owner acceptance remain authoritative. Bob-1 (VM ID
+102; guest/system `builder-system`) remains the complete Builder System / Dev System target; Product Runtime channel placement remains the
 TARS-hosted Linux VM topology; Demerzel/Mac mini remains a control/development/client/operator
 boundary; local Compose/Colima remains fallback-only.

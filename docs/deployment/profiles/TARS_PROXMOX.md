@@ -14,8 +14,8 @@ Owner: Platform and Operations System, with the BuilderOps deployment owner
 Temporal class: operational
 Review cadence: before a TARS BuilderOps deployment and whenever host, VM, network, or disk posture changes
 Source of truth: a fresh qualification input and deployment receipts
-Last reviewed: 2026-08-31
-Last verified against: repository deployment contract, `product_tars_channel_topology.v1`, and no live TARS/Proxmox readback in this slice
+Last reviewed: 2026-09-11
+Last verified against: repository deployment contract, `product_tars_channel_topology.v1`, Builder Vault dated TARS access/runtime receipts from 2026-09-07, and no fresh TARS/Proxmox readback from this workstation; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`
 
 # TARS / Proxmox Deployment Profile
 
@@ -37,26 +37,52 @@ future clock skew; older or farther-future evidence is rejected.
 Until that input and later operator acceptance exist, placement remains a repository contract only.
 
 Demerzel/Mac mini is a control, development, client, and operator computer, not a Product Runtime
-channel host. Local Compose/Colima is a non-authoritative development fallback. VM 102
-(`builder-system`) remains the separate complete Builder System / Dev System target and must not
-host a `pkm-*` Product Runtime project or share its Product engine.
+channel host. Local Compose/Colima is a non-authoritative development fallback. TARS VM `bob-1`
+(VM ID `102`, formerly referred to as `vm102`) remains the separate complete Builder System / Dev
+System target; its guest/system hostname is `builder-system`. It must not host a `pkm-*` Product
+Runtime project or share its Product engine.
 
 Provider/model selection is outside placement and is resolved by capability configuration. This
 profile carries no named provider, model, or Codex-only architecture decision.
 
 ## Complete Dev System placement boundary
 
-The TARS qualification contract identifies VM 102 (`builder-system`) as the intended cohesive home
-for the complete Builder System / Dev System, including Dev UI as one read-only projection and the
-BuilderOps control plane and internal providers. That is a candidate-policy identifier, not a live
-deployment assertion. The complete topology is owned by
+The TARS qualification contract identifies `bob-1` (VM ID `102`) as the intended cohesive home for
+the complete Builder System / Dev System, including Dev UI as one read-only projection and the
+BuilderOps control plane and internal providers. `builder-system` is the guest/system identity
+running on that VM. That is a candidate-policy identifier, not a live deployment assertion. The
+complete topology is owned by
 `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`; every
 unresolved component remains a named reconciliation gap.
+
+The host/system mapping is `proxmox_node=tars`, `proxmox_vm_name=bob-1`, `vmid=102`, and
+`guest_hostname=builder-system`. A failed or unavailable host ownership inventory remains an open
+qualification gate and never authorizes weakening SSH policy.
 
 The candidate must remain separate from Product Runtime: it must not host a `pkm-*` Product Compose
 project or carry Product production credentials, vault references, or network identities. Strict
 host-key verification is required for any operational readback. A failed or unavailable host
 ownership inventory is evidence of an open qualification gate, not permission to weaken SSH policy.
+
+## TARS guest role and access decision
+
+The dated Builder Vault inventory and access receipts establish the following role separation. These
+are dated operator evidence and planning constraints, not a fresh qualification receipt for this
+workstation:
+
+| VM | Identity / role | Access and operational decision |
+|---:|---|---|
+| 100 | `ygg-dev`, Product Runtime `dev` | Use the dedicated Demerzel channel identity and strict `ssh ygg-dev` route. Keep dev runtime/provider evidence separate from Builder System evidence. |
+| 104 | `ygg-test`, Product Runtime `test` | Use the dedicated Demerzel channel identity and strict `ssh ygg-test` route. Access repair does not equal a green test verification or promotion receipt. |
+| 101 | `ygg-prod`, Product Runtime `prod` | Use the dedicated Demerzel channel identity and strict `ssh ygg-prod` route. Degraded application readiness remains a separate product-health gate; do not infer promotion from access/container health. |
+| 102 | `bob-1`, guest/system `builder-system`, Builder System | Require a separate current execution-host identity and strict host-key readback. Do not copy the Product Runtime channel key or treat channel access as BuilderOps access. |
+| 103 | retired `ygg-ingest-gpu` / Bishop | Deleted with VM-owned disks on 2026-08-22. No access or restore action without a new architecture and owner decision. |
+| 9000 | stopped `ygg-base` provisioning definition | No OS disk or guest host key. Do not start, rebuild, or use it as a relay implicitly. |
+
+The common TARS administrative route remains the owner-authenticated Proxmox browser session; persistent
+unattended PVE API/root SSH is not established by the Vault receipts. Guest SSH, QGA, and Proxmox
+administration are separate evidence surfaces and must be reverified only when the planned operation
+needs them.
 
 The ordered schemas and rollback-baseline rules are owned only by the
 [VM-102 evidence and receipt contract](../../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).

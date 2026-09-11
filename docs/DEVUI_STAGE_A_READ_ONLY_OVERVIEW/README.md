@@ -38,7 +38,8 @@ page, asset, or visual destination.
 ## Complete Dev System placement boundary
 
 Stage A is one read-only Dev UI projection component within the complete Builder System / Dev
-System. Its target runtime home is TARS VM 102 (`builder-system`), but this capability specification
+System. Its target runtime home is TARS VM `bob-1` (VM ID `102`, formerly `vm102`), running
+guest/system `builder-system`, but this capability specification
 does not claim that Stage A, Dev UI, or the complete Dev System is resident or deployed there. The
 complete topology, external dependencies, intentionally non-runtime components, and unresolved
 gaps are owned by [`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology
@@ -143,7 +144,7 @@ authority and genuine acknowledgements.
       unlinked states without browser reclassification.
 - [ ] The owner pilot answers Now, Needs you, and Ready to try without a false decision, readiness,
       durable acceptance, or dependency on opening standalone subsystem UIs. It runs only on the
-      receipt-sourced VM-102 Dev System deployment (`builder-system`) and its governed external read
+      receipt-sourced Bob-1/VM-ID-102 Dev System deployment (`builder-system`) and its governed external read
       dependencies; Product Runtime projects, vaults, and lifecycle are not VM-102 deployment evidence,
       proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
       and gateway marker, and always records the deployed Overview → server-supplied Focus → return

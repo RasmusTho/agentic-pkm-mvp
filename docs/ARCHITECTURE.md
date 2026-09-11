@@ -863,8 +863,9 @@ The intended Product Runtime placement for `dev`, `test`, and `prod` is the TARS
 topology. Exact channel identity and qualification evidence are supplied by the redaction-safe
 `product_tars_channel_topology.v1` contract; this architecture reference does not claim live TARS
 qualification or deployment. Demerzel/Mac mini remains control/development/client/operator
-infrastructure, local Compose/Colima remains a fallback, and VM 102 (`builder-system`) remains the
-separate Builder System / Dev System target. Provider/model selection remains capability- and
+infrastructure, local Compose/Colima remains a fallback, and TARS VM `bob-1` (VM ID `102`, formerly
+`vm102`) remains the separate Builder System / Dev System target, running guest/system
+`builder-system`. Provider/model selection remains capability- and
 configuration-resolved rather than encoded by placement.
 
 A release channel is a named operational build identified by four mandatory properties.

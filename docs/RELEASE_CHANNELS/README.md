@@ -41,8 +41,9 @@ Channel placement is separate from channel identity and promotion. Each `dev`, `
 channel is intended to run on its qualified TARS-hosted Linux VM; exact VM/engine, source/image,
 ingress/auth, health/version, data, backup, and rollback identities come from the redaction-safe
 `product_tars_channel_topology.v1` input. Demerzel/Mac mini is control/development/client/operator
-infrastructure, local Compose/Colima is a non-authoritative development fallback, and VM 102
-(`builder-system`) is the separate Builder System / Dev System target. This specification does not
+infrastructure, local Compose/Colima is a non-authoritative development fallback, and TARS VM
+`bob-1` (VM ID `102`, formerly `vm102`) is the separate Builder System / Dev System target, running
+guest/system `builder-system`. This specification does not
 claim any of those live qualification or deployment facts.
 
 Provider/model choice remains capability- and configuration-resolved; release-channel placement

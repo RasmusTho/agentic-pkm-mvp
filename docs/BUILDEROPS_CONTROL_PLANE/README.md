@@ -8,11 +8,20 @@ Source of truth: ADR-0062 plus this directory for task shape and dependency orde
 # BuilderOps independent control plane
 
 Build a permanent API-first BuilderOps control plane as part of the cohesive Dev System runtime
-home on TARS VM 102 (`builder-system`), with one PostgreSQL operational authority, independent
-deployment/trust lifecycle, API-only clients, durable outbox-based external effects, and scoped
+home on TARS VM `bob-1` (VM ID `102`, formerly `vm102`), with one PostgreSQL operational authority,
+independent deployment/trust lifecycle, API-only clients, durable outbox-based external effects, and scoped
 review/merge execution. Then migrate every SQLite/file authority and remove BuilderOps ownership
-from Product Runtime. The former Demerzel-only placement is superseded by this VM-102 target; the
+from Product Runtime. The former Demerzel-only placement is superseded by this Bob-1/VM-ID-102
+target; the
 BCP task names and historical file paths remain for traceability.
+
+### Host and system identity
+
+The TARS/Proxmox host identity is `bob-1` on node `tars`, with VM ID `102`. The guest/system
+hostname and logical Builder System / Dev System identity running there is `builder-system`.
+Historical `VM 102`, `VM-102`, and `vm102` names remain in receipt and task identifiers for
+traceability; they must not be read as the current Proxmox VM name. This mapping does not claim
+qualification, residency, deployment, health, or SSH access.
 
 This specification does not transfer product or delivery authority. GitHub Issues, PR head SHA,
 required CI, review gates, repository protection, and GitHub merge results remain authoritative.
@@ -45,9 +54,10 @@ prohibited.
 ## Complete Dev System VM-102 topology contract
 
 BuilderOps, BuilderOps-owned providers, and Dev UI are one Builder System / Dev System for
-placement purposes. VM 102 is the intended cohesive runtime home for the complete system, not a
-Dev UI-only deployment. This is a target placement contract: this document does not claim that VM
-102 is qualified, that any service is resident, or that a deployment occurred. A guest readback,
+placement purposes. TARS VM `bob-1` (VM ID `102`) is the intended cohesive runtime home for the
+complete system, not a Dev UI-only deployment; `builder-system` is the guest/system identity on that
+VM. This is a target placement contract: this document does not claim that the VM is qualified, that
+any service is resident, or that a deployment occurred. A guest readback,
 screen observation, or running default-engine container is not a deployment or qualification
 receipt.
 
@@ -119,7 +129,8 @@ establishes that runnable baseline.
 | `devsystem_vm102_rollback.v1` | An available previous known-good source/image/config identity, selected rollback identity, migration classification, restored health/version/read-only smoke, and preserved GitHub/BuilderOps authority | Reversal of a forward-only migration, authority data rewind, or rollback when no compatible baseline exists |
 
 Required common fields are `receipt_type`, `receipt_version`, `target_vm` (`vmid: 102`,
-`name: builder-system`), `observed_at`, `source_refs`, `candidate_identity` when applicable,
+`name: builder-system` as the logical system target), `observed_at`, `source_refs`,
+`candidate_identity` when applicable,
 `component_inventory_digest` when applicable, `evidence_fingerprint`, `secret_material: absent`,
 and an explicit `gaps`/`refusals` list. The activation receipt must carry the inventory digest
 and exactly one `receipt:devsystem_vm102_component_inventory.v1:<digest>` source reference;
@@ -239,6 +250,14 @@ Approved candidate attestation runner](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#a
 A verifier exit of `0` proves only the candidate source/image attestation; it does not prove VM
 identity, qualification, writer selection, migration, readiness, or deployment.
 
+Where a receipt carries host identity, it must separately bind `proxmox_node: tars`,
+`proxmox_vm_name: bob-1`, VM ID `102`, and `guest_hostname: builder-system`; `builder-system` must
+not be substituted for the Proxmox VM name. The attestation prerequisite may run on Bob-1/guest
+`builder-system` or a named access-controlled operator runner. The runner records its observed
+version and command exit without recording credentials. The exact command and fail-closed boundary
+are defined in [Independent Authenticated Deployment :: Approved candidate attestation
+runner](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#approved-candidate-attestation-runner).
+
 The inventory-only boundary is executable through the
 [`devsystem_vm102_component_inventory.v1` schema](../../config/platform/devsystem_vm102_component_inventory.v1.schema.json)
 and its [pure producer/validator](../../app/ops/devsystem_vm102_component_inventory.py). The
@@ -310,11 +329,12 @@ the Platform and Operations specification remains the separate owner of host/pla
 It does not qualify a live host, authorize host or Proxmox mutation, or change Product/Runtime,
 deployment, credential, network, or firewall authority.
 
-The fixed VM 102 BuilderOps isolation baseline is: VM ID `102`, name `builder-system`, two cores,
+The fixed Bob-1 BuilderOps isolation baseline is: VM ID `102`, Proxmox VM name `bob-1`, guest/system
+hostname `builder-system`, two cores,
 4096 MiB memory, 60 GiB disk, `vmbr0`, VLAN tag `42`, and network scope `guest-vlan-42`. The
 candidate evaluator requires a non-empty BuilderOps engine identifier that does not equal the
 supplied Product engine identifier, no `pkm-*` Product Compose project, and no production
-credential, vault, or network-identity references on VM 102. It does not establish that a separate
+credential, vault, or network-identity references on Bob-1 (VM ID `102`). It does not establish that a separate
 Product engine was supplied or valid; that admission defect is governed by Issue #5072.
 
 Candidate evidence is accepted only when it is no more than 24 hours old and fingerprint-verifiable.
@@ -330,7 +350,7 @@ the live TARS state.
 
 ## Target boundary
 
-- VM 102 hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, outbox
+- Bob-1 hosts the independently deployed BuilderOps API, PostgreSQL store, migration gate, outbox
   worker, and the other resident Dev System components only after the complete topology and
   qualification receipts pass.
 - MacBook workflows call the authenticated API over an approved private path; no workflow opens
@@ -368,7 +388,7 @@ blocked.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
 not by rewriting that merge. The BCP-05 filename and historical Demerzel label remain for traceability;
-the current candidate runtime placement is the VM-102 `builder-system` target, and no Demerzel
+the current candidate runtime placement is the Bob-1/VM-ID-102 `builder-system` target, and no Demerzel
 residency or activation is implied by the document name or the repository baseline.
 
 ## Cross-task invariants / partial-failure safety
@@ -432,7 +452,7 @@ Partial-failure examples:
 
 ## Capability acceptance criteria
 
-- [ ] One authenticated API endpoint on VM 102 coordinates records, tasks, leases, attempts,
+- [ ] One authenticated API endpoint on Bob-1 (VM ID `102`) coordinates records, tasks, leases, attempts,
   idempotency, receipts, and outbox state against one PostgreSQL authority.
   Verify: BCP-01/02 contract tests named in their task files.
 - [ ] Every authority-bearing record carries the mandatory multi-repo envelope; leases,
@@ -445,7 +465,7 @@ Partial-failure examples:
 - [ ] A crash at each state/outbox/external-effect boundary produces no duplicate accepted transition
   and a reconcilable receipt chain.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once`.
-- [ ] A producer-derived manifest proves the complete client/VM-102 worktree/container source
+- [ ] A producer-derived manifest proves the complete client/Bob-1 VM-ID-102 worktree/container source
   universe, and every expected source is imported, quarantined, tombstoned, explicitly accounted
   missing, or archived, with no live lease carried into the new epoch. Evidence-backed repo
   provenance is backfilled. Plain quarantine contains only evidence-only material; every authority-

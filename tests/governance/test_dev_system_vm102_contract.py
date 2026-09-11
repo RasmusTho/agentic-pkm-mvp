@@ -193,8 +193,8 @@ def test_adr0062_amendment_owns_vm102_placement_and_rebuildable_posture() -> Non
     amendment = adr.split("### A4", 1)[1].split("## Source docs and evidence", 1)[0]
     normalized_amendment = " ".join(amendment.split()).lower()
 
-    assert "complete dev system placement on vm 102" in normalized_amendment
-    assert "vm 102 is the intended cohesive runtime home" in normalized_amendment
+    assert "complete dev system placement on bob-1 (vm id 102)" in normalized_amendment
+    assert "tars vm `bob-1` (vm id `102`, formerly `vm102`) is the intended cohesive runtime home" in normalized_amendment
     assert "external authenticated client and operator dependency" in normalized_amendment
     assert "rebuildable from source, images, configuration, and host-managed secrets" in normalized_amendment
     assert "backup, wal archive, and restore drill are deferred" in normalized_amendment
@@ -208,7 +208,7 @@ def test_complete_vm102_topology_keeps_known_components_and_gaps_visible() -> No
     )[0]
     normalized_topology = " ".join(topology.split())
 
-    assert "VM 102 is the intended cohesive runtime home" in normalized_topology
+    assert "TARS VM `bob-1` (VM ID `102`) is the intended cohesive runtime home" in normalized_topology
     assert "not a deployment or qualification receipt" in normalized_topology
     assert "VM-102 resident (target)" in normalized_topology
     assert "explicit external dependency" in normalized_topology
@@ -288,7 +288,8 @@ def test_dev_system_docs_preserve_the_product_runtime_boundary() -> None:
         "docs/deployment/profiles/TARS_PROXMOX.md",
     ):
         document = _read(relative)
-        assert "VM 102" in document
+        assert "VM ID `102`" in document
+        assert "builder-system" in document
         assert "Product Runtime" in document
         assert "does not" in document or "no live" in document
 

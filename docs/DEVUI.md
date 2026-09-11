@@ -51,8 +51,9 @@ without first rebuilding an internal model of the delivery machinery.
 
 ## Dev System runtime boundary
 
-The complete Builder System / Dev System has one intended cohesive runtime home: TARS VM 102
-(`builder-system`). Dev UI is one read-only projection component of that system, not the system's
+The complete Builder System / Dev System has one intended cohesive runtime home: TARS VM `bob-1`
+(VM ID `102`, formerly `vm102`), running guest/system `builder-system`. Dev UI is one read-only
+projection component of that system, not the system's
 whole deployment and not Product Runtime. BuilderOps and its internal providers supply the
 source-owned operational read paths; GitHub, Git, review, CI, merge, closure, promotion, and
 Product/Runtime-owned evidence remain external authority boundaries. TARS/Proxmox remains the
