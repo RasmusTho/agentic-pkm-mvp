@@ -169,6 +169,7 @@ def resolve_scalar_binding_runtime(
 
     registry = VaultRegistryStore(Path(registry_raw).expanduser().resolve(strict=True))
     snapshot = registry.load()
+    requested = (requested_binding_id or "").strip()
     if snapshot.authority == REGISTRY_AUTHORITY_DORMANT:
         # MVR-01B deliberately keeps the registry non-authoritative.  The
         # legacy scalar app-local store remains the runtime source of truth
@@ -176,6 +177,8 @@ def resolve_scalar_binding_runtime(
         # activates binding-keyed producers.  Returning the compatibility
         # posture here is distinct from an invalid active registry, which must
         # still fail closed below.
+        if requested and requested != COMPATIBILITY_BINDING_ID:
+            raise RegistryError("native binding requires active registry authority")
         return None
     if snapshot.authority != REGISTRY_AUTHORITY_ACTIVE:
         raise RegistryError("binding runtime requires active registry authority")
@@ -191,7 +194,6 @@ def resolve_scalar_binding_runtime(
     if len(matches) != 1:
         raise RegistryError("configured scalar root must resolve to exactly one active binding")
     registration = matches[0]
-    requested = (requested_binding_id or "").strip()
     if requested and requested not in {
         COMPATIBILITY_BINDING_ID,
         registration.vault_binding_id,
