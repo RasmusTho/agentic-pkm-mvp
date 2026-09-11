@@ -112,7 +112,8 @@ def _deploy_subshell_environment(
     """Mirror deploy_channel_compose's governed env pinning for the subshell.
 
     The wrapper exports WATCHER_RUNTIME_ENV_FILE, the non-secret LLM_PROVIDER
-    selector, and VAULT_HOST_ROOT from the governed channel/runtime env files
+    selector, VAULT_HOST_ROOT, and DEVUI_VM102_RECEIPT_HOST_DIR from the
+    governed channel/runtime env files
     (using the channel runtime-env default when the pin omits its path) so a
     stale parent shell cannot swap those selectors. The wrapper
     never passes the runtime env file as a Compose CLI --env-file (that would
@@ -159,6 +160,22 @@ def _deploy_subshell_environment(
     else:
         env.pop("VAULT_HOST_ROOT", None)
 
+    receipt_host_dir = _read_channel_env_value(
+        channel_env_file, "DEVUI_VM102_RECEIPT_HOST_DIR"
+    )
+    if (
+        not receipt_host_dir
+        and runtime_env_file is not None
+        and runtime_env_file.is_file()
+    ):
+        receipt_host_dir = _read_channel_env_value(
+            runtime_env_file, "DEVUI_VM102_RECEIPT_HOST_DIR"
+        )
+    if receipt_host_dir:
+        env["DEVUI_VM102_RECEIPT_HOST_DIR"] = receipt_host_dir
+    else:
+        env.pop("DEVUI_VM102_RECEIPT_HOST_DIR", None)
+
     return env
 
 
@@ -186,6 +203,25 @@ def test_deploy_subshell_environment_uses_dev_runtime_env_default(
 
     assert cli_env["WATCHER_RUNTIME_ENV_FILE"] == "./tmp/runtime.env"
     assert cli_env["LLM_PROVIDER"] == "governed-provider"
+
+
+def test_deploy_subshell_environment_pins_vm102_receipt_source(
+    tmp_path: Path,
+) -> None:
+    channel_env = tmp_path / "dev.env"
+    channel_env.write_text(
+        "APP_IMAGE_TAG=0000000000000000000000000000000000000000\n"
+        "DEVUI_VM102_RECEIPT_HOST_DIR=/Volumes/builderops-receipts\n",
+        encoding="utf-8",
+    )
+
+    cli_env = _deploy_subshell_environment(
+        channel_env,
+        {"DEVUI_VM102_RECEIPT_HOST_DIR": "/hostile/ambient/receipts"},
+        repo_root=tmp_path,
+    )
+
+    assert cli_env["DEVUI_VM102_RECEIPT_HOST_DIR"] == "/Volumes/builderops-receipts"
 
 
 def _effective_container_env_value(

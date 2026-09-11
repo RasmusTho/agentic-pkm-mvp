@@ -212,6 +212,16 @@ services:
         target: /data/tts
         bind:
           create_host_path: false
+      # VM-102 evidence is an operator-produced, read-only source. The
+      # disabled fallback is tracked and empty, so an unconfigured consumer
+      # starts with evidence withdrawn; a configured source must already exist
+      # because Compose is forbidden from creating it.
+      - type: bind
+        source: ${DEVUI_VM102_RECEIPT_HOST_DIR:-./config/vm102-receipts-disabled}
+        target: /opt/builderops/receipts
+        read_only: true
+        bind:
+          create_host_path: false
       # Shared runtime-artifact volume (#2991): api/worker/watcher each did their
       # own `mkdir -p /app/tmp`, so the three containers had NO shared filesystem
       # surface even though they all resolve the identical absolute heartbeat
@@ -238,6 +248,7 @@ services:
       - -c
       - >-
         mkdir -p /app/tmp &&
+        test -d "$${DEVUI_VM102_RECEIPT_DIR}" && test -r "$${DEVUI_VM102_RECEIPT_DIR}" && test -x "$${DEVUI_VM102_RECEIPT_DIR}" || { echo 'VM-102 receipt source mount unavailable' >&2; exit 75; } &&
         if python -c 'import importlib.util; raise SystemExit(0 if importlib.util.find_spec("app.instance.runtime") else 1)' >/dev/null 2>&1; then
           python -m app.instance.runtime preflight --channel "$${PKM_ENVIRONMENT:-dev}" --instance-state-root /app/instance-state --host-global-root /app/instance-ownership --consumer api;
         elif [ "$${INSTANCE_STATE_LEGACY_ROLLBACK:-0}" = 1 ]; then
@@ -275,6 +286,9 @@ services:
       # generated runtime env is populated by export_runtime_env.sh; governed deploys preflight
       # and pin its value so an operator's TTS_ENABLED=true reaches load_tts_config() (#2189/#4656).
       TTS_ENABLED: ${TTS_ENABLED:-false}
+      # Fixed in-container receipt path; only the host-side source is
+      # operator-configurable through DEVUI_VM102_RECEIPT_HOST_DIR.
+      DEVUI_VM102_RECEIPT_DIR: /opt/builderops/receipts
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
