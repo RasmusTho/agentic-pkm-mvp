@@ -1,6 +1,7 @@
 services:
   migrate:
     environment:
+      PKM_ENVIRONMENT: dev
       LLM_PROVIDER: mock
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev

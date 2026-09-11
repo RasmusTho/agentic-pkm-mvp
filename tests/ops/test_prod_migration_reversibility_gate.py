@@ -18,7 +18,12 @@ def _construct_override(loader: _ComposeLoader, node: yaml.Node) -> object:
     return loader.construct_sequence(node)
 
 
+def _construct_reset(loader: _ComposeLoader, node: yaml.Node) -> object:
+    return None if node.value == "null" else loader.construct_object(node)
+
+
 _ComposeLoader.add_constructor("!override", _construct_override)
+_ComposeLoader.add_constructor("!reset", _construct_reset)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -210,6 +215,7 @@ def test_production_overlay_owns_gate_and_nonproduction_overlays_clear_stale_con
         "MIGRATION_TARGET_IDENTITY": "pkm-prod/app",
         "MIGRATION_GATE_TOKEN_ONLY": "1",
         "PROD_MIGRATION_FORWARD_ONLY_ACK": "some-stale-value",
+        "PKM_ENVIRONMENT": "prod",
     }
     effective = dict(stale_runtime)
     effective.update(
@@ -231,6 +237,13 @@ def test_production_overlay_owns_gate_and_nonproduction_overlays_clear_stale_con
     assert effective["PROD_MIGRATION_FORWARD_ONLY_ACK"] == ""
 
     for compose_path in (DEV_COMPOSE, TEST_COMPOSE):
+        compose = yaml.load(compose_path.read_text(encoding="utf-8"), Loader=_ComposeLoader)
+        migrate_environment = compose["services"]["migrate"]["environment"]
+        expected_environment = "dev" if compose_path == DEV_COMPOSE else "test"
+        assert migrate_environment["PKM_ENVIRONMENT"] == expected_environment
+        nonproduction_effective = dict(stale_runtime)
+        nonproduction_effective["PKM_ENVIRONMENT"] = migrate_environment["PKM_ENVIRONMENT"]
+        assert nonproduction_effective["PKM_ENVIRONMENT"] == expected_environment
         text = compose_path.read_text(encoding="utf-8")
         assert 'MIGRATION_PRODUCTION_GATE: "0"' in text
         assert 'MIGRATION_GATE_TOKEN_ONLY: "0"' in text
