@@ -20,14 +20,15 @@ def test_owner_docs_keep_product_channels_demerzel_and_vm102_separate() -> None:
     assert "TARS-hosted Linux VM topology" in joined
     assert "Demerzel/Mac mini" in joined
     assert "control, development, client" in joined
-    assert "VM 102 (`builder-system`)" in joined
+    assert "TARS VM `bob-1` (VM ID `102`" in joined
+    assert "guest/system `builder-system`" in joined
     assert "separate Builder System / Dev System target" in joined
     assert "local Compose/Colima" in joined
     assert "product_tars_channel_topology.v1" in joined
     assert "does not" in joined
 
     deployment = contents[0]
-    assert "must not be used as a Product Runtime channel VM or\nengine" in deployment
+    assert "must not be used as a Product Runtime channel VM or engine" in " ".join(deployment.split())
     assert "do not authorize a channel operation" in deployment
 
 

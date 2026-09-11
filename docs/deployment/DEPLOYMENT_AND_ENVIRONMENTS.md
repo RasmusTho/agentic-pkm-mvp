@@ -5,9 +5,9 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-09-05
+Last reviewed: 2026-09-11
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`. This is not fresh host qualification, residency, deployment, health, or SSH evidence from this workstation.
 
 ## Why this document exists
 
@@ -35,10 +35,15 @@ headroom, and Linux alert installation belong in a deployment profile such as
 ## Complete Dev System placement and admission
 
 The portable deployment contract admits a selected setup profile; it does not choose a host. The
-TARS/Proxmox profile selects VM 102 (`builder-system`) as the intended cohesive runtime home for
-the complete Builder System / Dev System. This includes Dev UI as a read-only projection component
-and the BuilderOps control plane and its internal providers. It is not a Dev UI-only deployment and
-it does not merge the Dev System with Product Runtime.
+TARS/Proxmox profile selects TARS VM `bob-1` (VM ID `102`, formerly referred to as `vm102`) as the
+intended cohesive runtime home for the complete Builder System / Dev System. The guest/system
+hostname is `builder-system`: it is the system running on `bob-1`, not the Proxmox VM name. This
+includes Dev UI as a read-only projection component and the BuilderOps control plane and its internal
+providers. It is not a Dev UI-only deployment and it does not merge the Dev System with Product
+Runtime.
+
+This identity mapping is naming authority only. It does not claim live qualification, residency,
+deployment, health, or SSH access; those facts still require the receipt-bound evidence below.
 
 The complete topology and all unresolved components are owned by
 [`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev System VM-102 topology contract`](../BUILDEROPS_CONTROL_PLANE/README.md).
@@ -70,9 +75,10 @@ gaps and do not authorize a channel operation.
 
 Demerzel/Mac mini is a control, development, client, and operator computer only for Product Runtime
 placement purposes. It is not the `dev`, `test`, or `prod` Product Runtime host; local Compose/Colima
-is an explicitly non-authoritative development fallback. VM 102 (`builder-system`) is the separate
-complete Builder System / Dev System target and must not be used as a Product Runtime channel VM or
-engine. BuilderOps and Product Runtime placement therefore remain separate authority boundaries.
+is an explicitly non-authoritative development fallback. TARS VM `bob-1` (VM ID `102`) is the
+separate complete Builder System / Dev System target, running guest/system `builder-system`, and
+must not be used as a Product Runtime channel VM or engine. BuilderOps and Product Runtime placement
+therefore remain separate authority boundaries.
 
 Provider and model selection is resolved by capability configuration. Neither this placement profile
 nor the topology qualification input encodes a provider, model, or Codex-only runtime architecture.
@@ -80,12 +86,12 @@ nor the topology qualification input encodes a provider, model, or Codex-only ru
 ## Current live runtime posture
 
 The intended live split is now: a dedicated Ollama host for Ollama only, and the Product Runtime
-channels on the TARS-hosted isolated Linux VM topology reached through private ingress. On 2026-08-22,
-`ygg-dev` served API `:18001` and UI `:8111`,
-`ygg-prod` served API liveness on `:18000` while its UI `:8113` was unavailable, and no `ygg-test`
-host or endpoint was available. Dev and prod both reported `git_sha=unknown`; prod functional health
-was failing because the watcher was stale/paused and the worker had no heartbeat. These observations
-are the current baseline and do not prove a deployable promotion chain.
+channels on the TARS-hosted isolated Linux VM topology reached through private ingress. The latest
+dated Builder Vault operator evidence, from 2026-09-07, records restored strict access for `ygg-dev`,
+`ygg-test`, and `ygg-prod`; completed DEV upgrade/readiness evidence; healthy TEST/PROD containers
+after access repair; unavailable external TEST/PROD UI endpoints; and degraded PROD application
+readiness. Those records are execution-host-specific and do not provide this workstation with SSH or
+deployment authority, nor do they prove a deployable promotion chain.
 
 The repository does not yet contain an authoritative deployment/startup handoff for these new hosts,
 and this workstation has no usable SSH/deploy authority for them. Do not use the old local Compose

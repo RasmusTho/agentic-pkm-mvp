@@ -7,7 +7,13 @@ Owner: Builder System governance and owner-experience acceptance
 
 ## Capability intent
 
-Make Builder a usable standalone Product Owner platform on TARS VM 102, first for Yggdrasil and then an explicitly addressed second consumer repository. The owner clarified that an LLM is welcome wherever it improves overview and control, and determinism is secondary to that usable outcome. LLM-assisted explanation, synthesis and bounded agent workflows are admitted design direction; exact authorization, source/effect identity and truthful readback remain binding. Completing the entire DDO portfolio is not a first-release gate.
+Make Builder a usable standalone Product Owner platform on TARS VM `bob-1` (VM ID `102`, formerly
+`vm102`), running guest/system `builder-system`, first for Yggdrasil and then an explicitly
+addressed second consumer repository. The owner clarified that an LLM is welcome wherever it
+improves overview and control, and determinism is secondary to that usable outcome. LLM-assisted
+explanation, synthesis and bounded agent workflows are admitted design direction; exact
+authorization, source/effect identity and truthful readback remain binding. Completing the entire
+DDO portfolio is not a first-release gate.
 
 This specification owns only the gaps and aggregate acceptance identified in the [audit](../audits/BUILDER_SYSTEM_VISION_DELIVERY_2026-09-07.md). Existing infrastructure, DevUI, action, delivery and design owners are reused. It adds no task store, source registry, graph authority, universal score or second workflow engine. Source extraction and multi-tenancy are out of scope.
 

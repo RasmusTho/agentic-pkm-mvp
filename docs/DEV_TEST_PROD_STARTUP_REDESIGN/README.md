@@ -29,8 +29,9 @@ The redesign has two explicit delivery modes: `local-source` for dev/local-test,
 Before the operator-gated STARTUP-05 cutover in #4918, repository implementation and rehearsal must
 consume the #5237 Product Runtime placement contract. That contract names the TARS-hosted Linux VM
 topology as the intended home for `dev`, `test`, and `prod`, keeps Demerzel/Mac mini as
-control/development/client/operator infrastructure, keeps VM 102 (`builder-system`) as the separate
-Builder System / Dev System target, and leaves exact channel identities as explicit qualification
+control/development/client/operator infrastructure, keeps TARS VM `bob-1` (VM ID `102`, formerly
+`vm102`) running guest/system `builder-system` as the separate Builder System / Dev System target,
+and leaves exact channel identities as explicit qualification
 inputs and gaps. The sequence is therefore: #5237 repository reconciliation → exact redaction-safe
 qualification input → rehearsal/backup/rollback prerequisites → operator authorization for #4918.
 

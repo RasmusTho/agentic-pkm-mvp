@@ -14,7 +14,8 @@ existing_pr_status: merged
 ---
 
 State: Target-state BCP-05 contract. The historical “Demerzel” name and filename remain for
-traceability, but the current candidate runtime target is TARS VM 102 (`builder-system`). This
+traceability, but the current candidate runtime target is TARS VM `bob-1` (VM ID `102`, formerly
+`vm102`), running guest/system `builder-system`. This
 document does not claim VM residency, host qualification, deployment, or activation.
 
 # Demerzel Review And Merge Orchestration
@@ -30,15 +31,16 @@ a request to reopen the merged PR. The repo-side API/PostgreSQL/outbox adapter a
 merge-effect fence are now implemented. #3603 closed after read-only topology reconciliation and
 remains historical implementation evidence. The remaining installed-main cycle and parent acceptance
 are owned by the active VM-102 chain (#5052/#5056 and #5181), with FCA parent #5399 tracking the
-cross-contract acceptance; the target placement is TARS VM 102 (`builder-system`). Historical
+cross-contract acceptance; the target placement is TARS VM `bob-1` (VM ID `102`), running
+guest/system `builder-system`. Historical
 Demerzel observations are evidence only.
 
 ## What This Task Does
 
 - migrate the delivered #3603 / PR #3620 orchestration so claims and attempt/result/receipt state
   pass through the BCP-02 API and BCP-01 PostgreSQL/outbox;
-- run the privileged executor only on a separately qualified target host, currently TARS VM 102
-  (`builder-system`), with host-local model sessions and the narrowest practical repo-scoped
+- run the privileged executor only on a separately qualified target host, currently TARS VM `bob-1`
+  (VM ID `102`, guest/system `builder-system`), with host-local model sessions and the narrowest practical repo-scoped
   GitHub credential; this repository contract does not perform that host operation;
 - bind every attempt to `RepoRef`, governing Issue, PR, exact head SHA, workflow/model identity,
   lease/fencing token, and deterministic operation key;

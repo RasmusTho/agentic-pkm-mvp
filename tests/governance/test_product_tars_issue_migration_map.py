@@ -41,7 +41,8 @@ def test_every_live_material_issue_has_one_disposition() -> None:
 def test_migration_map_preserves_authority_boundaries() -> None:
     text = MAP.read_text(encoding="utf-8")
     assert "does not change Issue lifecycle" in text
-    assert "VM 102 remains" in text
+    assert "Bob-1 (VM ID" in text
+    assert "guest/system `builder-system`" in text
     assert "Product Runtime channel placement remains the" in text
     assert "local Compose/Colima remains fallback-only" in text
 

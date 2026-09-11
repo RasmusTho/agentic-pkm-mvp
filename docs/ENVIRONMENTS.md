@@ -5,9 +5,9 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-08-31
-Last live runtime verification: 2026-08-22 (Tailscale hosts `ygg-dev` and `ygg-prod`; `ygg-test` was not present/reachable)
-Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md
+Last reviewed: 2026-09-11
+Last live runtime verification: 2026-09-07 (Builder Vault operator receipts from Demerzel; this workstation did not perform a fresh channel readback)
+Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md; Builder Vault dated evidence `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`
 
 ## Overview
 
@@ -24,23 +24,32 @@ Reading rule:
 The intended Product Runtime placement is the TARS-hosted Linux VM topology, with private
 Linux/Tailscale ingress for `dev`, `test`, and `prod`. The Mac mini is a control, development, client,
 and operator computer only for Product Runtime placement; its legacy `pkm-*` Compose stacks are not
-runtime evidence. The following is the verified live baseline as of 2026-08-22:
+runtime evidence. The following is the latest dated operator evidence reviewed from Builder Vault,
+captured on 2026-09-07; it is not a fresh readback from this workstation:
 
 | Environment | Live endpoint evidence | Current state | Artifact identity |
 | --- | --- | --- | --- |
-| `dev` (`ygg-dev`) | API `:18001` and Companion UI `:8111` respond | API required checks pass, but runtime is degraded: watcher paused and two dead-lettered events; LLM provider is `mock` | `/version` reports `git_sha=unknown`, `built_at` empty |
-| `test` | No `ygg-test` peer or reachable test API/UI endpoint was found | Not deployed/available for staged verification | No candidate identity available |
-| `prod` (`ygg-prod`) | API liveness `:18000` responds; UI `:8113` unavailable | Functional health is failing: stale/paused watcher and no worker heartbeat | `/version` reports `git_sha=unknown`, `built_at` empty |
+| `dev` (`ygg-dev`) | API `:18001` and Companion UI `:8111` passed the dated final acceptance | Builder Vault reports the upgraded API/worker/watcher and required readiness checks green; use the dated upgrade receipt for exact image and remaining warnings | Image `565de061cfb5d3b8a675e5addaeffc424dd868b7` |
+| `test` (`ygg-test`) | Strict SSH/sudo/Docker and normal-boot cleanup passed; external UI remained unavailable | API/DB containers were healthy after access repair, but no green staged-verification or promotion receipt exists | Candidate identity remains unproven for promotion |
+| `prod` (`ygg-prod`) | Strict SSH/sudo and normal-boot cleanup passed; API liveness responded; UI `:8113` remained unavailable | Existing containers were healthy, but application readiness remained degraded; no prod promotion or acceptance is claimed | Existing runtime identity was preserved; no new candidate promotion |
 
 This table is runtime evidence, not a replacement for the environment contract below. Promotion is
 blocked until the new host deployment path is authoritative, the candidate has an exact immutable
 identity, `test` is reachable, and the test verification receipt is green. Until then, local Compose
 commands are a fallback for development/testing only and must not be reported as promotion evidence.
 
+TARS guest roles remain separate: VM 100 (`ygg-dev`), VM 104 (`ygg-test`), and VM 101 (`ygg-prod`)
+are Product Runtime channels; VM 102 (`bob-1`, guest/system `builder-system`) is the separate Builder
+System; VM 103 (`ygg-ingest-gpu`) is retired and deleted; and VM 9000 (`ygg-base`) is a stopped
+provisioning definition without an OS disk. Channel SSH evidence from Demerzel does not authorize
+VM-102 access, and no channel key is to be copied to Builder System. Do not start VM 9000 or restore
+VM 103 without a new owner-authorized decision.
+
 The exact TARS channel VM and engine identities are intentionally not hardcoded here. They are
 qualification inputs, not environment-selection values, and must be supplied by the redaction-safe
-`product_tars_channel_topology.v1` contract. VM 102 (`builder-system`) belongs to the separate
-complete Builder System / Dev System boundary and is not a Product Runtime channel target.
+`product_tars_channel_topology.v1` contract. TARS VM `bob-1` (VM ID `102`, formerly `vm102`) belongs
+to the separate complete Builder System / Dev System boundary, where guest/system `builder-system`
+runs, and is not a Product Runtime channel target.
 
 ## Vault terminology
 
@@ -233,7 +242,7 @@ Two kinds of separation govern how `dev`, `test`, and `prod` stay isolated:
 
 **Source of truth: [`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).** That document is canonical for *how a deploy physically happens* — the build-once/promote model (CI builds a SHA-tagged image, each channel runs a pinned tag, promotion = tag bump + recreate), Companion UI gateways as managed units (retiring the ad-hoc `nohup` launch), the deploy/rollback/migration-gate/health-gate procedure, the live post-deploy UI smoke, and the auth↔topology (trusted-proxy `X-Forwarded-For`) decision. The current-reality vs target environment matrix (per-channel API ports, gateway ports, DB names, vault mounts, `.env.<env>` files) also lives there.
 
-This document (`ENVIRONMENTS.md`) continues to own environment **selection** and **path scoping** — what data and config each channel touches (`PKM_ENVIRONMENT`, vault roots, DB names, `tmp*` artifact dirs). `docs/RELEASE_CHANNELS/README.md` continues to own channel **identity**, per-channel DB isolation, the promotion-plan contract, migration reversibility classification, and rollback semantics. For the complete Builder System / Dev System target on TARS VM 102, the deployment SoT and its TARS profile own placement and receipt-bound admission; this document does not claim VM residency or deployment. The deployment SoT implements the physical deploy beneath both and references them rather than restating them.
+This document (`ENVIRONMENTS.md`) continues to own environment **selection** and **path scoping** — what data and config each channel touches (`PKM_ENVIRONMENT`, vault roots, DB names, `tmp*` artifact dirs). `docs/RELEASE_CHANNELS/README.md` continues to own channel **identity**, per-channel DB isolation, the promotion-plan contract, migration reversibility classification, and rollback semantics. For the complete Builder System / Dev System target on TARS VM `bob-1` (VM ID `102`), where guest/system `builder-system` runs, the deployment SoT and its TARS profile own placement and receipt-bound admission; this document does not claim VM residency or deployment. The deployment SoT implements the physical deploy beneath both and references them rather than restating them.
 
 Reconciliation with #2527: #2527 ("prod runs dirty `main`, not `stable`") is the symptom-level reconciliation of the prod promotion ref and the dirty/diverged prod working tree. The deployment SoT is the systemic fix it pointed at — the shared bind-mounted-checkout model (which is *why* a "dirty prod tree" was possible at all) is replaced by pinned images. The promotion-ref decision recorded by #2527 is consumed by the deployment SoT and by `docs/RELEASE_CHANNELS/README.md`; it is not re-decided in either environments doc.
 
