@@ -419,7 +419,14 @@ def test_available_baseline_requires_compatible_known_good_receipts() -> None:
     receipt = build_receipt("deploy", evidence, prerequisites)
     assert receipt["refusals"] == []
     assert len(receipt["rollback_baseline_refs"]) == 2
-    for failure in ("missing", "fingerprint", "identity", "compatibility", "linkage"):
+    for failure in (
+        "missing",
+        "fingerprint",
+        "identity",
+        "compatibility",
+        "linkage",
+        "health_stage",
+    ):
         broken = copy.deepcopy(prerequisites)
         if failure == "missing":
             del broken["rollback_baseline"]["health"]
@@ -431,6 +438,26 @@ def test_available_baseline_requires_compatible_known_good_receipts() -> None:
             prior = broken["rollback_baseline"]["health"]
             if failure == "identity":
                 prior["candidate_identity"]["source_sha"] = "d" * 40
+            elif failure == "health_stage":
+                for row in prior["topology"]:
+                    if row["placement_class"] != "intentionally_non_runtime":
+                        row["health_version"] = "not_observed"
+                    if row["placement_class"] == "vm102_resident_target":
+                        row["state"] = "prepared"
+                    row["evidence_digest"] = canonical_digest(
+                        {
+                            key: value
+                            for key, value in row.items()
+                            if key not in {"evidence_digest", "source_identity_digest"}
+                        }
+                    )
+                prior["operator_evidence_digest"] = canonical_digest(
+                    {key: prior[key] for key in bundle["evidence"]}
+                )
+                prior["source_refs"] = sorted(
+                    [ref for ref in prior["source_refs"] if not ref.startswith("operator:")]
+                    + ["operator:sha256:" + prior["operator_evidence_digest"]]
+                )
             else:
                 prior["source_refs"] = [
                     ref for ref in prior["source_refs"] if "devsystem_vm102_deploy" not in ref
@@ -513,3 +540,75 @@ def test_receipt_cli_in_declared_builder_image_closure(tmp_path: Path) -> None:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads(result.stdout) == receipt
+
+
+def _refingerprint(receipt: dict) -> None:
+    receipt["operator_evidence_digest"] = canonical_digest(
+        {
+            key: receipt[key]
+            for key in (
+                "observed_at",
+                "candidate_identity",
+                "topology",
+                "runtime",
+                "checks",
+                *(
+                    ("rollback_baseline_state", "previous_identity")
+                    if receipt["receipt_type"] == TYPES["deploy"]
+                    else ()
+                ),
+            )
+        }
+    )
+    receipt["source_refs"] = sorted(
+        [ref for ref in receipt["source_refs"] if not ref.startswith("operator:")]
+        + ["operator:sha256:" + receipt["operator_evidence_digest"]]
+    )
+    receipt["evidence_fingerprint"] = canonical_digest(
+        {key: value for key, value in receipt.items() if key != "evidence_fingerprint"}
+    )
+
+
+def test_rollback_rejects_rehashed_candidate_topology_mismatch() -> None:
+    bundle = _bundle()
+    _, deploy, health = _chain(bundle)
+    prior_deploy, prior_health = copy.deepcopy(deploy), copy.deepcopy(health)
+    old_ref = "receipt:" + TYPES["deploy"] + ":" + canonical_digest(prior_deploy)
+    for prior in (prior_deploy, prior_health):
+        prior["candidate_identity"]["source_sha"] = "d" * 40
+    _refingerprint(prior_deploy)
+    prior_health["source_refs"] = [ref for ref in prior_health["source_refs"] if ref != old_ref] + [
+        "receipt:" + TYPES["deploy"] + ":" + canonical_digest(prior_deploy)
+    ]
+    _refingerprint(prior_health)
+    prerequisites = bundle["prerequisites"]
+    prerequisites["rollback_baseline"] = {
+        "deploy": prior_deploy,
+        "health": prior_health,
+        "compatibility": "verified_no_data_rewind",
+    }
+    evidence = {key: deploy[key] for key in bundle["evidence"]}
+    evidence.update(
+        rollback_baseline_state="available", previous_identity=prior_deploy["candidate_identity"]
+    )
+    with pytest.raises(ReceiptValidationError, match="topology must bind"):
+        build_receipt("deploy", evidence, prerequisites)
+
+
+@pytest.mark.parametrize("kind", ["deploy", "health"])
+def test_component_observations_follow_stage_prerequisites(kind: str) -> None:
+    bundle = _bundle()
+    receipt = copy.deepcopy(dict(zip(TYPES, _chain(bundle)))[kind])
+    evidence = {key: receipt[key] for key in bundle["evidence"]}
+    if kind == "deploy":
+        evidence.update(rollback_baseline_state="no_baseline", previous_identity=None)
+    for row in evidence["topology"]:
+        if row["placement_class"] != "intentionally_non_runtime":
+            row["observed_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    _component_evidence(evidence, bundle["prerequisites"], kind)
+    with pytest.raises(ReceiptValidationError, match="predates its stage prerequisite"):
+        build_receipt(kind, evidence, bundle["prerequisites"])
+    receipt.update(evidence)
+    _refingerprint(receipt)
+    with pytest.raises(ReceiptValidationError, match="predates its stage prerequisite"):
+        validate_receipt(receipt, bundle["prerequisites"])

@@ -244,7 +244,66 @@
             "type": "string",
             "format": "date-time"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "placement_class": {
+                  "const": "vm102_resident_target"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "prepared"
+                },
+                "health_version": {
+                  "const": "not_observed"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "placement_class": {
+                  "const": "external_dependency"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "external"
+                },
+                "health_version": {
+                  "const": "not_observed"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "placement_class": {
+                  "const": "intentionally_non_runtime"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "excluded"
+                },
+                "health_version": {
+                  "const": "excluded"
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "runtime": {

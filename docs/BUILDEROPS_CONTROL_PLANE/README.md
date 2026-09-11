@@ -168,6 +168,8 @@ ledger, cache, or authority store is created by the CLI.
 Qualification consumes the complete inventory; deployment additionally consumes the existing
 activation receipt and qualification, while health also consumes deployment. Observations must be
 timezone-aware, at most 24 hours old, not future-dated, and ordered after their prerequisites.
+Resident deploy observations must follow qualification and activation; all nonexcluded health
+observations must follow the bound deployment. A newly stamped envelope cannot refresh old checks.
 Canonical whole-receipt digests link qualification to deploy and deploy to health, matching the B1
 reader. The inventory reference retains its existing component-inventory digest convention.
 Candidate identity includes the control-plane and PostgreSQL pins plus the DevUI image and
@@ -194,7 +196,8 @@ the listener's liveness probe. Preparation and deploy receipts do not substitute
 First deployment retains `no_baseline`, null previous identity, no baseline references and exactly
 `no_compatible_baseline`. An available baseline requires `prerequisites.rollback_baseline` with
 prior `deploy` and `health` receipts plus `compatibility: verified_no_data_rewind`. Both prior
-receipts must have valid closed shapes and fingerprints, the same previous candidate and compatible
+receipts must pass the same receipt-local stage, identity, digest, boundary and observation-time
+invariants as current receipts, have valid closed shapes and fingerprints, the same previous candidate and compatible
 runtime/placement, ordered timestamps, and a health reference to that deployment. Their digests are
 bound in `rollback_baseline_refs` and `source_refs`. Historical known-good evidence has no current
 freshness requirement; original dependency bundles remain in operator custody and current
