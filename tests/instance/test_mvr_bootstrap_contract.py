@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MVR_README = REPO_ROOT / "docs" / "MULTI_VAULT_RUNTIME" / "README.md"
 BOOTSTRAP_HEADING = "### Fresh bootstrap after operational-lineage loss"
+READBACK_PARAGRAPH_ANCHOR = "The readback set is owner-native:"
 
 
 def _bootstrap_section() -> str:
@@ -28,6 +29,13 @@ def _transition_rows(section: str) -> list[dict[str, str]]:
         dict(zip(headers, (cell.strip() for cell in line.strip().strip("|").split("|"))))
         for line in table_lines[2:]
     ]
+
+
+def _readback_paragraph(section: str) -> str:
+    start = section.index(READBACK_PARAGRAPH_ANCHOR)
+    remainder = section[start:]
+    end = remainder.index("\n\n")
+    return remainder[:end]
 
 
 def test_missing_operational_lineage_requires_fresh_fenced_epoch() -> None:
@@ -102,8 +110,9 @@ def test_bootstrap_contract_requires_authoritative_readback_and_receipt() -> Non
 
 def test_ownership_conflict_refusal_has_one_persisted_state() -> None:
     section = _bootstrap_section()
-    lowered = section.lower()
     rows = _transition_rows(section)
+    readback_paragraph = _readback_paragraph(section)
+    lowered_readback_paragraph = readback_paragraph.lower()
 
     conflict = next(row for row in rows if "ownership conflict" in row["Event"].lower())
     persisted_conflict_state = "inactive_fenced"
@@ -111,6 +120,6 @@ def test_ownership_conflict_refusal_has_one_persisted_state() -> None:
     assert "ownership_conflict_refused" in conflict["Required evidence / refusal"]
     assert persisted_conflict_state in conflict["Required evidence / refusal"]
     assert "ownership_conflict_refused" not in {row["To"] for row in rows}
-    assert f"leaves the epoch `{persisted_conflict_state}`" in lowered
-    assert "restart" in lowered
-    assert "fenced epoch" in lowered
+    assert f"leaves the epoch `{persisted_conflict_state}`" in lowered_readback_paragraph
+    assert "restart must preserve or reload the same fenced epoch" in lowered_readback_paragraph
+    assert "new attempt requires a new authoritative readback" in lowered_readback_paragraph
