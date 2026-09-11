@@ -1,4 +1,4 @@
-State: Prompt artifact — input for the `docs-to-issue` conversion of the sibling README's capability spec. Not a spec itself; `README.md` owns the builder-ops-stability specification.
+State: Prompt artifact — the issue set has already been created and delivered as Issues #3891–#3897. Do not create duplicates; use the sibling README's delivery receipt and GitHub PR history as the current status. Not a spec itself; `README.md` owns the builder-ops-stability specification.
 
 # Deliver Issue Set: Builder Ops Stability
 
