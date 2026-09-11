@@ -298,6 +298,20 @@ if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MA
   exit 24
 fi
 case "$*" in
+  *"run --rm --no-deps -T migrate"*)
+    printf 'migration-token-probe selector=%s ack=%s\\n' \
+      "${{DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}}" \
+      "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
+      >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+    if [ "${{DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}}" = "1" ]; then
+      printf '%s\\n' "${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-ack.v1:0000000000000000000000000000000000000000000000000000000000000000}}"
+    fi
+    ;;
+  *"exit-code-from migrate"*)
+    printf 'migration-full ack=%s\\n' \
+      "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
+      >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+    ;;
   *"ps -aq"*"com.docker.compose.service=scalar-rollback-gateway"*)
     [ "${{FAKE_SCALAR_CONTAINERS:-0}}" = "1" ] && printf '%s\\n' fake-scalar-gateway
     ;;
@@ -1915,6 +1929,50 @@ def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path
         )
     ]
     assert len(strict_recreates) == 1
+
+
+def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_prod.py"
+    migration.write_text(
+        'revision = "forward_only_prod"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "add prod forward-only migration"], cwd=root, check=True)
+    target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    token = "prod-migration-ack.v1:" + "1" * 64
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": token,
+            "DEPLOY_ACK_FORWARD_ONLY": "1",
+        }
+    )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    probe_index = next(
+        index for index, event in enumerate(events) if event.startswith("migration-token-probe ")
+    )
+    stop_index = next(index for index, event in enumerate(events) if " stop api worker watcher" in event)
+    full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
+    assert probe_index < stop_index < full_index
+    assert f"selector=1 ack=" in events[probe_index]
+    assert events[full_index] == f"migration-full ack={token}"
 
 
 def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_path: Path) -> None:

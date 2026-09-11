@@ -8,6 +8,26 @@ services:
   ollama:
     ports: !override []
 
+  migrate:
+    environment:
+      # Production migration authority is bound to this overlay rather than
+      # the shared generated runtime.env file. Compose environment values win
+      # over service env_file values, so stale cross-channel control values
+      # cannot disable or accidentally activate this gate.
+      PKM_ENVIRONMENT: prod
+      # Keep the migration authority on the canonical Compose production
+      # database. Runtime services may retain their existing interpolation
+      # policy, but the gate token must not be primed against an ambient host.
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      MIGRATION_PRODUCTION_GATE: "1"
+      MIGRATION_TARGET_IDENTITY: pkm-prod/app
+      PROD_MIGRATION_FORWARD_ONLY_ACK: ${PROD_MIGRATION_FORWARD_ONLY_ACK:-}
+      # deploy_channel.sh sets the private selector only for its read-only
+      # pre-cutover token probe. Ordinary production startup is always full
+      # migration mode, even if runtime.env contains stale control values.
+      MIGRATION_GATE_TOKEN_ONLY: ${DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}
+
   api:
     environment:
       API_HEALTHCHECK_URL: http://host.docker.internal:18000/readyz

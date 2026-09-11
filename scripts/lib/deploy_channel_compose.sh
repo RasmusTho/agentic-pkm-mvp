@@ -767,6 +767,11 @@ deploy_channel_compose() {
           return 92
         fi
         cat "${compose_stdout_file}"
+      elif [ "${DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}" = "1" ]; then
+        # The migration gate-only probe is the one governed command whose
+        # stdout is an authority token. The caller validates its exact shape
+        # and cardinality; no general Compose output crosses this boundary.
+        cat "${compose_stdout_file}"
       elif _deploy_channel_principal_cutover_receipt_requested "$@"; then
         if ! _deploy_channel_redact_principal_cutover_receipt "${compose_stdout_file}"; then
           echo "governed compose output blocked: command=principal-cutover receipt=invalid" >&2

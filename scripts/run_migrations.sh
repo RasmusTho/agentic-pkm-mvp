@@ -15,9 +15,11 @@
 #   `depends_on` ordering serializes the two alembic invocations.
 #
 # Production migration safety is enforced here, immediately before the first
-# `alembic upgrade head`. The canonical prod launcher marks the compose
-# migration service with MIGRATION_PRODUCTION_GATE=1; a prod API re-run also
-# carries PKM_ENVIRONMENT=prod. Dev/test migrations do not enter this gate.
+# `alembic upgrade head`. The production Compose overlay owns the gate binding
+# for the canonical migrate service; a prod API re-run also carries
+# PKM_ENVIRONMENT=prod. Dev/test migrations do not enter this gate. Deploys may
+# invoke this script in gate-token-only mode before draining writers; that mode
+# is a read-only token producer and must never reach Alembic.
 set -euo pipefail
 
 run_production_migration_gate() {
@@ -124,6 +126,9 @@ if delta.forward_only:
         digest.update(info.path.read_bytes())
         digest.update(b"\n")
     expected_ack = f"{ACK_PREFIX}{digest.hexdigest()}"
+    if os.environ.get("MIGRATION_GATE_TOKEN_ONLY") == "1":
+        print(expected_ack)
+        raise SystemExit(0)
     supplied_ack = os.environ.get("PROD_MIGRATION_FORWARD_ONLY_ACK", "").strip()
     if not supplied_ack:
         pending_names = ", ".join(info.filename for info in delta.forward_only)
@@ -146,6 +151,13 @@ PY
 
 if [[ "${MIGRATION_PRODUCTION_GATE:-0}" == "1" || "${PKM_ENVIRONMENT:-}" == "prod" ]]; then
   run_production_migration_gate
+fi
+
+# The deploy channel producer uses the same target-bound gate before it stops
+# runtime writers. A token-only invocation is a read-only pre-cutover probe;
+# returning here is what prevents it from becoming a second migration runner.
+if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" ]]; then
+  exit 0
 fi
 
 if [[ -n "${DATABASE_URL:-}" ]]; then
