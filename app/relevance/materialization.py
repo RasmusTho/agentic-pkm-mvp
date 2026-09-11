@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.relevance.schema import Moment
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import render_markdown_settings
@@ -56,6 +56,10 @@ def materialize_moment(
     # system-settings.yaml yet (only ``settings/*.md``).
     system_dir = resolve_vault_system_dir_rel_or_default(vault_root)
     artifact_path = f"{system_dir}/moments/{moment.uuid}.md"
+    expected_version: str | None = None
+    existing_artifact = vault_root / artifact_path
+    if existing_artifact.is_file():
+        _, expected_version = read_note_text_with_version(existing_artifact)
     receipt_id = uuid4().hex
     trace_id = uuid4().hex
     moment.receipt_ref = receipt_id
@@ -63,7 +67,12 @@ def materialize_moment(
 
     try:
         write_guard.assert_writes_allowed(MOMENT_MATERIALIZE_ACTION)
-        write_note_relative(artifact_path, content, vault_root=vault_root)
+        write_note_relative(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            expected_version=expected_version,
+        )
     except WritesBlockedError as exc:
         _append_moment_receipt(
             outbox_path,
