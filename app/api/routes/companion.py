@@ -80,6 +80,7 @@ from app.domain.commitments import (
 from app.api.routes.active_context_selection import get_selection_store
 from app.api.routes.ingest_binding import ingest_binding_status
 from app.api.request_active_context import require_scoped_read_context
+from app.instance.errors import RegistryError
 from app.api.compatibility_mutation import (
     HEADER_COMPATIBILITY_PRECONDITION,
     reject_scoped_vault_mutation,
@@ -2328,11 +2329,23 @@ def list_scoped_vault_notes(
             # revocation can complete between filesystem read and publication.
             payload = JSONResponse(content=response.model_dump(mode="json"))
             if len(context.source_bindings) == 1:
-                payload.headers[HEADER_COMPATIBILITY_PRECONDITION] = issue_compatibility_precondition(
-                    binding_id=context.source_bindings[0].vault_binding_id,
-                    principal_id=context.principal_context.principal_id,
-                    registry=VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False)),
-                )
+                try:
+                    precondition = issue_compatibility_precondition(
+                        binding_id=context.source_bindings[0].vault_binding_id,
+                        principal_id=context.principal_context.principal_id,
+                        registry=VaultRegistryStore(
+                            Path(registry_path).expanduser().resolve(strict=False)
+                        ),
+                    )
+                except RegistryError as exc:
+                    # The scoped read path remains usable before the optional
+                    # compatibility-rebind bridge is installed.  A migrated
+                    # mutation can only use a precondition minted after that
+                    # bridge exists, so omit the advisory header here.
+                    if str(exc) != "settings rebind record is not installed":
+                        raise
+                else:
+                    payload.headers[HEADER_COMPATIBILITY_PRECONDITION] = precondition
             return payload
     except ContextBoundReadError as exc:
         raise HTTPException(status_code=409, detail="active_context_read_unavailable") from exc
