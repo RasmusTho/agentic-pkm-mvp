@@ -30,7 +30,12 @@ TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
 BASE_REVISION = "base0001"
 
 
-def _make_fixture(tmp_path: Path, *, child: str) -> tuple[Path, Path, Path]:
+def _make_fixture(
+    tmp_path: Path,
+    *,
+    child: str,
+    current_revision: str = "base0001",
+) -> tuple[Path, Path, Path]:
     root = tmp_path / "fixture"
     versions = root / "app" / "alembic" / "versions"
     versions.mkdir(parents=True)
@@ -55,7 +60,7 @@ def _make_fixture(tmp_path: Path, *, child: str) -> tuple[Path, Path, Path]:
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$*" >> "$ALEMBIC_LOG"\n'
         'case "$*" in\n'
-        '  *" current") printf "%s (head)\\n" "base0001" ;;\n'
+        f'  *" current") printf "%s (head)\\n" "{current_revision}" ;;\n'
         '  *" upgrade head") printf "upgrade\\n" >> "$ALEMBIC_LOG" ;;\n'
         "esac\n",
         encoding="utf-8",
@@ -149,6 +154,34 @@ def test_gate_token_only_mode_emits_token_without_running_upgrade(tmp_path: Path
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"prod-migration-ack\.v1:[0-9a-f]{64}\n?", result.stdout)
     assert "upgrade head" not in log_path.read_text(encoding="utf-8")
+
+
+def test_gate_token_only_mode_fails_closed_without_forward_only_pending(
+    tmp_path: Path,
+) -> None:
+    at_head_root, _child_path, at_head_log = _make_fixture(
+        tmp_path / "at-head",
+        child='reversibility = "forward-only"',
+        current_revision="child0002",
+    )
+    at_head = _run_migration(at_head_root, at_head_log, gate_token_only=True)
+
+    assert at_head.returncode == 78
+    assert "token-only migration probe found no pending migration" in at_head.stderr
+    assert "upgrade head" not in at_head_log.read_text(encoding="utf-8")
+
+    reversible_root, _child_path, reversible_log = _make_fixture(
+        tmp_path / "reversible",
+        child='reversibility = "reversible"',
+    )
+    reversible = _run_migration(reversible_root, reversible_log, gate_token_only=True)
+
+    assert reversible.returncode == 78
+    assert (
+        "token-only migration probe found no forward-only pending migration"
+        in reversible.stderr
+    )
+    assert "upgrade head" not in reversible_log.read_text(encoding="utf-8")
 
 
 def test_production_overlay_owns_gate_and_nonproduction_overlays_clear_stale_controls() -> None:

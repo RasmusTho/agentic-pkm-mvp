@@ -95,6 +95,7 @@ current_revisions = tuple(
 )
 if not current_revisions:
     fail("current database revision is unavailable")
+token_only = os.environ.get("MIGRATION_GATE_TOKEN_ONLY") == "1"
 
 try:
     delta = _pending_migration_delta(migrations_dir, current_revisions)
@@ -106,6 +107,8 @@ except (OSError, ValueError) as exc:
 if delta.unreachable_detail is not None:
     fail(delta.unreachable_detail)
 if not delta.pending:
+    if token_only:
+        fail("token-only migration probe found no pending migration")
     print("Production migration gate passed: database is at Alembic head.")
     raise SystemExit(0)
 
@@ -126,7 +129,7 @@ if delta.forward_only:
         digest.update(info.path.read_bytes())
         digest.update(b"\n")
     expected_ack = f"{ACK_PREFIX}{digest.hexdigest()}"
-    if os.environ.get("MIGRATION_GATE_TOKEN_ONLY") == "1":
+    if token_only:
         print(expected_ack)
         raise SystemExit(0)
     supplied_ack = os.environ.get("PROD_MIGRATION_FORWARD_ONLY_ACK", "").strip()
@@ -145,6 +148,8 @@ if delta.forward_only:
 
     print("Production migration gate passed: target-bound forward-only acknowledgement accepted.")
 else:
+    if token_only:
+        fail("token-only migration probe found no forward-only pending migration")
     print("Production migration gate passed: pending migrations are reversible.")
 PY
 }
