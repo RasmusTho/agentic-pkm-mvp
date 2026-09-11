@@ -736,6 +736,12 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "staging directory is created, and passes the same guard/action through "
         "to the port's own guard (#3315)."
     ),
+    ("app/briefing/compose.py", "_atomic_write", 2): (
+        "guarded_by_caller: the canonical expected-version-aware rewrite in "
+        "_atomic_write receives the same guard/action after the complete private "
+        "stage is prepared, and the port asserts that guard before its atomic "
+        "exchange (#5139)."
+    ),
     ("app/relevance/materialization.py", "materialize_moment", 1): (
         "guarded_by_caller: materialize_moment asserts write_guard."
         "assert_writes_allowed(MOMENT_MATERIALIZE_ACTION) immediately before "
