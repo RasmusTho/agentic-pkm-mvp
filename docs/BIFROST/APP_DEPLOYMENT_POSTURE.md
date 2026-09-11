@@ -23,7 +23,7 @@ instead of tribal knowledge.
 
 | Step | Owner | Mechanism |
 |---|---|---|
-| Build + unit/UI test | agents | bifrost CI (`macos-14`, simulator, `CODE_SIGNING_ALLOWED=NO`) — the merge gate |
+| Build + unit/UI test | agents | bifrost CI (`macos-15`, simulator, `CODE_SIGNING_ALLOWED=NO`) — the merge gate |
 | Simulator UAT journeys | agents | XCUITest in CI (see `docs/YGGDRASIL_APP_SHELL_COMPLETION/PROVE_UAT_JOURNEYS_IN_SIMULATOR_AND_ON_DEVICE.md`) |
 | Device install | **operator** | Xcode → run on device with Personal Team signing (runbook below) |
 | Eyes-on device walkthrough receipts | **operator** | posted to the tracking issue per the relevant spec |
