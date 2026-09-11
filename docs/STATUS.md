@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-11 (bounded DevUI runtime/receipt writeback)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
@@ -16,7 +16,7 @@ migration remains report-only by default and requires its own fresh targeted aut
 Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evidence_matching.py`,
 `app/standing_questions/answer_refresh.py`, and focused Standing Questions tests on 2026-08-29;
 live test-channel and owner-UAT evidence remain absent.
-Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30
+Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30; DevUI runtime/receipt boundary: Issue #5476, app/builderops/devui_runtime.py, app/ops/devui_vm102_runtime_receipts.py (2026-09-11, repository-only)
 
 ### Live environment baseline (2026-08-22)
 
@@ -31,15 +31,22 @@ Status snapshot now includes SoT baseline + release-line fields and intent/event
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
-2026-08-09 devUI read-model writeback (verified against `docs/DEVUI.md`,
-`docs/plans/DEVUI_IMPLEMENTATION.md`, and `app/builderops/devui_overview.py`):
+2026-09-11 DevUI read-model and prepared-runtime writeback (verified against `docs/DEVUI.md`,
+`docs/plans/DEVUI_IMPLEMENTATION.md`, `app/builderops/devui_overview.py`,
+`app/builderops/devui_runtime.py`, and `app/ops/devui_vm102_runtime_receipts.py`; repository evidence only):
 
 - The pure `devui-overview-view.v1` server-side composer derives the nonvisual Overview from
   `devui.composition.v1`, explicit producer evidence, and typed root references. It preserves
   unsupported owner and ready classification as withdrawal rather than an empty list; it performs
   no source I/O, persistence, mutation, task/session operation, inferred correlation, or browser
-  classification. Producer enrichment, a local Overview route, and every visual or command surface
-  remain undelivered.
+  classification. The standalone Builder listener now prepares exact read-only
+  `/api/devui/overview` with private loopback admission and fail-loud configuration preflight,
+  without Product startup. Its typed qualification/deploy/health producers validate supplied
+  component evidence and distinguish preparation from observed health. Work/CKM transports remain
+  unavailable in this runtime. The managed declaration and passing repository tests do not prove
+  VM102 deployment, live health, browser proof or owner acceptance; those gates remain under #5181
+  and #4749. The runtime/receipt owner contract is
+  `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Standalone DevUI receipt production`.
 - The pure `devui.discovery-projection.v1` composer derives detached discovery items from the
   existing composition envelope and caller-declared source records. It preserves authority,
   provenance, lifecycle, source-state limitations, and source-bound read-only navigation; it adds
