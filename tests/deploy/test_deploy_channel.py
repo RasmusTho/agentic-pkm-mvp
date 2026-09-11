@@ -1971,7 +1971,7 @@ def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     stop_index = next(index for index, event in enumerate(events) if " stop api worker watcher" in event)
     full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
     assert probe_index < stop_index < full_index
-    assert f"selector=1 ack=" in events[probe_index]
+    assert "selector=1 ack=" in events[probe_index]
     assert events[full_index] == f"migration-full ack={token}"
 
 
