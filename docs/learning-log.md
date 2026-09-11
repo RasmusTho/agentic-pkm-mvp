@@ -266,3 +266,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: local CLI import failed because the `lingua` dependency is absent; convert this entry to a `LearningSignal` when the acknowledged BuilderOps store is reachable.
 
 --- retro 2026-09-05: applied 38/38 proposals ---
+
+## 2026-09-11 — #3341 / bifrost#67 (Bifrost visibility posture)
+**Source:** issue-maintenance-change-control / human decision
+**Diverged:** ADR-0050 recorded Bifrost as private while the live repository was public and the owner had intentionally chosen public visibility for required GitHub features.
+**Upstream artifact:** `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md :: Visibility amendment`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: `python -m app.builderops` failed because the package has no `__main__`; the ADR and Issue receipts were updated directly.
