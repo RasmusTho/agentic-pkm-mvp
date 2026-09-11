@@ -156,3 +156,46 @@ def test_withdraws_missing_or_blocking_gaps_or_refusals(tmp_path: Path) -> None:
     payload["refusals"] = ["deployment_not_proven"]
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"
+
+
+def test_accepts_first_deployment_no_baseline_refusal(tmp_path: Path) -> None:
+    _write_chain(tmp_path)
+    deploy_path = tmp_path / f"1-{REQUIRED_RECEIPT_TYPES[1]}.json"
+    deploy = json.loads(deploy_path.read_text(encoding="utf-8"))
+    deploy["rollback_baseline_state"] = "no_baseline"
+    deploy["refusals"] = ["no_compatible_baseline"]
+    unsigned = {key: value for key, value in deploy.items() if key != "evidence_fingerprint"}
+    deploy["evidence_fingerprint"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    deploy_path.write_text(json.dumps(deploy), encoding="utf-8")
+
+    health_path = tmp_path / f"2-{REQUIRED_RECEIPT_TYPES[2]}.json"
+    health = json.loads(health_path.read_text(encoding="utf-8"))
+    deploy_digest = hashlib.sha256(
+        json.dumps(deploy, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    health["source_refs"][-1] = f"receipt:{deploy['receipt_type']}:{deploy_digest}"
+    unsigned = {key: value for key, value in health.items() if key != "evidence_fingerprint"}
+    health["evidence_fingerprint"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    health_path.write_text(json.dumps(health), encoding="utf-8")
+
+    assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "available"
+
+
+def test_withdraws_first_deployment_with_previous_identity(tmp_path: Path) -> None:
+    _write_chain(tmp_path)
+    deploy_path = tmp_path / f"1-{REQUIRED_RECEIPT_TYPES[1]}.json"
+    deploy = json.loads(deploy_path.read_text(encoding="utf-8"))
+    deploy["rollback_baseline_state"] = "no_baseline"
+    deploy["refusals"] = ["no_compatible_baseline"]
+    deploy["previous_source_sha"] = SOURCE_SHA
+    unsigned = {key: value for key, value in deploy.items() if key != "evidence_fingerprint"}
+    deploy["evidence_fingerprint"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    deploy_path.write_text(json.dumps(deploy), encoding="utf-8")
+
+    assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"

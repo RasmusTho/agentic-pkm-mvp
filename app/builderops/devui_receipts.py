@@ -73,6 +73,19 @@ def _source_ref(receipt_type: str, digest: str) -> str:
     return f"receipt:{receipt_type}:{digest}"
 
 
+def _has_previous_identity(receipt: Mapping[str, Any]) -> bool:
+    for key, value in receipt.items():
+        normalized = key.casefold().replace("-", "_")
+        if normalized.startswith("previous_") or normalized in {
+            "prior_identity",
+            "previous_identity",
+            "rollback_baseline",
+        }:
+            if value is not None:
+                return True
+    return False
+
+
 def _component_id(receipt: Mapping[str, Any]) -> str:
     direct = receipt.get("component_id")
     if isinstance(direct, str) and direct.strip():
@@ -152,7 +165,14 @@ def _validate_receipt(
         raise Vm102ReceiptError(f"receipt {expected_type} evidence fingerprint is invalid")
     gaps = receipt.get("gaps")
     refusals = receipt.get("refusals")
-    if gaps != [] or refusals != []:
+    first_deployment_refusal = (
+        expected_type == "devsystem_vm102_deploy.v1"
+        and receipt.get("rollback_baseline_state") == "no_baseline"
+        and gaps == []
+        and refusals == ["no_compatible_baseline"]
+        and not _has_previous_identity(receipt)
+    )
+    if (gaps != [] or refusals != []) and not first_deployment_refusal:
         raise Vm102ReceiptError(f"receipt {expected_type} contains blocking gaps or refusals")
     verdict = _verdict(receipt)
     if verdict not in _POSITIVE_VERDICTS:

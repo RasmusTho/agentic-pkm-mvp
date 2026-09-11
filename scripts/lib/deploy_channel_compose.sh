@@ -517,18 +517,26 @@ deploy_channel_compose() {
   if [ -z "${receipt_host_dir}" ] && [ -n "${runtime_env_file}" ] && [ -f "${runtime_env_file}" ]; then
     receipt_host_dir="$(_deploy_channel_env_value "${runtime_env_file}" DEVUI_VM102_RECEIPT_HOST_DIR)"
   fi
-  if [ -n "${receipt_host_dir}" ]; then
+  if [ "${action:-deploy}" != "rollback" ] && [ -n "${receipt_host_dir}" ]; then
+    if [ ! -d "${receipt_host_dir}" ] || [ ! -r "${receipt_host_dir}" ] || [ ! -x "${receipt_host_dir}" ]; then
+      echo "VM-102 receipt source preflight: blocked reason=unavailable" >&2
+      return 78
+    fi
+    receipt_host_dir="$(cd -- "${receipt_host_dir}" 2>/dev/null && pwd -P)" || {
+      echo "VM-102 receipt source preflight: blocked reason=uncanonicalizable" >&2
+      return 78
+    }
     case "${receipt_host_dir}" in
+      /Users|/Users/*|/Volumes|/Volumes/*)
+        echo "VM-102 receipt source preflight: blocked reason=writable_host_alias" >&2
+        return 78
+        ;;
       /*) ;;
       *)
         echo "VM-102 receipt source preflight: blocked reason=relative_path" >&2
         return 78
         ;;
     esac
-    if [ ! -d "${receipt_host_dir}" ] || [ ! -r "${receipt_host_dir}" ] || [ ! -x "${receipt_host_dir}" ]; then
-      echo "VM-102 receipt source preflight: blocked reason=unavailable" >&2
-      return 78
-    fi
   fi
 
   vault_container_root=""
@@ -632,7 +640,7 @@ deploy_channel_compose() {
       unset VAULT_HOST_ROOT
       unset DEPLOY_VAULT_CONTAINER_ROOT
     fi
-    if [ -n "${receipt_host_dir}" ]; then
+    if [ "${action:-deploy}" != "rollback" ] && [ -n "${receipt_host_dir}" ]; then
       export DEVUI_VM102_RECEIPT_HOST_DIR="${receipt_host_dir}"
     else
       unset DEVUI_VM102_RECEIPT_HOST_DIR

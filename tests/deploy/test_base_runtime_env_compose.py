@@ -160,6 +160,15 @@ def test_devui_vm102_receipt_source_is_read_only_and_fail_closed() -> None:
     assert "VM-102 receipt source mount unavailable" in api["command"][-1]
 
 
+def test_devui_vm102_receipt_source_rejects_writable_host_alias() -> None:
+    api = _load_compose(BASE_COMPOSE)["services"]["api"]
+    startup = api["command"][-1]
+    assert "/Users|/Users/*|/Volumes|/Volumes/*" in startup
+    assert "pwd -P" in startup
+    helper = COMPOSE_HELPER.read_text(encoding="utf-8")
+    assert "/Users|/Users/*|/Volumes|/Volumes/*" in helper
+
+
 @requires_docker
 def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
     watcher = _load_compose(BASE_COMPOSE)["services"]["watcher"]
