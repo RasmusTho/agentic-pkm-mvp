@@ -368,6 +368,9 @@ def validate_receipt(
                 raise ReceiptValidationError("activation candidate does not match")
             if receipt["runtime"]["engine_id"] != activation["dedicated_engine"]["engine_id"]:
                 raise ReceiptValidationError("dedicated engine identity does not match activation")
+            control_plane = next(row for row in rows if row["component_id"] == "builderops_control_plane")
+            if control_plane["service_or_project"] != activation["dedicated_engine"]["project"]:
+                raise ReceiptValidationError("control-plane project does not match activation")
             if kind == "deploy":
                 _observations_after(receipt, activation, resident_only=True)
             if observed < _time(activation["observed_at"], captured):

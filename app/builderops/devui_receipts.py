@@ -25,6 +25,7 @@ AUTHORITY = "builderops_vm102_receipt_source"
 DEFAULT_RECEIPT_DIR = Path("/opt/builderops/receipts")
 RECEIPT_DIR_ENV = "DEVUI_VM102_RECEIPT_DIR"
 MAX_AGE_ENV = "DEVUI_VM102_RECEIPT_MAX_AGE_SECONDS"
+RUNTIME_PREREQUISITES_FILE = "devui-runtime-prerequisites.json"
 TARGET_VM = {"vmid": 102, "name": "builder-system"}
 SUBJECT_COMPONENT = "devui_projection"
 REQUIRED_RECEIPT_TYPES = (
@@ -248,12 +249,26 @@ def read_vm102_receipt_evidence(
     receipt_dir: Path | str | None = None,
     *,
     now: datetime | None = None,
+    require_typed_runtime: bool = False,
 ) -> dict[str, Any]:
     """Read and bind the current VM-102 qualification/deploy/health chain."""
 
     captured = (now or _utc_now()).astimezone(timezone.utc)
     max_age = _max_age()
     receipts = _load_latest_by_type(_receipt_dir(receipt_dir))
+    if require_typed_runtime:
+        # Use the owner's retained producer prerequisites and the same raw receipts
+        # that will be normalized below; never reread a second, unvalidated chain.
+        from app.ops.devui_vm102_runtime_receipts import validate_receipt
+
+        path = _receipt_dir(receipt_dir) / RUNTIME_PREREQUISITES_FILE
+        if path.is_symlink() or not path.is_file():
+            raise Vm102ReceiptError("typed runtime verification prerequisites are unavailable")
+        prerequisites = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(prerequisites, Mapping):
+            raise Vm102ReceiptError("typed runtime verification prerequisites are malformed")
+        for receipt in receipts.values():
+            validate_receipt(receipt, prerequisites, now=captured)
     normalized = {
         kind: _validate_receipt(
             receipts[kind], expected_type=kind, now=captured, max_age=max_age
@@ -287,11 +302,14 @@ def read_vm102_receipt_provider(
     receipt_dir: Path | str | None = None,
     *,
     now: datetime | None = None,
+    require_typed_runtime: bool = False,
 ) -> dict[str, Any]:
     """Return a composition contribution, refusing without diagnostic leakage."""
 
     try:
-        evidence = read_vm102_receipt_evidence(receipt_dir, now=now)
+        evidence = read_vm102_receipt_evidence(
+            receipt_dir, now=now, require_typed_runtime=require_typed_runtime
+        )
     except Exception as exc:
         LOGGER.info("VM-102 DevUI evidence withdrawn: %s", exc.__class__.__name__)
         return {

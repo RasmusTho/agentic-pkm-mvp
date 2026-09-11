@@ -95,7 +95,10 @@ or enable Funnel. It is not a general Companion gateway and does not deliver a b
 The process composes the existing pure Overview functions and the B1 receipt reader. Work and CKM
 transports are explicitly unavailable in this bounded runtime until their owning boundaries admit
 them; no legacy SQLite selector, Product authentication module, or synthetic source is substituted.
-An empty/invalid receipt source withdraws deployment status. Even a valid chain is withdrawn when
+The mounted source must retain `devui-runtime-prerequisites.json` as specified by the receipt owner.
+The listener validates all three typed receipts with those prerequisites before publishing status.
+An empty/invalid receipt source or missing verification input withdraws deployment status.
+Even a valid chain is withdrawn when
 its source SHA, DevUI image, or DevUI configuration differs from this listener. Liveness explicitly
 reports `complete_dev_system_health: false`; it cannot satisfy the complete health/owner-pilot
 contract. These remaining source and browser gates stay visible under #5181 and #4749.

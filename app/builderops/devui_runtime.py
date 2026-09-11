@@ -110,7 +110,9 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None, redirect_slashes=False)
 
     def receipt_provider() -> dict[str, Any]:
-        provider = read_vm102_receipt_provider(configuration.receipt_dir)
+        provider = read_vm102_receipt_provider(
+            configuration.receipt_dir, require_typed_runtime=True
+        )
         if provider["status"] == "available":
             identities = [
                 row["candidate_identity"] for row in provider["payload"]["receipts"].values()

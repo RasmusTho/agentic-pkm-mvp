@@ -67,6 +67,8 @@ def _bundle() -> dict:
                 else "prepared",
                 "service_or_project": "builderops-devui"
                 if row["component_id"] == "devui_projection"
+                else activation["dedicated_engine"]["project"]
+                if row["component_id"] == "builderops_control_plane"
                 else row["component_id"],
                 "source_identity_digest": "a" * 64,
                 "source_identity": None
@@ -336,6 +338,9 @@ def test_runtime_withdraws_another_candidate_chain(tmp_path: Path) -> None:
     bundle = _bundle()
     for receipt in _chain(bundle):
         (tmp_path / f"{receipt['receipt_type']}.json").write_text(json.dumps(receipt))
+    (tmp_path / "devui-runtime-prerequisites.json").write_text(
+        json.dumps(bundle["prerequisites"])
+    )
     candidate = bundle["evidence"]["candidate_identity"]
     env = {
         "VCS_REF": candidate["source_sha"],
@@ -612,3 +617,71 @@ def test_component_observations_follow_stage_prerequisites(kind: str) -> None:
     _refingerprint(receipt)
     with pytest.raises(ReceiptValidationError, match="predates its stage prerequisite"):
         validate_receipt(receipt, bundle["prerequisites"])
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "qualification", "deploy", "health", "missing", "malformed", "source_packet", "activation"]
+)
+def test_listener_admits_only_owner_verified_typed_evidence(tmp_path: Path, failure: str | None) -> None:
+    from fastapi.testclient import TestClient
+    from app.builderops.devui_runtime import create_app, load_configuration
+
+    bundle = _bundle()
+    chain = _chain(bundle)
+    if failure in TYPES:
+        receipt = chain[list(TYPES).index(failure)]
+        receipt["topology"] = []
+        receipt["checks"][next(iter(receipt["checks"]))] = False
+        receipt["evidence_fingerprint"] = canonical_digest(
+            {key: value for key, value in receipt.items() if key != "evidence_fingerprint"}
+        )
+    elif failure == "source_packet":
+        del bundle["prerequisites"]["component_evidence"]["health"]["devui_projection"]
+    elif failure == "activation":
+        del bundle["prerequisites"]["activation"]
+    for receipt in chain:
+        (tmp_path / f"{receipt['receipt_type']}.json").write_text(json.dumps(receipt))
+    if failure != "missing":
+        (tmp_path / "devui-runtime-prerequisites.json").write_text(
+            "[" if failure == "malformed" else json.dumps(bundle["prerequisites"])
+        )
+    candidate = bundle["evidence"]["candidate_identity"]
+    configuration = load_configuration({
+        "VCS_REF": candidate["source_sha"],
+        "DEVUI_SOURCE_SHA": candidate["source_sha"],
+        "DEVUI_IMAGE_DIGEST": candidate["devui_image_digest"],
+        "DEVUI_CONFIG_FINGERPRINT": candidate["devui_config_fingerprint"],
+        "DEVUI_VM102_RECEIPT_DIR": str(tmp_path),
+    })
+    with TestClient(
+        create_app(configuration), client=("127.0.0.1", 1000), base_url="http://127.0.0.1:8113"
+    ) as client:
+        response = client.get("/api/devui/overview")
+        assert response.status_code == 200
+        assert ("DevUI on VM 102" in response.text) == (failure is None)
+        if failure is not None:
+            assert "evidence_unavailable" in response.text
+            assert candidate["devui_image_digest"] not in response.text
+
+
+def test_control_plane_project_must_match_activation() -> None:
+    bundle = _bundle()
+    row = next(
+        row for row in bundle["evidence"]["topology"] if row["component_id"] == "builderops_control_plane"
+    )
+    row["service_or_project"] = "unrelated-project"
+    _component_evidence(bundle["evidence"], bundle["prerequisites"], "qualification")
+    with pytest.raises(ReceiptValidationError, match="control-plane project"):
+        _chain(bundle)
+
+    bundle = _bundle()
+    _, deploy, health = _chain(bundle)
+    for receipt, kind in ((deploy, "deploy"), (health, "health")):
+        broken = copy.deepcopy(receipt)
+        row = next(row for row in broken["topology"] if row["component_id"] == "builderops_control_plane")
+        row["service_or_project"] = "unrelated-project"
+        prerequisites = copy.deepcopy(bundle["prerequisites"])
+        _component_evidence(broken, prerequisites, kind)
+        _refingerprint(broken)
+        with pytest.raises(ReceiptValidationError, match="control-plane project"):
+            validate_receipt(broken, prerequisites)

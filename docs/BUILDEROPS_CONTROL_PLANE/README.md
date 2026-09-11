@@ -174,7 +174,8 @@ Canonical whole-receipt digests link qualification to deploy and deploy to healt
 reader. The inventory reference retains its existing component-inventory digest convention.
 Candidate identity includes the control-plane and PostgreSQL pins plus the DevUI image and
 configuration fingerprint. DevUI uses the same immutable Builder image; its managed configuration
-has a separate fingerprint. Deployment rechecks the activation candidate and dedicated engine;
+has a separate fingerprint. Deployment rechecks the activation candidate, dedicated engine and
+the control-plane topology's exact project against the activation's dedicated-engine project;
 later receipts must retain the exact candidate, runtime and stable component identities.
 Qualification uses resident state `prepared`, deploy uses `deployed`, and health uses `healthy`.
 External dependencies remain `external` and Product Runtime remains `excluded`. Health/version
@@ -189,6 +190,15 @@ Product identity is null. The DevUI identity must equal the candidate's DevUI pi
 computes `operator_evidence_digest` over canonical input evidence; arbitrary digest placeholders
 cannot replace source packets. A new observation changes its digest without changing the stable
 candidate or ownership contract. The operator retains original source packets with the receipt.
+
+The standalone listener requires `devui-runtime-prerequisites.json` in the same read-only receipt
+directory. Its contents are the retained producer input's `prerequisites` mapping: inventory,
+activation, qualification, deploy, all three component-evidence maps, and rollback-baseline
+evidence when applicable. This is the existing verification input, not another receipt or ledger.
+Before normalizing the selected three receipts, the listener invokes the owner validator on each
+against that input, then checks the selected chain and its own candidate pins. Missing, malformed,
+stale or inconsistent prerequisites withdraw deployment readiness. Files are reread on each request;
+partial operator updates fail closed until a consistent complete chain is present.
 
 A positive health receipt requires observed source-owned health/version and all complete-system
 read-only smoke checks. Missing providers cannot become successful full-system evidence through
