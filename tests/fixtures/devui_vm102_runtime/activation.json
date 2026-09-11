@@ -1,0 +1,104 @@
+{
+  "receipt_type": "builderops_vm_rebuild_activation.v1",
+  "receipt_version": 1,
+  "target_vm": {
+    "vmid": 102,
+    "name": "builder-system"
+  },
+  "observed_at": "2000-01-01T00:00:00Z",
+  "source_refs": [
+    "github:commit:6e8e62f36ea64c2ad0691028c99be39d2fce74d4",
+    "github:issue:5428",
+    "github:pr:5457",
+    "operator:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "receipt:devsystem_vm102_component_inventory.v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract",
+    "repo:scripts/deploy_builderops.sh#builderops_assert_failure_domain"
+  ],
+  "component_inventory_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "activation_mode": "existing_runtime_reconciled",
+  "candidate_identity": {
+    "source_sha": "6e8e62f36ea64c2ad0691028c99be39d2fce74d4",
+    "control_plane_image_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "postgres_image_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "config_fingerprint": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "host_identity": {
+    "proxmox_node": "tars",
+    "proxmox_vm_name": "bob-1",
+    "guest_hostname": "builder-system",
+    "guest_ip": "10.42.42.121",
+    "host_key_fingerprint": "ssh-ed25519:SHA256:1Hjf4duEUo9aNPEcQxDEGJIGg1pUzD2lluE2sd9QVDE",
+    "vm_running": true,
+    "qemu_agent_ready": true
+  },
+  "dedicated_engine": {
+    "context": "builderops",
+    "socket": "unix:///run/docker-builderops.sock",
+    "engine_id": "799a3d86-54f6-4208-b71a-36ae3eee61b6",
+    "project": "builderops-control-plane",
+    "compose_config_fingerprint": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "services": [
+      "api",
+      "db",
+      "migrate",
+      "worker"
+    ],
+    "healthy_services": [
+      "api",
+      "db",
+      "worker"
+    ]
+  },
+  "product_engine": {
+    "context": "default",
+    "socket": "unix:///var/run/docker.sock",
+    "engine_id": "2cae4764-d613-484d-b63d-0d353d5eab7c",
+    "projects": [],
+    "duplicate_observed_before_quarantine": true
+  },
+  "migration": {
+    "completed": true,
+    "schema_version": 4,
+    "authority_epoch": 1,
+    "classification": "forward_only_no_data_rewind",
+    "rollback_data_rewind": "forbidden"
+  },
+  "fencing": {
+    "proven": true,
+    "engine_service": "docker-builderops.service",
+    "engine_service_enabled": true,
+    "engine_service_restart": "always",
+    "control_plane_service": "builderops-control-plane.service",
+    "control_plane_service_enabled": true,
+    "forwarder_service": "builderops-loopback-forwarder.service",
+    "forwarder_service_enabled": true,
+    "post_reboot_verified": true
+  },
+  "no_dual_writer": {
+    "proven": true,
+    "pre_quarantine_duplicate_project": true,
+    "quarantine_action": "default_engine_project_down_without_volume_removal",
+    "post_quarantine_product_projects": [],
+    "volume_removal": false
+  },
+  "readiness": {
+    "ready": true,
+    "unauthenticated_status": 401,
+    "loopback_endpoint": "127.0.0.1:18100",
+    "authentication": "scoped-bearer-over-loopback",
+    "private_ingress": "tailscale-serve-https-loopback-no-funnel",
+    "no_funnel": true
+  },
+  "secret_material": "absent",
+  "gaps": [],
+  "refusals": [],
+  "claims": {
+    "activation_proven": true,
+    "dedicated_engine_proven": true,
+    "migration_proven": true,
+    "fencing_proven": true,
+    "no_dual_writer_proven": true,
+    "readiness_proven": true
+  }
+}

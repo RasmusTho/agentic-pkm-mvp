@@ -1,0 +1,432 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devsystem_vm102_deploy.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_type",
+    "receipt_version",
+    "target_vm",
+    "component_id",
+    "observed_at",
+    "source_refs",
+    "candidate_identity",
+    "component_inventory_digest",
+    "operator_evidence_digest",
+    "topology",
+    "runtime",
+    "checks",
+    "verdict",
+    "secret_material",
+    "gaps",
+    "refusals",
+    "evidence_fingerprint",
+    "rollback_baseline_state",
+    "previous_identity",
+    "rollback_baseline_refs"
+  ],
+  "properties": {
+    "receipt_type": {
+      "const": "devsystem_vm102_deploy.v1"
+    },
+    "receipt_version": {
+      "const": 1
+    },
+    "target_vm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vmid",
+        "name"
+      ],
+      "properties": {
+        "vmid": {
+          "const": 102
+        },
+        "name": {
+          "const": "builder-system"
+        }
+      }
+    },
+    "component_id": {
+      "const": "devui_projection"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_refs": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(repo:docs/BUILDEROPS_CONTROL_PLANE/README[.]md#vm-102-evidence-and-receipt-contract|operator:sha256:[a-f0-9]{64}|receipt:[a-z0-9_.-]+:[a-f0-9]{64})$"
+      }
+    },
+    "candidate_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_sha",
+        "control_plane_image_digest",
+        "postgres_image_digest",
+        "config_fingerprint",
+        "devui_image_digest",
+        "devui_config_fingerprint"
+      ],
+      "properties": {
+        "source_sha": {
+          "type": "string",
+          "pattern": "^(?!0{40}$)[a-f0-9]{40}$"
+        },
+        "control_plane_image_digest": {
+          "type": "string",
+          "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+        },
+        "postgres_image_digest": {
+          "type": "string",
+          "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+        },
+        "config_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+        },
+        "devui_image_digest": {
+          "type": "string",
+          "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+        },
+        "devui_config_fingerprint": {
+          "type": "string",
+          "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+        }
+      }
+    },
+    "component_inventory_digest": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "operator_evidence_digest": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "topology": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "component_id",
+          "owner",
+          "placement_class",
+          "evidence_digest",
+          "state",
+          "service_or_project",
+          "source_identity_digest",
+          "ingress_auth",
+          "health_version",
+          "deployment_owner",
+          "migration_rollback",
+          "source_identity",
+          "observed_at"
+        ],
+        "properties": {
+          "component_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.:-]{0,79}$"
+          },
+          "owner": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.:-]{0,79}$"
+          },
+          "placement_class": {
+            "enum": [
+              "vm102_resident_target",
+              "external_dependency",
+              "intentionally_non_runtime"
+            ]
+          },
+          "evidence_digest": {
+            "type": "string",
+            "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+          },
+          "state": {
+            "enum": [
+              "prepared",
+              "deployed",
+              "healthy",
+              "external",
+              "excluded"
+            ]
+          },
+          "service_or_project": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.:-]{0,79}$"
+          },
+          "source_identity_digest": {
+            "type": "string",
+            "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+          },
+          "ingress_auth": {
+            "enum": [
+              "internal_authenticated",
+              "external_source_owned",
+              "excluded"
+            ]
+          },
+          "health_version": {
+            "enum": [
+              "not_observed",
+              "verified",
+              "excluded"
+            ]
+          },
+          "deployment_owner": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.:-]{0,79}$"
+          },
+          "migration_rollback": {
+            "enum": [
+              "no_migration_restore_image_config",
+              "builderops_governed_no_data_rewind",
+              "external_source_owned",
+              "excluded"
+            ]
+          },
+          "source_identity": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source_sha",
+                  "image_digest",
+                  "config_fingerprint"
+                ],
+                "properties": {
+                  "source_sha": {
+                    "type": "string",
+                    "pattern": "^(?!0{40}$)[a-f0-9]{40}$"
+                  },
+                  "image_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+                  },
+                  "config_fingerprint": {
+                    "type": "string",
+                    "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source_ref",
+                  "version_digest"
+                ],
+                "properties": {
+                  "source_ref": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_.:-]{0,79}$"
+                  },
+                  "version_digest": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "service",
+        "engine_id",
+        "engine_context",
+        "engine_socket",
+        "process_owner",
+        "bind_host",
+        "port",
+        "overview_path",
+        "managed",
+        "product_runtime_started",
+        "no_dual_writer",
+        "private_authenticated_ingress",
+        "funnel",
+        "migration",
+        "rollback_owner"
+      ],
+      "properties": {
+        "project": {
+          "const": "builderops-devui"
+        },
+        "service": {
+          "const": "devui"
+        },
+        "engine_id": {
+          "type": "string",
+          "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+        },
+        "engine_context": {
+          "const": "builderops"
+        },
+        "engine_socket": {
+          "const": "unix:///run/docker-builderops.sock"
+        },
+        "process_owner": {
+          "const": "builderops"
+        },
+        "bind_host": {
+          "const": "127.0.0.1"
+        },
+        "port": {
+          "const": 8113
+        },
+        "overview_path": {
+          "const": "/api/devui/overview"
+        },
+        "managed": {
+          "const": true
+        },
+        "product_runtime_started": {
+          "const": false
+        },
+        "no_dual_writer": {
+          "const": true
+        },
+        "private_authenticated_ingress": {
+          "const": true
+        },
+        "funnel": {
+          "const": false
+        },
+        "migration": {
+          "const": "none"
+        },
+        "rollback_owner": {
+          "const": "builder-system-release-operator"
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_completed",
+        "vm_local_attestation_verified",
+        "operator_gate_satisfied",
+        "migration_completed"
+      ],
+      "properties": {
+        "deployment_completed": {
+          "const": true
+        },
+        "vm_local_attestation_verified": {
+          "const": true
+        },
+        "operator_gate_satisfied": {
+          "const": true
+        },
+        "migration_completed": {
+          "const": true
+        }
+      }
+    },
+    "verdict": {
+      "const": "deployed"
+    },
+    "secret_material": {
+      "const": "absent"
+    },
+    "gaps": {
+      "const": []
+    },
+    "refusals": {
+      "enum": [
+        [],
+        [
+          "no_compatible_baseline"
+        ]
+      ]
+    },
+    "evidence_fingerprint": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "rollback_baseline_state": {
+      "enum": [
+        "available",
+        "no_baseline"
+      ]
+    },
+    "previous_identity": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_sha",
+            "control_plane_image_digest",
+            "postgres_image_digest",
+            "config_fingerprint",
+            "devui_image_digest",
+            "devui_config_fingerprint"
+          ],
+          "properties": {
+            "source_sha": {
+              "type": "string",
+              "pattern": "^(?!0{40}$)[a-f0-9]{40}$"
+            },
+            "control_plane_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "postgres_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "config_fingerprint": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "devui_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "devui_config_fingerprint": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rollback_baseline_refs": {
+      "type": "array",
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^receipt:devsystem_vm102_(deploy|health)[.]v1:[a-f0-9]{64}$"
+      }
+    }
+  }
+}

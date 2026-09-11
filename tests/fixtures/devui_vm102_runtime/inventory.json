@@ -1,0 +1,265 @@
+{
+  "receipt_type": "devsystem_vm102_component_inventory.v1",
+  "receipt_version": 1,
+  "target_vm": {
+    "vmid": 102,
+    "name": "builder-system"
+  },
+  "observed_at": "2000-01-01T00:00:00Z",
+  "source_refs": [
+    "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract",
+    "github:issue:5194"
+  ],
+  "components": [
+    {
+      "component_id": "devui_projection",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:dev_ui",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "builderops_control_plane",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:builderops",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "builderops_cockpit",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:builderops_cockpit",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "dispatcher_signboard",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:dispatcher_signboard",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "ddo",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:ddo",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "ckm_kvasir",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:ckm_kvasir",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "focus_conversation_port",
+      "placement_class": "vm102_resident_target",
+      "owner": "owner:focus_conversation_port",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "soi_evidence",
+      "placement_class": "external_dependency",
+      "owner": "owner:product_runtime",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "github_git_ci_delivery",
+      "placement_class": "external_dependency",
+      "owner": "owner:github_git_ci",
+      "service_or_project": "external:service_or_project_external_dependency",
+      "source_identity": "external:source_identity_external_dependency",
+      "ingress_auth": "external:ingress_auth_external_dependency",
+      "health_version": "external:health_version_external_dependency",
+      "deployment_lifecycle": "external:deployment_lifecycle_external_dependency",
+      "migration_rollback": "external:migration_rollback_external_dependency",
+      "reconciliation_state": "external",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "model_service",
+      "placement_class": "external_dependency",
+      "owner": "owner:model_access_substrate",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "tars_proxmox_control",
+      "placement_class": "external_dependency",
+      "owner": "owner:tars_proxmox",
+      "service_or_project": "gap:service_or_project_not_proven",
+      "source_identity": "gap:source_identity_not_proven",
+      "ingress_auth": "gap:ingress_auth_not_proven",
+      "health_version": "gap:health_version_not_proven",
+      "deployment_lifecycle": "gap:deployment_lifecycle_not_proven",
+      "migration_rollback": "gap:migration_rollback_not_proven",
+      "reconciliation_state": "gap",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    },
+    {
+      "component_id": "product_runtime",
+      "placement_class": "intentionally_non_runtime",
+      "owner": "owner:product_runtime",
+      "service_or_project": "excluded:service_or_project_not_applicable",
+      "source_identity": "excluded:source_identity_not_applicable",
+      "ingress_auth": "excluded:ingress_auth_not_applicable",
+      "health_version": "excluded:health_version_not_applicable",
+      "deployment_lifecycle": "excluded:deployment_lifecycle_not_applicable",
+      "migration_rollback": "excluded:migration_rollback_not_applicable",
+      "reconciliation_state": "excluded",
+      "evidence_refs": [
+        "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+      ]
+    }
+  ],
+  "secret_material": "absent",
+  "gaps": [
+    {
+      "component_id": "devui_projection",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "builderops_control_plane",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "builderops_cockpit",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "dispatcher_signboard",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "ddo",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "ckm_kvasir",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "focus_conversation_port",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "soi_evidence",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "model_service",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    },
+    {
+      "component_id": "tars_proxmox_control",
+      "code": "runtime_evidence_missing",
+      "detail": "runtime evidence is not supplied by this inventory"
+    }
+  ],
+  "refusals": [
+    "activation_not_proven",
+    "deployment_not_proven",
+    "health_not_proven",
+    "qualification_not_proven",
+    "residency_not_proven",
+    "rollback_not_proven"
+  ],
+  "claims": {
+    "inventory_complete": true,
+    "residency_proven": false,
+    "qualification_proven": false,
+    "activation_proven": false,
+    "deployment_proven": false,
+    "health_proven": false,
+    "rollback_proven": false
+  }
+}

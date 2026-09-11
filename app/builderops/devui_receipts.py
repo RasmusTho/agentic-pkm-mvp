@@ -178,11 +178,19 @@ def _validate_receipt(
     if verdict not in _POSITIVE_VERDICTS:
         raise Vm102ReceiptError(f"receipt {expected_type} has no positive verdict")
     digest = _digest(receipt)
+    candidate_identity = {"source_sha": source_sha}
+    raw_identity = receipt.get("candidate_identity")
+    if isinstance(raw_identity, Mapping):
+        for field in ("devui_image_digest", "devui_config_fingerprint"):
+            value = raw_identity.get(field)
+            if isinstance(value, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", value):
+                candidate_identity[field] = value
     return {
         "receipt_type": expected_type,
         "receipt_version": receipt.get("receipt_version"),
         "observed_at": observed_at.isoformat(),
         "source_sha": source_sha,
+        "candidate_identity": candidate_identity,
         "component_id": SUBJECT_COMPONENT,
         "verdict": verdict,
         "source_ref": _source_ref(expected_type, digest),

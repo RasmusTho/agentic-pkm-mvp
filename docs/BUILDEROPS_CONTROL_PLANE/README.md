@@ -70,9 +70,11 @@ row must be retained in `devsystem_vm102_component_inventory.v1`, including rows
 | `tars_proxmox_control` | explicit external dependency | TARS/Proxmox host qualification, deploy, health, and rollback control | Host/VM identity, ownership, private ingress, qualification receipt, and operator boundary; host key verification must remain strict | Host/VM operations stay with #5052/#5056 and operator controls; no guest contract authorizes host mutation | `gap`: no current qualification receipt binds host ownership and inventory evidence |
 | `product_runtime` | intentionally non-runtime | Product Runtime and its data, credentials, routes, and lifecycle | No `pkm-*` project, Product credential, vault, or network identity on the BuilderOps engine/VM; separation must be evidenced | Product migrations and rollback remain Product-owned; never run them from this contract | `excluded`: separate authority class by design |
 
-For every `VM-102 resident (target)` row, a future qualification receipt must bind the actual
-service/project, engine, source/image identity, ingress/auth posture, health/version, deployment
-owner, lifecycle evidence, migration boundary, and rollback identity. `gap` is a required state,
+For every `VM-102 resident (target)` row, qualification binds the prepared service/project,
+engine, source/image/config identity, ingress/auth contract, deployment owner, migration boundary
+and rollback policy. Qualification records health/version as `not_observed`; deployment must
+subsequently prove the installed identities and health must prove the observed health/version.
+Preparation does not establish runtime residency or erase the inventory's live-evidence gaps. `gap` is a required state,
 not permission to deploy or to infer residency. Runtime evidence remains an explicit `gap` until a
 bound receipt proves it; transient screen, guest, or default-engine observations are not frozen as
 contract truth.
@@ -110,7 +112,7 @@ establishes that runnable baseline.
 | --- | --- | --- |
 | `devsystem_vm102_component_inventory.v1` | All inventory rows, placement class, owner, service/project, source/image, ingress/auth, health/version, deployment/lifecycle, migration/rollback fields, observed-at, and inventory digest; gaps are explicit | Residency or deployment |
 | `builderops_vm_rebuild_activation.v1` | Fresh VM identity/ownership, rebuild activation, dedicated engine/project, migration/readiness, fencing, no dual writer, and redacted operator evidence | Complete Dev System topology or Dev UI deployment |
-| `devui_vm102_runtime_qualification.v1` | Complete resident-component topology, exact engine/project/service identities, source/image identities, internal ingress/auth, health/version, no dual writer, and deployment/rollback ownership | Candidate-policy pass or a successful deployment |
+| `devui_vm102_runtime_qualification.v1` | Complete prepared component topology, exact engine/project/service and source/image/config identities, internal ingress/auth contract, explicit unobserved health/version, no-dual-writer contract and deployment/rollback ownership | Live host activation, residency, observed health/version, deployment or full-system readiness |
 | `devsystem_vm102_deploy.v1` | Component-inventory digest, VM identity, exact candidate SHA, all image digests, pinned config fingerprint, owner, timestamp, migration classification/completion, and typed rollback-baseline state with a previous identity only when available | Post-deploy health, a runnable rollback target, or owner acceptance |
 | `devsystem_vm102_health.v1` | Exact deployed identities, complete topology, health/version/readiness, internal ingress/auth, no-dual-writer proof, and read-only smoke results | Deployment authorization, promotion, or owner acceptance |
 | `devui-stage-a-read-only-owner-pilot.v1` | Receipt-sourced URL/SHA, #4748 exact-SHA browser evidence, source-backed normal/review/blocked/completed projections, zero-effect journey, and owner acknowledgement | Any claim about components not covered by the pilot |
@@ -141,6 +143,67 @@ The deploy preflight refusal envelope is a separate contract,
 [`config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json`](../../config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json).
 It is non-activating evidence (`activation_verdict: refused`, `mutation_performed: false`) and
 must never be consumed as a successful activation receipt.
+
+### Standalone DevUI receipt production
+
+The repository-side producers for `devui_vm102_runtime_qualification.v1`,
+`devsystem_vm102_deploy.v1`, and `devsystem_vm102_health.v1` are
+[`app/ops/devui_vm102_runtime_receipts.py`](../../app/ops/devui_vm102_runtime_receipts.py),
+with separate closed schemas under `config/platform/` bearing those exact names.
+They consume redacted caller-supplied evidence and validated prerequisite receipts; they perform
+no SSH, Docker, Proxmox, service activation, network request, or receipt persistence. The operator
+retains responsibility for authentic evidence collection and storage in the existing BuilderOps
+receipt source. Schema validation and a fingerprint prove consistency, not that observations
+actually occurred or that deployment was authorized.
+
+The CLI takes `--kind qualification|deploy|health --bundle <file.json>`. The bundle contains exactly
+`evidence` and `prerequisites`; `--verify` instead takes exactly `receipt` and `prerequisites` and
+revalidates the complete dependency chain. Evidence is explicit, and identical evidence produces
+identical canonical JSON and SHA-256 fingerprints. Invalid input exits nonzero with a value-free
+refusal and `mutation_performed: false`; it never prints the offending evidence. No receipt file,
+ledger, cache, or authority store is created by the CLI.
+
+Qualification consumes the complete inventory; deployment additionally consumes the existing
+activation receipt and qualification, while health also consumes deployment. Observations must be
+timezone-aware, at most 24 hours old, not future-dated, and ordered after their prerequisites.
+Canonical whole-receipt digests link qualification to deploy and deploy to health, matching the B1
+reader. The inventory reference retains its existing component-inventory digest convention.
+Candidate identity includes the control-plane and PostgreSQL pins plus the DevUI image and
+configuration fingerprint. DevUI uses the same immutable Builder image; its managed configuration
+has a separate fingerprint. Deployment rechecks the activation candidate and dedicated engine;
+later receipts must retain the exact candidate, runtime and stable component identities.
+Qualification uses resident state `prepared`, deploy uses `deployed`, and health uses `healthy`.
+External dependencies remain `external` and Product Runtime remains `excluded`. Health/version
+is `not_observed` before health, `verified` in health, and `excluded` for Product Runtime.
+
+All twelve inventory components remain present. `prerequisites.component_evidence` contains a
+map for each receipt kind, keyed by component ID. Each source packet contains exactly its topology
+row without `evidence_digest` or `source_identity_digest`; the validator compares its contents,
+recomputes both digests and checks observation freshness. Resident source identities name a SHA,
+image digest and config fingerprint; external identities name a source reference and version digest;
+Product identity is null. The DevUI identity must equal the candidate's DevUI pins. The producer
+computes `operator_evidence_digest` over canonical input evidence; arbitrary digest placeholders
+cannot replace source packets. A new observation changes its digest without changing the stable
+candidate or ownership contract. The operator retains original source packets with the receipt.
+
+A positive health receipt requires observed source-owned health/version and all complete-system
+read-only smoke checks. Missing providers cannot become successful full-system evidence through
+the listener's liveness probe. Preparation and deploy receipts do not substitute for that gate.
+First deployment retains `no_baseline`, null previous identity, no baseline references and exactly
+`no_compatible_baseline`. An available baseline requires `prerequisites.rollback_baseline` with
+prior `deploy` and `health` receipts plus `compatibility: verified_no_data_rewind`. Both prior
+receipts must have valid closed shapes and fingerprints, the same previous candidate and compatible
+runtime/placement, ordered timestamps, and a health reference to that deployment. Their digests are
+bound in `rollback_baseline_refs` and `source_refs`. Historical known-good evidence has no current
+freshness requirement; original dependency bundles remain in operator custody and current
+compatibility must be explicitly rechecked. This is not a recursive history store. Neither baseline
+state authorizes rollback, data rewind, or an operator action.
+
+The standalone listener's local configuration preflight is deliberately narrower than a live
+`devui_vm102_runtime_qualification.v1`: it establishes only that its explicit inputs can be read
+without Product boot. Its successful startup, a fixture-backed test, and its `/healthz` response
+must never be retained as complete VM102 qualification, deployment, health, or owner acceptance.
+The later #5181 operational chain and #4749 pilot remain separate gates.
 
 The deploy preflight also compares the configured BuilderOps and Product engine project listings.
 If `builderops-control-plane` is present on both engines, it refuses with a duplicate-writer result
