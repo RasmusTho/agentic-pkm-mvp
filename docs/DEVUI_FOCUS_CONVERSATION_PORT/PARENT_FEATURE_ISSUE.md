@@ -51,9 +51,12 @@ from GitHub/repository delivery.
 ## Constraints
 
 - No child is ready before this specification merges and live readiness is reconciled.
-- FCP-03 waits only for FCP-01. FCP-04 also waits for the separately authenticated action boundary
-  in #4169 and destination-owned operation-key/readback support in the existing Model Inquiry
-  artifacts. Neither nonvisual slice requires a design receipt.
+- FCP-03 waits only for FCP-01. FCP-04 requires delivered FCP-03 and the accepted
+  [FCA-08 bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
+  from #5502. FCP-04 implements admission in the existing authenticated BuilderOps service and
+  reservation/readback in the sanctioned inquiry destination; these are its deliverables, not
+  self-dependencies. Runtime Start stays unavailable until that implementation is verified. #4169
+  remains the DDO-specific bridge. Neither nonvisual slice requires a design receipt.
 - FCP-02 remains technically blocked until FCP-01/FCP-03/FCP-04 fixtures and the governed Yggdrasil
   design handoff are available. Later visual implementation is a separately derived slice.
 - GitHub/repository delivery truth, workflow authority, and existing receipts remain external.
@@ -110,7 +113,7 @@ from GitHub/repository delivery.
 | --- | --- | --- | --- |
 | FCP-01 — Compose Subject-Centred Focus | #4694 | blocked until spec merge | none |
 | FCP-03 — Open External Conversation Port | #4696 | blocked until FCP-01 delivery | FCP-01 |
-| FCP-04 — Start Model Inquiry from Exact Preview | #4697 | blocked | FCP-03, authenticated boundary #4169, and Model Inquiry operation-key/readback support |
+| FCP-04 — Start Model Inquiry from Exact Preview | #4697 | reconcile live readiness after accepted contract | FCP-03 and accepted FCA-08/#5502; bounded admission and destination reservation/readback are FCP-04 deliverables |
 | FCP-02 — Validate Focus and Conversation Design | #4695 | blocked on stable fixtures and handoff availability | FCP-01, FCP-03, and FCP-04 |
 
 Live backlog and capability-validation state is maintained on
