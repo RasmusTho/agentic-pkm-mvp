@@ -243,106 +243,123 @@ class _ChainResolution:
     error: str | None = None
 
 
-#: Matches compose interpolation tokens: $$, $VAR, ${...}.
-_ENV_FILE_VAR_PATTERN = re.compile(
-    r"\$(?:(?P<escaped>\$)|(?P<named>[A-Za-z_][A-Za-z0-9_]*)|\{(?P<braced>[^}]*)\})"
-)
 _BRACED_SIMPLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _BRACED_DEFAULT = re.compile(
     r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<colon>:?)-(?P<default>.*)$"
 )
 
 
+def _interpolate_compose_expression(
+    expr: str,
+    lookup: Callable[[str], str | None],
+) -> str | None:
+    """Resolve the supported Compose interpolation grammar recursively.
+
+    In addition to the simple/default forms, Compose permits a default to be
+    another interpolation expression, for example
+    ``${DATABASE_URL:-${DB_DSN:-postgresql://...}}``. The deploy preflight
+    must evaluate that same effective-value contract instead of treating the
+    nested form as an unknown DSN.
+    """
+    out: list[str] = []
+    unresolved_literal_dollar = False
+    index = 0
+    while index < len(expr):
+        if expr[index] != "$":
+            out.append(expr[index])
+            index += 1
+            continue
+        if index + 1 >= len(expr):
+            out.append("$")
+            unresolved_literal_dollar = True
+            index += 1
+            continue
+        if expr[index + 1] == "$":
+            out.append("$")
+            index += 2
+            continue
+        if expr[index + 1] == "{":
+            depth = 1
+            end = index + 2
+            while end < len(expr) and depth:
+                if expr[end] == "{":
+                    depth += 1
+                elif expr[end] == "}":
+                    depth -= 1
+                end += 1
+            if depth:
+                return None
+            braced = expr[index + 2 : end - 1]
+            if _BRACED_SIMPLE.fullmatch(braced):
+                out.append(lookup(braced) or "")
+                index = end
+                continue
+            default_match = _BRACED_DEFAULT.fullmatch(braced)
+            if default_match is None:
+                return None
+            value = lookup(default_match.group("name"))
+            resolved_selected: str | None
+            if default_match.group("colon"):
+                if value:
+                    # Compose treats a value supplied by the invoking
+                    # environment (including the explicit --env-file) as
+                    # opaque; only YAML's default expression is recursively
+                    # interpolated. In particular, a DSN password may contain
+                    # literal '$' characters that must not be re-expanded.
+                    resolved_selected = value
+                else:
+                    resolved_selected = _interpolate_compose_expression(
+                        default_match.group("default"), lookup
+                    )
+            else:
+                if value is not None:
+                    resolved_selected = value
+                else:
+                    resolved_selected = _interpolate_compose_expression(
+                        default_match.group("default"), lookup
+                    )
+            if resolved_selected is None:
+                return None
+            out.append(resolved_selected)
+            index = end
+            continue
+        if re.match(r"[A-Za-z_]", expr[index + 1]):
+            end = index + 2
+            while end < len(expr) and re.match(r"[A-Za-z0-9_]", expr[end]):
+                end += 1
+            out.append(lookup(expr[index + 1 : end]) or "")
+            index = end
+            continue
+        return None
+    if unresolved_literal_dollar:
+        return None
+    return "".join(out)
+
+
 def _interpolate_env_file_path(
     expr: str,
     lookup: Callable[[str], str | None],
 ) -> str | None:
-    """Interpolate an env_file path expression the way compose does.
+    """Interpolate an env_file path expression the way Compose does.
 
-    Supports ``$VAR``, ``${VAR}``, ``${VAR-default}`` and ``${VAR:-default}``.
-    Returns ``None`` when the expression uses a form the preflight cannot
-    resolve (e.g. ``${VAR:?err}``, nested expressions) or when the result is
-    empty / still contains ``$`` — the caller must treat that as an
-    unverifiable binding and fail closed.
+    An empty or unresolved path cannot identify a layer, so it fails closed.
     """
-    out: list[str] = []
-    pos = 0
-    for match in _ENV_FILE_VAR_PATTERN.finditer(expr):
-        out.append(expr[pos:match.start()])
-        pos = match.end()
-        if match.group("escaped"):
-            out.append("$")
-            continue
-        named = match.group("named")
-        if named is not None:
-            out.append(lookup(named) or "")
-            continue
-        braced = match.group("braced") or ""
-        if _BRACED_SIMPLE.match(braced):
-            out.append(lookup(braced) or "")
-            continue
-        default_match = _BRACED_DEFAULT.match(braced)
-        if default_match is None or "$" in default_match.group("default"):
-            return None  # unsupported expression form — unresolvable
-        value = lookup(default_match.group("name"))
-        if default_match.group("colon"):
-            out.append(value if value else default_match.group("default"))
-        else:
-            out.append(value if value is not None else default_match.group("default"))
-    out.append(expr[pos:])
-    resolved = "".join(out)
-    if not resolved or "$" in resolved:
-        return None
-    return resolved
+
+    resolved = _interpolate_compose_expression(expr, lookup)
+    return resolved if resolved else None
 
 
 def _interpolate_environment_value(
     expr: str,
     lookup: Callable[[str], str | None],
 ) -> str | None:
-    """Interpolate a compose `environment:` scalar value the way compose does.
+    """Interpolate a Compose ``environment:`` scalar value.
 
-    Same substitution grammar as :func:`_interpolate_env_file_path`
-    (``$VAR``, ``${VAR}``, ``${VAR-default}``, ``${VAR:-default}``), but a
-    different unresolvable rule: an env_file *path* expression that resolves
-    to an empty string is meaningless (no file to read), so that function
-    folds "empty" and "unresolvable" together. A Compose `environment:`
-    *value* has no such constraint — an empty string is exactly what
-    ``${VAR:-}`` produces against an unset shell variable, and detecting that
-    blank-override shape is the whole point of Issue #4230's check. Returns
-    ``None`` only for a genuinely unsupported expression form (e.g.
-    ``${VAR:?err}``, nested expressions) or a result that still contains
-    ``$`` — both truly unresolvable, unlike a legitimate empty string.
+    Empty output is valid here because ``${VAR:-}`` deliberately resolves to
+    an empty environment value; the blank-override checker relies on that
+    distinction from an unresolvable expression.
     """
-    out: list[str] = []
-    pos = 0
-    for match in _ENV_FILE_VAR_PATTERN.finditer(expr):
-        out.append(expr[pos:match.start()])
-        pos = match.end()
-        if match.group("escaped"):
-            out.append("$")
-            continue
-        named = match.group("named")
-        if named is not None:
-            out.append(lookup(named) or "")
-            continue
-        braced = match.group("braced") or ""
-        if _BRACED_SIMPLE.match(braced):
-            out.append(lookup(braced) or "")
-            continue
-        default_match = _BRACED_DEFAULT.match(braced)
-        if default_match is None or "$" in default_match.group("default"):
-            return None  # unsupported expression form — unresolvable
-        value = lookup(default_match.group("name"))
-        if default_match.group("colon"):
-            out.append(value if value else default_match.group("default"))
-        else:
-            out.append(value if value is not None else default_match.group("default"))
-    out.append(expr[pos:])
-    resolved = "".join(out)
-    if "$" in resolved:
-        return None
-    return resolved
+    return _interpolate_compose_expression(expr, lookup)
 
 
 def _service_env_file_layers(service_dict: dict[str, Any]) -> list[EnvFileLayer]:

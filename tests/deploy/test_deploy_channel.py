@@ -298,12 +298,13 @@ if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MA
   exit 24
 fi
 case "$*" in
-  *"run --rm --no-deps -T migrate"*)
+  *"run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate"*)
+    probe_selector=1
     printf 'migration-token-probe selector=%s ack=%s\\n' \
-      "${{DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}}" \
+      "${{probe_selector}}" \
       "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
       >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
-    if [ "${{DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}}" = "1" ]; then
+    if [ "${{probe_selector}}" = "1" ]; then
       printf '%s\\n' "${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-ack.v1:0000000000000000000000000000000000000000000000000000000000000000}}"
       if [ -n "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT:-}}" ]; then
         printf '%s\\n' "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT}}"

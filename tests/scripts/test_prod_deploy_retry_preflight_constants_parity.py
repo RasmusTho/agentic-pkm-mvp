@@ -227,3 +227,39 @@ def test_host_reachable_dsn_uses_the_pinned_published_port() -> None:
 
     assert f"127.0.0.1:{preflight._PROD_DB_HOST_PUBLISHED_PORT}" in translated
     assert preflight._COMPOSE_INTERNAL_DB_HOST + ":5432" not in translated
+
+
+def test_prod_dsn_resolution_ignores_repo_dotenv_like_compose_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The preflight must match Compose's explicit ``--env-file`` source.
+
+    A repo-root ``.env`` is not consulted by the real deploy wrapper because
+    ``config/deploy/prod.env`` is passed with ``--env-file``. A wrong DSN in
+    that ignored file must not steer the pending-retry safety query.
+    """
+    default_dsn = "postgresql+psycopg://app:app@db:5432/app"
+    (tmp_path / "config" / "deploy").mkdir(parents=True)
+    (tmp_path / "config" / "deploy" / "prod.env").write_text(
+        "APP_IMAGE_TAG=fixture\n", encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text(
+        "DATABASE_URL=postgresql+psycopg://app:app@wrong-dotenv:5432/app\n"
+        "DB_DSN=postgresql+psycopg://app:app@wrong-dotenv-fallback:5432/app\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docker-compose.prod.yml").write_text(
+        "services:\n"
+        "  worker:\n"
+        "    environment:\n"
+        "      DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-"
+        f"{default_dsn}}}}}\n"
+        "      DB_DSN: ${DATABASE_URL:-${DB_DSN:-"
+        f"{default_dsn}}}}}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(preflight, "_repo_root", lambda: tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    assert preflight._resolve_prod_dsn() == default_dsn

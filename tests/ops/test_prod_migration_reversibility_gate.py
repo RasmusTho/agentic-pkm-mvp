@@ -71,7 +71,100 @@ def _make_fixture(
         encoding="utf-8",
     )
     (fake_bin / "alembic").chmod(0o755)
+    _install_ready_postgres_probe(root)
     return root, child_path, root / "alembic.log"
+
+
+def _install_ready_postgres_probe(root: Path) -> Path:
+    support = root / "support"
+    support.mkdir(exist_ok=True)
+    (support / "psycopg.py").write_text(
+        "class _Cursor:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def execute(self, statement):\n"
+        "        return None\n"
+        "\n"
+        "\n"
+        "class _Connection:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def cursor(self):\n"
+        "        return _Cursor()\n"
+        "\n"
+        "\n"
+        "def connect(dsn, **kwargs):\n"
+        "    return _Connection()\n",
+        encoding="utf-8",
+    )
+    return support
+
+
+def _install_delayed_postgres_probe(root: Path, readiness_log: Path) -> Path:
+    support = root / "support"
+    support.mkdir(exist_ok=True)
+    (support / "psycopg.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "\n"
+        "\n"
+        "class _Cursor:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def execute(self, statement):\n"
+        "        with Path(os.environ[\"READINESS_LOG\"]).open(\"a\") as handle:\n"
+        "            handle.write(f\"sql:{statement}\\n\")\n"
+        "\n"
+        "\n"
+        "class _Connection:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def cursor(self):\n"
+        "        return _Cursor()\n"
+        "\n"
+        "\n"
+        "def connect(dsn, **kwargs):\n"
+        "    marker = Path(os.environ[\"READINESS_ATTEMPTS\"])\n"
+        "    attempts = int(marker.read_text() or \"0\") if marker.exists() else 0\n"
+        "    attempts += 1\n"
+        "    marker.write_text(str(attempts))\n"
+        "    with Path(os.environ[\"READINESS_LOG\"]).open(\"a\") as handle:\n"
+        "        handle.write(f\"ready-{attempts}\\n\")\n"
+        "    if attempts == 1:\n"
+        "        raise RuntimeError(\"database is still starting\")\n"
+        "    return _Connection()\n",
+        encoding="utf-8",
+    )
+    return support
+
+
+def _install_failing_postgres_probe(root: Path) -> None:
+    support = root / "support"
+    support.mkdir(exist_ok=True)
+    (support / "psycopg.py").write_text(
+        "def connect(dsn, **kwargs):\n"
+        "    raise RuntimeError(\"database is still starting\")\n",
+        encoding="utf-8",
+    )
+    sleep = root / "bin" / "sleep"
+    sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    sleep.chmod(0o755)
 
 
 def _run_migration(
@@ -92,7 +185,7 @@ def _run_migration(
             "LLM_PROVIDER": "mock",
             "MIGRATION_PRODUCTION_GATE": "1",
             "MIGRATION_TARGET_IDENTITY": target,
-            "PYTHONPATH": f"{REPO_ROOT}{os.pathsep}{environment.get('PYTHONPATH', '')}",
+            "PYTHONPATH": f"{root / 'support'}{os.pathsep}{REPO_ROOT}{os.pathsep}{environment.get('PYTHONPATH', '')}",
             "MIGRATION_GATE_TOKEN_ONLY": "1" if gate_token_only else "0",
         }
     )
@@ -148,17 +241,115 @@ def test_prod_start_full_enforces_migration_gate_before_upgrade(tmp_path: Path) 
     assert "upgrade head" in log_path.read_text(encoding="utf-8")
 
 
-def test_gate_token_only_mode_emits_token_without_running_upgrade(tmp_path: Path) -> None:
-    root, _child_path, log_path = _make_fixture(
+def test_token_only_gate_does_not_upgrade(tmp_path: Path) -> None:
+    root, _child_path, _log_path = _make_fixture(
         tmp_path,
         child='reversibility = "forward-only"',
     )
+    readiness_log = tmp_path / "readiness.log"
+    support = _install_delayed_postgres_probe(root, readiness_log)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{root / 'bin'}{os.pathsep}{environment['PATH']}",
+            "ALEMBIC_LOG": str(readiness_log),
+            "DATABASE_URL": "",
+            "DB_DSN": "postgresql+psycopg://app:app@db:5432/app",
+            "LLM_PROVIDER": "mock",
+            "MIGRATION_PRODUCTION_GATE": "1",
+            "MIGRATION_TARGET_IDENTITY": "pkm-prod/app",
+            "MIGRATION_GATE_TOKEN_ONLY": "1",
+            "PYTHONPATH": f"{support}{os.pathsep}{REPO_ROOT}",
+            "READINESS_ATTEMPTS": str(tmp_path / "readiness.attempts"),
+            "READINESS_LOG": str(readiness_log),
+        }
+    )
 
-    result = _run_migration(root, log_path, gate_token_only=True)
+    result = subprocess.run(
+        ["bash", str(MIGRATION_SCRIPT)],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"prod-migration-ack\.v1:[0-9a-f]{64}\n?", result.stdout)
-    assert "upgrade head" not in log_path.read_text(encoding="utf-8")
+    events = readiness_log.read_text(encoding="utf-8").splitlines()
+    current_index = next(index for index, event in enumerate(events) if event.endswith(" current"))
+    assert events.index("ready-2") < current_index
+    assert "sql:SELECT 1" in events
+    assert not any("create extension" in event for event in events)
+    assert not any(event.endswith(" upgrade head") for event in events)
+
+
+def test_prod_migration_gate_waits_for_database_before_upgrade(tmp_path: Path) -> None:
+    root, _child_path, _log_path = _make_fixture(
+        tmp_path,
+        child='reversibility = "reversible"',
+    )
+    readiness_log = tmp_path / "readiness.log"
+    support = _install_delayed_postgres_probe(root, readiness_log)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{root / 'bin'}{os.pathsep}{environment['PATH']}",
+            "ALEMBIC_LOG": str(readiness_log),
+            "DATABASE_URL": "",
+            "DB_DSN": "postgresql+psycopg://app:app@db:5432/app",
+            "LLM_PROVIDER": "mock",
+            "MIGRATION_PRODUCTION_GATE": "1",
+            "MIGRATION_TARGET_IDENTITY": "pkm-prod/app",
+            "PYTHONPATH": f"{support}{os.pathsep}{REPO_ROOT}",
+            "READINESS_ATTEMPTS": str(tmp_path / "readiness.attempts"),
+            "READINESS_LOG": str(readiness_log),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(MIGRATION_SCRIPT)],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    events = readiness_log.read_text(encoding="utf-8").splitlines()
+    current_index = next(index for index, event in enumerate(events) if event.endswith(" current"))
+    upgrade_index = next(
+        index for index, event in enumerate(events) if event.endswith(" upgrade head")
+    )
+    assert events.index("ready-2") < current_index < upgrade_index
+
+
+def test_prod_migration_gate_fails_closed_after_readiness_exhaustion(
+    tmp_path: Path,
+) -> None:
+    root, _child_path, log_path = _make_fixture(
+        tmp_path,
+        child='reversibility = "reversible"',
+    )
+    _install_failing_postgres_probe(root)
+
+    result = _run_migration(root, log_path)
+
+    assert result.returncode == 78
+    assert "readiness check failed after 30 attempts" in result.stderr
+    assert not log_path.exists()
+
+    token_root, _child_path, token_log = _make_fixture(
+        tmp_path / "token-only",
+        child='reversibility = "forward-only"',
+    )
+    _install_failing_postgres_probe(token_root)
+    token_result = _run_migration(token_root, token_log, gate_token_only=True)
+
+    assert token_result.returncode == 78
+    assert "readiness check failed after 30 attempts" in token_result.stderr
+    assert not token_log.exists()
 
 
 def test_gate_token_only_mode_fails_closed_without_forward_only_pending(
@@ -194,16 +385,39 @@ def test_production_overlay_owns_gate_and_nonproduction_overlays_clear_stale_con
     prod_migrate = yaml.load(prod_text, Loader=_ComposeLoader)["services"]["migrate"]
     prod_environment = prod_migrate["environment"]
     assert prod_environment["PKM_ENVIRONMENT"] == "prod"
-    assert prod_environment["DATABASE_URL"] == "postgresql+psycopg://app:app@db:5432/app"
-    assert prod_environment["DB_DSN"] == "postgresql+psycopg://app:app@db:5432/app"
+    default_dsn = "postgresql+psycopg://app:app@db:5432/app"
+    effective_dsn_expression = (
+        f"${{DATABASE_URL:-${{DB_DSN:-{default_dsn}}}}}"
+    )
+    assert prod_environment["DATABASE_URL"] == effective_dsn_expression
+    assert prod_environment["DB_DSN"] == effective_dsn_expression
     assert prod_environment["MIGRATION_PRODUCTION_GATE"] == "1"
     assert prod_environment["MIGRATION_TARGET_IDENTITY"] == "pkm-prod/app"
     assert prod_environment["PROD_MIGRATION_FORWARD_ONLY_ACK"] == (
         "${PROD_MIGRATION_FORWARD_ONLY_ACK:-}"
     )
-    assert prod_environment["MIGRATION_GATE_TOKEN_ONLY"] == (
-        "${DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}"
+    assert prod_environment["MIGRATION_GATE_TOKEN_ONLY"] == "0"
+    assert "DEPLOY_MIGRATION_GATE_TOKEN_ONLY" not in prod_text
+    assert "-e MIGRATION_GATE_TOKEN_ONLY=1 migrate" in (
+        REPO_ROOT / "scripts/deploy_channel.sh"
+    ).read_text(encoding="utf-8")
+
+    prod_services = yaml.load(prod_text, Loader=_ComposeLoader)["services"]
+    for service_name in ("migrate", "api", "worker", "watcher", "heimdal-capture-watch"):
+        service_environment = prod_services[service_name]["environment"]
+        assert service_environment["DATABASE_URL"] == prod_environment["DATABASE_URL"]
+        assert service_environment["DB_DSN"] == prod_environment["DB_DSN"]
+    assert prod_services["api"]["environment"]["MIGRATION_GATE_TOKEN_ONLY"] == "0"
+    assert 'bash "$(dirname "$0")/run_migrations.sh"' in (
+        REPO_ROOT / "scripts" / "start_api.sh"
+    ).read_text(
+        encoding="utf-8"
     )
+
+    # Compose interpolates both service bindings from one effective expression:
+    # DATABASE_URL wins when present, otherwise DB_DSN supplies the fallback.
+    assert effective_dsn_expression.count("DATABASE_URL") == 1
+    assert effective_dsn_expression.count("DB_DSN") == 1
 
     # These stale values represent a runtime.env generated by an older prod
     # start. They are service env_file input only; the explicit prod mapping
@@ -221,8 +435,8 @@ def test_production_overlay_owns_gate_and_nonproduction_overlays_clear_stale_con
     effective.update(
         {
             "PKM_ENVIRONMENT": prod_environment["PKM_ENVIRONMENT"],
-            "DATABASE_URL": prod_environment["DATABASE_URL"],
-            "DB_DSN": prod_environment["DB_DSN"],
+            "DATABASE_URL": default_dsn,
+            "DB_DSN": default_dsn,
             "MIGRATION_PRODUCTION_GATE": prod_environment["MIGRATION_PRODUCTION_GATE"],
             "MIGRATION_TARGET_IDENTITY": prod_environment["MIGRATION_TARGET_IDENTITY"],
             "MIGRATION_GATE_TOKEN_ONLY": "0",
@@ -235,6 +449,20 @@ def test_production_overlay_owns_gate_and_nonproduction_overlays_clear_stale_con
     assert effective["MIGRATION_TARGET_IDENTITY"] == "pkm-prod/app"
     assert effective["MIGRATION_GATE_TOKEN_ONLY"] == "0"
     assert effective["PROD_MIGRATION_FORWARD_ONLY_ACK"] == ""
+
+    api_effective = dict(stale_runtime)
+    api_effective.update(
+        {
+            "PKM_ENVIRONMENT": prod_services["api"]["environment"]["PKM_ENVIRONMENT"],
+            "DATABASE_URL": default_dsn,
+            "DB_DSN": default_dsn,
+            "MIGRATION_GATE_TOKEN_ONLY": prod_services["api"]["environment"][
+                "MIGRATION_GATE_TOKEN_ONLY"
+            ],
+        }
+    )
+    assert api_effective["PKM_ENVIRONMENT"] == "prod"
+    assert api_effective["MIGRATION_GATE_TOKEN_ONLY"] == "0"
 
     for compose_path in (DEV_COMPOSE, TEST_COMPOSE):
         compose = yaml.load(compose_path.read_text(encoding="utf-8"), Loader=_ComposeLoader)
