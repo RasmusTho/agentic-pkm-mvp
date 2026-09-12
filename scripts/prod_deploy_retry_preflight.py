@@ -270,7 +270,16 @@ def _resolve_prod_dsn() -> str | None:
             return None
         environ = _interpolation_environ(repo_root)
         for key in ("DATABASE_URL", "DB_DSN"):
-            value = resolve_effective_dsn(compose_path, PROD_DSN_SERVICE, key, environ=environ)
+            value = resolve_effective_dsn(
+                compose_path,
+                PROD_DSN_SERVICE,
+                key,
+                environ=environ,
+                # The deploy wrapper passes config/deploy/prod.env with
+                # Compose's --env-file, which replaces the repo-root .env as
+                # an interpolation source. Keep the preflight identical.
+                load_dotenv=False,
+            )
             if value:
                 return value
         return None

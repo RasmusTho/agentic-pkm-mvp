@@ -226,6 +226,13 @@ Explicit overlay DSNs do not suppress structural `env_file` chain validation. Ev
 fail-closes on declared required layers that are missing, unreadable, or have unresolvable path
 expressions, because Compose must still resolve and load the service's `env_file` chain safely.
 
+**Deploy preflight uses the same Compose interpolation boundary.** The production deploy wrapper
+passes `config/deploy/prod.env` as Compose's `--env-file`; Compose therefore uses that file instead
+of the repository-root `.env` for interpolation. The pending-retry preflight resolves the same
+effective `DATABASE_URL`/`DB_DSN` expression with repository-root dotenv loading disabled, so a
+reachable DSN from an unrelated `.env` cannot make the preflight disagree with the Compose run it
+is guarding.
+
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 
 - by `scripts/test/test_ui_doctor.sh` (and therefore `make test-ui-doctor`) before any Docker or network check;
