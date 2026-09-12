@@ -13,7 +13,8 @@ Last reviewed: 2026-08-12
 
 Provide one small, host-local provisioning boundary for development and runtime processes without
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
-The initial implementation uses **macOS Keychain** as secret source of truth. A narrowly scoped
+The initial implementation uses **macOS Keychain** as secret source of truth. Heimdal owns the
+lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
 
@@ -22,6 +23,10 @@ Builder System consumers may use provider credentials for explicitly invoked dev
 Product/Runtime consumers may use channel-scoped runtime credentials such as
 `HEIMDAL_RAW_STORE_KEY`. The bootstrap carries values; it does not decide model routing, grant
 authority, retention, or product memory.
+
+For external helper systems, Builder Vault records the non-secret credential reference and Heimdal
+ownership metadata; the Keychain remains the secret source. A Discord webhook is a future declared
+consumer binding, not a value stored in the Vault or repository.
 
 The canonical v1 capture ingress is
 `~/Library/Mobile Documents/com~apple~CloudDocs/Yggdrasil/Heimdal/Capture/Inbox`. iCloud is an

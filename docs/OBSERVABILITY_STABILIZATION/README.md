@@ -25,7 +25,10 @@ This capability is the highest-leverage, lowest-regret remediation set: make the
 ## Owner decisions baked in (audit §1b)
 
 - **DB = disposable operational working-set; vault/notes = durable system-of-record.** No scheduled prod-DR backup. Durable audit-of-record moves to note-backed storage under a **separate Storage-lifecycle epic**. Therefore `AUDIT_WRITER_STOPS_LYING` fixes only the *silent failure* — it does **not** invest in the DB audit table as the durable system-of-record.
-- **Notification channel + single-point-of-failure stance are deferred** owner decisions — the push path is built regardless of which channel is chosen.
+- **Notification channel decision (2026-09-12):** the shared operational delivery capability is a
+  private Discord channel managed by Heimdal. Channel/account/webhook provisioning and the live
+  outage/recovery drill remain external delivery work; the notification is never health,
+  deployment, acknowledgement, or semantic authority.
 - `DEV_DB_SNAPSHOT_RESTORE` is **dev/test ergonomics + on-demand forensic dump**, explicitly **not** scheduled disaster-recovery backup.
 
 ## Tasks (execution order)
@@ -94,5 +97,6 @@ These invariants hold *across* tasks; a breakdown whose tasks are each locally c
 - `docs/HEALTH.md` — health CLI & contract owner doc (false-green register lands here)
 - `docs/OBSERVABILITY.md` — telemetry interpretation owner doc
 - `docs/OPERATIONS.md` — operational runbook owner doc
+- `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md` — owner of external helper systems and the shared Discord alert capability
 - `docs/runbooks/RUNBOOK_GO_LIVE.md`, `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`
 - Audit deliverable (assessment + decisions): scratchpad `observability-health-telemetri-audit.sv.md`

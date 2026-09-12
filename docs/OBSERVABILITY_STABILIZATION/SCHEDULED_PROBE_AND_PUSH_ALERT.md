@@ -19,6 +19,14 @@ can_parallelize_with:
 
 # Scheduled Probe And Push Alert
 
+## Owner decision (2026-09-12)
+
+The final shared delivery capability is a private Discord channel managed by Heimdal under
+`docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. The probe remains source/health-owned and Discord
+remains a one-way secondary warning channel. The webhook credential is resolved from the declared
+macOS Keychain boundary; no value is stored in the repository, Builder Vault, issues, logs, or
+receipts.
+
 ## Purpose
 
 Give the single operator one always-on signal that prod is actually serving: a
@@ -33,8 +41,7 @@ Add a host launchd plist (modelled on
 probe script under `ops/` on a configurable interval. The script curls
 `/readyz` and the `/api/health` `required_ok` field (not the top-level `ok`)
 and checks worker-heartbeat staleness; on the first outage transition it
-dispatches one push notification via a pluggable channel (ntfy / Telegram /
-mail — channel choice is a deferred operator decision), then clears that state
+dispatches one push notification via the Heimdal-managed Discord channel, then clears that state
 after the first healthy run so a later distinct outage can alert again.
 Relabel the existing Makefile targets
 `verify-prod-channel` (line 210) and `verify-test-channel` (line 204) so their
@@ -67,10 +74,10 @@ make live-prod-probe      # new: invokes the probe script once for manual spot-c
 
 Risk R3: there is no alerting anywhere in the system. A prod failure is
 discovered only when the operator manually runs a doctor script or the user
-perceives degraded recall. The notification channel and the fact that an
-on-mini push path is itself a SPOF are deferred operator decisions; the probe
-script must be pluggable so the channel can be swapped later without changing
-the launchd job.
+perceives degraded recall. Heimdal owns the notification provider relationship
+and its operational record. The notification remains a secondary warning path,
+and the probe must be replaceable so a successor provider can be attached without
+changing callers.
 
 ## Acceptance Criteria
 
@@ -105,7 +112,8 @@ plutil -lint ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist
 
 ## Out of Scope
 
-- Choosing the final notification channel (ntfy / Telegram / mail).
+- Creating or rotating the provider-side Discord account, channel, or webhook; that is the external
+  delivery operation tracked by the parent/bug Issues.
 - An external off-mini uptime pinger (deferred SPOF decision).
 - Prometheus / Alertmanager rules (later phase).
 - Worker-heartbeat staleness threshold tuning.
@@ -115,6 +123,7 @@ plutil -lint ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist
 - `ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist` — launchd pattern
 - `Makefile` lines 204-213 — targets being relabelled
 - `docs/OPERATIONS.md`
+- `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`
 - `docs/runbooks/RUNBOOK_AGENTOPS_INCIDENT_TRIAGE.md`
 
 ## Related GitHub Issues
