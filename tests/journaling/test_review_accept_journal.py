@@ -621,6 +621,17 @@ def test_production_registry_retries_checked_intent_automatically(
 
 def test_production_registry_entrypoints_call_journal_retry_tick() -> None:
     tree = ast.parse(Path("app/watcher/registry.py").read_text(encoding="utf-8"))
+    cycle = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_registry_cycle"
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_run_journal_review_tick"
+        for node in ast.walk(cycle)
+    )
     for function_name in ("run_registry_once", "run_registry_forever"):
         function = next(
             node
@@ -630,7 +641,7 @@ def test_production_registry_entrypoints_call_journal_retry_tick() -> None:
         assert any(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
-            and node.func.id == "_run_journal_review_tick"
+            and node.func.id == "_run_registry_cycle"
             for node in ast.walk(function)
         )
 
