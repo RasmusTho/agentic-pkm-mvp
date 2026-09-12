@@ -2,7 +2,7 @@ State: Active blocked validation hub #4741; ARO-01 is closed with its withdrawal
 is closed/superseded, ARO-03/#4744 is closed and delivered, ARO-04/#4745 and ARO-06/#4747 are
 closed as superseded by #4836, ARO-05/#4746 is closed after its accepted constrained-reuse receipt,
 ARO-07/#4748 is closed after exact final-main proof, and ARO-08/#4749 remains blocked. Recovery
-children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path.
+children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 is filed for the later managed runtime/pilot contract repair; no pilot admission changes follow from filing.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
 Owner: Builder System governance
@@ -164,6 +164,7 @@ it supplies neither a page nor a visual destination.
 | ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | closed / superseded | Delivered through the canonical connected shell #4836 / PR #5157; no separate successor is required |
 | ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | closed / exact-main proof | Authenticated #4833 exact five-node receipt at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880` |
 | ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748 and #4857: boolean-only #4835 prerequisite, Demerzel prod access, applicable main-tracking deployment/operator evidence for current deployed `M` with a matching fresh #4748 exact-main proof, receipt-sourced deployed URL/SHA, and conditional disposable-state classification; the historical `c7c57300f2ec241778061078e7ad585454f0b880` proof is valid only while `main` still equals it, and owner evidence acknowledgement is pilot output |
+| [ARO-09 — Reconcile Managed Owner Pilot](RECONCILE_MANAGED_OWNER_PILOT.md) | [#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504) | Filed contract repair; live readiness on GitHub | Reconcile the later independent-listener/source/candidate contract; retain ARO-08 admission until that repair is delivered |
 
 <!-- builderops:epic-delivery-ledger v1 epic=#4741 -->
 Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.

@@ -105,8 +105,8 @@ authority and genuine acknowledgements.
 
 ### ARO-09 — Managed runtime and pilot contract repair
 
-[RECONCILE_MANAGED_OWNER_PILOT](RECONCILE_MANAGED_OWNER_PILOT.md) is the next bounded, unfiled
-contract-repair task under #4741. It must reconcile the managed Builder listener, source admission,
+[RECONCILE_MANAGED_OWNER_PILOT](RECONCILE_MANAGED_OWNER_PILOT.md), filed as
+[#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504), is the bounded contract-repair task under #4741. It must reconcile the managed Builder listener, source admission,
 exact candidate/browser proof and live #4749 path using existing runtime/release owners. It also
 names the producers and order of pre-merge, deployment, read-only pilot and later effectful
 acceptance evidence. It activates no service and changes none of ARO-08's present admission gates.

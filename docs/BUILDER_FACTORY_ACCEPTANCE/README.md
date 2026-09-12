@@ -1,7 +1,7 @@
 State: Accepted target-state gap/acceptance specification. In the 2026-09-12 repository snapshot,
 FCA-01..04 are delivered; composed platform deployment and owner acceptance remain unproved.
-Parent #5399 is the live validation hub; seven original children are filed. Two additional
-contract-repair tasks below are specified but unfiled; live readiness is owned by GitHub.
+Parent #5399 is the live validation hub; seven original children and contract-repair children
+#5502/#5503 are filed. Live readiness is owned by GitHub.
 Doc role: Specification directory
 Authority: User-authorized research-to-backlog handoff `prom_20260907052807_ef79007c`, accepted receipt `receipt_20260907052822_aa95b743`; subordinate to DEVUI, ADR-0062 and the Builder System process map.
 Owner: Builder System governance and owner-experience acceptance
@@ -46,9 +46,9 @@ breakdown follows their accepted results.
 
 | Task | Bounded outcome | Order |
 | --- | --- | --- |
-| [FCA-08 — Define bounded action admission](DEFINE_BOUNDED_ACTION_ADMISSION.md) | Name the first action seam in the existing control plane while retaining DDO-specific ownership | First; before dependent action implementation |
-| [FCA-09 — Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) | Resolve trial/acceptance authority in the existing receipt/object owner without overloading ADR-0065 dispositions | Second; before FCA-05 producer implementation |
-| [ARO-09 — Reconcile managed owner pilot](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md) | Reconcile runtime/source topology and pre-merge versus live evidence order | Third; owned by Stage A / #4741, not a new FCA child |
+| #5502 [FCA-08 — Define bounded action admission](DEFINE_BOUNDED_ACTION_ADMISSION.md) | Name the first action seam in the existing control plane while retaining DDO-specific ownership | First; before dependent action implementation |
+| #5503 [FCA-09 — Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) | Resolve trial/acceptance authority in the existing receipt/object owner without overloading ADR-0065 dispositions | Second; before FCA-05 producer implementation |
+| #5504 [ARO-09 — Reconcile managed owner pilot](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md) | Reconcile runtime/source topology and pre-merge versus live evidence order | Third; owned by Stage A / #4741, not a new FCA child |
 
 #### FCA-08 — Bounded action contract repair
 
