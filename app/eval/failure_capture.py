@@ -436,9 +436,16 @@ def read_draft(vault_root: Path, draft_id: str) -> DraftEvalCase | None:
     if path is None or not path.exists():
         return None
     try:
-        text = path.read_text(encoding="utf-8")
+        text, _ = read_note_text_with_version(path)
     except Exception:
         return None
+    return _parse_draft_text(vault_root, draft_id, text)
+
+
+def _parse_draft_text(
+    vault_root: Path, draft_id: str, text: str
+) -> DraftEvalCase | None:
+    """Parse one already-observed draft payload without rereading its path."""
     if not text.startswith("---\n"):
         return None
     try:
@@ -551,16 +558,20 @@ def _decide(
 ) -> PromotionDecision:
     if not decided_by or not decided_by.strip():
         raise PromotionDecisionError("decided_by is required to record a review decision")
-    draft = read_draft(vault_root, draft_id)
+    path = _contained_draft_abspath(vault_root, draft_id)
+    if path is None or not path.exists():
+        raise PromotionDecisionError(f"no draft found: {draft_id}")
+    try:
+        observed_text, expected_version = read_note_text_with_version(path)
+    except Exception as exc:
+        raise PromotionDecisionError(f"no draft found: {draft_id}") from exc
+    draft = _parse_draft_text(vault_root, draft_id, observed_text)
     if draft is None:
         raise PromotionDecisionError(f"no draft found: {draft_id}")
     if draft.status != DRAFT_STATUS_PENDING:
         raise PromotionDecisionError(f"draft already decided: {draft_id} (status={draft.status})")
 
     write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION)
-    _, expected_version = read_note_text_with_version(
-        vault_root / (draft.draft_path or _draft_path(vault_root, draft_id))
-    )
     decided_at = _now_iso()
     updated = DraftEvalCase(
         draft_id=draft.draft_id,

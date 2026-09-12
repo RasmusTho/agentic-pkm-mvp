@@ -242,6 +242,61 @@ def test_decision_uses_observed_draft_version(
     assert "trace_id: trace-version" in updated
 
 
+def test_decision_uses_same_observed_draft_snapshot(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rendered decision must use the bytes whose version is passed to CAS."""
+    draft = _draft_schema_violation(vault, trace_id="trace-snapshot", event_id="evt-snapshot")
+    assert draft is not None and draft.draft_path is not None
+    draft_path = (vault / draft.draft_path).resolve()
+    original_bytes = draft_path.read_bytes()
+    observed_bytes = original_bytes.replace(b"evt-snapshot", b"evt-owner-edit")
+    assert observed_bytes != original_bytes
+
+    import app.eval.failure_capture as failure_capture
+
+    def read_observed_snapshot(path: Path):  # type: ignore[no-untyped-def]
+        assert path == draft_path
+        draft_path.write_bytes(observed_bytes)
+        return observed_bytes.decode("utf-8"), hashlib.sha256(observed_bytes).hexdigest()
+
+    monkeypatch.setattr(failure_capture, "read_note_text_with_version", read_observed_snapshot)
+
+    decision = reject_draft(vault, draft.draft_id, decided_by="rasmus:reviewer")
+
+    assert decision.decision == "reject"
+    updated = draft_path.read_text(encoding="utf-8")
+    assert "status: rejected" in updated
+    assert "evt-owner-edit" in updated
+    assert "evt-snapshot" not in updated
+
+
+def test_api_translates_eval_draft_write_conflict(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CAS refusal from the production route is a documented 409 response."""
+    import app.api.routes.eval_drafts as eval_drafts
+
+    def raise_conflict(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise KnowledgeWriteConflict("concurrent owner edit")
+
+    monkeypatch.setattr(eval_drafts, "reject_draft", raise_conflict)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/eval-drafts/schema-violation-missing/decision",
+        json={"action": "reject", "decided_by": "rasmus:reviewer"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json() == {
+        "detail": {
+            "error": "eval_draft_decision_refused",
+            "message": "concurrent owner edit",
+        }
+    }
+
+
 def test_write_draft_is_create_once(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import app.eval.failure_capture as failure_capture
 

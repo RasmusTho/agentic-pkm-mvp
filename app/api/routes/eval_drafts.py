@@ -42,6 +42,7 @@ from app.eval.failure_capture import (
     promote_draft,
     reject_draft,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 
 router = APIRouter(prefix="/eval-drafts", tags=["eval-drafts"])
 
@@ -147,7 +148,7 @@ def post_eval_draft_decision(
             decided_by=req.decided_by,
             notes=req.notes,
         )
-    except PromotionDecisionError as exc:
+    except (KnowledgeWriteConflict, PromotionDecisionError) as exc:
         raise HTTPException(
             status_code=409,
             detail={"error": "eval_draft_decision_refused", "message": str(exc)},
