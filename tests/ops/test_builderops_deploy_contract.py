@@ -329,6 +329,22 @@ fi
 """,
     )
     _write_executable(
+        bin_dir / "systemctl",
+        """#!/usr/bin/env bash
+set -eu
+printf 'systemctl %s\n' "$*" >> "$FAKE_EVENT_LOG"
+if [ "${FAKE_FAIL_FORWARDER_REFRESH:-0}" = 1 ] \
+  && [ "$*" = "restart builderops-loopback-forwarder.service" ]; then
+  exit 23
+fi
+if [ "${FAKE_FAIL_FORWARDER_REFRESH_AFTER_FIRST:-0}" = 1 ] \
+  && [ "$*" = "restart builderops-loopback-forwarder.service" ] \
+  && [ "$(grep -c 'systemctl restart builderops-loopback-forwarder.service' "$FAKE_EVENT_LOG")" -eq 2 ]; then
+  exit 23
+fi
+""",
+    )
+    _write_executable(
         bin_dir / "stat",
         "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_SECRET_STAT:-0:600}\"\n",
     )
@@ -398,6 +414,21 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     )
     migration_event = "up --abort-on-container-exit --exit-code-from migrate migrate"
     assert events.index(migration_event) < events.index("up -d --force-recreate api worker")
+    lines = events.splitlines()
+    refresh_event = "systemctl restart builderops-loopback-forwarder.service"
+    refresh_indexes = [
+        index for index, line in enumerate(lines) if line == refresh_event
+    ]
+    recreate_index = next(
+        index
+        for index, line in enumerate(lines)
+        if "up -d --force-recreate api worker" in line
+    )
+    curl_index = next(
+        index for index, line in enumerate(lines) if line.startswith("curl ")
+    )
+    assert len(refresh_indexes) == 2
+    assert refresh_indexes[0] < recreate_index < refresh_indexes[1] < curl_index
     pin = (root / "config/deploy/builderops.env").read_text(encoding="utf-8")
     assert pin.count("BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=") == 1
     assert pin.count("BUILDEROPS_POSTGRES_IMAGE_DIGEST=sha256:") == 1
@@ -438,6 +469,107 @@ def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "up -d db" in events
+
+
+def test_deploy_refreshes_loopback_forwarder_after_api_recreate(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    recreate = "up -d --force-recreate api worker"
+    refresh = "systemctl restart builderops-loopback-forwarder.service"
+    assert recreate in events
+    assert refresh in events
+    lines = events.splitlines()
+    refresh_indexes = [
+        index for index, line in enumerate(lines) if line == refresh
+    ]
+    recreate_index = next(
+        index for index, line in enumerate(lines) if recreate in line
+    )
+    curl_index = next(
+        index for index, line in enumerate(lines) if line.startswith("curl ")
+    )
+    assert len(refresh_indexes) == 2
+    assert refresh_indexes[0] < recreate_index < refresh_indexes[1] < curl_index
+
+
+def test_deploy_fails_closed_when_forwarder_refresh_fails(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_FAIL_FORWARDER_REFRESH"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert events.count("systemctl restart builderops-loopback-forwarder.service") == 2
+    assert " pull " not in events
+    assert " up " not in events
+    assert "curl " not in events
+    assert "previous pin and live API/worker release restored" not in result.stderr
+
+
+def test_deploy_fails_closed_when_post_recreation_forwarder_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_FAIL_FORWARDER_REFRESH_AFTER_FIRST"] = "1"
+    pin_path = root / "config/deploy/builderops.env"
+    before = pin_path.read_text(encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" not in result.stderr
+    assert pin_path.read_text(encoding="utf-8") == before
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert events.count("systemctl restart builderops-loopback-forwarder.service") == 4
+    assert events.count("up -d --force-recreate api worker") == 1
+    assert events.count("up -d --force-recreate db api worker") == 1
+    assert events.count("curl ") == 1
+    assert "previous pin and live API/worker release restored" in result.stderr
 
 
 def test_deploy_preflight_refuses_nonprivate_app_secret_before_pull_or_db_up(

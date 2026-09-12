@@ -37,6 +37,13 @@ project to be present, no Product project on the BuilderOps engine, and no Build
 Product engine. A competing out-of-band writer therefore fails the post-operation gate; automatic
 reactivation of the previous release is also refused while that writer remains visible.
 
+The API and worker recreation step invalidates the forwarder's cached container address. The governed
+wrapper therefore restarts the fixed `builderops-loopback-forwarder.service` before any pin, database,
+or container mutation, and again immediately after recreation and before the authenticated `wait_ready`
+gate, for both target activation and previous release reactivation. A missing `systemctl` or failed
+restart fails closed before mutation and readiness polling; the private loopback boundary is never
+silently left pointing at a stale API address.
+
 ### Complete Dev System admission
 
 BuilderOps deployment is admitted only as one part of the complete Dev System topology described in

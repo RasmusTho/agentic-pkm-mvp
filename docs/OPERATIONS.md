@@ -500,6 +500,12 @@ This repository-side guard is not VM102 activation or health evidence. Live acti
 single-writer proof, deploy, health, and owner read-back remain separate receipt-gated operations
 under #5056 and #5181.
 
+Before a BuilderOps pin, database, or service mutation, the deploy wrapper must successfully
+restart `builderops-loopback-forwarder.service`. API/worker recreation invalidates the cached
+container address, so the wrapper restarts that fixed service again before authenticated readiness
+polling. A missing or failed restart is fail-closed; the wrapper does not poll readiness or claim a
+restored release from an unrefreshed private loopback boundary.
+
 ### Builder Thread serialized writer
 
 Builder Thread is retired under #5128. There is no service, endpoint, client,

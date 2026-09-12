@@ -163,6 +163,18 @@ wait_ready() {
   return 1
 }
 
+refresh_loopback_forwarder() {
+  local service="builderops-loopback-forwarder.service"
+  command -v systemctl >/dev/null 2>&1 || {
+    echo "BuilderOps loopback forwarder refresh requires systemctl" >&2
+    return 75
+  }
+  systemctl restart "${service}" || {
+    echo "BuilderOps loopback forwarder refresh failed" >&2
+    return 75
+  }
+}
+
 record_receipt() {
   local action="${1}" source_sha="${2}" digest="${3}" postgres_digest="${4}" previous_digest="${5}" previous_postgres_digest="${6}" engine_id timestamp path
   engine_id="$(builderops_engine_id "${BUILDEROPS_DOCKER_CONTEXT}")"
@@ -327,11 +339,16 @@ cp "${PIN_FILE}" "${pin_backup}"
 
 activate_target() {
   builderops_preflight_app_password_secret || return
+  # Refuse before pin, database, or container mutation when the fixed
+  # loopback boundary cannot be refreshed. The post-recreation refresh below
+  # is still required because API recreation invalidates the cached address.
+  refresh_loopback_forwarder || return
   write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" || return
   builderops_compose "${ROOT}" pull db api worker migrate || return
   builderops_compose "${ROOT}" up -d db || return
   builderops_compose "${ROOT}" up --abort-on-container-exit --exit-code-from migrate migrate || return
   builderops_compose "${ROOT}" up -d --force-recreate api worker || return
+  refresh_loopback_forwarder || return
   wait_ready || return
   "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" || return
   builderops_assert_single_writer_after_activation || return
@@ -343,9 +360,14 @@ reactivate_previous_release() {
   # the operator must resolve the writer boundary before another mutation.
   builderops_assert_failure_domain || return
   builderops_preflight_app_password_secret || return
+  # A rollback must also prove the loopback boundary before restoring its pin
+  # or recreating any service; otherwise a forwarder outage becomes a second
+  # late mutation failure.
+  refresh_loopback_forwarder || return
   cp "${pin_backup}" "${PIN_FILE}" || return
   builderops_compose "${ROOT}" pull db api worker || return
   builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
+  refresh_loopback_forwarder || return
   wait_ready || return
   builderops_assert_single_writer_after_activation || return
 }
