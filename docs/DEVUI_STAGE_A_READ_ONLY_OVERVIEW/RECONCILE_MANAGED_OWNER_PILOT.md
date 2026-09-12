@@ -2,6 +2,7 @@
 name: "Reconcile managed owner pilot"
 description: "#4749 still names the Product-associated 8113/18000 journey and legacy host prerequisites. The independent managed listener has different admitted boundaries. Its contract must be reconciled, not bypassed."
 task_id: ARO-09
+github_issue: 5504
 source_anchor: "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: ARO-09 — Managed runtime and pilot contract repair"
 parent_capability: "DEVUI_STAGE_A_READ_ONLY_OVERVIEW"
 prerequisites: []
@@ -9,7 +10,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Task specification accepted for bounded contract repair; not yet filed or delivered. No runtime implementation or deployment is claimed.
+State: Filed as #5504 for bounded contract repair; repair not yet delivered. No runtime implementation or deployment is claimed.
 Doc role: Target-state task specification in an existing capability directory.
 Authority: Existing capability and owner documents govern the repair. This task defines work and verification, not the repaired action/data/runtime authority. Source disposition: #5399 comment 5648534770.
 
@@ -66,6 +67,6 @@ No runtime state changes in this task.
 
 ## Related GitHub Issues
 
-Parent validation: #4741. Existing related work: #5181, #4749, #4748, #5406, #5405, #4076. ARO-09 is a stable specification ID, not a filed Issue. Write `github_issue` frontmatter only after successful filing and readback. Milestone: M0.
+Parent validation: #4741. Existing related work: #5181, #4749, #4748, #5406, #5405, #4076. Execution: [#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504) from specification ARO-09. GitHub owns live readiness and delivery state. Milestone: M0.
 
 Execution context: fresh_issue_agent; helper budget 1 for the required independent authority/mechanism review when the contract is repaired; configured Codex / high reasoning. This is a non-binding capability hint; the execution skill reclassifies the actual diff. Serial delivery is the default.

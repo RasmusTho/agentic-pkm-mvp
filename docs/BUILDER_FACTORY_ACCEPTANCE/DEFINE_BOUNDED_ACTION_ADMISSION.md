@@ -2,6 +2,7 @@
 name: "Define bounded action admission"
 description: "FCA admits a first non-DDO workflow, but #4169 still couples its authenticated boundary to the complete DDO bridge. Resolve the contract before changing dependents."
 task_id: FCA-08
+github_issue: 5502
 source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: FCA-08 — Bounded action contract repair"
 parent_capability: "BUILDER_FACTORY_ACCEPTANCE"
 prerequisites: []
@@ -9,7 +10,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Task specification accepted for bounded contract repair; not yet filed or delivered. No runtime implementation or deployment is claimed.
+State: Filed as #5502 for bounded contract repair; repair not yet delivered. No runtime implementation or deployment is claimed.
 Doc role: Target-state task specification in an existing capability directory.
 Authority: Existing capability and owner documents govern the repair. This task defines work and verification, not the repaired action/data/runtime authority. Source disposition: #5399 comment 5648534770.
 
@@ -66,6 +67,6 @@ No runtime state changes in this task.
 
 ## Related GitHub Issues
 
-Parent validation: #5399. Existing related work: #4169, #4697, #5404. FCA-08 is a stable specification ID, not a filed Issue. Write `github_issue` frontmatter only after successful filing and readback. Milestone: M0.
+Parent validation: #5399. Existing related work: #4169, #4697, #5404. Execution: [#5502](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5502) from specification FCA-08. GitHub owns live readiness and delivery state. Milestone: M0.
 
 Execution context: fresh_issue_agent; helper budget 1 for the required independent authority/mechanism review when the contract is repaired; configured Codex / high reasoning. This is a non-binding capability hint; the execution skill reclassifies the actual diff. Serial delivery is the default.

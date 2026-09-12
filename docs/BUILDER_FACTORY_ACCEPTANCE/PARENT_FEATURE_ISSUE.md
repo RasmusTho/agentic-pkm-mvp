@@ -1,4 +1,4 @@
-State: Filed parent #5399, open and agent:blocked; no implementation, deployment or owner acceptance.
+State: Filed parent #5399, open; FCA-01..04 are delivered, while full platform deployment and owner acceptance remain unproved. Contract-repair children #5502/#5503 are filed; GitHub owns live readiness.
 Doc role: Specification / parent pointer
 Authority: GitHub owns live backlog state.
 
@@ -15,6 +15,12 @@ Parent: [#5399](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5399). This 
 - [#5404](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5404) — [Produce owner decision and trial facts](PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md)
 - [#5405](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5405) — [Qualify a second consumer repository](QUALIFY_SECOND_CONSUMER_REPOSITORY.md)
 - [#5406](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5406) — [Prepare composed owner acceptance](PREPARE_COMPOSED_OWNER_ACCEPTANCE.md)
+
+- [#5502](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5502) — [Define bounded action admission](DEFINE_BOUNDED_ACTION_ADMISSION.md) (FCA-08; contract repair)
+- [#5503](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5503) — [Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) (FCA-09; contract repair)
+
+Managed runtime/pilot repair [#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504)
+remains under Stage A parent #4741; it is not an FCA child.
 
 ## Verification and acceptance
 
