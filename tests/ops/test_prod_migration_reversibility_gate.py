@@ -74,6 +74,52 @@ def _make_fixture(
     return root, child_path, root / "alembic.log"
 
 
+def _install_delayed_postgres_probe(root: Path, readiness_log: Path) -> Path:
+    support = root / "support"
+    support.mkdir()
+    (support / "psycopg.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "\n"
+        "\n"
+        "class _Cursor:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def execute(self, statement):\n"
+        "        with Path(os.environ[\"READINESS_LOG\"]).open(\"a\") as handle:\n"
+        "            handle.write(\"sql\\n\")\n"
+        "\n"
+        "\n"
+        "class _Connection:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def cursor(self):\n"
+        "        return _Cursor()\n"
+        "\n"
+        "\n"
+        "def connect(dsn, **kwargs):\n"
+        "    marker = Path(os.environ[\"READINESS_ATTEMPTS\"])\n"
+        "    attempts = int(marker.read_text() or \"0\") if marker.exists() else 0\n"
+        "    attempts += 1\n"
+        "    marker.write_text(str(attempts))\n"
+        "    with Path(os.environ[\"READINESS_LOG\"]).open(\"a\") as handle:\n"
+        "        handle.write(f\"ready-{attempts}\\n\")\n"
+        "    if attempts == 1:\n"
+        "        raise RuntimeError(\"database is still starting\")\n"
+        "    return _Connection()\n",
+        encoding="utf-8",
+    )
+    return support
+
+
 def _run_migration(
     root: Path,
     log_path: Path,
@@ -148,7 +194,7 @@ def test_prod_start_full_enforces_migration_gate_before_upgrade(tmp_path: Path) 
     assert "upgrade head" in log_path.read_text(encoding="utf-8")
 
 
-def test_gate_token_only_mode_emits_token_without_running_upgrade(tmp_path: Path) -> None:
+def test_token_only_gate_does_not_upgrade(tmp_path: Path) -> None:
     root, _child_path, log_path = _make_fixture(
         tmp_path,
         child='reversibility = "forward-only"',
@@ -159,6 +205,47 @@ def test_gate_token_only_mode_emits_token_without_running_upgrade(tmp_path: Path
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"prod-migration-ack\.v1:[0-9a-f]{64}\n?", result.stdout)
     assert "upgrade head" not in log_path.read_text(encoding="utf-8")
+
+
+def test_prod_migration_gate_waits_for_database_before_upgrade(tmp_path: Path) -> None:
+    root, _child_path, _log_path = _make_fixture(
+        tmp_path,
+        child='reversibility = "reversible"',
+    )
+    readiness_log = tmp_path / "readiness.log"
+    support = _install_delayed_postgres_probe(root, readiness_log)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{root / 'bin'}{os.pathsep}{environment['PATH']}",
+            "ALEMBIC_LOG": str(readiness_log),
+            "DATABASE_URL": "postgresql+psycopg://app:app@db:5432/app",
+            "DB_DSN": "postgresql+psycopg://app:app@db:5432/app",
+            "LLM_PROVIDER": "mock",
+            "MIGRATION_PRODUCTION_GATE": "1",
+            "MIGRATION_TARGET_IDENTITY": "pkm-prod/app",
+            "PYTHONPATH": f"{support}{os.pathsep}{REPO_ROOT}",
+            "READINESS_ATTEMPTS": str(tmp_path / "readiness.attempts"),
+            "READINESS_LOG": str(readiness_log),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(MIGRATION_SCRIPT)],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    events = readiness_log.read_text(encoding="utf-8").splitlines()
+    current_index = next(index for index, event in enumerate(events) if event.endswith(" current"))
+    upgrade_index = next(
+        index for index, event in enumerate(events) if event.endswith(" upgrade head")
+    )
+    assert events.index("ready-2") < current_index < upgrade_index
 
 
 def test_gate_token_only_mode_fails_closed_without_forward_only_pending(

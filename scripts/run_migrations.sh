@@ -154,14 +154,12 @@ else:
 PY
 }
 
-if [[ "${MIGRATION_PRODUCTION_GATE:-0}" == "1" || "${PKM_ENVIRONMENT:-}" == "prod" ]]; then
-  run_production_migration_gate
-fi
-
-# The deploy channel producer uses the same target-bound gate before it stops
-# runtime writers. A token-only invocation is a read-only pre-cutover probe;
-# returning here is what prevents it from becoming a second migration runner.
-if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" ]]; then
+# A non-production token-only invocation is not a migration producer. Preserve
+# its existing no-op behavior without waiting for or touching a database. The
+# production probe is handled after the readiness check below.
+if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" \
+  && "${MIGRATION_PRODUCTION_GATE:-0}" != "1" \
+  && "${PKM_ENVIRONMENT:-}" != "prod" ]]; then
   exit 0
 fi
 
@@ -192,6 +190,18 @@ PY
   done
 fi
 
+# The deploy channel producer uses the same target-bound gate before it stops
+# runtime writers. A production token-only invocation is a read-only
+# pre-cutover probe, but it must wait until the database is reachable before
+# asking Alembic for its current revision. It exits before extension setup so
+# the probe does not mutate the database.
+if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" ]]; then
+  if [[ "${MIGRATION_PRODUCTION_GATE:-0}" == "1" || "${PKM_ENVIRONMENT:-}" == "prod" ]]; then
+    run_production_migration_gate
+  fi
+  exit 0
+fi
+
 if [[ -n "${DATABASE_URL:-}" ]]; then
   python - <<'PY'
 import os
@@ -207,6 +217,12 @@ with psycopg.connect(dsn, autocommit=True) as conn:
         cur.execute("create extension if not exists vector")
         cur.execute("create extension if not exists pgcrypto")
 PY
+fi
+
+# Ordinary production startup runs this gate after extension setup and
+# immediately before the first upgrade.
+if [[ "${MIGRATION_PRODUCTION_GATE:-0}" == "1" || "${PKM_ENVIRONMENT:-}" == "prod" ]]; then
+  run_production_migration_gate
 fi
 
 alembic -c app/alembic.ini upgrade head
