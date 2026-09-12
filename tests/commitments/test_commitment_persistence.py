@@ -26,6 +26,7 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.knowledge.contracts import NoteLocator, WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.services import commitment_persistence as cp_module
 from app.services.commitment_persistence import (
@@ -135,6 +136,55 @@ def test_persist_uses_observed_commitment_version(
     assert loaded["c-001"].target_ref == "projects/hiring.md"
     assert loaded["c-001"].source_goal == "close the hiring loop"
     assert loaded["c-001"].summary == "Updated generated summary"
+
+
+def test_persist_commitment_rejects_losing_create_once_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create-once loser must not acknowledge content it did not persist."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    ctx = _vault(vault_root)
+    guard = _allowing_guard()
+
+    def losing_create(path: str, content: str, **kwargs: object) -> WriteReceipt:
+        assert kwargs["create_once"] is True
+        return WriteReceipt(
+            operation="write_note",
+            locator=NoteLocator(vault="fs_vault", path=path),
+            adapter="fs_vault",
+            note_class="create-once",
+            outcome="already_exists",
+        )
+
+    monkeypatch.setattr(cp_module, "write_note_relative", losing_create)
+
+    with pytest.raises(KnowledgeWriteConflict, match="create target already exists") as exc_info:
+        persist_commitment(_record(), vault_context=ctx, write_guard=guard)
+
+    assert exc_info.value.receipt is not None
+    assert exc_info.value.receipt.outcome == "already_exists"
+
+
+def test_load_commitments_ignores_conflict_artifacts(tmp_path: Path) -> None:
+    """Staged conflict proposals never become canonical commitment records."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    ctx = _vault(vault_root)
+    guard = _allowing_guard()
+    persist_commitment(_record(), vault_context=ctx, write_guard=guard)
+
+    commitments_dir = (vault_root / commitment_artifact_path("c-001", vault_root)).parent
+    conflict = commitments_dir / "c-001 (conflicted copy test 2026-01-01T000000Z).md"
+    conflict.write_text(
+        "---\ncommitment_id: c-conflict\ncommitment_kind: next_action\n"
+        "commitment_state: next\nsummary: Generated replacement\n---\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_commitments(vault_context=ctx)
+
+    assert [record.commitment_id for record in loaded] == ["c-001"]
 
 
 def test_first_persist_is_create_once(

@@ -34,6 +34,10 @@ filesystem bytes and passes their SHA-256 version to the existing knowledge writ
 If the bytes changed before the replacement, the CAS fails closed and leaves the newer
 artifact untouched; callers may retry from a fresh read. A concurrent edit is therefore
 never silently clobbered, while first creation remains no-clobber/create-once.
+The create-once receipt is authoritative: an `already_exists` outcome is raised as a
+write conflict rather than acknowledged as the requested commitment having been persisted.
+Staged conflict artifacts are diagnostic proposals and are excluded from `load_commitments`;
+they never become canonical commitment records.
 
 ## Concretely
 
