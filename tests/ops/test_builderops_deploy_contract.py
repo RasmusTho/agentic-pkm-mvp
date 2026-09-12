@@ -329,6 +329,17 @@ fi
 """,
     )
     _write_executable(
+        bin_dir / "systemctl",
+        """#!/usr/bin/env bash
+set -eu
+printf 'systemctl %s\n' "$*" >> "$FAKE_EVENT_LOG"
+if [ "${FAKE_FAIL_FORWARDER_REFRESH:-0}" = 1 ] \
+  && [ "$*" = "restart builderops-loopback-forwarder.service" ]; then
+  exit 23
+fi
+""",
+    )
+    _write_executable(
         bin_dir / "stat",
         "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_SECRET_STAT:-0:600}\"\n",
     )
@@ -438,6 +449,60 @@ def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "up -d db" in events
+
+
+def test_deploy_refreshes_loopback_forwarder_after_api_recreate(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    recreate = "up -d --force-recreate api worker"
+    refresh = "systemctl restart builderops-loopback-forwarder.service"
+    assert recreate in events
+    assert refresh in events
+    assert events.index(recreate) < events.index(refresh) < events.index("curl ")
+
+
+def test_deploy_fails_closed_when_forwarder_refresh_fails(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_FAIL_FORWARDER_REFRESH"] = "1"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" in result.stderr
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert "systemctl restart builderops-loopback-forwarder.service" in events
+    assert "curl " not in events
+    assert "previous pin and live API/worker release restored" not in result.stderr
 
 
 def test_deploy_preflight_refuses_nonprivate_app_secret_before_pull_or_db_up(

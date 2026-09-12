@@ -84,6 +84,11 @@ unattended PVE API/root SSH is not established by the Vault receipts. Guest SSH,
 administration are separate evidence surfaces and must be reverified only when the planned operation
 needs them.
 
+On this Linux placement, API/worker recreation changes the container address behind the loopback
+forwarder. The governed BuilderOps wrapper must restart `builderops-loopback-forwarder.service`
+after recreation and before readiness polling; a failed or unavailable restart is a deployment
+failure, not permission to bypass the private loopback boundary.
+
 The ordered schemas and rollback-baseline rules are owned only by the
 [VM-102 evidence and receipt contract](../../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract).
 This profile supplies setup-specific qualification evidence and refuses missing ownership,
