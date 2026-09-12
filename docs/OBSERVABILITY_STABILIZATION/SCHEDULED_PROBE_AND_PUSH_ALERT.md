@@ -31,7 +31,8 @@ and the redacted live drill remain bounded by #5506 and #4076.
 The target shared delivery capability is a private Discord channel managed by Heimdal under
 `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. When the external delivery work is enacted, the
 probe remains source/health-owned and Discord remains a one-way secondary warning channel. The
-webhook credential is resolved from the declared macOS Keychain boundary; no value is stored in the
+webhook credential is resolved from the declared host-native secure-store boundary (macOS Keychain
+on Mac, or the approved Linux/Proxmox host-native store on that host); no value is stored in the
 repository, Builder Vault, issues, logs, or receipts.
 
 ## Purpose

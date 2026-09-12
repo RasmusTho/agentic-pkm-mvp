@@ -56,7 +56,8 @@ Each Builder Vault record should answer, at minimum:
 - purpose, capability class, environment/channel scope, and current status;
 - `owner_system: Heimdal` and the responsible Heimdal service identity;
 - provider-side server/account/channel identifiers, excluding bearer values;
-- credential reference (for example a macOS Keychain service/account reference), never the secret;
+- host-appropriate credential reference (macOS Keychain service/account reference on Mac, or a
+  Linux/Proxmox host-native secure-store reference on that host), never the secret;
 - allowed operations and explicit authority limits;
 - health/readiness endpoint, alert route, failure and degradation behavior;
 - provisioning, rotation, recovery, replacement, and retirement runbooks;
@@ -71,12 +72,13 @@ Vault surface explicitly; it may not promote an ordinary working note by locatio
 
 Heimdal owns the credential lifecycle, but secret material remains in the host's secure secret
 store. For the Mac-hosted control path this is macOS Keychain under the existing
-`yggdrasil.host-secrets` namespace. Builder Vault and the repository store only logical references,
-scope, fingerprints where explicitly permitted, and rotation metadata.
+`yggdrasil.host-secrets` namespace. A Linux/Proxmox-hosted control path uses the deployment host's
+approved native secure store. Builder Vault and the repository store only logical references, scope,
+fingerprints where explicitly permitted, and rotation metadata.
 
 No secret value may appear in Git, Builder Vault, ordinary configuration, Discord messages, logs,
-issues, PRs, or receipts. A future Linux/Proxmox-hosted Heimdal process may use host-native secure
-storage, but that is a custody migration, not permission to copy secrets into documentation.
+issues, PRs, or receipts. Moving the control path between Mac and Linux/Proxmox changes the secure
+store reference, not the exposure or authority boundary.
 
 ## Shared Discord alert capability
 
@@ -91,9 +93,9 @@ Discord is a downstream delivery provider for one shared Yggdrasil alert capabil
 - channel splits, if ever required, are by severity/privacy/audience, not by subsystem ownership;
 - an optional Discord MCP may assist administration, but it is never part of the critical alert path.
 
-The channel, webhook, provider account, and Keychain reference are not shipped by this document.
-They require the bounded delivery work tracked by the observability Issues and a redacted live
-drill receipt.
+The channel, webhook, provider account, and host-native credential reference are not shipped by
+this document. They require the bounded delivery work tracked by the observability Issues and a
+redacted live drill receipt.
 
 ## Integration and event boundary
 
@@ -114,9 +116,12 @@ system: Heimdal for ecosystem helper operations, and Builder System for delivery
 
 This boundary is considered enacted only when:
 
-1. the owner contract and Builder Vault record shape are merged and indexed;
+1. the owner contract and Builder Vault record shape are merged and indexed, and an
+   authority-capable, owner-approved Builder Vault record surface is explicitly defined and
+   accepted;
 2. concrete helper-system records identify Heimdal as owner and contain no secret material;
-3. the Discord alert adapter has a Keychain-backed credential reference and a redacted outage /
+3. the Discord alert adapter has a host-native credential reference appropriate to its execution
+   host (macOS Keychain on Mac or an approved Linux/Proxmox secure store) and a redacted outage /
    recovery drill receipt; and
 4. each host or VM integration names the Platform and Operations execution boundary separately.
 
