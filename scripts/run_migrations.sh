@@ -163,6 +163,8 @@ if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" \
   exit 0
 fi
 
+# Readiness and extension setup use the same effective DSN as the gate:
+# DATABASE_URL takes precedence, with DB_DSN as the compatibility fallback.
 if [[ -n "${DATABASE_URL:-${DB_DSN:-}}" ]]; then
   for attempt in $(seq 1 30); do
     if python - <<'PY'
