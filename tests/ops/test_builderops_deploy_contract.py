@@ -409,6 +409,21 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     )
     migration_event = "up --abort-on-container-exit --exit-code-from migrate migrate"
     assert events.index(migration_event) < events.index("up -d --force-recreate api worker")
+    lines = events.splitlines()
+    refresh_event = "systemctl restart builderops-loopback-forwarder.service"
+    refresh_indexes = [
+        index for index, line in enumerate(lines) if line == refresh_event
+    ]
+    recreate_index = next(
+        index
+        for index, line in enumerate(lines)
+        if "up -d --force-recreate api worker" in line
+    )
+    curl_index = next(
+        index for index, line in enumerate(lines) if line.startswith("curl ")
+    )
+    assert len(refresh_indexes) == 2
+    assert refresh_indexes[0] < recreate_index < refresh_indexes[1] < curl_index
     pin = (root / "config/deploy/builderops.env").read_text(encoding="utf-8")
     assert pin.count("BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=") == 1
     assert pin.count("BUILDEROPS_POSTGRES_IMAGE_DIGEST=sha256:") == 1
@@ -475,7 +490,18 @@ def test_deploy_refreshes_loopback_forwarder_after_api_recreate(tmp_path: Path) 
     refresh = "systemctl restart builderops-loopback-forwarder.service"
     assert recreate in events
     assert refresh in events
-    assert events.index(recreate) < events.index(refresh) < events.index("curl ")
+    lines = events.splitlines()
+    refresh_indexes = [
+        index for index, line in enumerate(lines) if line == refresh
+    ]
+    recreate_index = next(
+        index for index, line in enumerate(lines) if recreate in line
+    )
+    curl_index = next(
+        index for index, line in enumerate(lines) if line.startswith("curl ")
+    )
+    assert len(refresh_indexes) == 2
+    assert refresh_indexes[0] < recreate_index < refresh_indexes[1] < curl_index
 
 
 def test_deploy_fails_closed_when_forwarder_refresh_fails(tmp_path: Path) -> None:
@@ -500,7 +526,9 @@ def test_deploy_fails_closed_when_forwarder_refresh_fails(tmp_path: Path) -> Non
     assert result.returncode == 1
     assert "CRITICAL" in result.stderr
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
-    assert "systemctl restart builderops-loopback-forwarder.service" in events
+    assert events.count("systemctl restart builderops-loopback-forwarder.service") == 2
+    assert " pull " not in events
+    assert " up " not in events
     assert "curl " not in events
     assert "previous pin and live API/worker release restored" not in result.stderr
 

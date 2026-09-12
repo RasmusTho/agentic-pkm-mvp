@@ -339,6 +339,10 @@ cp "${PIN_FILE}" "${pin_backup}"
 
 activate_target() {
   builderops_preflight_app_password_secret || return
+  # Refuse before pin, database, or container mutation when the fixed
+  # loopback boundary cannot be refreshed. The post-recreation refresh below
+  # is still required because API recreation invalidates the cached address.
+  refresh_loopback_forwarder || return
   write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" || return
   builderops_compose "${ROOT}" pull db api worker migrate || return
   builderops_compose "${ROOT}" up -d db || return
@@ -356,6 +360,10 @@ reactivate_previous_release() {
   # the operator must resolve the writer boundary before another mutation.
   builderops_assert_failure_domain || return
   builderops_preflight_app_password_secret || return
+  # A rollback must also prove the loopback boundary before restoring its pin
+  # or recreating any service; otherwise a forwarder outage becomes a second
+  # late mutation failure.
+  refresh_loopback_forwarder || return
   cp "${pin_backup}" "${PIN_FILE}" || return
   builderops_compose "${ROOT}" pull db api worker || return
   builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
