@@ -1899,6 +1899,7 @@ def _authenticated_projection_convergence_receipts(
     current_digest = _canonical_digest(authority_receipt)
     receipts: list[Mapping[str, object]] = []
     seen_contracts: set[tuple[str, str]] = set()
+    history: dict[str, tuple[Mapping[str, object], Mapping[str, object], Mapping[str, object]]] = {}
     for receipt, _comment in entries:
         receipt_authority = authority_receipt
         if receipt.get("authority_sha256") != current_digest:
@@ -1929,6 +1930,8 @@ def _authenticated_projection_convergence_receipts(
             if (
                 receipt.get("repository") != authority_receipt.get("repository")
                 or receipt.get("pr_number") != authority_receipt.get("pr_number")
+                or not isinstance(receipt.get("head_sha"), str)
+                or _SHA_PATTERN.fullmatch(cast(str, receipt["head_sha"])) is None
                 or not isinstance(pull, Mapping)
                 or not _valid_authority_receipt(
                     receipt_authority,
@@ -1964,6 +1967,41 @@ def _authenticated_projection_convergence_receipts(
         seen_contracts.add(contract_identity)
         if receipt.get("authority_sha256") == current_digest:
             receipts.append(receipt)
+        else:
+            history[cast(str, receipt["receipt_sha256"])] = (
+                receipt_authority, receipt, authority_comment
+            )
+
+    phases = _comment_receipt_entries(comments, VERIFIED_MERGE_PHASE_MARKER)
+    if len(phases) != _trusted_structural_marker_occurrences(
+        comments, VERIFIED_MERGE_PHASE_MARKER
+    ):
+        return None
+    for phase, _comment in phases:
+        if phase.get("authority_sha256") == current_digest:
+            continue
+        convergence_digest = phase.get("projection_convergence_sha256")
+        historical = history.get(convergence_digest) if isinstance(convergence_digest, str) else None
+        # One PR can only merge one candidate. Earlier candidates may retain
+        # prepared phases, never another merged/closed/restored chain.
+        if historical is None or phase.get("phase") != "prepared":
+            return None
+        historical_authority, convergence, historical_comment = historical
+        final = cast(Mapping[str, object], convergence["final_projection_observation"])
+        pull = cast(Mapping[str, object], final["pull_request"])
+        expected = build_verified_merge_phase(
+            authority_receipt=historical_authority,
+            authority_comment=historical_comment,
+            phase="prepared",
+            pr={
+                "number": pull["number"], "head": {"sha": pull["head_sha"]},
+                "body": pull["body"], "state": "open", "merged_at": None,
+            },
+            projection_convergence_receipt=convergence,
+            final_projection_observation=final,
+        )["phase_receipt"]
+        if phase != expected:
+            return None
     return receipts
 
 

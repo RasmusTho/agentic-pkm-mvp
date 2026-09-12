@@ -7,6 +7,8 @@ import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 from app.dispatcher.verified_merge import _canonical_digest
 from tests.dispatcher.verified_merge_projection_helpers import (
     projection_convergence_comment,
@@ -527,7 +529,8 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
     }
 
 
-def test_watchdog_authenticates_current_chain_with_prior_head_history() -> None:
+@pytest.mark.parametrize("body_mode", ["canonical", "neutralized", "raced"])
+def test_watchdog_authenticates_current_chain_with_prior_head_history(body_mode: str) -> None:
     authority = _authority_comment()
     prior = _receipt_payload(authority)
     prior.update(head_sha="d" * 40, run_id="prior-candidate")
@@ -548,18 +551,28 @@ def test_watchdog_authenticates_current_chain_with_prior_head_history() -> None:
     request = {
         "comments": comments, "expectedRepository": REPOSITORY,
         "linkedIssues": [4999],
-        "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+        "livePr": _merged_pr({
+            "canonical": _body(), "neutralized": _neutralized_body(_body()),
+            "raced": "Governing-Issue: #4999\n\nFixes #4999\n",
+        }[body_mode]),
     }
     assert _node("selectWatchdogAuthority(inputs[0])", request) == {
         "closing_issues": [3820, 3823], "governing_issue": 3821,
         "mode": "durable_receipt",
     }
     assert comments == preserved
+    forged_phase = copy.deepcopy(comments)
+    phase_payload = _receipt_payload(forged_phase[2])
+    phase_payload["projection_convergence_sha256"] = "0" * 64
+    forged_phase[2]["body"] = "verified issue-set merge phase:\n```json\n" + json.dumps(phase_payload) + "\n```"
+    malformed_convergence = copy.deepcopy(comments)
+    malformed_convergence[1]["body"] = "verified merge closing projection convergence:\n```json\n{bad}\n```"
     for invalid_comments in (
         comments[:-1],  # prior prepared and current prepared cannot prove merge
         [*comments, copy.deepcopy(comments[4])],  # duplicate current convergence
         comments[1:],  # old evidence cannot self-authenticate without authority
         [*comments, copy.deepcopy(history[0])],  # ambiguous historical authority
+        forged_phase, malformed_convergence,
     ):
         assert _node("selectWatchdogAuthority(inputs[0])", {
             **request, "comments": invalid_comments,

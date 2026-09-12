@@ -820,6 +820,9 @@ def test_new_head_convergence_replay_and_phase_readback_preserve_history(
     "malformed-history", "missing-history-authority", "untrusted-history-authority",
     "duplicate-history-authority", "conflicting-history-authority", "forged-history",
     "malformed-history-authority", "invalid-history-authority",
+    "historical-phase-digest", "historical-phase-authority", "historical-phase-body",
+    "historical-phase-closure", "historical-phase-merged", "historical-phase-extra",
+    "historical-null-head", "historical-invalid-head",
     "foreign-history", "duplicate-history", "forged-current", "duplicate-current",
     "conflicting-current", "stale-edit", "nonempty-final", "unseparated-quorum",
 ])
@@ -842,6 +845,43 @@ def test_prior_head_history_does_not_hide_malformed_or_conflicting_receipts(
         old = json.loads(str(comments[0]["body"]).split("```json\n")[1].split("\n```")[0])
         old["body_sha256"] = old["neutralized_body_sha256"]
         comments[0] = _authority_comment(old)
+    elif corruption.startswith("historical-phase-"):
+        old_phase = json.loads(str(comments[2]["body"]).split("```json\n")[1].split("\n```")[0])
+        field, value = {
+            "historical-phase-digest": ("projection_convergence_sha256", "0" * 64),
+            "historical-phase-authority": ("authority_sha256", "0" * 64),
+            "historical-phase-body": ("body_sha256", "0" * 64),
+            "historical-phase-closure": ("closed_issues", [3820]),
+            "historical-phase-merged": ("phase", "merged"),
+            "historical-phase-extra": ("extra", True),
+        }[corruption]
+        old_phase[field] = value
+        comments[2] = _trusted_comment(
+            verified_merge.VERIFIED_MERGE_PHASE_MARKER + "\n```json\n" + json.dumps(old_phase) + "\n```",
+        )
+    elif corruption in {"historical-null-head", "historical-invalid-head"}:
+        old_authority, old_convergence, old_phase = [
+            json.loads(str(comment["body"]).split("```json\n")[1].split("\n```")[0])
+            for comment in comments[:3]
+        ]
+        invalid_head = None if corruption == "historical-null-head" else "not-a-sha"
+        old_authority["head_sha"] = invalid_head
+        old_convergence["head_sha"] = invalid_head
+        old_convergence["pr_contract"]["head_sha"] = invalid_head
+        old_convergence["final_projection_observation"]["pull_request"]["head_sha"] = invalid_head
+        old_convergence["authority_sha256"] = verified_merge._canonical_digest(old_authority)
+        old_convergence["pr_contract"]["authority_sha256"] = old_convergence["authority_sha256"]
+        old_convergence.pop("receipt_sha256")
+        old_convergence["receipt_sha256"] = verified_merge._canonical_digest(old_convergence)
+        old_phase.update(
+            head_sha=invalid_head, authority_sha256=old_convergence["authority_sha256"],
+            projection_convergence_sha256=old_convergence["receipt_sha256"],
+            final_projection_observation_sha256=verified_merge._canonical_digest(old_convergence["final_projection_observation"]),
+        )
+        comments[:3] = [
+            _authority_comment(old_authority), _trusted_convergence_comment(old_convergence),
+            _trusted_comment(verified_merge.VERIFIED_MERGE_PHASE_MARKER + "\n```json\n" + json.dumps(old_phase) + "\n```"),
+        ]
     elif corruption == "conflicting-history-authority":
         old = json.loads(str(comments[0]["body"]).split("```json\n")[1].split("\n```")[0])
         old["repair_budget"] = {"policy_version": "v2", "mechanisms": []}

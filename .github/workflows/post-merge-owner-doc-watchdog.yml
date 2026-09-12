@@ -428,6 +428,7 @@ jobs:
               const currentDigest = canonicalSha256(authorityReceipt);
               const seenContracts = new Set();
               const byDigest = new Map();
+              const history = new Map();
               for (const receipt of receipts) {
                 let receiptAuthority = authorityReceipt;
                 if (receipt.authority_sha256 !== currentDigest) {
@@ -446,6 +447,7 @@ jobs:
                   const pull = receipt.final_projection_observation?.pull_request;
                   if (receipt.repository !== authorityReceipt.repository ||
                       receipt.pr_number !== authorityReceipt.pr_number ||
+                      typeof receipt.head_sha !== "string" || !/^[0-9a-f]{40}$/.test(receipt.head_sha) ||
                       pull === null || typeof pull !== "object" ||
                       !validAuthorityReceipt(receiptAuthority, {
                         number: pull.number, head: {sha: pull.head_sha}, body: pull.body,
@@ -459,7 +461,33 @@ jobs:
                 seenContracts.add(contractIdentity);
                 if (receipt.authority_sha256 === currentDigest) {
                   byDigest.set(receipt.receipt_sha256, receipt);
+                } else {
+                  history.set(receipt.receipt_sha256, [receiptAuthority, receipt]);
                 }
+              }
+              const phases = commentReceipts(comments, PHASE_MARKER);
+              const phaseAttempts = comments.reduce((count, comment) => count + (
+                TRUSTED_ASSOCIATIONS.has(comment.author_association) && typeof comment.body === "string"
+                  ? structuralMarkerOccurrences(comment.body, PHASE_MARKER) : 0
+              ), 0);
+              if (phases.length !== phaseAttempts) return null;
+              for (const phase of phases) {
+                if (phase.authority_sha256 === currentDigest) continue;
+                const historical = history.get(phase.projection_convergence_sha256);
+                if (historical === undefined || phase.phase !== "prepared") return null;
+                const [historicalAuthority, convergence] = historical;
+                const expected = {
+                  authority_sha256: canonicalSha256(historicalAuthority),
+                  body_sha256: historicalAuthority.neutralized_body_sha256,
+                  closed_issues: [], contract: "verified_issue_set_merge_phase.v1",
+                  final_projection_observation_sha256: canonicalSha256(convergence.final_projection_observation),
+                  head_sha: historicalAuthority.head_sha, merge_commit_sha: null, phase: "prepared",
+                  pr_number: historicalAuthority.pr_number,
+                  projection_convergence_sha256: convergence.receipt_sha256,
+                  reopened_unauthorized_issues: [], repository: historicalAuthority.repository,
+                  run_id: historicalAuthority.run_id,
+                };
+                if (canonicalJson(phase) !== canonicalJson(expected)) return null;
               }
               return byDigest;
             };
@@ -635,16 +663,22 @@ jobs:
               const keys = new Set(receipts.map(canonicalSha256));
               if (keys.size !== 1) return null;
               const authorityReceipt = receipts[receipts.length - 1];
+              if (resolveDurableConvergences(comments, authorityReceipt) === null) return null;
+              const hasConvergenceHistory = comments.some(comment =>
+                TRUSTED_ASSOCIATIONS.has(comment.author_association) && typeof comment.body === "string" &&
+                structuralMarkerOccurrences(comment.body, CONVERGENCE_MARKER) > 0
+              );
               const allowLegacy = comments.some(comment =>
                 legacyAuthorityEligible(comment) &&
                 commentReceipts([comment], AUTHORITY_MARKER)
                   .some(receipt => canonicalSha256(receipt) === canonicalSha256(authorityReceipt))
               );
               if (
+                ((hasCompleteMergedIdentity(livePr) && hasConvergenceHistory) ||
                 ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256]
                   .some(storedDigest => matchesStoredBodyDigest(
                     livePr.body || "", storedDigest, {allowLegacy}
-                  )) &&
+                  ))) &&
                 resolveContinuousMergePhase(comments, authorityReceipt, livePr) === null
               ) return null;
               return authorityReceipt;
