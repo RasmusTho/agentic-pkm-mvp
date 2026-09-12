@@ -71,12 +71,46 @@ def _make_fixture(
         encoding="utf-8",
     )
     (fake_bin / "alembic").chmod(0o755)
+    _install_ready_postgres_probe(root)
     return root, child_path, root / "alembic.log"
+
+
+def _install_ready_postgres_probe(root: Path) -> Path:
+    support = root / "support"
+    support.mkdir(exist_ok=True)
+    (support / "psycopg.py").write_text(
+        "class _Cursor:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def execute(self, statement):\n"
+        "        return None\n"
+        "\n"
+        "\n"
+        "class _Connection:\n"
+        "    def __enter__(self):\n"
+        "        return self\n"
+        "\n"
+        "    def __exit__(self, exc_type, exc, tb):\n"
+        "        return False\n"
+        "\n"
+        "    def cursor(self):\n"
+        "        return _Cursor()\n"
+        "\n"
+        "\n"
+        "def connect(dsn, **kwargs):\n"
+        "    return _Connection()\n",
+        encoding="utf-8",
+    )
+    return support
 
 
 def _install_delayed_postgres_probe(root: Path, readiness_log: Path) -> Path:
     support = root / "support"
-    support.mkdir()
+    support.mkdir(exist_ok=True)
     (support / "psycopg.py").write_text(
         "from pathlib import Path\n"
         "import os\n"
@@ -138,7 +172,7 @@ def _run_migration(
             "LLM_PROVIDER": "mock",
             "MIGRATION_PRODUCTION_GATE": "1",
             "MIGRATION_TARGET_IDENTITY": target,
-            "PYTHONPATH": f"{REPO_ROOT}{os.pathsep}{environment.get('PYTHONPATH', '')}",
+            "PYTHONPATH": f"{root / 'support'}{os.pathsep}{REPO_ROOT}{os.pathsep}{environment.get('PYTHONPATH', '')}",
             "MIGRATION_GATE_TOKEN_ONLY": "1" if gate_token_only else "0",
         }
     )
@@ -195,16 +229,44 @@ def test_prod_start_full_enforces_migration_gate_before_upgrade(tmp_path: Path) 
 
 
 def test_token_only_gate_does_not_upgrade(tmp_path: Path) -> None:
-    root, _child_path, log_path = _make_fixture(
+    root, _child_path, _log_path = _make_fixture(
         tmp_path,
         child='reversibility = "forward-only"',
     )
+    readiness_log = tmp_path / "readiness.log"
+    support = _install_delayed_postgres_probe(root, readiness_log)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{root / 'bin'}{os.pathsep}{environment['PATH']}",
+            "ALEMBIC_LOG": str(readiness_log),
+            "DATABASE_URL": "",
+            "DB_DSN": "postgresql+psycopg://app:app@db:5432/app",
+            "LLM_PROVIDER": "mock",
+            "MIGRATION_PRODUCTION_GATE": "1",
+            "MIGRATION_TARGET_IDENTITY": "pkm-prod/app",
+            "MIGRATION_GATE_TOKEN_ONLY": "1",
+            "PYTHONPATH": f"{support}{os.pathsep}{REPO_ROOT}",
+            "READINESS_ATTEMPTS": str(tmp_path / "readiness.attempts"),
+            "READINESS_LOG": str(readiness_log),
+        }
+    )
 
-    result = _run_migration(root, log_path, gate_token_only=True)
+    result = subprocess.run(
+        ["bash", str(MIGRATION_SCRIPT)],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"prod-migration-ack\.v1:[0-9a-f]{64}\n?", result.stdout)
-    assert "upgrade head" not in log_path.read_text(encoding="utf-8")
+    events = readiness_log.read_text(encoding="utf-8").splitlines()
+    current_index = next(index for index, event in enumerate(events) if event.endswith(" current"))
+    assert events.index("ready-2") < current_index
+    assert not any(event.endswith(" upgrade head") for event in events)
 
 
 def test_prod_migration_gate_waits_for_database_before_upgrade(tmp_path: Path) -> None:
@@ -219,7 +281,7 @@ def test_prod_migration_gate_waits_for_database_before_upgrade(tmp_path: Path) -
         {
             "PATH": f"{root / 'bin'}{os.pathsep}{environment['PATH']}",
             "ALEMBIC_LOG": str(readiness_log),
-            "DATABASE_URL": "postgresql+psycopg://app:app@db:5432/app",
+            "DATABASE_URL": "",
             "DB_DSN": "postgresql+psycopg://app:app@db:5432/app",
             "LLM_PROVIDER": "mock",
             "MIGRATION_PRODUCTION_GATE": "1",

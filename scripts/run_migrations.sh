@@ -163,7 +163,7 @@ if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" \
   exit 0
 fi
 
-if [[ -n "${DATABASE_URL:-}" ]]; then
+if [[ -n "${DATABASE_URL:-${DB_DSN:-}}" ]]; then
   for attempt in $(seq 1 30); do
     if python - <<'PY'
 import os
@@ -202,7 +202,7 @@ if [[ "${MIGRATION_GATE_TOKEN_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
-if [[ -n "${DATABASE_URL:-}" ]]; then
+if [[ -n "${DATABASE_URL:-${DB_DSN:-}}" ]]; then
   python - <<'PY'
 import os
 import psycopg
