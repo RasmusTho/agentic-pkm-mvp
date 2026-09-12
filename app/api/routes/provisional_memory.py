@@ -10,11 +10,16 @@ from app.agent_memory.provisional_write import (
     ProvisionalWriteResult,
     write_provisional_memory,
 )
+from app.api.compatibility_mutation import reject_scoped_vault_mutation
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.auth import require_loopback_or_api_key
 from app.write_guard import WritesBlockedError
 
-router = APIRouter(prefix="/companion/memory", tags=["companion", "memory"])
+router = APIRouter(
+    prefix="/companion/memory",
+    tags=["companion", "memory"],
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 
 
 @router.post(
