@@ -337,6 +337,11 @@ if [ "${FAKE_FAIL_FORWARDER_REFRESH:-0}" = 1 ] \
   && [ "$*" = "restart builderops-loopback-forwarder.service" ]; then
   exit 23
 fi
+if [ "${FAKE_FAIL_FORWARDER_REFRESH_AFTER_FIRST:-0}" = 1 ] \
+  && [ "$*" = "restart builderops-loopback-forwarder.service" ] \
+  && [ "$(grep -c 'systemctl restart builderops-loopback-forwarder.service' "$FAKE_EVENT_LOG")" -eq 2 ]; then
+  exit 23
+fi
 """,
     )
     _write_executable(
@@ -531,6 +536,40 @@ def test_deploy_fails_closed_when_forwarder_refresh_fails(tmp_path: Path) -> Non
     assert " up " not in events
     assert "curl " not in events
     assert "previous pin and live API/worker release restored" not in result.stderr
+
+
+def test_deploy_fails_closed_when_post_recreation_forwarder_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["FAKE_FAIL_FORWARDER_REFRESH_AFTER_FIRST"] = "1"
+    pin_path = root / "config/deploy/builderops.env"
+    before = pin_path.read_text(encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "CRITICAL" not in result.stderr
+    assert pin_path.read_text(encoding="utf-8") == before
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert events.count("systemctl restart builderops-loopback-forwarder.service") == 4
+    assert events.count("up -d --force-recreate api worker") == 1
+    assert events.count("up -d --force-recreate db api worker") == 1
+    assert events.count("curl ") == 1
+    assert "previous pin and live API/worker release restored" in result.stderr
 
 
 def test_deploy_preflight_refuses_nonprivate_app_secret_before_pull_or_db_up(
