@@ -362,6 +362,34 @@ the live TARS state.
   deployment ownership; and
 - SQLite/JSONL/JSON remains only read-only migration input or an explicitly injected test adapter.
 
+The existing authenticated service also owns the target finite
+[bounded action admission](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission) seam.
+That owner contract specifies the immutable approval manifest, per-operation permissions,
+destination reservation and finite recovery/readback rules. It does not add a service or queue,
+activate the API authority epoch, or make a read-only DevUI endpoint an action boundary.
+
+For the first `start_model_inquiry` operation, `service.py::commit_inquiry` at `POST /v1/inquiries`
+currently calls `store.commit_record`; its `ModelInquiry` receipt proves record storage only. The
+actual sanctioned launcher remains the fixed host-local `yggdrasil-model-inquiry` invocation owned
+by [Start Model Inquiry](../../.codex/skills/start-model-inquiry/SKILL.md). Its existing
+`ModelInquiryService` artifacts and `ModelInquiryRunner` terminal report produce inquiry evidence.
+The admission adapter must delegate to that boundary and must not copy host proof, subscription,
+lock, staging, provider or cleanup logic into this service.
+
+The approval/handoff implementation, destination-owned operation-key-to-inquiry reservation and
+authenticated lookup/restart reconciliation are still missing. Record-write idempotency and the
+fixed staging lock do not establish launch deduplication. Inquiry stop is currently unsupported;
+storing a record, observing a workflow terminal receipt and observing a requested process
+termination are distinct facts. No fallback to browser state or a parallel local authority is
+admitted by this contract.
+
+#4169 retains the DDO-specific request/preview compiler, `DeliveryInitiation.v2`, reducer handoff,
+typed lifecycle commands and CKM receipt projection. Its service command/journal admission does not
+directly launch a worker; the existing DDO reducer and BuilderOps outbox/effect owners remain
+responsible for execution. A separately approved Issue workflow must establish its own exact
+permissions, destination/readback and existing executor fences before admission. An inquiry
+approval grants no Issue, code, GitHub, merge, closure or deployment effect.
+
 ## Implementation tasks
 
 | # | Task | ID | Issue | Delivers | Depends on |

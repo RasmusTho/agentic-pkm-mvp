@@ -132,9 +132,11 @@ retains its no-code/no-GitHub-effect boundary. Full DDO completion is not a univ
 The first contract tasks are [bounded action admission](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_BOUNDED_ACTION_ADMISSION.md),
 [owner outcome authority](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md), and
 [managed runtime/pilot reconciliation](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md).
-They must update their owning contracts and dependent Issue wording before later implementation
-uses the repaired boundary. In particular, the existing dependency graph below remains subject to
-that reconciliation; this milestone map does not silently change #4169, #4697 or #4749 admission.
+The [bounded action contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
+now separates the inquiry seam from DDO-specific #4169. Its runtime admission, destination
+reservation/readback and activation remain undelivered. The other repair tasks and dependent live
+Issue reconciliation remain prerequisites before later implementation uses their boundaries; this
+milestone map does not make #4697, #5404 or #4749 ready.
 
 ### Stage A — see: coherent read-only devUI
 
@@ -216,10 +218,14 @@ specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`:
 
 This is not an early activation of the general Stage B DDO command chain. Start Model Inquiry is a
 narrow pre-Issue workflow documented in the Builder System process map, but its cost-bearing Start
-still crosses the authenticated action boundary owned by #4169. The current loopback-only read
+still crosses the existing BuilderOps control-plane service under the
+[bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission).
+#4169 owns the DDO-specific bridge. The current loopback-only read
 route is not approval authentication, and the current single-flight launcher is not durable
 idempotency. FCP-04 therefore remains blocked until the authenticated boundary and a proposal-scoped
-operation key/readback in the existing inquiry artifacts are available. The slice
+operation-key reservation/readback in the existing inquiry destination are available. A stored
+`POST /v1/inquiries` record is not a sanctioned launch; stop remains unsupported by the current
+inquiry skill. Contract repair #5502 alone does not satisfy these runtime prerequisites. The slice
 adds no delivery request, GitHub/repository mutation, task store, provider-session store, global
 session view, or direct provider invocation. Inquiry promotion and any later Issue/repo consequence
 remain separate governed workflows.
@@ -249,9 +255,9 @@ trial or acceptance.
 
 The delivery order is:
 
-1. the authenticated action boundary emits an exact `TypedCommandProposal.v1` /
-   `DeliveryRequest.v1` + `DeliveryPreview.v1` owner ask, with `Start/Hold` for the first bounded
-   Start Model Inquiry path;
+1. the authenticated action boundary binds the exact `TypedCommandProposal.v1` and immutable
+   approval manifest for `Start/Hold` on the first bounded Model Inquiry path; a separately
+   approved DDO operation uses `DeliveryRequest.v1` + `DeliveryPreview.v1` under #4169;
 2. the deployment/verification owner emits an exact candidate-bound ready-to-try receipt, including
    environment, health/read-only smoke, rollback identity, and source freshness;
 3. the existing owner-disposition boundary records an explicit trial or rejection, and later an
