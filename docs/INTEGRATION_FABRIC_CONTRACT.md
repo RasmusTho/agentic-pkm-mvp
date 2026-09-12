@@ -10,7 +10,7 @@ Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/PROJECT_KERNEL.md, doc
 
 # Integration Fabric Contract
 
-This document defines how internal and external components attach to Mimer through the Integration Fabric subsystem named in `docs/MODULAR_ARCHITECTURE.md`. It is a docs-only contract: it does not introduce a runtime integration registry, runtime enforcement, or new tests. Concrete external helper-system ownership and the human-readable operational catalog are owned by `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`; that catalog lives in Builder Vault and is not a runtime registry.
+This document defines how internal and external components attach to Mimer through the Integration Fabric subsystem named in `docs/MODULAR_ARCHITECTURE.md`. It is a docs-only contract: it does not introduce a runtime integration registry, runtime enforcement, or new tests. Concrete external helper-system ownership and the human-readable operational-record boundary are owned by `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`; the target record surface is not a runtime registry and does not override the current Builder Vault working-artifact classification.
 
 The contract has three purposes:
 
@@ -86,14 +86,18 @@ The table is a summary, not a substitute for the per-integration contract. Healt
 ## External helper-system ownership
 
 Concrete external helper systems are operationally owned by Heimdal under
-`docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. Integration Fabric remains the replaceable
-adapter layer: it provides webhook/API/MCP transport and capability under Heimdal's declared
+`docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. For helpers that attach to Mimer, Integration
+Fabric remains the replaceable adapter layer: it provides webhook/API/MCP transport and capability under Heimdal's declared
 authority, provenance, health, and replacement constraints. This does not promote Discord,
 Proxmox, or another provider into Yggdrasil semantic authority, and it does not create a second
 runtime integration registry.
 
-The concrete catalog and runbooks belong in Builder Vault. Repository documents carry only the
-stable ownership contract, schemas/validation needed by code, and pointers to the Vault records.
+For a constituent-neutral helper that does not attach to Mimer, this Mimer-facing contract is not
+the helper's runtime owner; Heimdal's owner contract names the appropriate shared transport seam.
+The concrete catalog and runbooks are intended for the owner-authorized Builder Vault record surface.
+Repository documents carry only the stable ownership contract, schemas/validation needed by code,
+and pointers to the Vault records. A Builder Vault working artifact is not promoted to authority by
+its location or by this document.
 
 ## Authority rule
 

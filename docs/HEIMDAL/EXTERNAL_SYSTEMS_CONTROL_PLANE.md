@@ -4,7 +4,7 @@ Authority: Owns the ecosystem-level operational ownership boundary for external 
 Owner: Heimdal / Yggdrasil ecosystem operations
 Temporal class: strategic
 Review cadence: event-driven, when an external system, credential boundary, or operational channel changes
-Source of truth: this contract for ownership; Builder Vault for concrete helper-system records and runbooks; provider systems for provider-side state
+Source of truth: this contract for ownership; the owner-authorized Builder Vault record surface for concrete helper-system records and runbooks once enacted; provider systems for provider-side state
 Last reviewed: 2026-09-12
 
 # Heimdal External Systems Control Plane
@@ -30,17 +30,21 @@ Heimdal so that the owner is not the only witness of its own failure.
 | --- | --- | --- |
 | External helper-system registry, lifecycle, identity, channel topology, runbooks, and operational status | Heimdal | One canonical operational registry; no personal or subsystem-owned duplicate |
 | Host, VM, Docker, Proxmox, channel execution, and recovery mechanics | Yggdrasil Platform and Operations System | Executes already-authorized operations; does not become the helper-system authority |
-| Webhook, API, or MCP adapter implementation | Integration Fabric | Reusable transport/capability layer under Heimdal's ownership contract |
+| Mimer-facing webhook, API, or MCP adapter implementation | Integration Fabric | Reusable transport/capability layer under the applicable Mimer-facing contract and Heimdal's ownership contract |
+| Constituent-neutral helper transport, such as Heimdal-to-Discord liveness delivery | Heimdal with the appropriate shared transport seam | Does not acquire a Mimer dependency merely because the helper is external |
 | Security policy, credential scope, exposure, and rotation rules | Security/deployment owner documents | Heimdal must comply with these rules; it does not silently weaken them |
 | Source health and domain truth | The source system, such as BuilderOps, Product/Runtime, or Proxmox | Heimdal observes and routes the signal; it does not replace the source authority |
 | Provider-side account state | The external provider, operated through a Heimdal-owned identity | Provider state is external; its local representation is recorded in Builder Vault |
-| Human-facing operational record | Builder Vault | Canonical catalog and runbooks for external helper systems |
+| Human-facing operational record | Builder Vault | Intended single catalog and runbooks; authority begins only on an accepted authority-capable record surface |
 
-## Builder Vault is the operational source
+## Builder Vault operational record
 
-Builder Vault is the single human-readable source for concrete external helper-system records. The
-repository must not grow a second hand-maintained inventory of servers, channels, webhook URLs,
-provider accounts, or credential values.
+Builder Vault is the single human-readable operational record intended for concrete external
+helper-system records. The repository must not grow a second hand-maintained inventory of servers,
+channels, webhook URLs, provider accounts, or credential values. This contract does not override the
+current Builder Vault classification: Builder Vault working artifacts remain non-normative until an
+authority-capable, owner-approved record surface is defined and accepted. The live provider remains
+the authority for provider-side state until that enactment step completes.
 
 Each Builder Vault record should answer, at minimum:
 
@@ -56,7 +60,8 @@ Each Builder Vault record should answer, at minimum:
 
 The repository contains only the ownership contract, machine-readable schemas/validation where
 needed, and pointers to the Builder Vault record. A generated or receipt-bound projection is a
-mirror, not a second authority.
+mirror, not a second authority. Enactment must therefore identify the authority-capable Builder
+Vault surface explicitly; it may not promote an ordinary working note by location or recency.
 
 ## Credential boundary
 
@@ -88,10 +93,12 @@ drill receipt.
 
 ## Integration and event boundary
 
-All external helper systems attach through the Integration Fabric contract. Adapters provide
-capability or transport and must preserve provenance, timeout/failure visibility, replacement
-posture, and authority separation. No adapter may create a second semantic source of truth or
-bypass the event/receipt boundary for an effect that matters to Yggdrasil.
+External helper systems that cross a Mimer boundary use the applicable Integration Fabric contract.
+Constituent-neutral helper paths, such as Heimdal's independent liveness delivery, may use a shared
+transport seam without acquiring a Mimer dependency. In either case, adapters provide capability or
+transport and must preserve provenance, timeout/failure visibility, replacement posture, and
+authority separation. No adapter may create a second semantic source of truth or bypass the
+event/receipt boundary for an effect that matters to Yggdrasil.
 
 Heimdal's registry is an operational catalog in Builder Vault; it is not a runtime workflow store,
 task queue, product database, or replacement for GitHub/BuilderOps delivery authority.

@@ -10,9 +10,12 @@ Source of truth: the docs indexed below + owner decision session 2026-07-04.
 
 **Heimdal** is the sensor / event-capture constituent of the personal agentic ecosystem: continuous observation
 of reality, converted into **attributed, timestamped events** with **confidence** and **provenance**.
-Its responsibility ends at a **published event**; **Mimer**, the undivided knowledge-and-cognition
-constituent, consumes that stream as candidate evidence. Hugin and Munin are reserved, inactive
-names under ADR-0044.
+In the **observation path**, its responsibility ends at a **published event**; **Mimer**, the undivided
+knowledge-and-cognition constituent, consumes that stream as candidate evidence. Separately, Heimdal
+is the target-state operational owner for Yggdrasil's external helper-system relationships; that
+boundary is defined in [EXTERNAL_SYSTEMS_CONTROL_PLANE.md](EXTERNAL_SYSTEMS_CONTROL_PLANE.md) and does
+not make Heimdal the semantic owner of those events. Hugin and Munin are reserved, inactive names
+under ADR-0044.
 
 This directory began as the **"A" artifacts** — docs-only groundwork that fixed the container and
 handed a Fable-5 architecture window a bounded problem. Those original briefs remain advisory design
