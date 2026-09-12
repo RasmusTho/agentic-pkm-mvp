@@ -346,6 +346,15 @@ then carries only its mapped acceptance criteria and validation commands:
 No issue may borrow an acceptance criterion from a later group merely to bypass its dependency.
 The post-spec issue extraction records three distinct child receipts on #2143.
 
+### MVR-05C — compatibility write effect boundary
+
+The registry task records the delivered compatibility-boundary writeback; the normative current
+boundary and its verification anchors live in
+`docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: MVR-05C compatibility
+bridge`. That bridge is a bounded predecessor to the full MVR-05C explicit-target
+DecisionToken/effect-fence floor and does not claim that the full multi-binding governed-write
+floor is shipped.
+
 The 01A activation gate is durable and fail-closed, not a release-note convention. An 01A-only
 runtime may read/migrate into disposable validation state, but cannot commit new-only identity/schema
 fields or replace the authoritative legacy file. 01B installs and validates durable export/
