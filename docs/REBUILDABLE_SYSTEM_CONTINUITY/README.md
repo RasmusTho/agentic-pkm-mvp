@@ -40,6 +40,24 @@ Historical restore-first, WAL, and generalized backup proposals remain historica
 blocked unless a current owner contract explicitly promotes a bounded capability. This document
 does not claim that total-loss recovery or a generalized restore program is shipped.
 
+## Owner decision — accepted loss posture (2026-09-11)
+
+Product Runtime does not require a general database backup. Runtime DB state is disposable and is
+rebuilt from retained vault Markdown, companions, and document-backed receipts. If an operational
+history record cannot be reconstructed, its loss is accepted as limited history loss; it is not a loss
+of canonical human meaning.
+
+The continuity review must inventory every persisted path and classify it as:
+
+1. rebuildable from retained Markdown, companions, or receipts;
+2. reconstructable with identity or history loss;
+3. intentionally lossy operational state; or
+4. safety state that requires a fresh fenced bootstrap and authoritative readback.
+
+For each class, the review records readiness/refusal behavior, replay and effect-reconciliation
+implications, and the operator-visible consequence. This review does not create a backup/restore
+program.
+
 ## Cross-Task Invariants / Partial Failure Safety
 
 1. **Retained authority survives mirror loss.** Loss of a machine representation cannot alter

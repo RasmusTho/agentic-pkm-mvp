@@ -16,6 +16,18 @@ It is the Layer 6 detail for `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md` and the mirr
 
 The continuity classification is owned by [`RSC-01 continuity classification`](../REBUILDABLE_SYSTEM_CONTINUITY/README.md#rsc-01-continuity-classification): retained human artifacts, companions, and document-backed governance receipts remain authority; machine mirrors remain rebuildable; diagnostics and optional backups remain evidence/ergonomics only; and missing operational lineage requires a new fenced bootstrap epoch. This contract does not claim a generalized restore program.
 
+## Continuity and accepted loss posture
+
+For Product Runtime, the database is a disposable performance and coordination projection. The
+durable continuity set is retained vault Markdown, companion artifacts, and document-backed receipts;
+there is no general Product DB backup, cold-storage, WAL, or restore obligation.
+
+Any persisted operational history that is not reconstructible from that continuity set is explicitly
+lossy. Its loss is accepted as bounded history loss, not as loss of canonical human meaning and not as
+permission to promote the DB into an authority source. The rebuildability review tracked by #5258
+must keep the exact lossy paths, rebuild consequences, readiness posture, and fresh-bootstrap/readback
+requirements visible.
+
 ## Canonical authority
 
 The durable, authoritative set is the human-readable surface; machine mirrors sit beneath it.
