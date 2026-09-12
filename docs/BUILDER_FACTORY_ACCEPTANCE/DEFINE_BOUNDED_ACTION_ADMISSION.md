@@ -24,7 +24,9 @@ FCA admits a first non-DDO workflow, but #4169 still couples its authenticated b
 
 The repaired normative contract is [Bounded action admission](README.md#bounded-action-admission)
 and the finite table in [Cross-Task Invariants / Interaction Safety](README.md#cross-task-invariants--interaction-safety).
-The service, inquiry and DDO task owners link to that same contract. The following scope records the
+The service, inquiry, FCP capability/parent, implementation plan and DDO owners use that same
+contract and distinguish pickup prerequisites from the inquiry task's implementation and activation.
+The following scope records the
 bounded repair; it does not authorize executing any operation.
 
 - Define the finite admission/readback responsibilities in the existing BuilderOps control-plane service and existing sanctioned destination launcher/artifacts; retain #4169 as owner of the DDO-specific compiler/reducer/CKM bridge. A stored inquiry record is not a launch receipt: name the actual launcher and any missing operation-key-to-inquiry reservation explicitly.
@@ -45,6 +47,11 @@ The complete owner journey depends on this finite seam. Delivering the module or
 
 - [x] The admitted service, destination producers and exact approval/readback fields are enumerated, including per-operation permissions. Verify: doc writeback at `docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Bounded action admission`
 - [x] DDO-specific initiation remains in #4169's owning specification; the first inquiry dependency names the bounded seam and preserves its no-delivery restriction. Verify: doc writeback at `docs/DEVUI_FOCUS_CONVERSATION_PORT/START_MODEL_INQUIRY_FROM_PREVIEW.md :: What This Task Does`
+  The FCP capability owner, parent task pointer and Stage A2 plan distinguish external prerequisites,
+  FCP-04 deliverables and runtime Start availability.
+  - Verify: doc writeback at `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: Open implementation dependencies`
+  - Verify: doc writeback at `docs/DEVUI_FOCUS_CONVERSATION_PORT/PARENT_FEATURE_ISSUE.md :: Constraints`
+  - Verify: doc writeback at `docs/plans/DEVUI_IMPLEMENTATION.md :: Stage A2 — Focus + external Conversation Port`
 - [x] The control-plane and DDO specifications agree on the existing service, actual destination launcher, readback producer and remaining missing support; record storage, launch and observed termination are not conflated.
   - Verify: doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Target boundary`
   - Verify: doc writeback at `docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md :: What This Task Does`
@@ -67,6 +74,8 @@ No runtime state changes in this task.
 - `docs/BUILDER_FACTORY_ACCEPTANCE/README.md`
 - `docs/DETERMINISTIC_DELIVERY_ORCHESTRATION/CONNECT_CKM_INITIATION_AND_DELIVERY_RECEIPTS.md`
 - `docs/DEVUI_FOCUS_CONVERSATION_PORT/START_MODEL_INQUIRY_FROM_PREVIEW.md`
+- `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`
+- `docs/DEVUI_FOCUS_CONVERSATION_PORT/PARENT_FEATURE_ISSUE.md`
 - `docs/plans/DEVUI_IMPLEMENTATION.md`
 - `docs/BUILDEROPS_CONTROL_PLANE/README.md`
 
