@@ -8,6 +8,7 @@ import hmac
 import json
 import os
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.api.routes.active_context_selection import build_selection_service, get_selection_store
 from app.auth import api_key_header, resolve_auth_subject
-from app.instance.settings_rebind import SettingsRebindStore
+from app.instance.settings_rebind import SettingsRebindStore, compatibility_ingress_window
 from app.instance.vault_registry import VaultRegistryStore
 from app.settings import settings
 
@@ -63,13 +64,11 @@ def _decode(value: str, *, secret: bytes) -> dict[str, object]:
     return payload
 
 
-def _registry() -> tuple[VaultRegistryStore, object]:
+def _registry() -> VaultRegistryStore:
     raw_path = os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip()
     if not raw_path:
         raise CompatibilityMutationError("compatibility registry is not bound")
-    registry = VaultRegistryStore(Path(raw_path).expanduser().resolve(strict=False))
-    snapshot = registry.load()
-    return registry, snapshot
+    return VaultRegistryStore(Path(raw_path).expanduser().resolve(strict=False))
 
 
 def issue_compatibility_precondition(*, binding_id: str, principal_id: str, registry: VaultRegistryStore) -> str:
@@ -85,8 +84,14 @@ def issue_compatibility_precondition(*, binding_id: str, principal_id: str, regi
     return _encode(payload, secret=_secret(snapshot.app_install_id))
 
 
-def _current_proof(value: str, *, request: Request, api_key: str | None) -> CompatibilityMutationProof:
-    registry, snapshot = _registry()
+def _current_proof(
+    value: str,
+    *,
+    request: Request,
+    api_key: str | None,
+    registry: VaultRegistryStore,
+) -> CompatibilityMutationProof:
+    snapshot = registry.load()
     service = build_selection_service(get_selection_store())
     principal = service.derive(
         resolve_auth_subject(request, api_key), presented_credential=api_key
@@ -133,21 +138,32 @@ def require_compatibility_mutation(
     request: Request,
     api_key: str | None = Depends(api_key_header),
     precondition: str | None = Header(default=None, alias=HEADER_COMPATIBILITY_PRECONDITION),
-) -> CompatibilityMutationProof:
-    """Require the migrated route's authenticated binding/revision proof."""
+) -> Iterator[CompatibilityMutationProof]:
+    """Hold the compatibility ingress window through the governed route effect."""
 
     if request.headers.get("X-Active-Context-Session") or request.headers.get(
         "X-Active-Context-Override"
     ) or not precondition:
         raise _capability_not_ready()
     try:
-        proof = _current_proof(precondition, request=request, api_key=api_key)
+        registry = _registry()
     except Exception as exc:
-        if isinstance(exc, HTTPException):
-            raise
         raise _capability_not_ready() from exc
-    request.state.compatibility_mutation_proof = proof
-    return proof
+
+    with compatibility_ingress_window(registry):
+        try:
+            proof = _current_proof(
+                precondition,
+                request=request,
+                api_key=api_key,
+                registry=registry,
+            )
+        except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise
+            raise _capability_not_ready() from exc
+        request.state.compatibility_mutation_proof = proof
+        yield proof
 
 
 __all__ = [

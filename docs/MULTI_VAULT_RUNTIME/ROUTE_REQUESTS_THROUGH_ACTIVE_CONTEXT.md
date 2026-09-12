@@ -556,6 +556,14 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   set (and any batch that is not a subset), and record vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set`
+
+### MVR-05C compatibility bridge — target-state handoff
+
+The current-state compatibility bridge and its production verification live in
+`docs/ARCHITECTURE.md :: Current Runtime Surfaces`. This future-state specification retains
+the explicit-target DecisionToken/effect-fence floor below; it must not treat the bounded
+pre-DecisionToken bridge as completion of full MVR-05C multi-binding governed writes.
+
 - [ ] **MVR-05C:** GOV revocation after request resolution but before
   commit invalidates the current DecisionToken/binding revision and blocks the in-flight mutation
   without writing. Production removal/relocation remain capability-not-ready and are proved after
