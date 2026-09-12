@@ -25,8 +25,9 @@ Product/Runtime consumers may use channel-scoped runtime credentials such as
 authority, retention, or product memory.
 
 For external helper systems, Builder Vault records the non-secret credential reference and Heimdal
-ownership metadata; the Keychain remains the secret source. A Discord webhook is a future declared
-consumer binding, not a value stored in the Vault or repository.
+ownership metadata; the execution host's approved secure store remains the secret source (macOS
+Keychain for the Mac-hosted path, or the approved Linux/Proxmox host-native store for that path). A
+Discord webhook is a future declared consumer binding, not a value stored in the Vault or repository.
 
 The canonical v1 capture ingress is
 `~/Library/Mobile Documents/com~apple~CloudDocs/Yggdrasil/Heimdal/Capture/Inbox`. iCloud is an
