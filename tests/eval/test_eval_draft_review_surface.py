@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.knowledge.contracts import NoteLocator, WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.eval.failure_capture import (
     DRAFT_KIND_SCHEMA_VIOLATION,
@@ -240,6 +241,103 @@ def test_decision_uses_observed_draft_version(
     assert "status: rejected" in updated
     assert '"event_id": "evt-version"' in updated
     assert "trace_id: trace-version" in updated
+
+
+def test_decision_uses_same_observed_draft_snapshot(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rendered decision must use the bytes whose version is passed to CAS."""
+    draft = _draft_schema_violation(vault, trace_id="trace-snapshot", event_id="evt-snapshot")
+    assert draft is not None and draft.draft_path is not None
+    draft_path = (vault / draft.draft_path).resolve()
+    original_bytes = draft_path.read_bytes()
+    observed_bytes = original_bytes.replace(b"evt-snapshot", b"evt-owner-edit")
+    assert observed_bytes != original_bytes
+
+    import app.eval.failure_capture as failure_capture
+
+    def read_observed_snapshot(path: Path):  # type: ignore[no-untyped-def]
+        assert path == draft_path
+        draft_path.write_bytes(observed_bytes)
+        return observed_bytes.decode("utf-8"), hashlib.sha256(observed_bytes).hexdigest()
+
+    monkeypatch.setattr(failure_capture, "read_note_text_with_version", read_observed_snapshot)
+
+    decision = reject_draft(vault, draft.draft_id, decided_by="rasmus:reviewer")
+
+    assert decision.decision == "reject"
+    updated = draft_path.read_text(encoding="utf-8")
+    assert "status: rejected" in updated
+    assert "evt-owner-edit" in updated
+    assert "evt-snapshot" not in updated
+
+
+def test_crlf_draft_remains_readable_after_raw_snapshot_read(vault: Path) -> None:
+    """Raw-byte versioning must not make the tolerant draft reader reject CRLF."""
+    draft = _draft_schema_violation(vault, trace_id="trace-crlf", event_id="evt-crlf")
+    assert draft is not None and draft.draft_path is not None
+    draft_path = vault / draft.draft_path
+    draft_path.write_bytes(draft_path.read_bytes().replace(b"\n", b"\r\n"))
+
+    parsed = read_draft(vault, draft.draft_id)
+
+    assert parsed is not None
+    assert parsed.status == DRAFT_STATUS_PENDING
+    assert list_pending_drafts(vault)[0].draft_id == draft.draft_id
+
+
+def test_api_translates_eval_draft_write_conflict(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CAS refusal from the production route is a documented 409 response."""
+    import app.api.routes.eval_drafts as eval_drafts
+
+    def raise_conflict(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise KnowledgeWriteConflict(
+            "concurrent owner edit",
+            receipt=WriteReceipt(
+                operation="write_note",
+                locator=NoteLocator(vault="Vault", path="eval_drafts/schema-violation-missing.md"),
+                adapter="fs_vault",
+                outcome="conflict_staged",
+                conflict_artifact="eval_drafts/schema-violation-missing.concurrent.md",
+            ),
+        )
+
+    monkeypatch.setattr(eval_drafts, "reject_draft", raise_conflict)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post(
+        "/api/eval-drafts/schema-violation-missing/decision",
+        json={"action": "reject", "decided_by": "rasmus:reviewer"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json() == {
+        "detail": {
+            "error": "eval_draft_decision_refused",
+            "message": "concurrent owner edit",
+        }
+    }
+
+
+def test_api_preserves_receiptless_eval_draft_write_conflict(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receiptless conflicts stay indeterminate instead of becoming stale 409s."""
+    import app.api.routes.eval_drafts as eval_drafts
+
+    def raise_conflict(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise KnowledgeWriteConflict("canonical outcome is indeterminate")
+
+    monkeypatch.setattr(eval_drafts, "reject_draft", raise_conflict)
+
+    client = TestClient(app)
+    with pytest.raises(KnowledgeWriteConflict, match="canonical outcome is indeterminate"):
+        client.post(
+            "/api/eval-drafts/schema-violation-missing/decision",
+            json={"action": "reject", "decided_by": "rasmus:reviewer"},
+        )
 
 
 def test_write_draft_is_create_once(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
