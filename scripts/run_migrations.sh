@@ -166,6 +166,7 @@ fi
 # Readiness and extension setup use the same effective DSN as the gate:
 # DATABASE_URL takes precedence, with DB_DSN as the compatibility fallback.
 if [[ -n "${DATABASE_URL:-${DB_DSN:-}}" ]]; then
+  database_ready=0
   for attempt in $(seq 1 30); do
     if python - <<'PY'
 import os
@@ -186,10 +187,15 @@ except Exception:
     sys.exit(1)
 PY
     then
+      database_ready=1
       break
     fi
     sleep 1
   done
+  if [[ "${database_ready}" != "1" ]]; then
+    echo "ERROR: migration database readiness check failed after 30 attempts" >&2
+    exit 78
+  fi
 fi
 
 # The deploy channel producer uses the same target-bound gate before it stops

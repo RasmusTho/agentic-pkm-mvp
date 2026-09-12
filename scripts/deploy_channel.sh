@@ -650,7 +650,7 @@ prepare_prod_forward_only_ack() {
   fi
   set +e
   export DEPLOY_MIGRATION_GATE_TOKEN_ONLY=1
-  gate_output="$(compose run --rm --no-deps -T migrate)"
+  gate_output="$(compose run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate)"
   gate_rc=$?
   unset DEPLOY_MIGRATION_GATE_TOKEN_ONLY
   set -e

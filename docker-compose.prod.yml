@@ -23,10 +23,11 @@ services:
       MIGRATION_PRODUCTION_GATE: "1"
       MIGRATION_TARGET_IDENTITY: pkm-prod/app
       PROD_MIGRATION_FORWARD_ONLY_ACK: ${PROD_MIGRATION_FORWARD_ONLY_ACK:-}
-      # deploy_channel.sh sets the private selector only for its read-only
-      # pre-cutover token probe. Ordinary production startup is always full
-      # migration mode, even if runtime.env contains stale control values.
-      MIGRATION_GATE_TOKEN_ONLY: ${DEPLOY_MIGRATION_GATE_TOKEN_ONLY:-0}
+      # Ordinary production startup is always full migration mode. The deploy
+      # wrapper passes the private token-only selector explicitly on its
+      # read-only pre-cutover `compose run`; no ambient host variable can
+      # change this service's normal startup mode.
+      MIGRATION_GATE_TOKEN_ONLY: "0"
 
   api:
     environment:
