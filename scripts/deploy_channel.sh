@@ -633,6 +633,45 @@ print("1" if pending else "0")
   export MIGRATION_RECEIPT_JSON DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
 }
 
+prepare_prod_forward_only_ack() {
+  local gate_output gate_rc token token_lines
+  if [ "${action}" != "deploy" ] || [ "${channel}" != "prod" ] || \
+      [ "${FORWARD_ONLY_COUNT}" -eq 0 ]; then
+    return 0
+  fi
+
+  # DEPLOY_ACK_FORWARD_ONLY is operator intent, not migration authority. Ask
+  # the production migrate producer for the exact live, target-bound token
+  # before any pin, pending marker, runtime mutation, or writer stop. A failed
+  # probe therefore leaves the current runtime untouched.
+  if [ "${ack_forward_only}" != "1" ]; then
+    echo "production forward-only migration requires the existing deploy acknowledgement" >&2
+    return 42
+  fi
+  set +e
+  export DEPLOY_MIGRATION_GATE_TOKEN_ONLY=1
+  gate_output="$(compose run --rm --no-deps -T migrate)"
+  gate_rc=$?
+  unset DEPLOY_MIGRATION_GATE_TOKEN_ONLY
+  set -e
+  if [ "${gate_rc}" -ne 0 ]; then
+    echo "production migration token probe failed before writer stop: output=redacted" >&2
+    return "${gate_rc}"
+  fi
+  token_lines="$(printf '%s\n' "${gate_output}" | awk 'NF { count += 1; token = $0 } END { if (count == 1) print token; else exit 1 }')" || {
+    echo "production migration token probe returned ambiguous output before writer stop" >&2
+    return 78
+  }
+  token="${token_lines}"
+  if [[ ! "${token}" =~ ^prod-migration-ack\.v1:[0-9a-f]{64}$ ]]; then
+    echo "production migration token probe returned an invalid decision token before writer stop" >&2
+    return 78
+  fi
+  PROD_MIGRATION_FORWARD_ONLY_ACK="${token}"
+  export PROD_MIGRATION_FORWARD_ONLY_ACK
+  echo "production migration token probe accepted: target-bound token ready before writer stop"
+}
+
 heimdal_raw_migration_secret_preflight() {
   if [ "${action}" != "deploy" ] \
       || [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" != "1" ]; then
@@ -1434,6 +1473,12 @@ fi
 # every pin, marker, volume, Docker, or writer-stop operation. Archive readiness
 # must be established before the Keychain-backed migration secret is read.
 heimdal_raw_migration_secret_preflight || exit $?
+
+# Prime the same live production gate that the real migration container will
+# re-run after writer drain. This joins the existing deploy acknowledgement to
+# the target-bound token without permitting a missing/false acknowledgement to
+# create a stopped-writer recovery state.
+prepare_prod_forward_only_ack || exit $?
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2

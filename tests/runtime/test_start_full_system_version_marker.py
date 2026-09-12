@@ -99,6 +99,11 @@ if [ "${{1:-}}" = "compose" ]; then
       exit 0
       ;;
     up)
+      if [ "${{2:-}}" = "-d" ] && [ "${{3:-}}" = "db" ]; then
+        # Startup now establishes the database-server precondition before
+        # the instance-state fence and the later build-marker compose up.
+        exit 0
+      fi
       {{
         printf 'COMMAND=%s\n' "compose $*"
         printf 'VCS_REF=%s\n' "${{VCS_REF:-}}"

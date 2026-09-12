@@ -7,9 +7,16 @@ services:
 
   migrate:
     environment:
+      PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: mock
+      # Test is non-production; stale shared runtime control values must not
+      # turn this migration producer into the production gate.
+      MIGRATION_PRODUCTION_GATE: "0"
+      MIGRATION_GATE_TOKEN_ONLY: "0"
+      MIGRATION_TARGET_IDENTITY: !reset null
+      PROD_MIGRATION_FORWARD_ONLY_ACK: !reset null
 
   db:
     environment:

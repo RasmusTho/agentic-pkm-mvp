@@ -1058,6 +1058,12 @@ if [ -z "$runtime_env_path" ]; then
 fi
 RUNTIME_ENV_PATH="$runtime_env_path"
 NO_VAULT_MODE="$NO_VAULT_MODE" bash scripts/export_runtime_env.sh
+# The production Compose overlay owns the migration gate and target identity.
+# Keep generated runtime.env channel-neutral: it is a shared service env-file
+# surface and must not carry production authority or a deploy-only token into
+# another channel. The deferred promotion-plan acknowledgement workflow stays
+# deferred; an explicit startup acknowledgement is consumed by the prod
+# overlay and revalidated by run_migrations.sh.
 scope_glob_raw="${WATCHER_SCOPE_GLOB:-}"
 scope_glob_raw="${scope_glob_raw#"${scope_glob_raw%%[![:space:]]*}"}"
 scope_glob_raw="${scope_glob_raw%"${scope_glob_raw##*[![:space:]]}"}"
