@@ -34,6 +34,7 @@ The Platform and Operations System owns the operational-platform specification f
 | Runtime lifecycle wrappers | Startup, stop, restart, recovery, environment-export, and deployment wrappers when their primary effect is to operate the host, container runtime, Compose stack, or channel. |
 | Platform health | Operational handling of host, container runtime, Compose-unit, gateway, binding, and recovery-prerequisite signals; the signal definitions and product-health interpretation remain with their existing owners. |
 | Operational runbooks | Operator-facing procedures for provisioning, startup, recovery, deployment, rollback execution, and platform incident handling. |
+| External helper-system execution | Host/topology mechanics for already-authorized Heimdal-managed helper systems; this system only executes the approved host/VM mechanics. |
 
 This is ownership of the **operational platform**, not of every capability the platform runs. A
 platform wrapper may invoke a Product/Runtime command, but that does not transfer the command's
@@ -50,6 +51,7 @@ The following boundaries are strict.
 | Product runtime lifecycle authority | Existing Product/Runtime SBS owners, including the WSP lifecycle-binding decision and its EBF/EXE/PDM/OEF mechanism split | May operate host/Compose mechanics only with already-authorized channel, binding, and promotion inputs. It must not redefine whether a product process should run, what vault/context it is bound to, or the authority needed for a product side effect. |
 | Build, test, PR, CI, agent, and delivery workflows | Builder System | Does not own Builder System build/test/PR/CI workflows, delivery governance, or BuilderOps evidence. Deployment and promotion can cross the platform boundary, but their delivery policy and acceptance remain with their existing Builder and release-channel owners. |
 | Security, credentials, and exposure | Security and deployment owner documents | Implements approved host and topology mechanics only. It does not set security policy, credential scope or rotation, network exposure, or proxy-trust decisions. |
+| External helper-system ownership | Heimdal, under `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md` | May execute Heimdal-owned host/topology actions, but must not create a competing helper-system registry or reassign provider/channel ownership. |
 | Product-function scripts | The Product/Runtime owner determined by the script's effect | A script is not a platform script merely because it lives in `scripts/`, is called by a runbook, or runs on a host. |
 
 ### Script classification rule
@@ -117,6 +119,7 @@ current-state claims and procedures to the documents below.
 | `docs/SECURITY_ARCHITECTURE.md` | Security framing, invariants, and review routing | Retains security-policy, credential, exposure, and proxy-trust authority while platform mechanisms implement approved topology. |
 | `docs/OPERATIONS.md` and `docs/runbooks/**` | Current operator entrypoint and task-specific procedures | Provide executable operator guidance within this system boundary. |
 | `ops/host-setup/README.md` | Specific host-provisioning procedure | Is a platform runbook, not a Product/Runtime or Builder System specification. |
+| `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md` | Heimdal's external helper-system ownership, Builder Vault record shape, credential boundary, and shared Discord capability | Owns who manages external helpers; this document owns host and topology mechanics only. |
 
 When an operational change changes present-tense reality, update the most local current-state owner
 above in the same delivery. When a change alters this system's scope, exclusion, or cross-system

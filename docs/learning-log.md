@@ -272,3 +272,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** ADR-0050 recorded Bifrost as private while the live repository was public and the owner had intentionally chosen public visibility for required GitHub features.
 **Upstream artifact:** `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md :: Visibility amendment`
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: `python -m app.builderops` failed because the package has no `__main__`; the ADR and Issue receipts were updated directly.
+
+## 2026-09-12 — #5506 (Heimdal external helper-system ownership)
+**Source:** docs-to-issue / human direction
+**Diverged:** The earlier plan treated Discord and similar helper systems as provider configuration without one ecosystem owner, while current authority required a single system-owned lifecycle and credential boundary.
+**Upstream artifact:** `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md :: Decision`
+**BuilderOps LearningSignal:** `lrn_20260912213739_dc53bfc9`
