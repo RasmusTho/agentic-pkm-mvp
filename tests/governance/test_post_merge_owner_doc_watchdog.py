@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import subprocess
@@ -524,6 +525,49 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
         "governing_issue": 3821,
         "mode": "durable_receipt",
     }
+
+
+def test_watchdog_authenticates_current_chain_with_prior_head_history() -> None:
+    authority = _authority_comment()
+    prior = _receipt_payload(authority)
+    prior.update(head_sha="d" * 40, run_id="prior-candidate")
+    prior_comment = {
+        "author_association": "OWNER",
+        "body": "verified issue-set merge authority:\n```json\n" + json.dumps(prior) + "\n```",
+    }
+    history = [
+        prior_comment, _convergence_comment(prior_comment),
+        _phase_comment(prior_comment, phase="prepared", merge_commit_sha=None),
+    ]
+    comments = [
+        *history, authority, _convergence_comment(authority),
+        _phase_comment(authority, phase="prepared", merge_commit_sha=None),
+        _phase_comment(authority, phase="merged", merge_commit_sha="c" * 40),
+    ]
+    preserved = copy.deepcopy(comments)
+    request = {
+        "comments": comments, "expectedRepository": REPOSITORY,
+        "linkedIssues": [4999],
+        "livePr": _merged_pr("Governing-Issue: #4999\n\nFixes #4999\n"),
+    }
+    assert _node("selectWatchdogAuthority(inputs[0])", request) == {
+        "closing_issues": [3820, 3823], "governing_issue": 3821,
+        "mode": "durable_receipt",
+    }
+    assert comments == preserved
+    for invalid_comments in (
+        comments[:-1],  # prior prepared and current prepared cannot prove merge
+        [*comments, copy.deepcopy(comments[4])],  # duplicate current convergence
+        comments[1:],  # old evidence cannot self-authenticate without authority
+        [*comments, copy.deepcopy(history[0])],  # ambiguous historical authority
+    ):
+        assert _node("selectWatchdogAuthority(inputs[0])", {
+            **request, "comments": invalid_comments,
+        }) == {"closing_issues": [], "governing_issue": None, "mode": "trusted_receipt_invalid"}
+    changed_merge = {**request["livePr"], "merge_commit_sha": "e" * 40}
+    assert _node("selectWatchdogAuthority(inputs[0])", {
+        **request, "livePr": changed_merge,
+    })["mode"] == "trusted_receipt_invalid"
 
 
 def test_watchdog_parses_dynamic_convergence_fence_for_embedded_pr_body_fence() -> None:

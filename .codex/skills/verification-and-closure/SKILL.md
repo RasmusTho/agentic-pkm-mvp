@@ -675,6 +675,11 @@ Rules for the restore:
   hand-edited body is what strands a neutralization in the first place
 - never rewrite, delete, or re-post the durable authority and phase receipt trail; it is historical
   evidence of the abandoned attempt, and restoration repairs only the mutable body
+- retain prior-head convergence comments as well. The shared convergence classifier authenticates
+  each against its own unique trusted same-PR authority and complete frozen proof before retaining
+  it as audit history. Missing, forged, duplicate, or conflicting history fails closed. Only the
+  current authority's exact body-edit/check proof can satisfy convergence, phase recovery, or the
+  merged-chain watchdog; prior-head proof never supplies current approval or resets repair accounting
 - never restore while a merge request for that head may still be in flight — resolve the attempt
   through step 7 first, so a restore cannot race a merge or grant authority
 - resume normally afterwards: once the new head is final again, step 2 re-derives a fresh head-bound

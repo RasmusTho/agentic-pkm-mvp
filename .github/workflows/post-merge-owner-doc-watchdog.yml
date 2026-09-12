@@ -421,14 +421,45 @@ jobs:
                 ),
                 0
               );
-              if (receipts.length !== markerAttempts ||
-                  receipts.some(receipt => !validConvergenceReceipt(receipt, authorityReceipt))) {
-                return null;
-              }
+              if (receipts.length !== markerAttempts) return null;
+              // Mirror verified_merge.py's shared history classification:
+              // authenticate every candidate before selecting current proof.
+              const authorities = commentReceipts(comments, AUTHORITY_MARKER);
+              const currentDigest = canonicalSha256(authorityReceipt);
+              const seenContracts = new Set();
               const byDigest = new Map();
               for (const receipt of receipts) {
-                if (byDigest.has(receipt.receipt_sha256)) return null;
-                byDigest.set(receipt.receipt_sha256, receipt);
+                let receiptAuthority = authorityReceipt;
+                if (receipt.authority_sha256 !== currentDigest) {
+                  const authorityAttempts = comments.reduce((count, comment) => count + (
+                    TRUSTED_ASSOCIATIONS.has(comment.author_association) && typeof comment.body === "string"
+                      ? structuralMarkerOccurrences(comment.body, AUTHORITY_MARKER) : 0
+                  ), 0);
+                  if (authorities.length !== authorityAttempts) return null;
+                  const matching = authorities.filter(candidate =>
+                    ["repository", "pr_number", "head_sha", "run_id"].every(
+                      field => candidate[field] === receipt[field]
+                    )
+                  );
+                  if (matching.length !== 1) return null;
+                  receiptAuthority = matching[0];
+                  const pull = receipt.final_projection_observation?.pull_request;
+                  if (receipt.repository !== authorityReceipt.repository ||
+                      receipt.pr_number !== authorityReceipt.pr_number ||
+                      pull === null || typeof pull !== "object" ||
+                      !validAuthorityReceipt(receiptAuthority, {
+                        number: pull.number, head: {sha: pull.head_sha}, body: pull.body,
+                      }, authorityReceipt.repository)) return null;
+                }
+                if (!validConvergenceReceipt(receipt, receiptAuthority)) return null;
+                const contractIdentity = canonicalJson([
+                  canonicalSha256(receiptAuthority), receipt.pr_contract,
+                ]);
+                if (seenContracts.has(contractIdentity)) return null;
+                seenContracts.add(contractIdentity);
+                if (receipt.authority_sha256 === currentDigest) {
+                  byDigest.set(receipt.receipt_sha256, receipt);
+                }
               }
               return byDigest;
             };

@@ -1367,6 +1367,15 @@ fails closed. Failure restores only the authority-authenticated canonical body w
 it also performs no post-merge effect. Repeated reads do not replace the unchanged
 post-merge event enumeration and exact closure-attribution reconciliation.
 
+After a repaired head, preserve earlier authority, convergence, and phase comments and the repair
+accounting. The shared convergence classifier authenticates each prior candidate against its own
+unique trusted same-repository/PR authority and complete frozen convergence proof before treating
+it as audit history. A claimed different head or run is insufficient: missing, malformed, forged,
+duplicate, or conflicting historical proof refuses the gate. Only the current authority's exact
+body-edit/check receipt can satisfy convergence and phase recovery; the watchdog selects only its
+continuous chain reaching the exact merged identity. Earlier proof cannot grant current merge or
+closure authority, and no recovery step deletes or rewrites the audit trail.
+
 Same-head deployed-v1 recovery preserves historical attempts and repair budget only when the fresh
 v2 artifact retains the exact legacy supporting set and its authenticated closing set stays within
 the governing issue plus that set. A changed or unknowable legacy issue authority remains inert.

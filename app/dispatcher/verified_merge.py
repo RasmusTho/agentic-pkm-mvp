@@ -1868,7 +1868,12 @@ def _authenticated_projection_convergence_receipts(
     *,
     authority_receipt: Mapping[str, object],
 ) -> list[Mapping[str, object]] | None:
-    """Return all authenticated convergence receipts, including audit history."""
+    """Authenticate the complete history, then return only current-authority proof.
+
+    Earlier candidates are not authenticated against the live head. Their own
+    unique trusted authority and frozen final observation must agree first.
+    Keeping that evidence does not let it satisfy any current convergence gate.
+    """
 
     trusted_attempts = [
         comment
@@ -1888,19 +1893,77 @@ def _authenticated_projection_convergence_receipts(
     )
     if len(entries) != marker_attempts:
         return None
-    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
-        comments, authority_receipt
+    authority_entries = _comment_receipt_entries(
+        comments, VERIFIED_MERGE_AUTHORITY_MARKER
     )
-    receipts = [receipt for receipt, _comment in entries]
-    if any(
-        not _projection_convergence_matches_authority(
+    current_digest = _canonical_digest(authority_receipt)
+    receipts: list[Mapping[str, object]] = []
+    seen_contracts: set[tuple[str, str]] = set()
+    for receipt, _comment in entries:
+        receipt_authority = authority_receipt
+        if receipt.get("authority_sha256") != current_digest:
+            # A claimed different head/run is not enough to discard evidence.
+            # Bind to one same-PR authority, including conflicting/duplicate
+            # comments for that candidate identity in the uniqueness check.
+            if len(authority_entries) != _trusted_structural_marker_occurrences(
+                comments, VERIFIED_MERGE_AUTHORITY_MARKER
+            ):
+                return None
+            matching_authorities = [
+                (candidate, comment)
+                for candidate, comment in authority_entries
+                if all(
+                    candidate.get(field) == receipt.get(field)
+                    for field in ("repository", "pr_number", "head_sha", "run_id")
+                )
+            ]
+            if len(matching_authorities) != 1:
+                return None
+            receipt_authority, authority_comment = matching_authorities[0]
+            final_observation = receipt.get("final_projection_observation")
+            pull = (
+                final_observation.get("pull_request")
+                if isinstance(final_observation, Mapping)
+                else None
+            )
+            if (
+                receipt.get("repository") != authority_receipt.get("repository")
+                or receipt.get("pr_number") != authority_receipt.get("pr_number")
+                or not isinstance(pull, Mapping)
+                or not _valid_authority_receipt(
+                    receipt_authority,
+                    pr={
+                        "number": pull.get("number"),
+                        "head": {"sha": pull.get("head_sha")},
+                        "body": pull.get("body"),
+                    },
+                    repository=cast(str, authority_receipt.get("repository")),
+                    expected_run_id=cast(str, receipt.get("run_id")),
+                    allow_legacy_terminal_lf=_legacy_terminal_lf_provenance(
+                        authority_comment
+                    ),
+                )
+            ):
+                return None
+        if not _projection_convergence_matches_authority(
             receipt,
-            authority_receipt=authority_receipt,
-            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            authority_receipt=receipt_authority,
+            allow_legacy_terminal_lf=_comments_authenticate_legacy_authority(
+                comments, receipt_authority
+            ),
+        ):
+            return None
+        contract_identity = (
+            _canonical_digest(receipt_authority),
+            _canonical_digest(cast(Mapping[str, object], receipt["pr_contract"])),
         )
-        for receipt in receipts
-    ):
-        return None
+        if contract_identity in seen_contracts:
+            # Duplicate or competing POSTs for one exact post-edit check do
+            # not become a unique durable proof merely by selecting one.
+            return None
+        seen_contracts.add(contract_identity)
+        if receipt.get("authority_sha256") == current_digest:
+            receipts.append(receipt)
     return receipts
 
 
