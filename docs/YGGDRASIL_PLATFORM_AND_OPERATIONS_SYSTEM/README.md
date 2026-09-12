@@ -34,7 +34,7 @@ The Platform and Operations System owns the operational-platform specification f
 | Runtime lifecycle wrappers | Startup, stop, restart, recovery, environment-export, and deployment wrappers when their primary effect is to operate the host, container runtime, Compose stack, or channel. |
 | Platform health | Operational handling of host, container runtime, Compose-unit, gateway, binding, and recovery-prerequisite signals; the signal definitions and product-health interpretation remain with their existing owners. |
 | Operational runbooks | Operator-facing procedures for provisioning, startup, recovery, deployment, rollback execution, and platform incident handling. |
-| External helper-system execution | Host/topology mechanics for already-authorized Heimdal-managed helper systems. | Heimdal owns the external-system identity, channel, credential lifecycle, adapter relationship, and operational record; this system only executes the approved host/VM mechanics. |
+| External helper-system execution | Host/topology mechanics for already-authorized Heimdal-managed helper systems; this system only executes the approved host/VM mechanics. |
 
 This is ownership of the **operational platform**, not of every capability the platform runs. A
 platform wrapper may invoke a Product/Runtime command, but that does not transfer the command's

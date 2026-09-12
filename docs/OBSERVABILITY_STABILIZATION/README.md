@@ -28,7 +28,8 @@ This capability is the highest-leverage, lowest-regret remediation set: make the
 - **Notification channel decision (2026-09-12):** the shared operational delivery capability is a
   private Discord channel managed by Heimdal. Channel/account/webhook provisioning and the live
   outage/recovery drill remain external delivery work; the notification is never health,
-  deployment, acknowledgement, or semantic authority.
+  deployment, acknowledgement, or semantic authority. This target-state decision does not change
+  the currently delivered OBSSTAB-04 provider implementation until that external work is accepted.
 - `DEV_DB_SNAPSHOT_RESTORE` is **dev/test ergonomics + on-demand forensic dump**, explicitly **not** scheduled disaster-recovery backup.
 
 ## Tasks (execution order)

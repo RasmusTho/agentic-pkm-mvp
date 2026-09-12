@@ -11,9 +11,12 @@ Last reviewed: 2026-09-12
 
 ## Decision
 
-Heimdal is the single Yggdrasil owner for external helper systems and their operational
-relationships. This includes external accounts, channels, webhooks, service identities, credential
-references, integration lifecycle, health/alert routes, runbooks, replacement, and retirement.
+Heimdal is the single Yggdrasil owner for external helper systems that support ecosystem and
+Product/Runtime operations, and for their operational relationships. This includes external
+accounts, channels, webhooks, service identities, credential references, integration lifecycle,
+health/alert routes, runbooks, replacement, and retirement. External dependencies intrinsic to the
+Builder System's build, test, PR, CI, model/tool, GitHub, or BuilderOps delivery authority remain
+Builder-owned; they are not silently reclassified as Heimdal helpers.
 
 This is an **operational ownership** boundary. It does not make Heimdal the semantic authority for
 Product/Runtime data, Builder delivery state, security policy, or the meaning of an observation.
@@ -36,6 +39,7 @@ Heimdal so that the owner is not the only witness of its own failure.
 | Source health and domain truth | The source system, such as BuilderOps, Product/Runtime, or Proxmox | Heimdal observes and routes the signal; it does not replace the source authority |
 | Provider-side account state | The external provider, operated through a Heimdal-owned identity | Provider state is external; its local representation is recorded in Builder Vault |
 | Human-facing operational record | Builder Vault | Intended single catalog and runbooks; authority begins only on an accepted authority-capable record surface |
+| Builder delivery dependencies | Builder System | Owns the external connectors and credentials needed to build, verify, release, and govern repository changes; no duplicate Heimdal ownership is implied |
 
 ## Builder Vault operational record
 
@@ -100,8 +104,11 @@ transport and must preserve provenance, timeout/failure visibility, replacement 
 authority separation. No adapter may create a second semantic source of truth or bypass the
 event/receipt boundary for an effect that matters to Yggdrasil.
 
-Heimdal's registry is an operational catalog in Builder Vault; it is not a runtime workflow store,
-task queue, product database, or replacement for GitHub/BuilderOps delivery authority.
+Heimdal's registry is an operational catalog in the owner-authorized Builder Vault record surface;
+until that surface is accepted, the contract defines the intended shape but does not claim an
+enacted runtime registry. It is not a runtime workflow store, task queue, product database, or
+replacement for GitHub/BuilderOps delivery authority. Each external relationship has one owner
+system: Heimdal for ecosystem helper operations, and Builder System for delivery dependencies.
 
 ## Acceptance and change rule
 

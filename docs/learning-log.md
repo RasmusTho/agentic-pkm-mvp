@@ -277,3 +277,4 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** docs-to-issue / human direction
 **Diverged:** The earlier plan treated Discord and similar helper systems as provider configuration without one ecosystem owner, while current authority required a single system-owned lifecycle and credential boundary.
 **Upstream artifact:** `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md :: Decision`
+**BuilderOps LearningSignal:** `lrn_20260912213739_dc53bfc9`

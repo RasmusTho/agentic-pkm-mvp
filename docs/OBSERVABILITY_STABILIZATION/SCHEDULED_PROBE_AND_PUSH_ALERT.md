@@ -19,13 +19,20 @@ can_parallelize_with:
 
 # Scheduled Probe And Push Alert
 
+## Current-state note (2026-09-12)
+
+The delivered provider-pluggable implementation currently supports the existing `ntfy`, Telegram,
+mail, and `none` paths. Discord is a target shared route, not a claim that the current probe
+implementation already provisions or dispatches through Discord. External provider/channel setup
+and the redacted live drill remain bounded by #5506 and #4076.
+
 ## Owner decision (2026-09-12)
 
-The final shared delivery capability is a private Discord channel managed by Heimdal under
-`docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. The probe remains source/health-owned and Discord
-remains a one-way secondary warning channel. The webhook credential is resolved from the declared
-macOS Keychain boundary; no value is stored in the repository, Builder Vault, issues, logs, or
-receipts.
+The target shared delivery capability is a private Discord channel managed by Heimdal under
+`docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. When the external delivery work is enacted, the
+probe remains source/health-owned and Discord remains a one-way secondary warning channel. The
+webhook credential is resolved from the declared macOS Keychain boundary; no value is stored in the
+repository, Builder Vault, issues, logs, or receipts.
 
 ## Purpose
 
@@ -40,9 +47,10 @@ Add a host launchd plist (modelled on
 `ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist`) that runs a small
 probe script under `ops/` on a configurable interval. The script curls
 `/readyz` and the `/api/health` `required_ok` field (not the top-level `ok`)
-and checks worker-heartbeat staleness; on the first outage transition it
-dispatches one push notification via the Heimdal-managed Discord channel, then clears that state
-after the first healthy run so a later distinct outage can alert again.
+and checks worker-heartbeat staleness; on the first outage transition it dispatches one push
+notification through the configured provider interface, then clears that state after the first
+healthy run so a later distinct outage can alert again. Discord is the target provider once the
+acceptance and external setup in #5506/#4076 are complete.
 Relabel the existing Makefile targets
 `verify-prod-channel` (line 210) and `verify-test-channel` (line 204) so their
 names reflect what they actually do — run pytest channel-isolation suites — and
