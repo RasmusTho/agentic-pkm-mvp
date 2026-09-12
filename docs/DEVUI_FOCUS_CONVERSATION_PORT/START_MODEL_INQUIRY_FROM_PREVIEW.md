@@ -5,7 +5,7 @@ task_id: FCP-04
 github_issue: 4697
 source_anchor: "docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: First command flow — Start Model Inquiry"
 parent_capability: devUI Focus + Conversation Port
-prerequisites: [FCP-03, "implemented FCA bounded inquiry admission and destination reservation/readback"]
+prerequisites: [FCP-03, "accepted FCA-08 bounded inquiry admission contract (#5502)"]
 depends_on: [OPEN_EXTERNAL_CONVERSATION_PORT.md]
 can_parallelize_with: []
 recommended_capability: "Codex Sol / high"
@@ -25,6 +25,10 @@ start the existing artifact-first Model Inquiry workflow once after explicit own
   repaired by #5502, through the existing authenticated BuilderOps control-plane service and
   sanctioned inquiry destination. #4169 retains DDO-specific initiation and is not a dependency
   on the complete DDO portfolio for this inquiry. The contract alone is not implemented admission.
+  Admission, destination reservation and readback are FCP-04 implementation deliverables, not
+  prerequisites that must be delivered before this task can begin. Pickup requires the accepted
+  contract, delivered FCP-03 and fresh live Issue readiness; runtime Start requires this task's
+  verified implementation.
 - Defines and validates `TypedCommandProposal.v1` for `start_model_inquiry` only.
 - Produces the complete preview-state contract for exact input/source/destination/side-effect/
   non-effect/approval/expiry/receipt details without choosing a visual treatment.

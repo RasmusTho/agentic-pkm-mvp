@@ -272,3 +272,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** ADR-0050 recorded Bifrost as private while the live repository was public and the owner had intentionally chosen public visibility for required GitHub features.
 **Upstream artifact:** `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md :: Visibility amendment`
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: `python -m app.builderops` failed because the package has no `__main__`; the ADR and Issue receipts were updated directly.
+
+## 2026-09-12 — #5502 (bounded inquiry admission contract)
+**Source:** verification-and-closure / independent GitHub review
+**Diverged:** The first contract repair passed local independent review but required FCP-04 to pre-deliver its own admission/reservation scope and left its capability owner and parent pointer on the old DDO dependency.
+**Upstream artifact:** `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: Open implementation dependencies` and its FCP-04/parent task pointers; check each prerequisite against the same task's deliverables before validating the dependency graph.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent, and the documented CLI selects a local SQLite store that this run is not authorized to use. No store write was attempted; convert this entry to a LearningSignal when the admitted source is available. PR #5509 repairs the named source pointers and records both P1 findings before a fresh independent review.
