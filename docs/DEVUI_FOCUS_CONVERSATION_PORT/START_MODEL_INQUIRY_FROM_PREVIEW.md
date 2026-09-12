@@ -5,7 +5,7 @@ task_id: FCP-04
 github_issue: 4697
 source_anchor: "docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: First command flow — Start Model Inquiry"
 parent_capability: devUI Focus + Conversation Port
-prerequisites: [FCP-03, "authenticated action boundary #4169"]
+prerequisites: [FCP-03, "implemented FCA bounded inquiry admission and destination reservation/readback"]
 depends_on: [OPEN_EXTERNAL_CONVERSATION_PORT.md]
 can_parallelize_with: []
 recommended_capability: "Codex Sol / high"
@@ -21,6 +21,10 @@ start the existing artifact-first Model Inquiry workflow once after explicit own
 
 ## What This Task Does
 
+- Implements only the first operation of the [bounded action admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
+  repaired by #5502, through the existing authenticated BuilderOps control-plane service and
+  sanctioned inquiry destination. #4169 retains DDO-specific initiation and is not a dependency
+  on the complete DDO portfolio for this inquiry. The contract alone is not implemented admission.
 - Defines and validates `TypedCommandProposal.v1` for `start_model_inquiry` only.
 - Produces the complete preview-state contract for exact input/source/destination/side-effect/
   non-effect/approval/expiry/receipt details without choosing a visual treatment.
@@ -33,6 +37,20 @@ start the existing artifact-first Model Inquiry workflow once after explicit own
   restart, or ambiguous response cannot launch a second inquiry for the same proposal.
 - Maps valid terminal fields to the receipt view and malformed/nonzero/empty outcomes to honest
   ambiguity without retry or protected-state cleanup.
+
+The service's current `POST /v1/inquiries` stores a `ModelInquiry` record; it does not call the
+fixed host-local `yggdrasil-model-inquiry` launcher. The existing destination artifacts and runner
+produce inquiry execution/terminal evidence. This slice must supply the missing durable
+operation-key/approval-to-inquiry reservation, conflict checks, authenticated status lookup and
+restart reconciliation at those existing owners before Start is available. It must bind the
+complete immutable approval/readback fields and finite recovery cases in the owner contract,
+including current permission, expiry, source, policy and workflow revalidation immediately before
+launch. An unknown attempt is reconciled before any further launch.
+
+The current inquiry workflow supports no stop request or acknowledgement. Render stop as
+unsupported and preserve the existing skill's ambiguity/lock rules; Hold before invocation remains
+the only no-call choice. An inquiry terminal result is not proof of a requested process stop.
+Inquiry approval still grants no code, GitHub, merge, deploy or Issue-delivery effect.
 
 ## Concretely
 

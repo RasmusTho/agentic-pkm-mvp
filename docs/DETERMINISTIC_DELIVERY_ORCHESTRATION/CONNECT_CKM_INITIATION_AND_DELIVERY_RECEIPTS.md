@@ -25,6 +25,10 @@ docs pass did not change the Issue or authorize implementation.
 
 ## What This Task Does
 
+- Owns the **DDO-specific** initiation/receipt bridge. The existing BuilderOps control-plane
+  service owns the shared finite [bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission);
+  the first non-DDO inquiry does not require this task's compiler/reducer/CKM portfolio. Contract
+  separation does not deliver its missing authenticated admission or destination readback support.
 - Adds a CKM-side draft builder for carrier-neutral `DeliveryRequest.v1`.
 - Invokes the pure compiler for `DeliveryPreview.v1` before approval, with scope, exclusions, waves,
   risk, policy, acceptance meaning, and estimated TCD.
@@ -45,6 +49,19 @@ docs pass did not change the Issue or authorize implementation.
 - Fires a reevaluation signal when terminal delivery evidence contradicts or advances a CKM
   capability claim, retains the last-good generated artifact on render failure, and provides manual
   regeneration fallback.
+
+The non-DDO destination is the sanctioned host-local `yggdrasil-model-inquiry` launcher through
+`.codex/skills/start-model-inquiry/SKILL.md`; its existing Model Inquiry artifacts/runner produce
+the inquiry result. `POST /v1/inquiries` only stores a record and is not that launcher. The inquiry
+path still lacks destination-owned operation-key reservation and authenticated lookup after a lost
+response; its current stop support is unsupported. Those finite additions belong to the bounded
+inquiry implementation, not this DDO bridge. They cannot grant delivery effects or substitute an
+inquiry receipt for a `DeliveryReceipt.v2` or observed DDO termination.
+
+Any separately approved Issue-delivery extension uses a fresh operation manifest, the selected
+existing workflow and its per-effect gates. If DDO is selected, all request/preview/acceptance-profile,
+command/journal, reducer, outbox, executor, current-head and lifecycle fences in this specification
+still apply. Contract repair #5502 does not satisfy DDO-02/DDO-05 or activate #4169.
 
 ## Concretely
 
