@@ -14,6 +14,7 @@ from app.briefing import (
     load_briefing,
 )
 from app.domain.commitments import CommitmentRecord
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.relevance.schema import (
     Moment,
     MomentNeed,
@@ -700,18 +701,18 @@ def test_invalid_receipt_timestamp_degrades_receipt_section(
 def test_atomic_replace_failure_preserves_prior_note(
     vault: tuple[Path, VaultContext], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import app.briefing.compose as compose_module
+    import app.knowledge.adapters as adapters_module
 
     root, context = vault
     target = _target(root)
     target.parent.mkdir(parents=True)
     target.write_bytes(b"prior complete note")
 
-    def fail_replace(_source: object, _target: object) -> None:
+    def fail_replace(*_args: object) -> None:
         raise OSError("replace failed")
 
-    monkeypatch.setattr(compose_module.os, "replace", fail_replace)
-    with pytest.raises(OSError):
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", fail_replace)
+    with pytest.raises(KnowledgeWriteConflict):
         compose_briefing(
             vault_context=context,
             for_date=BRIEFING_DATE,
@@ -721,6 +722,70 @@ def test_atomic_replace_failure_preserves_prior_note(
     assert target.read_bytes() == b"prior complete note"
     assert list(target.parent.glob("*.tmp")) == []
     assert list(target.parent.glob(".*.tmp")) == []
+
+
+def test_regeneration_refuses_concurrent_briefing_edit(
+    vault: tuple[Path, VaultContext], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.briefing.compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    original_write = compose_module.write_note_relative
+
+    def edit_before_conditional_write(*args: object, **kwargs: object) -> object:
+        expected_version = kwargs.get("expected_version")
+        if expected_version is not None and kwargs.get("vault_root") == root:
+            target.write_bytes(target.read_bytes() + b"\nowner edit\n")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(compose_module, "write_note_relative", edit_before_conditional_write)
+    with pytest.raises(KnowledgeWriteConflict):
+        compose_briefing(
+            vault_context=context,
+            for_date=BRIEFING_DATE,
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+
+    assert b"owner edit" in target.read_bytes()
+
+
+def test_regeneration_uses_observed_briefing_version(
+    vault: tuple[Path, VaultContext], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+    import app.briefing.compose as compose_module
+
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    prior_bytes = target.read_bytes()
+    observed_versions: list[object] = []
+    original_write = compose_module.write_note_relative
+
+    def capture_expected_version(*args: object, **kwargs: object) -> object:
+        if kwargs.get("vault_root") == root:
+            observed_versions.append(kwargs.get("expected_version"))
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(compose_module, "write_note_relative", capture_expected_version)
+    receipt = compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+
+    assert receipt.outcome == "written"
+    assert observed_versions == [hashlib.sha256(prior_bytes).hexdigest()]
 
 
 def test_load_briefing_round_trip_absent_and_invalid_schema(

@@ -114,6 +114,14 @@ moment was materialized, under what authority, on what basis, with what result),
 operational `OutboxEvent` trace, per `docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`.
 `receipt_ref` points to it.
 
+When an existing moment is re-materialized, the governed writer uses the SHA-256
+digest of the exact bytes observed immediately before the write as its
+`expected_version`. A concurrent lifecycle edit therefore fails the write and
+leaves the latest artifact bytes authoritative; rematerialization never replaces
+an owner edit. The existing deferred-lifecycle rule remains in force: deferral is
+timing, not deletion, and a deferred moment is never silently dropped or regressed
+to a proposed write.
+
 Per the governance tiers settled in #1881 and summarized in the brief §4, **materializing a moment
 and surfacing it are `Act` tier** (reversible, vault-internal, clear authority — the log + Git history
 is the safety net). Routing a moment to a more capable agent for review is `agent-review`. No moment

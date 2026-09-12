@@ -736,6 +736,12 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "staging directory is created, and passes the same guard/action through "
         "to the port's own guard (#3315)."
     ),
+    ("app/briefing/compose.py", "_atomic_write", 2): (
+        "guarded_by_caller: the canonical expected-version-aware rewrite in "
+        "_atomic_write receives the same guard/action after the complete private "
+        "stage is prepared, and the port asserts that guard before its atomic "
+        "exchange (#5139)."
+    ),
     ("app/relevance/materialization.py", "materialize_moment", 1): (
         "guarded_by_caller: materialize_moment asserts write_guard."
         "assert_writes_allowed(MOMENT_MATERIALIZE_ACTION) immediately before "
@@ -767,6 +773,11 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "guarded_by_caller: the persistence entrypoint asserts write_guard."
         "assert_writes_allowed(COMMITMENT_PERSIST_ACTION) immediately before "
         "this call, in addition to the port's own guard (#2953)."
+    ),
+    ("app/services/commitment_persistence.py", "persist_commitment", 2): (
+        "guarded_by_caller: the persistence entrypoint's same guard assertion "
+        "covers this explicit create-once branch, in addition to the port's "
+        "own guard (#2953)."
     ),
     ("app/mcp/vault_tools.py", "append_note", 1): (
         "guarded_by_port: append_note had NO caller-side WriteGuard assert on "
@@ -966,7 +977,9 @@ def find_create_once_write_note_relative_call_sites(
 
     A producer may select create-once conditionally when an exact version
     snapshot is absent; the keyword itself is still the explicit producer
-    contract even when its value is not a literal ``True``.
+    contract even when its value is not a literal ``True``. Only producers in
+    the published VMW intent registry are returned; mixed CAS/create-once
+    writers are covered by the complete write-site census above.
     """
     sites: list[tuple[str, str, int]] = []
     for path in sorted(root.rglob("*.py")):
@@ -1008,8 +1021,12 @@ def find_create_once_write_note_relative_call_sites(
                     qualname = ".".join(self.scope) or "<module>"
                     ordinal = self.call_counts.get(qualname, 0) + 1
                     self.call_counts[qualname] = ordinal
-                    if any(keyword.arg == "create_once" for keyword in node.keywords):
-                        sites.append((rel, qualname, ordinal))
+                    site = (rel, qualname, ordinal)
+                    if (
+                        any(keyword.arg == "create_once" for keyword in node.keywords)
+                        and site in WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION
+                    ):
+                        sites.append(site)
                 self.generic_visit(node)
 
         _CreateOnceVisitor().visit(tree)

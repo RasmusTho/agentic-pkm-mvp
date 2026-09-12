@@ -26,6 +26,19 @@ Surfacing commitments to the human is only trustworthy if the commitments are **
 - Keeps writes **read/proposal-only and WriteGuard-governed**: every persistence write asserts `DEFAULT_WRITE_GUARD.assert_writes_allowed(...)` before touching the filesystem; a blocked guard raises and writes nothing (atomic-or-absent).
 - **Pins the artefact shape** against the contract before implementing: decide and document whether a commitment is its own vault artefact (`vault/<system_dir>/commitments/<id>.md` style) or a section within the related note's companion note. Pin it against `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md` (a commitment is not reducible to a note; the absence of a canonical note does not mean the commitment does not exist) and `docs/COMMITMENT_AS_FIRST_CLASS/DEFINE_COMMITMENT_STATE_TRANSITIONS.md` (the `CommitmentState` family must persist unchanged — never collapsed into `review_state` / `maturity`).
 
+### Persistence contract
+
+Commitment persistence is create-once for an absent artifact and exact-byte version-aware
+replacement for an existing artifact. Before replacing, the writer reads the current
+filesystem bytes and passes their SHA-256 version to the existing knowledge write seam.
+If the bytes changed before the replacement, the CAS fails closed and leaves the newer
+artifact untouched; callers may retry from a fresh read. A concurrent edit is therefore
+never silently clobbered, while first creation remains no-clobber/create-once.
+The create-once receipt is authoritative: an `already_exists` outcome is raised as a
+write conflict rather than acknowledged as the requested commitment having been persisted.
+Staged conflict artifacts are diagnostic proposals and are excluded from `load_commitments`;
+they never become canonical commitment records.
+
 ## Concretely
 
 ```python

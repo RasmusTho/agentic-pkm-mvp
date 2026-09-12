@@ -11,12 +11,14 @@ Spec: docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md :: Reviewe
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.eval.failure_capture import (
     DRAFT_KIND_SCHEMA_VIOLATION,
     DRAFT_STATUS_PENDING,
@@ -25,6 +27,7 @@ from app.eval.failure_capture import (
     draft_unknown_classification_case,
     list_pending_drafts,
     read_draft,
+    reject_draft,
 )
 
 from tests.api._vault_test_helpers import bind_initialized_vault
@@ -183,6 +186,77 @@ def test_decision_on_unknown_draft_is_404(vault: Path) -> None:
         json={"action": "promote", "decided_by": "rasmus:reviewer"},
     )
     assert resp.status_code == 409
+
+
+def test_decision_refuses_concurrent_draft_edit(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft = _draft_schema_violation(vault, trace_id="trace-race", event_id="evt-race")
+    assert draft is not None and draft.draft_path is not None
+    draft_path = vault / draft.draft_path
+    edited = draft_path.read_bytes() + b"\nconcurrent owner edit\n"
+
+    import app.eval.failure_capture as failure_capture
+
+    original_write = failure_capture.write_note_relative
+
+    def edit_before_write(*args, **kwargs):  # type: ignore[no-untyped-def]
+        draft_path.write_bytes(edited)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture, "write_note_relative", edit_before_write)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        reject_draft(vault, draft.draft_id, decided_by="rasmus:reviewer")
+
+    assert draft_path.read_bytes() == edited
+
+
+def test_decision_uses_observed_draft_version(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft = _draft_schema_violation(vault, trace_id="trace-version", event_id="evt-version")
+    assert draft is not None and draft.draft_path is not None
+    draft_path = vault / draft.draft_path
+    original_bytes = draft_path.read_bytes()
+    captured: dict[str, object] = {}
+
+    import app.eval.failure_capture as failure_capture
+
+    original_write = failure_capture.write_note_relative
+
+    def capture_write(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture, "write_note_relative", capture_write)
+    decision = reject_draft(vault, draft.draft_id, decided_by="rasmus:reviewer")
+
+    assert decision.decision == "reject"
+    assert captured["expected_version"] == hashlib.sha256(original_bytes).hexdigest()
+    assert captured["action"] == failure_capture.FAILURE_CAPTURE_DRAFT_ACTION
+    assert captured["writer_identity"] == "eval.failure_capture.decision"
+    updated = draft_path.read_text(encoding="utf-8")
+    assert "status: rejected" in updated
+    assert '"event_id": "evt-version"' in updated
+    assert "trace_id: trace-version" in updated
+
+
+def test_write_draft_is_create_once(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.eval.failure_capture as failure_capture
+
+    fixed_id = "schema-violation-fixed"
+    monkeypatch.setattr(failure_capture, "uuid4", lambda: type("UUID", (), {"hex": "fixed"})())
+    first = _draft_schema_violation(vault, trace_id="trace-first", event_id="evt-first")
+    assert first is not None and first.draft_path is not None
+    draft_path = vault / first.draft_path
+    original_bytes = draft_path.read_bytes()
+
+    with pytest.raises(KnowledgeWriteConflict):
+        _draft_schema_violation(vault, trace_id="trace-second", event_id="evt-second")
+
+    assert first.draft_id == fixed_id
+    assert draft_path.read_bytes() == original_bytes
 
 
 # ---------------------------------------------------------------------------

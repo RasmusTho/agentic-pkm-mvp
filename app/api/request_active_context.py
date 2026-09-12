@@ -23,6 +23,8 @@ from app.instance.context_selection import ReselectionRequiredError, SelectionPr
 from app.instance.local_operator_principal import PrincipalPreflightError
 from app.vault.active_context_v1 import ActiveContextSetV1
 
+from app.api.compatibility_mutation import reject_scoped_vault_mutation
+
 
 def resolve_read_context(
     request: Request,
@@ -93,4 +95,4 @@ def require_scoped_read_context(
     return context
 
 
-__all__ = ["require_scoped_read_context", "resolve_read_context"]
+__all__ = ["reject_scoped_vault_mutation", "require_scoped_read_context", "resolve_read_context"]

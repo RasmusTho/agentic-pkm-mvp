@@ -40,7 +40,9 @@ from app.domain.commitments import (
     normalize_commitment_kind,
     normalize_commitment_state,
 )
-from app.knowledge.write_ops import write_note_relative
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
+from app.knowledge.multiwriter import is_conflict_artifact
 from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -135,9 +137,31 @@ def persist_commitment(
 
     # WriteGuard first: nothing on disk is created when the guard blocks.
     write_guard.assert_writes_allowed(COMMITMENT_PERSIST_ACTION)
-    # Single complete file write (write_note_relative writes the whole artefact atomically
-    # via the knowledge port, creating parent dirs as needed).
-    write_note_relative(artifact_path, content, vault_root=vault_root)
+    artifact = vault_root / artifact_path
+    if artifact.exists():
+        # Existing artifacts are replacements: bind the write to the exact bytes read,
+        # including line endings, so an owner edit cannot be clobbered after this read.
+        _observed_content, expected_version = read_note_text_with_version(artifact)
+        write_note_relative(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            expected_version=expected_version,
+        )
+    else:
+        # Creation is intentionally first-write-wins; an absent-target race must not
+        # turn into an overwrite of the winner.
+        receipt = write_note_relative(
+            artifact_path,
+            content,
+            vault_root=vault_root,
+            create_once=True,
+        )
+        if receipt.outcome == "already_exists":
+            raise KnowledgeWriteConflict(
+                f"commitment create target already exists: {artifact_path}",
+                receipt=receipt,
+            )
     return artifact_path
 
 
@@ -186,6 +210,8 @@ def load_commitments(*, vault_context: VaultContext) -> list[CommitmentRecord]:
 
     records: list[CommitmentRecord] = []
     for path in sorted(commitments_dir.glob("*.md")):
+        if is_conflict_artifact(path.name):
+            continue
         try:
             fm, _body = load_frontmatter(path.read_text(encoding="utf-8"))
         except Exception:
