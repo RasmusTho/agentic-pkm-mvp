@@ -148,7 +148,14 @@ def post_eval_draft_decision(
             decided_by=req.decided_by,
             notes=req.notes,
         )
-    except (KnowledgeWriteConflict, PromotionDecisionError) as exc:
+    except KnowledgeWriteConflict as exc:
+        if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
+            raise
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "eval_draft_decision_refused", "message": str(exc)},
+        ) from exc
+    except PromotionDecisionError as exc:
         raise HTTPException(
             status_code=409,
             detail={"error": "eval_draft_decision_refused", "message": str(exc)},

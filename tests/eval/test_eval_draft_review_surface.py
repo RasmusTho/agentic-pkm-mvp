@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.knowledge.contracts import NoteLocator, WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.eval.failure_capture import (
     DRAFT_KIND_SCHEMA_VIOLATION,
@@ -271,6 +272,20 @@ def test_decision_uses_same_observed_draft_snapshot(
     assert "evt-snapshot" not in updated
 
 
+def test_crlf_draft_remains_readable_after_raw_snapshot_read(vault: Path) -> None:
+    """Raw-byte versioning must not make the tolerant draft reader reject CRLF."""
+    draft = _draft_schema_violation(vault, trace_id="trace-crlf", event_id="evt-crlf")
+    assert draft is not None and draft.draft_path is not None
+    draft_path = vault / draft.draft_path
+    draft_path.write_bytes(draft_path.read_bytes().replace(b"\n", b"\r\n"))
+
+    parsed = read_draft(vault, draft.draft_id)
+
+    assert parsed is not None
+    assert parsed.status == DRAFT_STATUS_PENDING
+    assert list_pending_drafts(vault)[0].draft_id == draft.draft_id
+
+
 def test_api_translates_eval_draft_write_conflict(
     vault: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -278,7 +293,16 @@ def test_api_translates_eval_draft_write_conflict(
     import app.api.routes.eval_drafts as eval_drafts
 
     def raise_conflict(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise KnowledgeWriteConflict("concurrent owner edit")
+        raise KnowledgeWriteConflict(
+            "concurrent owner edit",
+            receipt=WriteReceipt(
+                operation="write_note",
+                locator=NoteLocator(vault="Vault", path="eval_drafts/schema-violation-missing.md"),
+                adapter="fs_vault",
+                outcome="conflict_staged",
+                conflict_artifact="eval_drafts/schema-violation-missing.concurrent.md",
+            ),
+        )
 
     monkeypatch.setattr(eval_drafts, "reject_draft", raise_conflict)
 
@@ -295,6 +319,25 @@ def test_api_translates_eval_draft_write_conflict(
             "message": "concurrent owner edit",
         }
     }
+
+
+def test_api_preserves_receiptless_eval_draft_write_conflict(
+    vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receiptless conflicts stay indeterminate instead of becoming stale 409s."""
+    import app.api.routes.eval_drafts as eval_drafts
+
+    def raise_conflict(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise KnowledgeWriteConflict("canonical outcome is indeterminate")
+
+    monkeypatch.setattr(eval_drafts, "reject_draft", raise_conflict)
+
+    client = TestClient(app)
+    with pytest.raises(KnowledgeWriteConflict, match="canonical outcome is indeterminate"):
+        client.post(
+            "/api/eval-drafts/schema-violation-missing/decision",
+            json={"action": "reject", "decided_by": "rasmus:reviewer"},
+        )
 
 
 def test_write_draft_is_create_once(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:

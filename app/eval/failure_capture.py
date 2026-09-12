@@ -446,10 +446,13 @@ def _parse_draft_text(
     vault_root: Path, draft_id: str, text: str
 ) -> DraftEvalCase | None:
     """Parse one already-observed draft payload without rereading its path."""
-    if not text.startswith("---\n"):
+    # Preserve the original text for its raw-byte version, but parse common
+    # newline encodings the same way the prior tolerant ``read_text`` path did.
+    parse_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not parse_text.startswith("---\n"):
         return None
     try:
-        _, rest = text.split("---\n", 1)
+        _, rest = parse_text.split("---\n", 1)
         fm_text, _ = rest.split("\n---", 1) if "\n---" in rest else (rest, "")
         fm = yaml.safe_load(fm_text) or {}
     except Exception:
@@ -457,9 +460,9 @@ def _parse_draft_text(
     if not isinstance(fm, dict):
         return None
     try:
-        payload_start = text.index("```json\n") + len("```json\n")
-        payload_end = text.index("\n```", payload_start)
-        payload_snapshot = json.loads(text[payload_start:payload_end])
+        payload_start = parse_text.index("```json\n") + len("```json\n")
+        payload_end = parse_text.index("\n```", payload_start)
+        payload_snapshot = json.loads(parse_text[payload_start:payload_end])
     except Exception:
         payload_snapshot = {}
     source_event_fm = fm.get("source_event") or {}
