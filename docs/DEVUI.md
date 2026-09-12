@@ -1,7 +1,7 @@
 State: Accepted strategic target-state owner-function contract (2026-08-07). `devUI` is the working
-owner-facing name. The CKM Development Overview and BuilderOps Cockpit are delivered as separate
-read-only surfaces; the unified experience, authenticated approval path, live delivery controls,
-and receipt loop described here are not yet delivered.
+owner-facing name. Separate CKM/BuilderOps surfaces and the connected read-only Overview/Focus
+repository shell are delivered; the complete owner experience, authenticated approval path,
+live delivery controls and owner receipt/trial loop remain targets.
 Doc role: Builder System owner-function and experience contract
 Authority: Owns the accepted owner-experience goal and guardrails for what the Product Owner must be
 able to see, decide, initiate, follow, and verify through devUI. Existing CKM, delivery,
@@ -12,8 +12,9 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-08-30
-Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub state
+Last reviewed: 2026-09-12 for current-state and milestone boundaries at `main`
+`c7a4da3a80a1108b269bd8e88c4535a17499290a`, #5399 delivery ledger and #5181's cited operational receipts.
+Earlier Stage A verification baseline: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub state
 for #4741, #4742–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857, the merged
 withdrawal receipt in PR #4751, the admitted local Focus route in PR #4771, the admitted
 direct-loopback Overview route in PR #4772, the ARO-03 contract and route-test-selection recovery
@@ -752,7 +753,17 @@ Delivered now:
   delivered Overview composer with only trusted, source-ordered Cockpit `working` candidates,
   delivered by #4744 / PR #4772 and #4834;
 - DDO-01 through DDO-04 fast lane, contracts, plan compiler, reducer, and WorkerRuntime seam; and
-- parts of the BuilderOps API/PostgreSQL control-plane development baseline.
+- BSC-01 through BSC-03 pure, nonvisual inventory, workflow/capability, and coverage/deviation
+  composers; the [Builder System Control ledger](DEVUI_BUILDER_SYSTEM_CONTROL/README.md#current-to-target-truth)
+  owns their partial scope;
+- source-linked LLM-assisted owner synthesis, delivered by #5402 / PR #5413, with proposal-only
+  output and explicit model-unavailable states;
+- the #5468 / PR #5469 read adapter for an exact VM102 qualification/deploy/health chain, which
+  can project bounded `ready_to_try` evidence for `devui_projection` and otherwise withdraws it;
+- the #5476 / PR #5477 standalone managed DevUI listener and pure typed receipt producers,
+  with work/CKM transports still unadmitted; their [runtime owner](BUILDEROPS_CONTROL_PLANE/README.md#standalone-devui-receipt-production)
+  defines prerequisites and limits; and
+- the BuilderOps API/PostgreSQL control-plane implementation and independent package boot.
 
 The production Companion transport prerequisite for the existing Overview and Focus reads is
 delivered by #4841: `127.0.0.1:8113` loopback host publication, local-Host/no-forwarded admission,
@@ -782,11 +793,22 @@ the current `main` promotion ref and the receipt-sourced deployed SHA.
 This remains delivered repository/proof truth, not production-deployed or owner-accepted UI truth;
 #4749 owns the later deployment and owner-pilot gates.
 
-Not delivered now: request/preview/authenticated approval in one owner experience; PostgreSQL
-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
+Not delivered now: request/preview/authenticated approval in one owner experience; complete PostgreSQL
+client-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
 provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
-Control lens; production deployment; owner pilot and tried-by-owner acceptance; and ADR-0065
-dispositions.
+Control route/UI and whole lens; managed DevUI production deployment; owner pilot and candidate-bound
+owner trial/acceptance producers. The latter authority gap has a separate
+[contract-repair task](BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md).
+
+The [2026-09-12 activation receipt on #5181](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647954880)
+records source `c7a4da3a80a1108b269bd8e88c4535a17499290a` deployed in the dedicated BuilderOps
+control-plane engine. That is component deployment evidence. The
+[separate continuation readback](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647963371)
+records the operator's stopped, unqualified DevUI posture without its typed qualification/deploy/health chain; it also
+retains missing external SoI/model-service evidence, complete-system smoke, and the #4076 Linux
+probe/Discord drill. Current-main browser CI is repository proof, not live VM access or #4749
+owner acknowledgement. This operational report does not prove a code-level startup gate or a
+source-connected served journey. GitHub #5181 owns subsequent operational movement.
 
 The target turns the current cockpits and Signboard from competing owner destinations into internal
 providers: Direction B stays an exportable/static evidence fallback, BuilderOps Cockpit supplies
@@ -795,6 +817,23 @@ console becomes devUI's authenticated decision/run mode behind a separate trust 
 routes may remain available for diagnostics and recovery, but devUI is the normal owner entry.
 
 ## Owner-experience acceptance criteria
+
+### First-repository milestone
+
+The first useful owner loop is one owner, this repository, one named feature/Issue, and one existing
+Builder workflow. It follows the accepted see → decide → act → verify functions: source-linked
+intent, acceptance criteria and relevant architecture requirements; scoped external reasoning;
+approval of one exact permitted action; actual delivery/readback; and the owner's trial and explicit
+acceptance or rejection of the exact candidate against the applicable requirements.
+
+This is the target M2 milestone in the [implementation plan](plans/DEVUI_IMPLEMENTATION.md#delivery-milestones).
+Start Model Inquiry is an earlier integration exercise and retains its no-repository-mutation
+boundary; an inquiry receipt is not a code-delivery or owner-acceptance receipt. The separate Stage A
+pilot remains read-only. The [Factory Acceptance milestone](BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone)
+reuses the existing parent evidence surfaces and leaves full platform acceptance, second-consumer
+qualification and #5399 closure requirements intact.
+
+### Full owner-experience target
 
 - [ ] The first view answers Now, Needs you, and Ready to try without owner-side reconstruction.
 - [ ] One selected item can be followed from overview to terminal receipt without product switching
