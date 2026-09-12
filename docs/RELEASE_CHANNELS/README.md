@@ -231,7 +231,8 @@ passes `config/deploy/prod.env` as Compose's `--env-file`; Compose therefore use
 of the repository-root `.env` for interpolation. The pending-retry preflight resolves the same
 effective `DATABASE_URL`/`DB_DSN` expression with repository-root dotenv loading disabled, so a
 reachable DSN from an unrelated `.env` cannot make the preflight disagree with the Compose run it
-is guarding.
+is guarding. Values supplied by the invoking environment or the selected deploy env file are
+treated as opaque; only defaults written in the Compose expression are recursively interpolated.
 
 **Enforcement:** `app/release_channels/channel_isolation_preflight.py` is a read-only preflight guard that fail-closes when a compose overlay's effective env bindings do not match the intended channel. It is invoked:
 

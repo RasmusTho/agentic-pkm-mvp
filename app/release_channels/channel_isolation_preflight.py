@@ -262,6 +262,7 @@ def _interpolate_compose_expression(
     nested form as an unknown DSN.
     """
     out: list[str] = []
+    unresolved_literal_dollar = False
     index = 0
     while index < len(expr):
         if expr[index] != "$":
@@ -270,6 +271,7 @@ def _interpolate_compose_expression(
             continue
         if index + 1 >= len(expr):
             out.append("$")
+            unresolved_literal_dollar = True
             index += 1
             continue
         if expr[index + 1] == "$":
@@ -296,18 +298,29 @@ def _interpolate_compose_expression(
             if default_match is None:
                 return None
             value = lookup(default_match.group("name"))
+            resolved_selected: str | None
             if default_match.group("colon"):
-                selected = value or default_match.group("default")
+                if value:
+                    # Compose treats a value supplied by the invoking
+                    # environment (including the explicit --env-file) as
+                    # opaque; only YAML's default expression is recursively
+                    # interpolated. In particular, a DSN password may contain
+                    # literal '$' characters that must not be re-expanded.
+                    resolved_selected = value
+                else:
+                    resolved_selected = _interpolate_compose_expression(
+                        default_match.group("default"), lookup
+                    )
             else:
-                selected = (
-                    value
-                    if value is not None
-                    else default_match.group("default")
-                )
-            resolved_default = _interpolate_compose_expression(selected, lookup)
-            if resolved_default is None:
+                if value is not None:
+                    resolved_selected = value
+                else:
+                    resolved_selected = _interpolate_compose_expression(
+                        default_match.group("default"), lookup
+                    )
+            if resolved_selected is None:
                 return None
-            out.append(resolved_default)
+            out.append(resolved_selected)
             index = end
             continue
         if re.match(r"[A-Za-z_]", expr[index + 1]):
@@ -318,10 +331,9 @@ def _interpolate_compose_expression(
             index = end
             continue
         return None
-    resolved = "".join(out)
-    if "$" in resolved:
+    if unresolved_literal_dollar:
         return None
-    return resolved
+    return "".join(out)
 
 
 def _interpolate_env_file_path(

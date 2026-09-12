@@ -1410,6 +1410,21 @@ def test_resolve_effective_dsn_honors_db_dsn_only_against_real_prod_compose() ->
         assert value == external
 
 
+def test_resolve_effective_dsn_treats_lookup_values_as_opaque() -> None:
+    """A DSN supplied by the environment is not recursively interpolated."""
+    external = "postgresql+psycopg://app:pa$$word@external-prod:5432/app"
+
+    value = resolve_effective_dsn(
+        PROD_COMPOSE,
+        "worker",
+        "DATABASE_URL",
+        environ={"DATABASE_URL": external},
+        load_dotenv=False,
+    )
+
+    assert value == external
+
+
 def test_resolve_effective_dsn_ignores_ambient_runtime_env_file_against_real_prod_compose() -> None:
     """Mirrors test_real_prod_compose_ignores_runtime_layer_test_dsn_when_overlay_is_explicit:
     an ambient WATCHER_RUNTIME_ENV_FILE pointing at a wrong-channel layer has
