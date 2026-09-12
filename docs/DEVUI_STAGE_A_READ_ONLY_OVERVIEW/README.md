@@ -103,6 +103,20 @@ No task is `agent:ready` at filing. The parent is a blocked validation hub and n
 pickup issue. #4748 is a completed proof receipt, while #4749 remains blocked on external runtime
 authority and genuine acknowledgements.
 
+### ARO-09 — Managed runtime and pilot contract repair
+
+[RECONCILE_MANAGED_OWNER_PILOT](RECONCILE_MANAGED_OWNER_PILOT.md) is the next bounded, unfiled
+contract-repair task under #4741. It must reconcile the managed Builder listener, source admission,
+exact candidate/browser proof and live #4749 path using existing runtime/release owners. It also
+names the producers and order of pre-merge, deployment, read-only pilot and later effectful
+acceptance evidence. It activates no service and changes none of ARO-08's present admission gates.
+
+The [2026-09-12 #5181 readback](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647963371)
+reports stopped/unqualified DevUI despite the active BuilderOps control plane, missing typed and
+external-provider evidence, and outstanding Linux probe/drill and live owner-pilot work. ARO-09
+must reconcile that evidence with the actual runtime/producer paths; neither a liveness response
+nor a repository browser artifact proves a qualified managed owner journey.
+
 ## Cross-Task Invariants / Interaction Safety
 
 - **ARO-INV-1 — composer exclusion.** No child changes or recreates Overview zone semantics owned
@@ -126,6 +140,10 @@ authority and genuine acknowledgements.
   `127.0.0.1:8113` loopback publish, local-Host/no-forwarded gateway admission, exact Overview/Focus
   GET allowlist, stripped upstream request, and direct-loopback-or-server-derived API rule unchanged.
   Port `18000` remains direct diagnostics and is not a browser page origin.
+- **ARO-INV-9 — contract repair precedes dependent execution.** ARO-09 specifies repair work;
+  publication alone cannot supersede ARO-08 admission or authenticate a different origin/candidate.
+  If a source/receipt producer is missing or fails, preserve the gap under #5181 and keep the live
+  pilot gated. The separate effectful first-repository milestone never widens this read-only pilot.
 
 ## Capability acceptance
 

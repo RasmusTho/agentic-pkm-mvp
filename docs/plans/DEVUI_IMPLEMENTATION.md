@@ -1,18 +1,16 @@
-State: Target-state implementation plan (2026-08-09). The read-only `devui.composition.v1` seam,
-pure `focus-view.v1` composer, nonvisual external context-pack/export composer, bounded SoI
-Evidence View v0 proof, pure server-declared Overview composer, and the source-linked LLM-assisted
-owner synthesis projection delivered by PR #5413 are delivered. The synthesis remains proposal-only
-and source-bound; it does not create authority, tasks, approvals, or effects. Producer enrichment for
-owner and ready classification is the next nonvisual work. The Focus UI, provider conversation runtime,
-Builder System Control lens, visual handoff, production deployment, and general authority-bearing
-stages remain targets. Existing GitHub Issues remain executable backlog truth.
+State: Target-state implementation plan; current/target boundary reviewed 2026-09-12. Read-only
+composers, local Overview/Focus routes, the connected Companion repository shell, LLM-assisted
+synthesis, and the bounded managed DevUI listener/receipt producers are delivered. Source admission,
+managed DevUI deployment, richer Focus/conversation/actions, whole BSC lens and actual owner
+acceptance remain targets. The active BuilderOps control plane does not establish those outcomes.
+Existing GitHub Issues remain executable backlog truth.
 Doc role: Builder System implementation and sequencing plan
 Authority: Owns the proposed dependency order for realizing `docs/DEVUI.md`. Subordinate to accepted ADRs, DDO and BuilderOps control-plane specifications, live Issue contracts, and current-state owner docs.
 Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-08-10
+Last reviewed: 2026-09-12
 
 # devUI implementation plan
 
@@ -81,7 +79,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 
 ## Reuse before construction
 
-| Need | Reuse | Status at plan date |
+| Need | Reuse | Repository/evidence status reviewed 2026-09-12 |
 | --- | --- | --- |
 | Capability/evidence snapshot | `CkmQueryService`, `CkmProjectionBatch`, Direction B owner-readable models | Delivered for local single-operator access; remote policy absent |
 | Work/freshness | `build_registry`, Cockpit chain predicates, source-state model | Delivered read-only |
@@ -89,21 +87,54 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Unified read composition | `devui.composition.v1`, GET `/api/devui/composition` | Delivered per-request projection; no cache, mutation, or visual shell |
 | Authority-aware discovery | `devui.discovery-projection.v1` over declared source items | Pure nonvisual composer delivered by #4985; no source registry, UI, Builder Vault surface, or promotion execution |
 | Overview zones | `DevuiOverviewView.v1` over the composition envelope | Pure server-side composer delivered; it withdraws unsupported Needs you and Ready to try classifications until producer-authority enrichment exists |
-| Subject focus | `FocusView.v1` over existing read sources | Pure read-only composer delivered by PR #4703; Focus route/UI not delivered |
+| Subject focus | `FocusView.v1` over existing read sources | Composer PR #4703, local GET PR #4771, and connected read-only Companion shell PR #5157 delivered; richer source-linked feature/conversation experience remains target |
+| LLM-assisted overview | Existing source-linked owner synthesis | PR #5413 delivered bounded proposal-only synthesis; model text supplies no canonical owner fact or approval |
+| Bounded VM102 readiness | Existing qualification/deploy/health receipt chain | PR #5469 projects exact `devui_projection` evidence or withdrawal; no generic feature readiness or live deployment is implied |
+| Managed DevUI runtime | Standalone listener and typed receipt producers | PR #5477 repository preparation delivered; work/CKM transports remain unadmitted; qualified deployment/readiness requires its exact typed chain, independently of process liveness |
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
 | First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
-| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, source-owned intent/decision/evidence joins, BuilderOps/live evidence | Separate read-lens target; not delivered |
+| Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, source-owned intent/decision/evidence joins, BuilderOps/live evidence | BSC-01..03 pure nonvisual inputs delivered; source-connected route/UI, previews and whole lens remain targets |
 | Proposal/preview | `DeliveryRequest.v1`, `DeliveryPreview.v1`, pure plan compiler | DDO-06 target; compiler seam delivered |
 | Lawful transitions | DDO reducer and versioned lifecycle commands | Pure reducer delivered; durable binding is DDO-05 target |
 | Worker | `WorkerRuntimePort` and context/invocation/result contracts | Seam delivered; durable correlation/reattach target |
-| Durable state/effects | BuilderOps PostgreSQL transaction/outbox/fencing kernel | Development baseline only; production authority inactive |
+| Durable state/effects | BuilderOps PostgreSQL transaction/outbox/fencing kernel | Dedicated control plane activated per #5181's 2026-09-12 receipt; complete client-authority cutover and selected workflow effects require their own proof |
 | Live status | `DeliveryRunView.v1` | Specified target, not delivered |
 | Delivery truth | GitHub/dispatcher/Git/CI/review/merge/closure | Existing authority |
 | Results | `DeliveryReceipt.v2` and attempt-terminal evidence | Receipt seam delivered; complete attempt terminality target |
 | Visual base | Yggdrasil Design System and tested Cockpit patterns | The connected read-only repository shell is delivered by PR #5157; visual handoff, VM102 deployment, and owner acceptance remain targets |
 
+The [current-state owner](../DEVUI.md#current-state-and-target) binds these distinctions to the
+repository and live #5181 evidence. A composer, shell, managed listener, admitted source, deployed
+candidate and owner-accepted journey are separate claims.
+
 ## Three delivery stages
+
+See, decide/act and verify remain the owner flow. The milestones below sequence delivery across
+those stages; they do not replace any source, action, design, deployment or acceptance gate.
+
+### Delivery milestones
+
+| Milestone | Owner outcome | Evidence boundary |
+| --- | --- | --- |
+| M0 — executable contracts | The first action, owner outcome and managed pilot have coherent owning contracts | Deliver the three bounded contract-repair specifications linked below; publication of a task is not its contract repair |
+| M1 — useful read journey | Real sources support Overview → Focus, including feature intent and architecture requirements | Admitted sources, served exact candidate, matching browser proof and the separate read-only #4749 pilot |
+| M2 — first-repository owner loop | The owner directs one real feature delivery and judges its result | Exact action approval, selected existing workflow, result/readback, actual candidate trial and explicit accept/reject; [FCA milestone](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone) |
+| M3 — broader owner control | Separate Builder System Control and named Product/Runtime SoI lenses become useful | Real bounded sources, governed design, independent root identity and previews to existing workflows |
+| M4 — qualified standalone platform | Builder operates with independent authority and an addressed second consumer | Full VM102/component/authority evidence, #5405 second-consumer proof and all #5399 platform criteria |
+| M5 — qualified workflow autonomy | The selected workflow carries more responsibility with proven recovery | Workflow-specific interruption, recovery, permission and demotion evidence; no universal unattended authority |
+
+M1 is useful before M2. Infrastructure and authority work may run earlier wherever the selected
+operation requires it; later milestone placement never waives a prerequisite. M2 uses a separately
+authorized Issue-delivery operation. Start Model Inquiry is an earlier integration exercise and
+retains its no-code/no-GitHub-effect boundary. Full DDO completion is not a universal first-loop gate.
+
+The first contract tasks are [bounded action admission](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_BOUNDED_ACTION_ADMISSION.md),
+[owner outcome authority](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md), and
+[managed runtime/pilot reconciliation](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md).
+They must update their owning contracts and dependent Issue wording before later implementation
+uses the repaired boundary. In particular, the existing dependency graph below remains subject to
+that reconciliation; this milestone map does not silently change #4169, #4697 or #4749 admission.
 
 ### Stage A — see: coherent read-only devUI
 
