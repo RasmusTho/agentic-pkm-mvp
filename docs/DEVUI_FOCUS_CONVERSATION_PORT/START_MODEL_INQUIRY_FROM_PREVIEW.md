@@ -128,6 +128,7 @@ existing recovery evidence.
 
 ## Related GitHub Issues
 
-Filed as final blocked child [#4697](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697).
+Implementation is tracked by [#4697](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697);
+GitHub owns its live pickup state.
 Delivery posts its command/receipt validation to the parent, which remains open for capability
 acceptance and owner-doc reconciliation.
