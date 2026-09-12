@@ -15,11 +15,12 @@ services:
       # over service env_file values, so stale cross-channel control values
       # cannot disable or accidentally activate this gate.
       PKM_ENVIRONMENT: prod
-      # Keep the migration authority on the canonical Compose production
-      # database. Runtime services may retain their existing interpolation
-      # policy, but the gate token must not be primed against an ambient host.
-      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
-      DB_DSN: postgresql+psycopg://app:app@db:5432/app
+      # Keep the migration authority on the same effective production database
+      # binding as the runtime services. The deploy pin/ambient shell may
+      # intentionally select an approved production endpoint; otherwise this
+      # falls back to the canonical Compose database.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
+      DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
       MIGRATION_PRODUCTION_GATE: "1"
       MIGRATION_TARGET_IDENTITY: pkm-prod/app
       PROD_MIGRATION_FORWARD_ONLY_ACK: ${PROD_MIGRATION_FORWARD_ONLY_ACK:-}
@@ -33,6 +34,7 @@ services:
     environment:
       API_HEALTHCHECK_URL: http://host.docker.internal:18000/readyz
       PKM_ENVIRONMENT: prod
+      MIGRATION_GATE_TOKEN_ONLY: "0"
       COCKPIT_GITHUB_REPO: RasmusTho/agentic-pkm-mvp
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
