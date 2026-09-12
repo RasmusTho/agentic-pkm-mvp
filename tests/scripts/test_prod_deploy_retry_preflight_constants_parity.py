@@ -244,7 +244,8 @@ def test_prod_dsn_resolution_ignores_repo_dotenv_like_compose_env_file(
         "APP_IMAGE_TAG=fixture\n", encoding="utf-8"
     )
     (tmp_path / ".env").write_text(
-        "DATABASE_URL=postgresql+psycopg://app:app@wrong-dotenv:5432/app\n",
+        "DATABASE_URL=postgresql+psycopg://app:app@wrong-dotenv:5432/app\n"
+        "DB_DSN=postgresql+psycopg://app:app@wrong-dotenv-fallback:5432/app\n",
         encoding="utf-8",
     )
     (tmp_path / "docker-compose.prod.yml").write_text(
