@@ -349,9 +349,9 @@ The post-spec issue extraction records three distinct child receipts on #2143.
 ### MVR-05C — compatibility write effect boundary
 
 The registry task records the delivered compatibility-boundary writeback; the normative current
-boundary and its verification anchors live in
-`docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: MVR-05C compatibility
-bridge`. That bridge is a bounded predecessor to the full MVR-05C explicit-target
+boundary and its verification anchors live in `docs/ARCHITECTURE.md :: Current Runtime Surfaces`.
+The future-state target remains in
+`docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md :: MVR-05C`. That bridge is a bounded predecessor to the full MVR-05C explicit-target
 DecisionToken/effect-fence floor and does not claim that the full multi-binding governed-write
 floor is shipped.
 

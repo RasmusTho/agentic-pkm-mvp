@@ -557,22 +557,12 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set`
 
-### MVR-05C compatibility bridge — current delivered boundary
+### MVR-05C compatibility bridge — target-state handoff
 
-The compatibility bridge is the bounded predecessor to the explicit-target governed-write floor
-above. Migrated compatibility mutations hold the shared `compatibility_ingress_window` from the
-final authenticated binding/revision proof through filesystem and authority-receipt effects; the
-corresponding rebind transition takes the exclusive side of that same window, so a concurrent
-picker change waits for an already-admitted effect instead of redirecting it to a new binding.
-Independently mounted provisional-memory, Companion, Canvas, and Panel mutation routes fail
-closed on retained `X-Active-Context-Session` or `X-Active-Context-Override` carriers before
-their vault effects. The bridge remains pre-DecisionToken and does not claim full MVR-05C
-multi-binding governed writes.
-
-- Verify: `tests/integration/test_multi_vault_client_carriers.py::test_compatibility_mutation_holds_ingress_window_through_effect`
-- Verify: `tests/integration/test_multi_vault_client_carriers.py::test_independently_mounted_vault_writers_fail_closed_for_scoped_carrier`
-- Verify: `tests/integration/test_multi_vault_client_carriers.py::test_compatibility_mutation_requires_current_binding_and_principal`
-- Verify: `docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md :: MVR-05C`
+The current-state compatibility bridge and its production verification live in
+`docs/ARCHITECTURE.md :: Current Runtime Surfaces`. This future-state specification retains
+the explicit-target DecisionToken/effect-fence floor below; it must not treat the bounded
+pre-DecisionToken bridge as completion of full MVR-05C multi-binding governed writes.
 
 - [ ] **MVR-05C:** GOV revocation after request resolution but before
   commit invalidates the current DecisionToken/binding revision and blocks the in-flight mutation
