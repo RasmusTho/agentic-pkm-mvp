@@ -77,7 +77,9 @@ def test_command_sources_are_exact_issue_or_packaged_owner(tmp_path, monkeypatch
     assert len(calls) == before
 
 
-@pytest.mark.parametrize("failure", ["timeout", "nonzero", "mismatched_identity"])
+@pytest.mark.parametrize(
+    "failure", ["timeout", "nonzero", "mismatched_identity", "list_state", "object_state"]
+)
 def test_terminal_launcher_with_failed_readback_preserves_recovery(tmp_path, monkeypatch, failure):
     graph = InquiryGraph(tmp_path, monkeypatch)
     preview = graph.preview()
@@ -90,15 +92,21 @@ def test_terminal_launcher_with_failed_readback_preserves_recovery(tmp_path, mon
                 return subprocess.CompletedProcess(argv, 1, b"", b"fixture unavailable")
             captured = graph.process(argv, **kwargs)
             value = decode_object(captured.stdout)
-            value["operation_key"] = "0" * 64
+            if failure == "list_state":
+                value["state"] = []
+            elif failure == "object_state":
+                value["state"] = {}
+            else:
+                value["operation_key"] = "0" * 64
             return subprocess.CompletedProcess(argv, 0, canonical_bytes(value), b"")
         return graph.process(argv, **kwargs)
 
     monkeypatch.setattr(SanctionedModelInquiryWorkflow, "_process", staticmethod(process))
-    result = graph.start(preview).json()["operation"]
-    assert result["state"] == "ambiguous"
+    response = graph.start(preview)
     assert graph.launches == 1 and len(graph.provider.calls) == 4
     assert graph.stage.exists() and graph.lock.exists()
+    result = response.json()["operation"]
+    assert result["state"] == "ambiguous"
     assert result["workflow_cleanup"] == "preserved_for_reconciliation"
 
 

@@ -227,7 +227,9 @@ class SanctionedModelInquiryWorkflow:
         }
 
     @staticmethod
-    def _bound_readback(value: dict[str, Any], approval: dict[str, Any]) -> dict[str, Any]:
+    def _bound_readback(value: Any, approval: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict) or not isinstance(value.get("state"), str):
+            raise WorkflowUnavailable("exact destination readback is unavailable")
         proposal = approval["proposal"]
         expected = {
             "approval_id": approval["approval_id"],
@@ -372,33 +374,31 @@ class SanctionedModelInquiryWorkflow:
             attempted = True
             captured = self._invoke(local, args, envelope=envelope, timeout=_LAUNCH_TIMEOUT)
             value = decode_object(captured.stdout)
-            terminal = captured.returncode == 0 and all(
+            launcher_valid = captured.returncode == 0 and all(
                 isinstance(value.get(key), str) and value[key].strip() for key in _TERMINAL_FIELDS
             )
-            if not terminal:
+            if not launcher_valid:
                 raise WorkflowUnavailable("launcher outcome ambiguous")
             if approval is not None:
-                terminal = terminal and value.get("inquiry_id") == approval["inquiry_id"]
                 result = self._bound_readback(
                     self._control(
                         local, "--operation-readback-stdin", self._envelope(approval, readback)
                     ),
                     approval,
                 )
-                terminal = (
-                    terminal
+                if not (
+                    value.get("inquiry_id") == approval["inquiry_id"]
                     and result["state"] == "terminal"
                     and result.get("terminal_receipt")
                     == {key: value[key] for key in _TERMINAL_FIELDS}
-                )
-                if not terminal:
+                ):
                     raise WorkflowUnavailable("terminal readback does not match launcher")
             else:
-                result = (
-                    {"state": "terminal", "terminal_receipt": value}
-                    if terminal
-                    else {"state": "ambiguous", "reason": "launcher_outcome_ambiguous"}
-                )
+                result = {"state": "terminal", "terminal_receipt": value}
+            # Cleanup eligibility is committed only after every required terminal
+            # check succeeds. Even an unexpected exception before here preserves
+            # the fixed stage and lock without depending on an exception list.
+            terminal = True
         except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
             terminal = False
             if isinstance(exc, StagingFailure):
