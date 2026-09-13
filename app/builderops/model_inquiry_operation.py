@@ -21,6 +21,7 @@ from app.builderops.devui_model_inquiry_command import (
     validate_approval_identity,
 )
 from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry_adapters import (
     operational_subscription_requested,
     resolve_inquiry_target,
@@ -60,10 +61,12 @@ class OperationDestination:
             environment=os.environ,
         )
 
-    def current_bindings(self) -> dict[str, Any]:
+    def current_bindings(
+        self, *, resolver: BuilderModelAccessResolver | None = None
+    ) -> dict[str, Any]:
         if not operational_subscription_requested(self.environment):
             raise OperationRefused("operational subscription workflow is not configured")
-        resolver, intent, resolution = resolve_inquiry_target(self.environment)
+        resolver, intent, resolution = resolve_inquiry_target(self.environment, resolver=resolver)
         profile = resolver.model_inquiry_profile(intent.channel)
         return {
             "workflow": workflow_binding(),
@@ -94,7 +97,13 @@ class OperationDestination:
             "stop_support": "unsupported",
         }
 
-    def _authorize(self, approval: dict[str, Any], purpose: str) -> dict[str, Any]:
+    def _authorize(
+        self,
+        approval: dict[str, Any],
+        purpose: str,
+        *,
+        resolver: BuilderModelAccessResolver | None = None,
+    ) -> dict[str, Any]:
         reply = self.client.inquiry_command_authority(approval=approval, purpose=purpose)
         if (
             reply.get("approval") != approval
@@ -108,7 +117,7 @@ class OperationDestination:
                 raise OperationRefused("authority epoch changed")
             if any(
                 approval["material"][name] != value
-                for name, value in self.current_bindings().items()
+                for name, value in self.current_bindings(resolver=resolver).items()
             ):
                 raise OperationRefused("current workflow/profile differs from approval")
         return reply
@@ -172,7 +181,10 @@ class OperationDestination:
             raise OperationRefused("operation invocation already consumed")
         # Queue time, atomic entry, or an in-flight credential/source change
         # cannot reuse the earlier authorization. Failure now stays ambiguous.
-        self._authorize(approval, "execute")
+        # Freeze the exact declaration snapshot being validated. The existing
+        # runner consumes it instead of reloading declarations after writes.
+        resolver, _, _ = resolve_inquiry_target(self.environment)
+        self._authorize(approval, "execute", resolver=resolver)
         inquiry_id = approval["inquiry_id"]
         self.service.start(
             question=question.decode("utf-8"),
@@ -185,7 +197,7 @@ class OperationDestination:
             inquiry_id=inquiry_id,
         )
         result = ModelInquiryRunner(
-            self.service, env=self.environment, allow_operational_fallback=False
+            self.service, env=self.environment, resolver=resolver, allow_operational_fallback=False
         ).run(inquiry_id)
         terminal = {
             "inquiry_id": inquiry_id,

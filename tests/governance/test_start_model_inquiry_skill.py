@@ -433,7 +433,8 @@ def test_manual_skill_facade_preserves_fixed_route_and_exact_question(tmp_path, 
     assert help_result.returncode == 0 and "--question-file" in help_result.stdout
 
 
-def test_workflow_local_route_requires_complete_host_proof(monkeypatch) -> None:
+@pytest.mark.parametrize("lookup", ["plain", "none", "port", "second_file", "literal_alias"])
+def test_workflow_local_route_requires_complete_host_proof(monkeypatch, lookup) -> None:
     from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow
     real_is_file, real_read_text = Path.is_file, Path.read_text
     key_path = Path("/etc/ssh/ssh_host_ed25519_key.pub")
@@ -444,23 +445,73 @@ def test_workflow_local_route_requires_complete_host_proof(monkeypatch) -> None:
     def process(argv, **kwargs):
         calls.append(argv)
         if argv[:2] == ["/usr/bin/ssh", "-G"]:
-            raw = "user fixture-user\nhostname fixed-host\nuserknownhostsfile /fixture/known_hosts\n"
+            raw = f"user fixture-user\nhostname {'Tailscale_macmini' if lookup == 'literal_alias' else 'fixed-host'}\nuserknownhostsfile {Path.home()}/.ssh/known_hosts {Path.home()}/.ssh/known_hosts2\n"
+            if lookup == "none":
+                raw += "hostkeyalias none\n"
+            if lookup == "port":
+                raw += "port 2222\n"
         elif argv == ["/usr/bin/id", "-un"]:
             raw = "fixture-user\n"
         elif argv[0] == "/usr/bin/dscl":
             raw = "NFSHomeDirectory: " + state["home"]
         elif argv[0] == "/usr/bin/ssh-keygen":
+            expected = "[fixed-host]:2222" if lookup == "port" else "fixed-host"
+            if argv[2] != expected or (lookup == "second_file" and not argv[-1].endswith("known_hosts2")):
+                return subprocess.CompletedProcess(argv, 1, b"", b"")
             raw = "fixed-host ssh-ed25519 " + state["key"]
         else:
             raise AssertionError(argv)
         return subprocess.CompletedProcess(argv, 0, raw.encode(), b"")
     monkeypatch.setattr(SanctionedModelInquiryWorkflow, "_process", staticmethod(process))
-    assert SanctionedModelInquiryWorkflow()._route() is True
+    assert SanctionedModelInquiryWorkflow()._route() is (lookup != "literal_alias")
     state["key"] = "mismatched-public-key"
     assert SanctionedModelInquiryWorkflow()._route() is False
     state["home"] = "/another/home"
     assert SanctionedModelInquiryWorkflow()._route() is False
     assert not any("yggdrasil-model-inquiry" in argument for call in calls for argument in call)
+
+
+@pytest.mark.parametrize("failure", ["caller_fsync", "stage_fsync"])
+def test_owned_question_write_failure_cleans_partial_files(tmp_path, monkeypatch, failure):
+    from app.builderops import model_inquiry_workflow as workflow
+    monkeypatch.setattr(workflow, "STAGE", str(tmp_path / "stage"))
+    monkeypatch.setattr(workflow, "LOCK", str(tmp_path / "lock"))
+    real_temporary = workflow.tempfile.mkstemp
+    paths = []
+    def temporary(**kwargs):
+        fd, name = real_temporary(**kwargs, dir=tmp_path)
+        paths.append(Path(name))
+        return fd, name
+    monkeypatch.setattr(workflow.tempfile, "mkstemp", temporary)
+    fsync_calls = []
+    def fsync(fd):
+        fsync_calls.append(fd)
+        if len(fsync_calls) == (1 if failure == "caller_fsync" else 2):
+            raise OSError("fixture disk full")
+    monkeypatch.setattr(workflow.os, "fsync", fsync)
+    result = workflow.SanctionedModelInquiryWorkflow()._launch(True, "Exact question\n", None, None)
+    assert result["state"] == "unavailable"
+    assert result["workflow_cleanup"] == "complete"
+    assert paths and all(not path.exists() for path in paths)
+    assert not Path(workflow.STAGE).exists() and not Path(workflow.LOCK).exists()
+
+
+def test_unknown_remote_staging_preserves_files_and_reports_cleanup_truth(tmp_path, monkeypatch):
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow
+    from tests.builderops.inquiry_operation_fixture import InquiryGraph
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    question = tmp_path / "question.md"
+    question.write_text("Exact question\n")
+    def process(argv, **kwargs):
+        if argv[-1].startswith("umask 077; set -C;"):
+            graph.stage.write_text("partial")
+            return subprocess.CompletedProcess(argv, 1, b"", b"fixture disk full")
+        return graph.process(argv, **kwargs)
+    monkeypatch.setattr(SanctionedModelInquiryWorkflow, "_process", staticmethod(process))
+    result = SanctionedModelInquiryWorkflow().manual(question)
+    assert result["state"] == "unavailable"
+    assert result["workflow_cleanup"] == "preserved_for_reconciliation"
+    assert graph.stage.exists() and graph.lock.exists() and graph.launches == 0
 
 
 @pytest.mark.parametrize("outcome", ["malformed", "nonzero", "empty", "prefix", "duplicate", "timeout", "existing_lock", "existing_stage"])

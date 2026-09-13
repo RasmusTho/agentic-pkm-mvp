@@ -26,6 +26,9 @@ from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.model_inquiry_operation import OperationDestination
 from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow
 from app.builderops.model_inquiry_workflow import canonical_bytes
+from app.builderops.model_inquiry_workflow import decode_object
+from app.builderops import model_access_resolver, model_inquiry_runner
+from app.builderops.model_inquiry_adapters import resolve_inquiry_target
 from tests.builderops.inquiry_operation_fixture import InquiryGraph, REPOSITORY
 
 
@@ -72,6 +75,65 @@ def test_command_sources_are_exact_issue_or_packaged_owner(tmp_path, monkeypatch
     with pytest.raises(devui_sources.SourceReadRefusal, match="unsupported"):
         devui_sources.revalidate_inquiry_sources(config, repository=REPOSITORY, context_pack=pack)
     assert len(calls) == before
+
+
+@pytest.mark.parametrize("failure", ["timeout", "nonzero", "mismatched_identity"])
+def test_terminal_launcher_with_failed_readback_preserves_recovery(tmp_path, monkeypatch, failure):
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    preview = graph.preview()
+
+    def process(argv, **kwargs):
+        if "--operation-readback-stdin" in argv[-1]:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(argv, 1)
+            if failure == "nonzero":
+                return subprocess.CompletedProcess(argv, 1, b"", b"fixture unavailable")
+            captured = graph.process(argv, **kwargs)
+            value = decode_object(captured.stdout)
+            value["operation_key"] = "0" * 64
+            return subprocess.CompletedProcess(argv, 0, canonical_bytes(value), b"")
+        return graph.process(argv, **kwargs)
+
+    monkeypatch.setattr(SanctionedModelInquiryWorkflow, "_process", staticmethod(process))
+    result = graph.start(preview).json()["operation"]
+    assert result["state"] == "ambiguous"
+    assert graph.launches == 1 and len(graph.provider.calls) == 4
+    assert graph.stage.exists() and graph.lock.exists()
+    assert result["workflow_cleanup"] == "preserved_for_reconciliation"
+
+
+def test_runner_consumes_the_profile_snapshot_approved_at_final_entry(tmp_path, monkeypatch):
+    import yaml
+
+    census = tmp_path / "providers.yaml"
+    original = model_access_resolver._PROVIDER_CENSUS_PATH.read_text()
+    census.write_text(original)
+    monkeypatch.setattr(model_access_resolver, "_PROVIDER_CENSUS_PATH", census)
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    preview = graph.preview()
+    approved = resolve_inquiry_target(graph.destination.environment)[2]
+    actual = []
+    start = graph.service.start
+
+    def start_then_change_profile(**kwargs):
+        value = start(**kwargs)
+        changed = yaml.safe_load(original)
+        changed["runtime_channels"]["model_inquiry"]["dev"]["target_intent"]["reasoning_effort"] = (
+            "high"
+        )
+        census.write_text(yaml.safe_dump(changed))
+        return value
+
+    def load_provider_boundary(environment, *, resolver=None):
+        actual.append(resolve_inquiry_target(environment, resolver=resolver)[2])
+        return {"synthesis": graph.provider, "verification": graph.provider}
+
+    monkeypatch.setattr(graph.service, "start", start_then_change_profile)
+    monkeypatch.setattr(model_inquiry_runner, "load_operational_adapters", load_provider_boundary)
+    result = graph.start(preview).json()["operation"]
+    assert result["state"] == "terminal"
+    assert actual == [approved]
+    assert resolve_inquiry_target(graph.destination.environment)[2] != approved
 
 
 def command_material(*, now: datetime = NOW) -> dict:

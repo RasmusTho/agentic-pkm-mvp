@@ -326,6 +326,8 @@ class InquiryGraph:
                 self.lock.mkdir()
                 return result()
             if command.startswith("umask 077; set -C;"):
+                if self.stage.exists() or self.stage.is_symlink():
+                    return result(code=17)
                 fd = os.open(self.stage, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 with os.fdopen(fd, "wb") as stream:
                     stream.write(stdin or b"")

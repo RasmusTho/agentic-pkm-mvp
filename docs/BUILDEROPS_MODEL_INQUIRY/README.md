@@ -181,6 +181,8 @@ for this check; the owner's bearer token is never forwarded. Deletion/revocation
 permission, source, workflow, policy/configuration/resolved target or epoch, and unavailable or
 contradictory authority all refuse launch. Destination policy/profile checks use the declared
 resolver and current local workflow version, not client-provided executable choices or cached proof.
+The existing runner consumes that same validated resolver and environment snapshot; artifact writes
+between validation and runner construction cannot cause a second selection from changed declarations.
 
 Initial addressed subjects are an exact configured GitHub Issue or an explicit-null pre-ticket
 question. Reuse the existing admitted bounded GitHub REST reader and exact question/context/source
@@ -213,7 +215,10 @@ assistant-tool-specific `apply_patch` requirement for this skill's temporary-fil
 not a general deletion helper or an expansion of cleanup authority. It records and validates the
 caller temporary path, rejects symlinks/unowned paths and globs, and deletes only that caller temp
 unconditionally. Stage and lock release use the selected route only after a failure before the
-attempt boundary or a valid terminal response. Ambiguous attempt/launcher output preserves both.
+attempt boundary with known ownership or a valid terminal response. For approved operations, cleanup
+requires the matching authenticated terminal readback too; failed readback never permits deletion.
+Ambiguous attempt/launcher output or uncertain remote staging preserves both. Owned caller and local
+stage identity is recorded before writes so failed writes cannot strand a known-owned temporary.
 Delete the exact staging path before releasing the empty fixed lock. Cleanup failures are reported
 separately and cannot replace the captured launcher exit status or response. Never delete inquiry
 artifacts, inspect the vault to infer a substitute response, or clean another invocation's files.

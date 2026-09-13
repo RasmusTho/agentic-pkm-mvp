@@ -65,6 +65,8 @@ The facade contains one implementation of the previously manual mechanics:
 - Expand the fixed alias with `/usr/bin/ssh -G` before any connection or lock action. Proven-local
   execution requires exact SSH user/current-account binding, directory-service home equality, and
   a pinned public host key matching this host. Read no private host key and print no key material.
+  Use the effective host-key alias unless it is absent or `none`, otherwise the expanded hostname;
+  preserve nondefault-port lookup syntax and the two fixed verified-home known-hosts files.
   Missing or malformed proof selects the fixed remote route. Connection failure never permits a
   local fallback, and a selected route never changes during an invocation.
 - Acquire the exclusive lock once before staging. Failed acquisition cannot remove the existing
@@ -76,8 +78,9 @@ The facade contains one implementation of the previously manual mechanics:
 - Delete only the facade-owned caller temporary unconditionally. The exact-path runtime helper
   replaces the former assistant-only `apply_patch` mechanics for this skill; it rejects symlinks,
   unowned paths and globs and is not a general deletion capability. A pre-attempt failure or valid
-  terminal response permits selected-route staging/lock cleanup. Delete the exact stage before
-  releasing the empty fixed lock. Ambiguous attempts preserve both. Report cleanup failures
+  terminal response permits selected-route cleanup of known-owned staging/lock paths. Approved
+  operations also require matching authenticated terminal readback. Delete the exact stage before
+  releasing the empty fixed lock. Ambiguous attempts preserve both; uncertain remote staging does too. Report cleanup failures
   separately; never mask the captured launcher outcome or delete durable inquiry artifacts.
 - Replays and restarts read the same destination key first. Reservation and attempt are not launch
   evidence. No automatic second launch, new key, staging cleanup, lock release or inferred latest

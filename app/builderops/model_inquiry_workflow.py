@@ -38,6 +38,12 @@ class WorkflowUnavailable(ValueError):
     """The fixed workflow is unavailable; never select another executor."""
 
 
+class StagingFailure(WorkflowUnavailable):
+    def __init__(self, *, owned: bool) -> None:
+        super().__init__("workflow staging unavailable")
+        self.owned = owned
+
+
 def canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -106,20 +112,26 @@ class SanctionedModelInquiryWorkflow:
                 or home.stdout.decode().strip() != f"NFSHomeDirectory: {Path.home()}"
             ):
                 return False
-            known_files = settings.get("userknownhostsfile", "").split()
-            host = settings.get("hostkeyalias", settings.get("hostname", ""))
-            if not known_files or not host or host.startswith("-"):
+            hostname = settings.get("hostname", "")
+            if not hostname or hostname.lower() == DESTINATION.lower():
                 return False
-            pinned = self._process(
-                ["/usr/bin/ssh-keygen", "-F", host, "-f", str(Path(known_files[0]).expanduser())]
-            )
-            if pinned.returncode:
+            alias = settings.get("hostkeyalias", "")
+            host = alias if alias and alias.lower() != "none" else hostname
+            port = settings.get("port", "22")
+            if host.startswith("-") or not port.isdecimal() or not 1 <= int(port) <= 65535:
                 return False
-            keys = {
-                tuple(parts[1:3])
-                for line in pinned.stdout.decode().splitlines()
-                if not line.startswith("#") and len(parts := line.split()) >= 3
-            }
+            lookup = host if int(port) == 22 else f"[{host}]:{port}"
+            keys: set[tuple[str, ...]] = set()
+            for name in ("known_hosts", "known_hosts2"):
+                pinned = self._process(
+                    ["/usr/bin/ssh-keygen", "-F", lookup, "-f", str(Path.home() / ".ssh" / name)]
+                )
+                if pinned.returncode == 0:
+                    keys.update(
+                        tuple(parts[1:3])
+                        for line in pinned.stdout.decode().splitlines()
+                        if not line.startswith("#") and len(parts := line.split()) >= 3
+                    )
             for name in ("ed25519", "ecdsa", "rsa"):
                 path = Path(f"/etc/ssh/ssh_host_{name}_key.pub")
                 if path.is_file() and not path.is_symlink():
@@ -268,12 +280,27 @@ class SanctionedModelInquiryWorkflow:
     def _stage(self, local: bool, question: bytes) -> None:
         if local:
             fd = os.open(STAGE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(question)
-                stream.flush()
-                os.fsync(stream.fileno())
-        elif self._remote(f"umask 077; set -C; /bin/cat > {STAGE}", stdin=question).returncode:
-            raise WorkflowUnavailable("workflow staging unavailable")
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(question)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except OSError as exc:
+                raise StagingFailure(owned=True) from exc
+        else:
+            try:
+                result = self._remote(
+                    f"umask 077; set -C; test ! -e {STAGE} && test ! -L {STAGE} || exit 17; /bin/cat > {STAGE}",
+                    stdin=question,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise StagingFailure(owned=False) from exc
+            if result.returncode == 17:
+                raise WorkflowUnavailable("workflow staged path already exists")
+            if result.returncode:
+                # Partial writes and lost acknowledgements cannot prove remote
+                # creation/ownership. Keep both paths for reconciliation.
+                raise StagingFailure(owned=False)
 
     def _cleanup(self, local: bool, *, stage_owned: bool) -> bool:
         """Only the fixed owned stage and empty lock, never a general path helper."""
@@ -310,6 +337,7 @@ class SanctionedModelInquiryWorkflow:
         readback: dict[str, Any] | None,
     ) -> dict[str, Any]:
         locked, staged, attempted, terminal = False, False, False, False
+        staging_unknown = False
         temporary: Path | None = None
         identity: tuple[int, int] | None = None
         result: dict[str, Any] = {"state": "unavailable", "reason": "workflow_preflight_failed"}
@@ -318,12 +346,12 @@ class SanctionedModelInquiryWorkflow:
             locked = True
             fd, name = tempfile.mkstemp(prefix="model-inquiry-question-", suffix=".md")
             temporary = Path(name)
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
             with os.fdopen(fd, "wb") as stream:
                 stream.write(question.encode("utf-8"))
                 stream.flush()
                 os.fsync(stream.fileno())
-                info = os.fstat(stream.fileno())
-                identity = (info.st_dev, info.st_ino)
             self._stage(local, temporary.read_bytes())
             staged = True
             args = ["--question-file", STAGE]
@@ -371,7 +399,11 @@ class SanctionedModelInquiryWorkflow:
                     if terminal
                     else {"state": "ambiguous", "reason": "launcher_outcome_ambiguous"}
                 )
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+            terminal = False
+            if isinstance(exc, StagingFailure):
+                staged = exc.owned
+                staging_unknown = not exc.owned
             result = {
                 "state": "ambiguous" if attempted else "unavailable",
                 "reason": "launcher_outcome_ambiguous"
@@ -399,7 +431,7 @@ class SanctionedModelInquiryWorkflow:
                         result["caller_cleanup"] = "refused"
                 except OSError:
                     result["caller_cleanup"] = "failed"
-            if locked and (not attempted or terminal):
+            if locked and not staging_unknown and (not attempted or terminal):
                 result["workflow_cleanup"] = (
                     "complete" if self._cleanup(local, stage_owned=staged) else "failed"
                 )
