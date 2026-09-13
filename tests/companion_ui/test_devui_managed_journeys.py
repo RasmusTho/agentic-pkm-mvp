@@ -26,6 +26,7 @@ if os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1":
 from playwright.sync_api import sync_playwright
 import uvicorn
 from app.builderops.devui_runtime import production_app
+from app.builderops.devui_sources import package_candidate
 
 pytestmark = pytest.mark.browser_runtime
 ORIGIN = "http://127.0.0.1:8113"
@@ -34,7 +35,17 @@ FOCUS = "/devui/focus?subject=github%3Aexample%2Ffixture%23501"
 
 @contextmanager
 def _server(source, monkeypatch):
+    source.environment["DEVUI_REPOSITORY"] = "Example/Fixture"
+    source.gh_mode.write_text("canonical_case")
     _package_managed_shell(source.root)
+    manifest = json.loads((source.root / "manifest.json").read_text())
+    package_candidate(
+        source.root,
+        repository=source.environment["DEVUI_REPOSITORY"],
+        source_sha=source.environment["DEVUI_SOURCE_SHA"],
+        capabilities=manifest["capabilities"],
+        matrix=manifest["matrix"],
+    )
     for key, value in source.environment.items():
         monkeypatch.setenv(key, value)
     listener = socket.socket()
@@ -127,6 +138,7 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         _loaded(page, "focus")
         payload = read.value.json()
         assert payload["subject"]["stable_id"] == MANAGED_SUBJECT
+        assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
         assert (
             page.locator('[data-testid="focus-subject"]').get_attribute("data-subject")
             == MANAGED_SUBJECT
@@ -277,7 +289,7 @@ def test_managed_journey_preserves_focus_failures_and_fresh_return(managed_sourc
             assert len(source.calls) == before
             _capture(page, "focus-failure-" + failure)
             page.unroute("**/api/devui/focus?*")
-            source.gh_mode.write_text("ok")
+            source.gh_mode.write_text("canonical_case")
             page.get_by_role("link", name="Return to Overview").click()
             _loaded(page, "overview")
             assert len(source.calls) > before

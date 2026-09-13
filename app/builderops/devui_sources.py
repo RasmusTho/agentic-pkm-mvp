@@ -549,12 +549,23 @@ def read_managed_focus(config: SourceConfiguration, subject: str) -> dict[str, A
 
     def read_issue(repository: str, number: str) -> Any:
         issue = cockpit_github_plane._run_gh(["api", f"repos/{repository}/issues/{number}"])
+        locator = issue.get("html_url") if isinstance(issue, dict) else None
+        addressed_issue = (
+            re.fullmatch(
+                r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)",
+                locator,
+            )
+            if isinstance(locator, str)
+            else None
+        )
         if (
             not isinstance(issue, dict)
             or type(issue.get("number")) is not int
             or issue.get("number") != int(number)
             or parse_timestamp(issue.get("updated_at")) is None
-            or issue.get("html_url") != f"https://github.com/{repository}/issues/{number}"
+            or addressed_issue is None
+            or canonical_repository(addressed_issue[1]) != canonical_repository(repository)
+            or addressed_issue[2] != number
         ):
             raise FocusInputError("selected Issue response identity is invalid")
         return issue

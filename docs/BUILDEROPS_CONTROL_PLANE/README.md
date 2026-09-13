@@ -125,7 +125,9 @@ loopback peer, exact `127.0.0.1:8113` or `localhost:8113` Host, and no forwarded
 Only the two Focus paths admit exactly one typed `subject`; all other paths reject queries.
 Unknown paths and non-GET requests stop before source reads. Focus reads only its selected Issue
 through the explicitly configured repository's admitted gh REST source, validates response identity,
-and uses the existing pure Focus input/composer contracts. Other subject kinds remain unsupported;
+and uses the existing pure Focus input/composer contracts. Repository comparisons use the existing
+canonical identity while the selected subject and source URL retain their supplied spelling.
+Foreign repositories and malformed source URLs remain refused. Other subject kinds remain unsupported;
 Conversation Port and workflow transitions remain unavailable, and unrelated root/receipt/provider
 observations are never joined. Returning to Overview performs a fresh read.
 

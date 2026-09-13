@@ -291,6 +291,16 @@ if endpoint.endswith('/issues/501'):
     result = {'number': 501, 'title': '<img src=x onerror=alert(1)> Managed work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501', 'updated_at': '2026-09-13T10:00:00Z'}
     if mode == 'identity_mismatch':
         result['html_url'] = 'https://github.com/foreign/repo/issues/501'
+    if mode == 'canonical_case':
+        result['html_url'] = 'https://github.com/Example/Fixture/issues/501'
+    invalid_locators = {
+        'locator_query': 'https://github.com/Example/Fixture/issues/501?source=other',
+        'locator_userinfo': 'https://user@github.com/Example/Fixture/issues/501',
+        'locator_wrong_path': 'https://github.com/Example/Fixture/pull/501',
+        'locator_foreign_host': 'https://foreign.invalid/Example/Fixture/issues/501',
+    }
+    if mode in invalid_locators:
+        result['html_url'] = invalid_locators[mode]
     if mode == 'wrong_number':
         result['number'] = 999
     if mode == 'wrong_kind':
@@ -304,6 +314,8 @@ if endpoint.endswith('/issues/501'):
         raise SystemExit(0)
 elif endpoint.endswith('/issues'):
     result = [{'number': 501, 'title': 'Fixture work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501'}]
+    if mode == 'canonical_case':
+        result[0]['html_url'] = 'https://github.com/Example/Fixture/issues/501'
 elif endpoint.endswith('/pulls'):
     result = [] if mode == 'no_pull' else [{'number': 502, 'title': 'Fixture PR', 'state': 'open', 'html_url': 'https://github.com/example/fixture/pull/502', 'body': 'Governing-Issue: #501', 'head': {'sha': 'd' * 40, 'ref': 'codex/fixture'}}]
 elif endpoint.endswith('/status'):
@@ -975,7 +987,7 @@ def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed
             refused = client.get("/api/devui/focus", params={"subject": subject})
             assert refused.status_code == 404
         assert source.gh_calls.read_text().splitlines() == calls
-        for mode in ("unavailable", "identity_mismatch", "wrong_number", "wrong_kind", "missing_title", "bad_version", "malformed"):
+        for mode in ("unavailable", "identity_mismatch", "wrong_number", "wrong_kind", "missing_title", "bad_version", "malformed", "locator_query", "locator_userinfo", "locator_wrong_path", "locator_foreign_host"):
             source.gh_mode.write_text(mode)
             refused = client.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT})
             assert refused.status_code == 404, (mode, refused.text)
@@ -986,6 +998,21 @@ def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed
             assert disabled.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT}).status_code == 404
         assert source.gh_calls.read_text() == before
 
+    assert source.http_calls == []
+
+
+@pytest.mark.parametrize("subject", ["github:example/fixture#501", "github:Example/Fixture#501"])
+def test_managed_focus_preserves_canonical_repository_case(managed_sources, subject) -> None:
+    source = managed_sources
+    _package_managed_shell(source.root)
+    source.environment["DEVUI_REPOSITORY"] = "Example/Fixture"
+    source.gh_mode.write_text("canonical_case")
+    with source.client() as client:
+        response = client.get("/api/devui/focus", params={"subject": subject})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["subject"]["stable_id"] == subject
+    assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
     assert source.http_calls == []
 
 

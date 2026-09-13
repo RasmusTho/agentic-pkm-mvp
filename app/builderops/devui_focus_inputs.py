@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 import subprocess
 from typing import Any
 
+from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
+
 
 _ISSUE_SUBJECT = re.compile(r"github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)\Z")
 
@@ -100,7 +102,13 @@ def _read_issue_inputs(
         repository if issue_reader is not None else os.environ.get("COCKPIT_GITHUB_REPO")
     )
     repository = requested_repository
-    if configured_repo != repository:
+    matches_repository = configured_repo == repository
+    if issue_reader is not None and configured_repo is not None:
+        try:
+            matches_repository = canonical_repository(configured_repo) == canonical_repository(repository)
+        except EnvelopeValidationError:
+            matches_repository = False
+    if not matches_repository:
         raise FocusInputError("requested Issue repository is not configured for the local read")
     if issue_reader is not None:
         try:
