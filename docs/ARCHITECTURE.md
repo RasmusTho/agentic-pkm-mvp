@@ -69,6 +69,11 @@ Related documents and authority boundaries:
   review routing, and security invariants. Use it with `docs/SECURITY_TRUST_BOUNDARIES.md`,
   `docs/SECURITY_DATA_FLOWS.md`, and `docs/security/API_SECURITY_MATRIX.md` before changing
   exposure, auth, write authority, provider/tool execution, or boundary-crossing data flows.
+- `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md` owns the target-state operational relationship
+  with external helper systems: Heimdal owns their ecosystem catalog, channels, credential
+  references, constituent-neutral transport, and lifecycle; Mimer-facing webhook/API/MCP adapters
+  remain Integration Fabric-owned. Builder Vault is the intended post-enactment human-readable
+  operational record once an authority-capable owner-approved surface is accepted.
 - `docs/ENVIRONMENTS.md` defines the active `dev` / `test` / `prod` environment model, including environment invariants, allowed variance, persistence/runtime separation, and production safety expectations.
 - `docs/ONTOLOGY_RUNTIME_BRIDGE.md` is the cross-layer reading guide connecting human functions, semantic classes, persistence surfaces, and runtime contracts. It does not replace the owning SoT docs, but it should be used when architecture wording risks collapsing those layers.
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` defines the broader human-first second-brain ontology. This document uses narrower runtime and storage language where needed and should not be read as the full domain ontology.

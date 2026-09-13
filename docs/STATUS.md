@@ -743,6 +743,10 @@ Repo-side governance added:
 - governance workflow checking Issue shape and PR Issue linkage
 - machine-readable GitHub governance contract in `.github/github-governance.yml`
 - delivery feedback loop governance for learning capture, retrospective review, and post-merge owner-doc receipt enforcement
+- verified-merge convergence recovery authenticates retained prior-candidate history under its own
+  unique same-PR authority before selecting current-head proof; phase recovery and the owner-doc
+  watchdog preserve the same boundary. See
+  [Builder System feedback loops](development/BUILDER_SYSTEM_PROCESS_MAP.md#8-feedback-loops).
 
 Platform-side governance applied:
 - the exact delivery-control-plane labels now exist in the repository

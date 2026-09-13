@@ -10,7 +10,7 @@ Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/PROJECT_KERNEL.md, doc
 
 # Integration Fabric Contract
 
-This document defines how internal and external components attach to Mimer through the Integration Fabric subsystem named in `docs/MODULAR_ARCHITECTURE.md`. It is a docs-only contract: it does not introduce a runtime integration registry, runtime enforcement, or new tests.
+This document defines how internal and external components attach to Mimer through the Integration Fabric subsystem named in `docs/MODULAR_ARCHITECTURE.md`. It is a docs-only contract: it does not introduce a runtime integration registry, runtime enforcement, or new tests. Concrete external helper-system ownership and the human-readable operational-record boundary are owned by `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`; the target record surface is not a runtime registry and does not override the current Builder Vault working-artifact classification.
 
 The contract has three purposes:
 
@@ -82,6 +82,22 @@ The table below is a target-state summary. Where a class already has a shipped a
 | Acquisition source | Capability (content acquisition: discovery + fetch of external source material) | Not semantic authority; produces immutable raw evidence with provenance; never writes durable human meaning directly (refinement candidates enter triage under review posture) | Runtime projection / staged input (raw + derived refinement records, rebuildable); durable human meaning only via governed writeback + human promotion | Through acquisition/refinement stage events on the outbox envelope; only source plugins contact acquisition sources (extractor model calls are Model-provider egress, governed by that class) | `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md`, `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` |
 
 The table is a summary, not a substitute for the per-integration contract. Health/observability and replacement strategy details belong in the owner contract doc for each integration class.
+
+## External helper-system ownership
+
+Concrete external helper systems are operationally owned by Heimdal under
+`docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. For helpers that attach to Mimer, Integration
+Fabric remains the replaceable adapter layer: it provides webhook/API/MCP transport and capability under Heimdal's declared
+authority, provenance, health, and replacement constraints. This does not promote Discord,
+Proxmox, or another provider into Yggdrasil semantic authority, and it does not create a second
+runtime integration registry.
+
+For a constituent-neutral helper that does not attach to Mimer, this Mimer-facing contract is not
+the helper's runtime owner; Heimdal's owner contract names the appropriate shared transport seam.
+The concrete catalog and runbooks are intended for the owner-authorized Builder Vault record surface.
+Repository documents carry only the stable ownership contract, schemas/validation needed by code,
+and pointers to the Vault records. A Builder Vault working artifact is not promoted to authority by
+its location or by this document.
 
 ## Authority rule
 

@@ -11,6 +11,11 @@ import pytest
 
 from app.dispatcher import verified_merge
 from scripts import await_verified_merge_projection_convergence as await_projection
+from scripts import build_verified_issue_set_merge_phase as build_phase
+from tests.dispatcher.verified_merge_projection_helpers import (
+    projection_convergence_comment,
+    projection_phase_kwargs,
+)
 
 
 HEAD = "a" * 40
@@ -663,6 +668,260 @@ def _trusted_convergence_comment(
         "created_at": "2026-08-12T05:00:06Z",
         "updated_at": "2026-08-12T05:00:06Z",
     }
+
+
+def _authority_comment(authority: Mapping[str, object]) -> dict[str, object]:
+    return _trusted_comment(
+        verified_merge.VERIFIED_MERGE_AUTHORITY_MARKER
+        + "\n```json\n" + json.dumps(authority) + "\n```"
+    )
+
+
+def _prior_candidate_history() -> list[dict[str, object]]:
+    context = {**_context(), "head_sha": "d" * 40, "run_id": "prior-candidate"}
+    prior_pr = {**_canonical_pr(), "head": {"sha": context["head_sha"]}}
+    plan = verified_merge.prepare_verified_merge(
+        context=context, pr=prior_pr, live_closing_issues=[3820],
+        merge_readiness={**_readiness(), "head_sha": context["head_sha"]},
+    )
+    prior_pr["body"] = plan["neutralized_body"]
+    authority = plan["authority_receipt"]
+    kwargs = projection_phase_kwargs(authority, prior_pr)
+    phase = verified_merge.build_verified_merge_phase(
+        authority_receipt=authority, pr=prior_pr, phase="prepared", **kwargs,
+    )
+    return [
+        _authority_comment(authority), projection_convergence_comment(kwargs),
+        _trusted_comment(phase["phase_receipt_comment"]),
+    ]
+
+
+def _run_convergence_with_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    comments: list[dict[str, object]], *, replay: bool = False,
+) -> tuple[int, dict[str, object], list[str]]:
+    authority, body, contract, _ = _projection_fixture()
+    authority_path = tmp_path / "authority.json"
+    contract_path = tmp_path / "pr-contract.json"
+    output_path = tmp_path / "convergence.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    snapshots = [
+        _observation(body, observed_at=f"2026-08-12T05:00:{second:02d}Z")
+        for second in ([8, 9] if replay else [4, 6, 7])
+    ]
+    records = _github_pr_contract_records(
+        contract, latest_rows=[{"id": contract["check_run_id"]}],
+    ) * 2
+    clock = [0.0]
+    events: list[str] = []
+
+    def github_json(argv: list[str]) -> dict[str, object]:
+        if "POST" in argv:
+            events.append("post")
+            comment = _trusted_comment(argv[-1].removeprefix("body="))
+            comments.append(comment)
+            return comment
+        events.append("check")
+        return records.pop(0)
+
+    def snapshot(*args: object, **kwargs: object) -> dict[str, object]:
+        events.append("snapshot")
+        return snapshots.pop(0)
+
+    def sleep(seconds: float) -> None:
+        events.append("sleep")
+        clock[0] += seconds
+
+    # Double only GitHub transport/time. The production authority, check,
+    # history, quorum, final-read, POST and readback code all execute.
+    monkeypatch.setattr(await_projection, "_run_json", github_json)
+    monkeypatch.setattr(await_projection, "_run_json_value", lambda *args: comments.copy())
+    monkeypatch.setattr(await_projection, "_snapshot", snapshot)
+    monkeypatch.setattr(await_projection.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(await_projection.time, "sleep", sleep)
+    result = await_projection.main([
+        "--authority-json", str(authority_path), "--pr-contract-json", str(contract_path),
+        "--repository", REPOSITORY, "--pr-number", "3822",
+        "--minimum-backoff-seconds", "1", "--final-backoff-seconds", "1",
+        "--timeout-seconds", "5", "--output-json", str(output_path),
+    ])
+    return result, json.loads(output_path.read_text(encoding="utf-8")), events
+
+
+def test_new_head_convergence_preserves_authenticated_prior_head_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, _, contract, expected = _projection_fixture()
+    comments = [*_prior_candidate_history(), _authority_comment(authority)]
+    preserved = copy.deepcopy(comments)
+    monkeypatch.setattr(await_projection, "_run_json_value", lambda *args: comments.copy())
+    assert await_projection._authenticate_unique_authority(
+        "gh", repository=REPOSITORY, authority=authority,
+        snapshot=expected["final_projection_observation"], pr_contract=contract,
+    ) is None
+    result, output, events = _run_convergence_with_history(tmp_path, monkeypatch, comments)
+    assert result == 0
+    assert output["convergence_receipt"] == expected
+    assert events.count("snapshot") == 3
+    assert events.count("sleep") == 2
+    assert events.count("post") == 1
+    assert comments[:-1] == preserved
+    assert output["convergence_receipt"]["authority_sha256"] == verified_merge._canonical_digest(authority)
+
+
+def test_new_head_convergence_replay_and_phase_readback_preserve_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, body, contract, convergence = _projection_fixture()
+    comments = [
+        *_prior_candidate_history(), _authority_comment(authority),
+        _trusted_convergence_comment(convergence),
+    ]
+    preserved = copy.deepcopy(comments)
+    result, output, events = _run_convergence_with_history(
+        tmp_path, monkeypatch, comments, replay=True,
+    )
+    assert result == 0
+    assert output["convergence_receipt"] == convergence
+    assert output["convergence_receipt_comment"] is None
+    assert events.count("snapshot") == 2
+    assert "post" not in events
+    assert comments == preserved
+
+    # Phase construction consumes the complete durable stream through its CLI.
+    paths = {}
+    for name, value in {
+        "authority": authority, "comments": comments,
+        "convergence": convergence, "pr": _canonical_pr(body),
+        "final": convergence["final_projection_observation"],
+    }.items():
+        paths[name] = tmp_path / f"{name}.json"
+        paths[name].write_text(json.dumps(value), encoding="utf-8")
+    phase_path = tmp_path / "phase.json"
+    assert build_phase.main([
+        "--authority-json", str(paths["authority"]), "--comments-json", str(paths["comments"]),
+        "--projection-convergence-json", str(paths["convergence"]),
+        "--final-projection-observation-json", str(paths["final"]),
+        "--pr-json", str(paths["pr"]), "--phase", "prepared", "--output-json", str(phase_path),
+    ]) == 0
+    phase = json.loads(phase_path.read_text(encoding="utf-8"))
+    comments.append(_trusted_comment(phase["phase_receipt_comment"]))
+    assert verified_merge.resolve_verified_merge_phase(
+        comments, authority_receipt=authority, pr=_canonical_pr(body),
+        current_body_edit=contract["body_edit"],
+    ) == phase["phase_receipt"]
+    assert comments[:-1] == preserved
+    assert phase["phase_receipt"]["head_sha"] == HEAD
+    assert phase["phase_receipt"]["projection_convergence_sha256"] == convergence["receipt_sha256"]
+
+
+@pytest.mark.parametrize("corruption", [
+    "malformed-history", "missing-history-authority", "untrusted-history-authority",
+    "duplicate-history-authority", "conflicting-history-authority", "forged-history",
+    "malformed-history-authority", "invalid-history-authority",
+    "historical-phase-digest", "historical-phase-authority", "historical-phase-body",
+    "historical-phase-closure", "historical-phase-merged", "historical-phase-extra",
+    "historical-null-head", "historical-invalid-head",
+    "foreign-history", "duplicate-history", "forged-current", "duplicate-current",
+    "conflicting-current", "stale-edit", "nonempty-final", "unseparated-quorum",
+])
+def test_prior_head_history_does_not_hide_malformed_or_conflicting_receipts(
+    corruption: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, body, _, convergence = _projection_fixture()
+    comments = [*_prior_candidate_history(), _authority_comment(authority)]
+    if corruption == "malformed-history":
+        comments[1]["body"] = verified_merge.VERIFIED_MERGE_PROJECTION_CONVERGENCE_MARKER + "\n```json\n{bad}\n```"
+    elif corruption == "missing-history-authority":
+        comments.pop(0)
+    elif corruption == "untrusted-history-authority":
+        comments[0]["author_association"] = "NONE"
+    elif corruption == "duplicate-history-authority":
+        comments.append(copy.deepcopy(comments[0]))
+    elif corruption == "malformed-history-authority":
+        comments.append(_trusted_comment(verified_merge.VERIFIED_MERGE_AUTHORITY_MARKER + "\n```json\n{bad}\n```"))
+    elif corruption == "invalid-history-authority":
+        old = json.loads(str(comments[0]["body"]).split("```json\n")[1].split("\n```")[0])
+        old["body_sha256"] = old["neutralized_body_sha256"]
+        comments[0] = _authority_comment(old)
+    elif corruption.startswith("historical-phase-"):
+        old_phase = json.loads(str(comments[2]["body"]).split("```json\n")[1].split("\n```")[0])
+        field, value = {
+            "historical-phase-digest": ("projection_convergence_sha256", "0" * 64),
+            "historical-phase-authority": ("authority_sha256", "0" * 64),
+            "historical-phase-body": ("body_sha256", "0" * 64),
+            "historical-phase-closure": ("closed_issues", [3820]),
+            "historical-phase-merged": ("phase", "merged"),
+            "historical-phase-extra": ("extra", True),
+        }[corruption]
+        old_phase[field] = value
+        comments[2] = _trusted_comment(
+            verified_merge.VERIFIED_MERGE_PHASE_MARKER + "\n```json\n" + json.dumps(old_phase) + "\n```",
+        )
+    elif corruption in {"historical-null-head", "historical-invalid-head"}:
+        old_authority, old_convergence, old_phase = [
+            json.loads(str(comment["body"]).split("```json\n")[1].split("\n```")[0])
+            for comment in comments[:3]
+        ]
+        invalid_head = None if corruption == "historical-null-head" else "not-a-sha"
+        old_authority["head_sha"] = invalid_head
+        old_convergence["head_sha"] = invalid_head
+        old_convergence["pr_contract"]["head_sha"] = invalid_head
+        old_convergence["final_projection_observation"]["pull_request"]["head_sha"] = invalid_head
+        old_convergence["authority_sha256"] = verified_merge._canonical_digest(old_authority)
+        old_convergence["pr_contract"]["authority_sha256"] = old_convergence["authority_sha256"]
+        old_convergence.pop("receipt_sha256")
+        old_convergence["receipt_sha256"] = verified_merge._canonical_digest(old_convergence)
+        old_phase.update(
+            head_sha=invalid_head, authority_sha256=old_convergence["authority_sha256"],
+            projection_convergence_sha256=old_convergence["receipt_sha256"],
+            final_projection_observation_sha256=verified_merge._canonical_digest(old_convergence["final_projection_observation"]),
+        )
+        comments[:3] = [
+            _authority_comment(old_authority), _trusted_convergence_comment(old_convergence),
+            _trusted_comment(verified_merge.VERIFIED_MERGE_PHASE_MARKER + "\n```json\n" + json.dumps(old_phase) + "\n```"),
+        ]
+    elif corruption == "conflicting-history-authority":
+        old = json.loads(str(comments[0]["body"]).split("```json\n")[1].split("\n```")[0])
+        old["repair_budget"] = {"policy_version": "v2", "mechanisms": []}
+        comments.append(_authority_comment(old))
+    elif corruption in {"forged-history", "foreign-history"}:
+        old = json.loads(str(comments[1]["body"]).split("```json\n")[1].split("\n```")[0])
+        old["authority_sha256" if corruption == "forged-history" else "repository"] = "foreign"
+        old.pop("receipt_sha256")
+        old["receipt_sha256"] = verified_merge._canonical_digest(old)
+        comments[1] = _trusted_convergence_comment(old)
+    elif corruption == "duplicate-history":
+        comments.append(copy.deepcopy(comments[1]))
+    else:
+        candidate = copy.deepcopy(convergence)
+        if corruption == "forged-current":
+            candidate["authority_sha256"] = "0" * 64
+        elif corruption == "stale-edit":
+            candidate["body_edit"]["node_id"] = "stale"  # type: ignore[index]
+        elif corruption == "nonempty-final":
+            candidate["final_projection_observation"]["pull_request"]["closing_issues"] = [  # type: ignore[index]
+                {"number": 3820, "repository": REPOSITORY},
+            ]
+        elif corruption == "unseparated-quorum":
+            candidate["observations"][1]["observed_at"] = candidate["observations"][0]["observed_at"]  # type: ignore[index]
+        elif corruption == "conflicting-current":
+            candidate["final_projection_observation"]["observed_at"] = "2026-08-12T05:00:08Z"  # type: ignore[index]
+        candidate.pop("receipt_sha256")
+        candidate["receipt_sha256"] = verified_merge._canonical_digest(candidate)
+        comments.append(_trusted_convergence_comment(candidate))
+        if corruption in {"duplicate-current", "conflicting-current"}:
+            comments.append(_trusted_convergence_comment(convergence))
+    preserved = copy.deepcopy(comments)
+    result, output, events = _run_convergence_with_history(tmp_path, monkeypatch, comments)
+    assert result == 3
+    assert output["status"] == "failed_closed"
+    assert "post" not in events
+    assert comments == preserved
+    assert verified_merge.resolve_verified_merge_phase(
+        comments, authority_receipt=authority, pr=_canonical_pr(body),
+    ) is None
 
 
 def test_unique_authority_authentication_allows_current_replacement_after_stale_prepared_phase(
@@ -1604,7 +1863,8 @@ def test_projection_convergence_cli_rebuilds_after_body_edit_aba(
     assert output["convergence_receipt"] == replacement_convergence
 
 
-def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() -> None:
+@pytest.mark.parametrize("corruption", [None, "body_sha256", "closed_issues", "repository", "merge_commit_sha", "missing-prepared", "legacy-schema"])
+def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest(corruption: str | None) -> None:
     authority, neutralized_body, stale_pr_contract, stale_convergence = (
         _projection_fixture()
     )
@@ -1660,6 +1920,30 @@ def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() ->
         _trusted_comment(str(stale_prepared["phase_receipt_comment"])),
         _trusted_comment(str(prepared["phase_receipt_comment"])),
     ]
+
+    if corruption is not None:
+        stale = copy.deepcopy(stale_prepared["phase_receipt"])
+        if corruption == "missing-prepared":
+            stale.update(phase="merged", final_projection_observation_sha256=None, merge_commit_sha="c" * 40)
+        elif corruption == "legacy-schema":
+            stale.pop("projection_convergence_sha256")
+            stale.pop("final_projection_observation_sha256")
+        else:
+            stale[corruption] = [3820] if corruption == "closed_issues" else "forged"
+        comments[2] = _trusted_comment(
+            verified_merge.VERIFIED_MERGE_PHASE_MARKER + "\n```json\n" + json.dumps(stale) + "\n```"
+        )
+        assert not verified_merge.projection_convergence_receipts_authenticate_authority(
+            comments, authority_receipt=authority,
+        )
+        assert verified_merge.resolve_verified_merge_projection_convergence_receipt(
+            comments, authority_receipt=authority, pr_contract=current_pr_contract,
+        ) is None
+        assert verified_merge.resolve_verified_merge_phase(
+            comments, authority_receipt=authority, pr=neutralized_pr,
+            current_body_edit=current_body_edit,
+        ) is None
+        return
 
     assert verified_merge.resolve_verified_merge_phase(
         comments,
