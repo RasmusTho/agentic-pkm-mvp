@@ -2,9 +2,45 @@ from __future__ import annotations
 
 from email.message import Message
 from io import BytesIO
+import os
+from pathlib import Path
+import subprocess
+import sys
+from textwrap import dedent
 from typing import Any
 
 from companion_ui.workspace.serve_dev_page import make_handler
+
+
+def test_companion_source_tree_entrypoint_boots_without_builder_package() -> None:
+    package_root = Path(__file__).resolve().parents[2] / "companion-ui/companion-app"
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    script = dedent("""
+        import sys
+
+        class NoBuilderPackage:
+            def find_spec(self, fullname, path=None, target=None):
+                if fullname == "app" or fullname.startswith("app."):
+                    raise ImportError("standalone Companion must not require the root app package")
+
+        sys.meta_path.insert(0, NoBuilderPackage())
+        from companion_ui.workspace.serve_dev_page import CompanionThreadingHTTPServer, make_handler
+        from companion_ui.workspace.devui_candidate_assets import load_devui_candidate_asset
+
+        handler = make_handler(client=object(), api_base_url="http://127.0.0.1:18001")
+        server = CompanionThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.server_close()
+        for route in ("/devui/overview", "/devui/focus", "/devui/assets/devui.css",
+                      "/devui/assets/overview.js", "/devui/assets/focus.js"):
+            assert load_devui_candidate_asset(route)[1]
+        assert load_devui_candidate_asset("/devui/assets/unknown.js") is None
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=package_root, env=environment,
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 class _Client:
