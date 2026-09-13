@@ -360,6 +360,12 @@ fi
         """#!/usr/bin/env bash
 set -eu
 printf 'systemctl %s\n' "$*" >> "$FAKE_EVENT_LOG"
+pin_state=previous
+if [ -n "${FAKE_TARGET_SOURCE_SHA:-}" ] \
+  && grep -q "BUILDEROPS_SOURCE_SHA=${FAKE_TARGET_SOURCE_SHA}" "$BUILDEROPS_PIN_FILE"; then
+  pin_state=target
+fi
+printf 'systemctl pin-state=%s\n' "$pin_state" >> "$FAKE_EVENT_LOG"
 if [ "${1:-}" = "show" ]; then
   if [ "${FAKE_FAIL_FORWARDER_UNIT_PREFLIGHT:-0}" = 1 ]; then
     printf 'systemctl show: failed to inspect builderops-loopback-forwarder.service\n' >&2
@@ -398,6 +404,7 @@ fi
             "BUILDEROPS_HEALTH_TIMEOUT_SECONDS": "1",
             "BUILDEROPS_TEST_CANDIDATE_RECEIPT": str(candidate_receipt),
             "BUILDEROPS_SECRET_ROOT": str(secret_root),
+            "FAKE_TARGET_SOURCE_SHA": source_sha,
         }
     )
     return root, env, source_sha, digest, postgres_digest
@@ -537,6 +544,11 @@ def test_deploy_preflights_forwarder_authority_before_pin_mutation(tmp_path: Pat
     assert unit_preflight in lines
     assert lines.index(unit_preflight) < pull_index
     assert lines.index(restart) < pull_index
+    pin_state_indexes = [
+        index for index, line in enumerate(lines) if line == "systemctl pin-state=previous"
+    ]
+    assert len(pin_state_indexes) >= 2
+    assert pin_state_indexes[1] < pull_index
 
     rollback = subprocess.run(
         ["bash", "scripts/deploy_builderops.sh", "rollback"],
@@ -592,6 +604,8 @@ def test_deploy_fails_closed_when_forwarder_preflight_fails(tmp_path: Path) -> N
         env.update(overrides)
         if missing_binary:
             _path_without_systemctl(env, tmp_path / fixture_name / "path")
+        pin_path = root / "config/deploy/builderops.env"
+        before = pin_path.read_text(encoding="utf-8")
 
         result = subprocess.run(
             [
@@ -613,6 +627,50 @@ def test_deploy_fails_closed_when_forwarder_preflight_fails(tmp_path: Path) -> N
         assert " pull " not in events
         assert " up " not in events
         assert "curl " not in events
+        assert pin_path.read_text(encoding="utf-8") == before
+
+
+def test_rollback_fails_closed_when_forwarder_preflight_fails(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+
+    deploy = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert deploy.returncode == 0, deploy.stdout + deploy.stderr
+
+    pin_path = root / "config/deploy/builderops.env"
+    before = pin_path.read_text(encoding="utf-8")
+    event_count = len(Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8").splitlines())
+    env["FAKE_FORWARDER_UNIT_MISSING"] = "1"
+
+    rollback = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "rollback"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rollback.returncode == 1
+    assert "unit is not loaded" in rollback.stderr
+    assert pin_path.read_text(encoding="utf-8") == before
+    new_events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8").splitlines()[event_count:]
+    assert any(line.startswith("systemctl show ") for line in new_events)
+    assert not any(" pull " in line for line in new_events)
+    assert not any(" up " in line for line in new_events)
+    assert not any(line.startswith("curl ") for line in new_events)
 
 
 def test_deploy_refreshes_loopback_forwarder_after_api_recreate(tmp_path: Path) -> None:
