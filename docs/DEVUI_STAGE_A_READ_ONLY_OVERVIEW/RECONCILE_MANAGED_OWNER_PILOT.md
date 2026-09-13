@@ -1,6 +1,6 @@
 ---
 name: "Reconcile managed owner pilot"
-description: "#4749 still names the Product-associated 8113/18000 journey and legacy host prerequisites. The independent managed listener has different admitted boundaries. Its contract must be reconciled, not bypassed."
+description: "Reconcile the independent managed listener and later pilot with the earlier Product-associated 8113/18000 proof. The repaired contract preserves exact-candidate and distinct acknowledgement guarantees without borrowing legacy admission."
 task_id: ARO-09
 github_issue: 5504
 source_anchor: "docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/README.md :: ARO-09 — Managed runtime and pilot contract repair"
@@ -10,15 +10,15 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Filed as #5504 for bounded contract repair; repair not yet delivered. No runtime implementation or deployment is claimed.
-Doc role: Target-state task specification in an existing capability directory.
-Authority: Existing capability and owner documents govern the repair. This task defines work and verification, not the repaired action/data/runtime authority. Source disposition: #5399 comment 5648534770.
+State: Contract defined by #5504; managed source/browser implementation and live qualification/pilot remain gated.
+Doc role: Contract-repair task specification and source writeback pointer.
+Authority: The control-plane receipt owner and Stage A pilot specification below own the repaired contract. This task records the bounded repair; it grants no runtime or owner authority. Source disposition: #5399 comment 5648534770.
 
 # Reconcile managed owner pilot
 
 ## Purpose
 
-#4749 still names the Product-associated 8113/18000 journey and legacy host prerequisites. The independent managed listener has different admitted boundaries. Its contract must be reconciled, not bypassed.
+Reconcile the independent managed listener and later pilot with the earlier Product-associated 8113/18000 proof. The repaired contract preserves exact-candidate and distinct acknowledgement guarantees without borrowing legacy admission.
 
 ## What This Task Does
 
@@ -29,6 +29,16 @@ Authority: Existing capability and owner documents govern the repair. This task 
 - Reconcile #5181/#4749/#4748-at-candidate and their checked-in task specs; remove obsolete Product credential assumptions only when independent producers replace them. Preserve exact-candidate browser proof, no-effect read pilot and distinct operator/owner acknowledgements.
 - Separate pre-merge harness contracts (#5406/#5405) from post-merge VM, owner and second-repo evidence. Remove circular scheduling edges only with explicit retained parent acceptance obligations.
 - Apply the published M0–M5 milestone map to the concrete dependency graph and #5399 acceptance evidence. First-repository MLP never closes the full platform epic.
+
+## Contract writeback
+
+The [managed read journey](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
+names the finite target runtime/source topology and every producer/failure boundary. The
+[pilot Scope](RUN_READ_ONLY_OWNER_PILOT.md#scope) consumes that contract. The
+[dependency graph](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph) separates child-owned
+pre-merge work, true external implementation prerequisites and later operational/owner acceptance.
+Stage A/FCA task frontmatter, READMEs, parent pointers and index metadata follow the same order.
+No service, secret, deployment, live provider observation or owner acceptance is supplied here.
 
 ## Concretely
 
@@ -41,9 +51,9 @@ The complete owner journey depends on this finite seam. Delivering the module or
 
 ## Acceptance Criteria
 
-- [ ] One managed URL/admission/identity and source-topology contract replaces contradictory pilot paths, without activating any service. Verify: doc writeback at `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RUN_READ_ONLY_OWNER_PILOT.md :: Scope`
-- [ ] Exact candidate, source/receipt prerequisites, runtime identity and browser proof gates are mapped to their producing authority; external-provider, complete-system smoke and #4076 probe/drill gaps remain explicit. Verify: doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/README.md :: VM-102 evidence and receipt contract`
-- [ ] Pre-merge, deployment, read-only pilot and effectful owner acceptance are separate ordered stages; #5399 retains second-consumer and full-platform criteria. Verify: doc writeback at `docs/plans/DEVUI_IMPLEMENTATION.md :: Dependency graph`
+- [x] One managed URL/admission/identity and source-topology contract replaces contradictory pilot paths, without activating any service. Verify: doc writeback at `docs/DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RUN_READ_ONLY_OWNER_PILOT.md :: Scope`
+- [x] Exact candidate, source/receipt prerequisites, runtime identity and browser proof gates are mapped to their producing authority; external-provider, complete-system smoke and #4076 probe/drill gaps remain explicit. Verify: doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/README.md :: VM-102 evidence and receipt contract`
+- [x] Pre-merge, deployment, read-only pilot and effectful owner acceptance are separate ordered stages; #5399 retains second-consumer and full-platform criteria. Companion prerequisite frontmatter, README/task/parent metadata and index rows agree with that order. Verify: doc writeback at `docs/plans/DEVUI_IMPLEMENTATION.md :: Dependency graph`
 
 ## How to Verify (Pre-Merge)
 

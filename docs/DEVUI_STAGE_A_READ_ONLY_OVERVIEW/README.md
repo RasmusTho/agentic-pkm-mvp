@@ -2,17 +2,18 @@ State: Accepted target-state breakdown with blocked validation parent #4741; ARO
 its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route, ARO-05/#4746 and
 ARO-06/#4836 are delivered, ARO-07/#4748 is delivered with exact final-main evidence, and ARO-04 is
 superseded while ARO-08/#4749 remains blocked; Focus-route prerequisite #4768, source-owned Now producer #4834, and
-production transport #4841 are delivered.
+production transport #4841 are delivered. ARO-09/#5504 defines the managed runtime/pilot contract;
+the managed shell/source extension, deployment and owner pilot remain unproved.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
 Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents own intended behavior; source systems and receipts own facts; GitHub, Git, CI, and merged code own delivery truth.
-Last reviewed: 2026-08-30
-Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub
-state for #4741, #4742–#4749, #4768, #4786, #4834, #4835, #4836, #4838, #4841, and #4857, and
-merged PRs #4751, #4771, #4772, #4789, #4792, #4900, #4901, #5157, and #5200.
+Last reviewed: 2026-09-13
+Last verified against: `origin/main` `9d9cacff7c1ee04dd73eeb3c67bd1a8b485edae8`, managed
+listener/receipt producers, the dated #5181 component receipt and latest #4076 operator boundary.
+Historical #4836/#4748 proof retains its exact source/transport scope.
 
 # devUI Stage A Read-Only Overview
 
@@ -31,9 +32,14 @@ production acceptance remain separate authorities. ARO-07/#4748 is now proven at
 main `M=c7c57300f2ec241778061078e7ad585454f0b880`; ARO-08/#4749 still requires the independent VM-102
 deployment, promotion, production observation, and owner-evidence gates.
 
-#4841 supplies only the production loopback-published Companion transport for the existing two
-read APIs. #4836 consumes its exact admission and header-stripping boundary; it provides no
-page, asset, or visual destination.
+#4841 supplies the historical Companion two-GET transport; #4836 adds its pages/assets. The
+independent managed runtime is a different process at the same port and currently serves neither
+those pages nor Focus. Its remaining extension is governed by
+[Managed read journey admission](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
+
+Historical #4841/#4836 Companion transport bound `127.0.0.1:8113`. Port `18000` remains
+direct API diagnostics for that historical transport, never the independent managed browser origin.
+This provenance does not import the Companion/Product admission into the managed runtime.
 
 ## Complete Dev System placement boundary
 
@@ -97,7 +103,7 @@ changes none of the withdrawal conclusions for **Needs you** or **Ready to try**
 | 5 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence #4746 | Delivered and closed after exact constrained-reuse receipt | Merged stable #4834 source-owned Now fixtures plus delivered #4768 Focus API fixtures, with independently reviewed `yggdrasil-constrained-reuse.v1` receipt |
 | 6 | ARO-06 — Render the Read-Only Overview Shell | Delivered by merged #4836 | Accepted ARO-05 design evidence and merged ARO-03/04 |
 | 7 | ARO-07 — Prove Overview Browser and Accessibility States | Delivered and closed #4748 | Exact five-node #4833 artifact and `devui-stage-a-exact-sha-state-matrix.v1` receipt at final post-merge `main` `M` |
-| 8 | ARO-08 — Run the Read-Only Owner Pilot | `agent:blocked` | #4857 repaired contract, #4835 boolean-only prerequisite, a fresh #4748 exact-main receipt matching the current deployed `main` SHA `M`, VM-102 Dev System health/deploy receipts, applicable main-tracking deployment/operator evidence for `M`, receipt-sourced deployed URL/SHA, and conditional disposable-state classification when `pkm-test` is used; the historical `c7c57300f2ec241778061078e7ad585454f0b880` proof is valid only while `main` still equals it; separate owner evidence acknowledgement is pilot output |
+| 8 | ARO-08 — Run the Read-Only Owner Pilot | Separately gated #4749 | Merged ARO-09; delivered/admitted managed shell, Focus and required sources; fresh applicable #4748 proof for deployed `M`; exact VM102 qualification/deploy/health and operator/promotion receipts; observed URL/source/image/config agreement. Disposable-state classification is conditional on a `pkm-test` supplement. Separate owner evidence acknowledgement is pilot output. |
 
 No task is `agent:ready` at filing. The parent is a blocked validation hub and never becomes a
 pickup issue. #4748 is a completed proof receipt, while #4749 remains blocked on external runtime
@@ -105,17 +111,13 @@ authority and genuine acknowledgements.
 
 ### ARO-09 — Managed runtime and pilot contract repair
 
-[RECONCILE_MANAGED_OWNER_PILOT](RECONCILE_MANAGED_OWNER_PILOT.md), filed as
-[#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504), is the bounded contract-repair task under #4741. It must reconcile the managed Builder listener, source admission,
-exact candidate/browser proof and live #4749 path using existing runtime/release owners. It also
-names the producers and order of pre-merge, deployment, read-only pilot and later effectful
-acceptance evidence. It activates no service and changes none of ARO-08's present admission gates.
-
-The [2026-09-12 #5181 readback](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647963371)
-reports stopped/unqualified DevUI despite the active BuilderOps control plane, missing typed and
-external-provider evidence, and outstanding Linux probe/drill and live owner-pilot work. ARO-09
-must reconcile that evidence with the actual runtime/producer paths; neither a liveness response
-nor a repository browser artifact proves a qualified managed owner journey.
+[RECONCILE_MANAGED_OWNER_PILOT](RECONCILE_MANAGED_OWNER_PILOT.md) / #5504 defines the
+[managed origin, source and producer contract](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
+and the [ordered implementation/live-evidence stages](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph).
+It repairs ARO-08 without deploying it. Current startup needs readable local configuration; missing
+typed receipts withdraw readiness at read time. The older #5181 stopped-process observation does
+not redefine that code behavior. Complete topology, external SoI/model evidence and #4076's actual
+Heimdal/Platform operation remain separately owned gaps.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -136,14 +138,14 @@ nor a repository browser artifact proves a qualified managed owner journey.
   Exact shipped-pattern reuse requires an independently reviewed content-addressed
   `yggdrasil-constrained-reuse.v1` receipt with zero novel language; novel, mixed, unknown, or
   out-of-envelope work still requires the live Yggdrasil preflight and handoff receipt.
-- **ARO-INV-8 — production transport stays narrower than presentation.** #4836 consumes #4841's
-  `127.0.0.1:8113` loopback publish, local-Host/no-forwarded gateway admission, exact Overview/Focus
-  GET allowlist, stripped upstream request, and direct-loopback-or-server-derived API rule unchanged.
-  Port `18000` remains direct diagnostics and is not a browser page origin.
-- **ARO-INV-9 — contract repair precedes dependent execution.** ARO-09 specifies repair work;
-  publication alone cannot supersede ARO-08 admission or authenticate a different origin/candidate.
-  If a source/receipt producer is missing or fails, preserve the gap under #5181 and keep the live
-  pilot gated. The separate effectful first-repository milestone never widens this read-only pilot.
+- **ARO-INV-8 — exact managed transport.** The independent runtime consumes the finite
+  [managed read contract](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission),
+  including its direct-loopback/no-forwarded-identity boundary. Historical #4841 Companion
+  admission and #4836 provenance do not install that managed extension or authorize Product access.
+- **ARO-INV-9 — contracts, implementation and live proof differ.** ARO-09 defines the contract;
+  missing shell/source producers remain implementation work, then #5181 supplies operational
+  evidence and #4749 supplies a zero-effect pilot. Missing evidence withdraws claims. Effectful
+  first-repository acceptance remains separate and cannot widen this pilot.
 
 ## Capability acceptance
 
@@ -152,9 +154,9 @@ nor a repository browser artifact proves a qualified managed owner journey.
       serialized, linked, fresh enough, and never inferred.
 - [ ] The local Overview endpoint is GET-only, local-admission constrained, projection-only, and
       preserves the delivered composer contract.
-- [ ] The production shell uses #4841's exact read-only Companion transport at `127.0.0.1:8113`;
-      it never treats port `18000` as a browser page, forwards identity or credentials, adds a
-      wildcard/write route, or infers loopback from the Docker peer.
+- [ ] The managed shell uses the independently admitted origin, finite GET/assets/Focus allowlist
+      and exact candidate identity. It never borrows Product/Companion authority, forwards identity
+      or credentials, adds a wildcard/write route, or infers loopback from a Docker peer.
 - [ ] Every typed navigation reference resolves to an actual admitted local destination or remains
       explicitly unavailable/unsupported; no dead or synthetic link is rendered.
 - [ ] The governed design evidence and shell cover desktop, narrow, 200% zoom, keyboard, screen-reader,
@@ -164,8 +166,8 @@ nor a repository browser artifact proves a qualified managed owner journey.
       durable acceptance, or dependency on opening standalone subsystem UIs. It runs only on the
       receipt-sourced Bob-1/VM-ID-102 Dev System deployment (`builder-system`) and its governed external read
       dependencies; Product Runtime projects, vaults, and lifecycle are not VM-102 deployment evidence,
-      proves the deployed SHA across CI/review/deploy receipt, `/version`, `/api/health.version`,
-      and gateway marker, and always records the deployed Overview → server-supplied Focus → return
+      proves source/image/config equality across CI/review/deploy/health evidence, managed `/version`,
+      served shell/assets and applicable exact-main browser proof, and always records the deployed Overview → server-supplied Focus → return
       journey with zero effects/errors/storage/unauthorized writes and durable evidence. If a
       `pkm-test` supplement is used, it additionally records the disposable-state matrix; the
       production-only path does not create test state.

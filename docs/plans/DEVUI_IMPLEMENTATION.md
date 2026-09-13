@@ -1,4 +1,4 @@
-State: Target-state implementation plan; current/target boundary reviewed 2026-09-12. Read-only
+State: Target-state implementation plan; current/target boundary reviewed 2026-09-13. Read-only
 composers, local Overview/Focus routes, the connected Companion repository shell, LLM-assisted
 synthesis, and the bounded managed DevUI listener/receipt producers are delivered. Source admission,
 managed DevUI deployment, richer Focus/conversation/actions, whole BSC lens and actual owner
@@ -117,7 +117,7 @@ those stages; they do not replace any source, action, design, deployment or acce
 
 | Milestone | Owner outcome | Evidence boundary |
 | --- | --- | --- |
-| M0 — executable contracts | The first action, owner outcome and managed pilot have coherent owning contracts | Deliver the three bounded contract-repair specifications linked below; publication of a task is not its contract repair |
+| M0 — executable contracts | The first action, owner outcome and managed pilot have coherent owning contracts | The three bounded contract repairs #5502/#5503/#5504 define the accepted implementation direction; source publication supplies no runtime admission or owner evidence |
 | M1 — useful read journey | Real sources support Overview → Focus, including feature intent and architecture requirements | Admitted sources, served exact candidate, matching browser proof and the separate read-only #4749 pilot |
 | M2 — first-repository owner loop | The owner directs one real feature delivery and judges its result | Exact action approval, selected existing workflow, result/readback, actual candidate trial and explicit accept/reject; [FCA milestone](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone) |
 | M3 — broader owner control | Separate Builder System Control and named Product/Runtime SoI lenses become useful | Real bounded sources, governed design, independent root identity and previews to existing workflows |
@@ -134,9 +134,9 @@ The first contract tasks are [bounded action admission](../BUILDER_FACTORY_ACCEP
 [managed runtime/pilot reconciliation](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md).
 The [bounded action contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
 now separates the inquiry seam from DDO-specific #4169. Its runtime admission, destination
-reservation/readback and activation remain undelivered. The other repair tasks and dependent live
-Issue reconciliation remain prerequisites before later implementation uses their boundaries; this
-milestone map does not make #4697, #5404 or #4749 ready.
+reservation/readback and activation remain undelivered. The outcome and managed-pilot contracts are also defined; source-backed dependent Issue
+maintenance follows their merge. Live readiness still depends on each exact Issue, its consumed
+production seams and current claims; this milestone table does not grant runtime admission.
 
 ### Stage A — see: coherent read-only devUI
 
@@ -338,16 +338,45 @@ its replacement has a verified receipt.
 
 ## Dependency graph
 
+The ordering below separates contracts, repository work and real observations. #5181 and #5399
+are acceptance hubs; their live completion is not required to implement the harnesses that will
+collect their evidence. The [managed receipt owner](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract)
+defines the exact topology, candidate, source and operational boundaries.
+
+| Stage | Required external input | Work/evidence owned here | Next gate and retained obligation |
+| --- | --- | --- | --- |
+| M0 contract foundation | Accepted owner sources | #5502 action, #5503 outcome, #5504 runtime/pilot reconciliation | Bounded implementation can be extracted from the merged contracts; no runtime activation. |
+| Pre-merge managed read/source implementation | ARO-09 finite transport/asset contract and applicable #4746 design/reuse authority | Managed shell/assets/Focus and required work/GitHub/document adapters, actual production-path admission/withdrawal/identity and browser tests | #4836 reuse is an input, not managed deployment. Missing required source wiring is this slice's work, not a self-dependency. |
+| Pre-merge action/outcome implementation | FCA-08/FCA-09 contracts and each selected external destination's support | #4697 first inquiry adapter; separately admitted Issue-delivery operation; #5404's four producers and outcome transport after its selected operation's admission/readback exists | Inquiry cannot perform a feature delivery. Missing external admission/readback still blocks a consumer; its own producer work does not. |
+| Pre-merge #5405 / #5406 | Delivered consumed production seams; #5406 also consumes FCA-05 outcomes and applicable synthesis/design | Conformance/composed harness, validators and explicit pilot plans; finite missing/stale/unknown-effect tests | No live #5181/#4749 or second-consumer/owner observation needed before child merge. Missing consumed seams remain explicit pickup blockers. |
+| Candidate and deployment | Current-head CI/review, applicable exact-candidate browser proof, operator/promotion acknowledgement, qualified host/source boundaries | #5181 inventory → activation + prepared qualification → immutable deployment → complete health/read smoke; source-owned external SoI/model evidence | Repository producers and component liveness cannot fabricate these observations. #4076 remains its actual selected TEST-channel Heimdal/Platform operation; a Builder probe is not implicitly authorized. |
+| M1 read-only owner pilot | Admitted managed shell/sources, fresh applicable #4748 proof at deployed final-main `M`, exact source/image/config and complete deploy/health chain | #4749 Overview → server-supplied Focus → fresh Overview, independent browser/production digests and zero-effect owner acknowledgement | Deployment authorization, pilot acknowledgement and later owner trial/acceptance are distinct. #4741 closes only on its own complete evidence. |
+| M2 first-repository feature loop | Separately approved Issue-delivery operation with actual destination/readback/recovery; source-linked intent/ACs and candidate profile | One real feature through planning, approved action, implementation, tests, PR/CI/review/merge, candidate trial and explicit accept/reject | Intermediate #5399 milestone. Neither an inquiry nor a read-only pilot proves it. |
+| M3 broader lenses | Each required source/design/operation admitted | BSC and Product/Runtime SoI views retain independent roots | Optional missing context remains unavailable; no Product authority transfer. |
+| M4 standalone platform | Complete VM102 and API-only/no-fallback authority qualification, second consumer's explicit repo/branch/effects and credentials | Real second-consumer result/readback using #5405 procedure plus all #5399 platform/owner acceptance evidence using #5406 | First-repository MLP never closes #5399; all second-consumer, independence, health, stop/recovery and owner criteria remain. |
+| M5 workflow autonomy | Per-workflow permissions, interruption/recovery and demotion proof | Only the selected workflow's admitted additional responsibility | No global autonomy or universal unattended authority. |
+
 ```mermaid
-flowchart LR
-  A["A · See<br/>read-only cockpit"] --> A2["A2 · Focus + Conversation<br/>subject read · external reasoning · inquiry preview"]
-  A2 --> B["B · Decide and act<br/>general contextual command"]
-  B --> C["C · Verify<br/>receipt, try, reassess"]
-  D["Governed design handoff<br/>visual acceptance only"] --> A2
-  I["Existing artifact-first<br/>Start Model Inquiry"] --> A2
-  A2 -. separate follow-up .-> S["Builder System Control<br/>meta-governance lens"]
-  M["Internal mechanism gates<br/>#3603 · #4168 · #4169 · #3604 · #4217 · #4466 · #3793 · #4170"] --> B
+flowchart TD
+  M0["M0 · accepted contracts"] --> R["Managed read/source implementation"]
+  M0 --> A["Selected action and outcome implementation"]
+  R --> H["Pre-merge #5405/#5406 harnesses and procedures"]
+  A --> H
+  R --> D["#5181 · exact candidate qualification/deploy/health"]
+  D --> P["M1 · #4749 zero-effect read pilot"]
+  P --> F["M2 · real first-repository feature and owner outcome"]
+  A --> F
+  H --> Q["M4 · full #5399 acceptance and real second consumer"]
+  F --> Q
+  D --> Q
+  F --> L["M3 · separately admitted broader lenses"]
+  Q --> U["M5 · workflow-specific autonomy"]
 ```
+
+There is no #5405/#5406 → live evidence → same child pickup cycle. There is also no waiver of
+complete-system health or owner acceptance: an incomplete live plan stays incomplete on its parent.
+The read-only pilot never launches actions or writes trial/acceptance facts. Each independently
+governed action and deployment keeps its own operator/owner acknowledgement and effect boundary.
 
 ## Definition of done
 

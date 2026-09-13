@@ -2,14 +2,14 @@ State: Active blocked validation hub #4741; ARO-01 is closed with its withdrawal
 is closed/superseded, ARO-03/#4744 is closed and delivered, ARO-04/#4745 and ARO-06/#4747 are
 closed as superseded by #4836, ARO-05/#4746 is closed after its accepted constrained-reuse receipt,
 ARO-07/#4748 is closed after exact final-main proof, and ARO-08/#4749 remains blocked. Recovery
-children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 is filed for the later managed runtime/pilot contract repair; no pilot admission changes follow from filing.
+children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 defines the managed contract; required source/shell delivery and live pilot gates remain open.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
 Owner: Builder System governance
 Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
-Last reviewed: 2026-08-30
+Last reviewed: 2026-09-13
 Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3` and live GitHub
 state for #4741–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857; the delivery
 ledger below records the exact PR heads, merge commits, and proof receipt it cites.
@@ -81,18 +81,20 @@ it supplies neither a page nor a visual destination.
   receipt from #4746: either `yggdrasil-constrained-reuse.v1` or
   `yggdrasil-design-handoff.v1`. Exact shipped reuse does not run or claim the live system/token
   preflight; any novel, mixed, unknown, extension, or out-of-envelope delta must pass it.
-- #4836 must consume #4841's `127.0.0.1:8113` host publish, local-Host/no-forwarded admission,
-  exact two-GET/header-stripping contract, and direct-loopback-or-server-derived Companion API
-  admission unchanged. Port `18000` remains direct diagnostics, never a browser page origin.
-- No technical label/state, provider metadata, or terminal delivery fact substitutes for explicit
+- Historical #4836/#4841 Companion evidence remains exact to its transport. The independent
+  managed route consumes [ARO-09 admission](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
+  and cannot borrow Product credentials or `/api/health.version` identity.
+- No technical label/state, provider metadata or terminal delivery fact substitutes for explicit
   canonical category or receipt-backed `ready_to_try` evidence.
-- ARO-08 remains serially blocked after #4748 until the repaired #4857 source contract, the fresh
-  exact-main #4748 proof matching current deployed `main`, the boolean-only #4835 prerequisite,
-  Demerzel authentication/access, #4836 server-supplied Focus selectors, receipt-sourced deployed
-  URL/SHA, and applicable main-tracking deployment/operator evidence are all available. If the
-  pilot uses a `pkm-test` supplement, its disposable-state classification is also required; the
-  production-only path has no supplemental-state prerequisite. It never invents a URL or deployed
-  SHA, and no parent label or closed historical receipt removes these blockers.
+- ARO-08/#4749 is gated on its delivered/admitted managed shell/Focus/sources, fresh applicable
+  exact-main #4748 proof, complete VM102 qualification/deployment/health and operator/promotion
+  evidence, and observed URL/source/image/config agreement. The pilot owns the zero-effect owner
+  walkthrough and separate acknowledgement. A disposable-state receipt is needed only for an
+  explicitly used `pkm-test` supplement. A closed historical proof cannot satisfy a changed candidate.
+
+Historical #4841/#4836 Companion transport bound `127.0.0.1:8113`. Port `18000` remains
+direct API diagnostics for that historical transport, never the independent managed browser origin.
+This provenance does not import the Companion/Product admission into the managed runtime.
 
 ## Acceptance Criteria
 
@@ -111,7 +113,7 @@ it supplies neither a page nor a visual destination.
   - Verify: `tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free`
 - [ ] The owner pilot records exact SHA, source conditions, answers, reconstruction steps, and a
       pass/fail disposition for all three zones; it proves the receipt-sourced deployed SHA across
-      CI/review/deploy receipt, `/version`, `/api/health.version`, and gateway marker, and always
+      CI/review/deploy/health evidence, managed `/version`, served shell/assets and applicable browser proof, and always
       runs the deployed Overview → server-supplied Focus → return Playwright journey with zero
       effects, errors, storage, or unauthorized writes. If a `pkm-test` supplement is used, it
       additionally records its disposable-state matrix and durable trace/screenshot/checksum/
@@ -163,8 +165,8 @@ it supplies neither a page nor a visual destination.
 | ARO-05 — Validate Connected Overview and Focus Yggdrasil Evidence | [#4746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4746) | closed / accepted constrained reuse | Accepted exact `yggdrasil-constrained-reuse.v1` evidence for the merged #4836 candidate |
 | ARO-06 — Render Read-Only Overview Shell | [#4747](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4747) | closed / superseded | Delivered through the canonical connected shell #4836 / PR #5157; no separate successor is required |
 | ARO-07 — Prove Browser and Accessibility | [#4748](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4748) | closed / exact-main proof | Authenticated #4833 exact five-node receipt at final post-merge `main` `M=c7c57300f2ec241778061078e7ad585454f0b880` |
-| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | `agent:blocked` | serially after #4748 and #4857: boolean-only #4835 prerequisite, Demerzel prod access, applicable main-tracking deployment/operator evidence for current deployed `M` with a matching fresh #4748 exact-main proof, receipt-sourced deployed URL/SHA, and conditional disposable-state classification; the historical `c7c57300f2ec241778061078e7ad585454f0b880` proof is valid only while `main` still equals it, and owner evidence acknowledgement is pilot output |
-| [ARO-09 — Reconcile Managed Owner Pilot](RECONCILE_MANAGED_OWNER_PILOT.md) | [#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504) | Filed contract repair; live readiness on GitHub | Reconcile the later independent-listener/source/candidate contract; retain ARO-08 admission until that repair is delivered |
+| ARO-08 — Run Read-Only Owner Pilot | [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) | Separately gated live pilot | Delivered/admitted managed shell/Focus/required sources, fresh applicable #4748 proof at deployed `M`, exact VM102 qualification/deploy/health and operator evidence, and observed URL/source/image/config identity; conditional disposable-state receipt only when used. Owner acknowledgement is pilot output. |
+| [ARO-09 — Reconcile Managed Owner Pilot](RECONCILE_MANAGED_OWNER_PILOT.md) | [#5504](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5504) | Contract defined | Managed origin/source/producer and ordered evidence contract; no runtime or owner acceptance. |
 
 <!-- builderops:epic-delivery-ledger v1 epic=#4741 -->
 Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
@@ -178,7 +180,7 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 | #4746 ARO-05 | closed / accepted constrained reuse | #5157 / #4746 receipt | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | accepted `yggdrasil-constrained-reuse.v1` receipt | design/provenance gate complete | preserve the accepted receipt; #4748 remains a separate final-main proof |
 | #4747 ARO-06 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged shell receipt | shell delivered in the canonical connected path | preserve the closed predecessor as superseded history |
 | #4748 ARO-07 | closed / exact-main proof | #4833 receipt; closure comment on #4748 | final `M=c7c57300f2ec241778061078e7ad585454f0b880`; #4833 run `33304261671` | authenticated exact five-node `devui-stage-a-exact-sha-state-matrix.v1` receipt | browser/accessibility proof complete; no deployment claim | preserve proof-only boundary; #4749 owns production pilot |
-| #4749 ARO-08 | open / blocked | none | no pilot run | awaiting #4857, boolean-only #4835 prerequisite, deployment identity, and applicable main-tracking deployment/operator evidence for current deployed `M` with a matching fresh #4748 proof | run production-only or conditionally supplemented pilot only after every applicable receipt; owner evidence acknowledgement is produced on PASS; POST-PASS current-state writeback is separate |
+| #4749 ARO-08 | open / separately gated | none | no managed pilot run | not run | Required managed source/shell implementation, applicable exact-M browser and VM102 deployment/health/operator evidence | Run the zero-effect pilot only after its named receipts; owner acknowledgement and post-PASS writeback are separate. |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
@@ -192,6 +194,10 @@ URL/SHA only from shell/browser/deployment receipts and records
 every required identity/effect proof in the structured owner-pilot ledger.
 Before #4836 pickup, re-read merged #4841 and bind its current transport regression evidence;
 #4833 verifies the published #4836 candidate at its exact ref before merge.
+
+The managed extension must preserve those five historical browser obligations and separately
+prove its actual process/origin/admission and asset identity per ARO-07. #5504 repairs the source
+contract only; #4741 remains open for the runtime and owner evidence.
 
 ## Validation / Acceptance Path
 
