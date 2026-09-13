@@ -691,9 +691,9 @@ generic `POST /v1/records`, `records:write` permission and
 `GET /v1/receipts/{object_kind}/{object_id}` read primitive alone do not admit owner outcomes.
 They do not yet supply the owner confirmation, binding validation or ordered outcome lookup below.
 
-An authorized client may submit an exact outcome only after explicit human confirmation of its
-complete payload. The service authenticates the submitting principal, checks the addressed
-repository/subject and current permission/revocation/authority epoch, and resolves the owner actor
+An authorized client may submit an exact outcome only after explicit human confirmation of the
+complete immutable request defined below. The service authenticates the submitting principal,
+checks the addressed repository/subject and current permission/revocation/authority epoch, and resolves the owner actor
 from that confirmation authority, never from a caller-supplied `actor_type: human`. Its receipt
 binds the confirmation identifier and payload hash to that human and permitted fact kind. An agent
 may prepare a proposal or transport a confirmed submission; an agent credential, broad
@@ -704,12 +704,29 @@ admission stay in their existing authority owners.
 
 **Required payload.** The existing `BuilderOpsReceipt` envelope remains mandatory, including
 `actor`, `created_by`, `occurred_at`, `source_refs`, `target_refs` and `idempotency_key`.
-`receipt_body.contract` is exactly `builder_owner_outcome.v1`; no new top-level object type is
+`receipt_body` has exactly `contract`, `request`, `request_sha256`, `confirmation_ref` and
+`recorded_at`. `contract` is `builder_owner_outcome.v1`; no new top-level object type is
 introduced. `event_type` is `owner_outcome_recorded` or `owner_outcome_corrected`; `action` is
 `record_owner_trial` or `record_owner_acceptance` consistently with `fact_kind`. Envelope `outcome`
 records technical commit success, while payload `outcome` alone records the human outcome.
-Its closed payload contains the following fields; unknown fields or missing required
-bindings are refused before any outcome write.
+The owner confirms `request`, whose complete closed field set is the table below. Unknown fields
+or missing required bindings are refused before any outcome write. `request_sha256` hashes the
+UTF-8 bytes of `builder_owner_outcome.v1`, one zero byte, then canonical JSON of `request`:
+`json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`. Requests admit
+objects, arrays, strings, integers and null only (no floats), with duplicate object keys rejected
+and array order retained. Canonicalization precedes owner confirmation, never changes it afterward.
+The contract tag and every decision, binding, actor, time and predecessor field below are covered;
+neither the request hash itself nor server-generated metadata is an input to its own hash.
+
+The authenticated confirmation owner generates `confirmation_ref` containing its identifier,
+`request_sha256`, confirmed human principal, `confirmed_at` and permission-authority reference.
+The service verifies those values against the request and current authority; the caller cannot
+manufacture that confirmation. Server-owned `recorded_at`, receipt id/hash/sequence, envelope
+commit timestamps/`created_by`, and the derived `binding_hash` are generated after confirmation
+and are excluded from the confirmed request. None may change a confirmed request field.
+The receipt preserves the exact request, its hash and original confirmation reference. Its own
+integrity hash follows the existing receipt owner's rules, separately from the human-confirmed
+request hash.
 
 | Fields | Required meaning |
 | --- | --- |
@@ -718,8 +735,8 @@ bindings are refused before any outcome write.
 | `candidate_ref` | Exact source commit, deployed image digest(s) and non-secret configuration identity/hash from the candidate owner. Each component has its identity; an absent image is explicitly not applicable only when the addressed source contract allows a non-image candidate. |
 | `environment_ref`, `readiness_receipt_ref` | Source-owned environment identity and exact readiness receipt identifier, immutable revision/hash and source owner. The receipt must address this candidate/environment and acceptance scope. Health, freshness and limitations are re-read; deployment or image presence alone is insufficient. |
 | `acceptance_profile_ref`, `criterion_refs` | Immutable profile identifier/version/hash and exact AC identifiers plus their content/version hash. A profile belongs to this subject/repository. An `accepted` decision covers every required criterion in that profile; a `rejected` decision names the rejected criterion(s). A subset cannot assert whole-profile acceptance. |
-| `owner_actor`, `authorization_ref` | Minimal opaque human ActorRef bound by the service to its authenticated confirmation; non-secret permission/confirmation references, versions, payload hash and authority epoch. `actor` is that human; `created_by` identifies the authenticated submitting client/service separately. No token, email, transcript or credential material is retained. |
-| `observed_at`, `decided_at`, `recorded_at` | Owner-confirmed observation time for trials, decision time for decisions (the other field is explicitly null), and server commit time, all RFC 3339. Confirmed event time cannot be after commit time. Time does not select a winning decision or manufacture freshness. |
+| `owner_actor`, `authorization_ref` | Minimal opaque human ActorRef, plus non-secret permission reference/version and authority epoch, matched by the service to the authenticated confirmation. Envelope `actor` is that human; server-owned `created_by` separately identifies the authenticated submitting client/service. No token, email, transcript or credential material is retained. |
+| `observed_at`, `decided_at` | Owner-confirmed observation time for trials or decision time for decisions; the other field is explicitly null. Both use RFC 3339 and cannot be after the authenticated `confirmed_at`, which cannot be after server commit `recorded_at`. Time does not select a winning decision or manufacture freshness. |
 | `observation`, `limitation_refs` | For a trial, a bounded list of profile criterion refs with `observed` or `not_observed` and source-owned limitation refs; no free text. `unable_to_try` requires a limitation ref and no claimed observed trial. For acceptance, `observation` is null; current material limitations and the decision's exact criterion scope remain explicit. References bind source revisions and are subject to the owning source's access policy. |
 | `trial_receipt_ref` | Null for a trial. An `accepted` decision requires the current `tried` receipt for the same full candidate/environment/readiness/profile/owner binding. A rejection may reference that trial or explicitly use null; rejection without a trial never creates one. |
 | `expected_previous_receipt_id`, `supersedes_receipt_id`, `correction_reason` | Initial submission: all null. Correction: both identifiers name the same current receipt for this exact fact kind and binding; reason is `owner_correction`. A new explicit confirmation is required. Corrections append; old receipts remain immutable. |
@@ -752,8 +769,10 @@ authority store is introduced. The writer compares
 current selection, idempotent response and any existing outbox projection intent. There is no
 success acknowledgement before commit and no projection work inside the authority transaction.
 
-- Equal operation/key and confirmed payload hash return the original committed receipt and result;
-  a changed payload under that key returns `idempotency_conflict`, with no new outcome. Authenticate
+- Equal repository/operation/key and immutable `request_sha256` return the original committed
+  receipt and result, including its original confirmation reference and server metadata; replay
+  does not regenerate commit time or compare a fresh receipt hash with the request hash.
+  A changed request under that key returns `idempotency_conflict`, with no new outcome. Authenticate
   read permission before revealing replay data. Revoked write permission never authorizes a new
   effect; a permitted read may still recover historical evidence.
 - Two different keys with the same expected predecessor cannot both advance the slot, even if the

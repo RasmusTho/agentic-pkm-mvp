@@ -43,7 +43,7 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The production writer in the existing BuilderOps service authenticates the confirmed human actor, repository/subject and finite FCA-09 payload, checks current permission/epoch and source versions, and commits guarded receipt selection, idempotency result and projection intent atomically. Generic agent write permission and caller-supplied human identity refuse without an outcome.
+- [ ] The production writer in the existing BuilderOps service authenticates the confirmed human actor, repository/subject and finite FCA-09 payload, checks current permission/epoch and source versions, and commits guarded receipt selection, idempotency result and projection intent atomically. Generic agent write permission and caller-supplied human identity refuse without an outcome. An owner request confirmed at T1 retains the same request hash when the server commits at T2; recorded time and confirmation/receipt metadata are outside that immutable request, and replay returns the original receipt.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_production_writer_is_authorized_version_bound_and_idempotent`
 - [ ] Equal-key/equal-payload replay returns the original receipt; changed payload under the same key returns `idempotency_conflict`. Two different-key initial submissions (`accepted` versus `rejected`, or equal outcomes) against the same predecessor yield one commit and one `current_receipt_conflict`, never two current decisions. A correction requires new explicit owner confirmation of the current predecessor.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_conflicting_submissions_require_explicit_correction`
