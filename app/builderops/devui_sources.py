@@ -141,20 +141,20 @@ def _reference(row: dict[str, Any], *, repository: str) -> dict[str, Any]:
     return envelope
 
 
-def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any]:
+def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
     _reference(row, repository=repository)
     payload = row.get("payload")
     if (
         row.get("repository") != repository
         or not isinstance(payload, dict)
-        or payload.get("repo") != repository
+        or ("repo" in payload and payload["repo"] != repository)
     ):
         raise SourceReadRefusal("task_scope_mismatch")
     task_id = row.get("task_id")
     if (
         not isinstance(task_id, str)
         or _ID.fullmatch(task_id) is None
-        or payload.get("task_id") != task_id
+        or ("task_id" in payload and payload["task_id"] != task_id)
     ):
         raise SourceReadRefusal("task_identity_invalid")
     if (
@@ -163,9 +163,27 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any]:
         or parse_timestamp(row.get("updated_at")) is None
     ):
         raise SourceReadRefusal("task_version_invalid")
+    if not isinstance(row.get("state"), str):
+        raise SourceReadRefusal("task_state_invalid")
+    lease = row.get("lease")
+    if lease is not None and (
+        not isinstance(lease, dict)
+        or lease.get("repository") != repository
+        or lease.get("resource_id") != task_id
+        or not isinstance(lease.get("holder"), str)
+        or type(lease.get("fencing_token")) is not int
+        or lease["fencing_token"] < 1
+        or parse_timestamp(lease.get("expires_at")) is None
+    ):
+        raise SourceReadRefusal("task_lease_mismatch")
+    # The API also stores generic CLI tasks and native verification documents.
+    # Neither supplies the GitHub-Issue subject required by the existing Now
+    # adapter. Keep their addressed observations explicit without guessing an
+    # issue/title or treating them as malformed Cockpit task records.
+    if not {"repo", "task_id", "issue_number", "title"}.issubset(payload):
+        return None
     if (
         (payload.get("status") is not None and payload["status"] != row.get("state"))
-        or not isinstance(row.get("state"), str)
         or type(payload.get("issue_number")) is not int
         or payload["issue_number"] <= 0
         or not isinstance(payload.get("title"), str)
@@ -192,18 +210,11 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any]:
         if key in payload
     }
     result["updated_at"], result["status"] = row["updated_at"], row["state"]
-    lease = row.get("lease")
+    # TaskRecord.to_dict carries a mapping; the existing Cockpit seam expects
+    # the equivalent database JSON representation, with the same source fields.
+    if isinstance(result.get("sync_state"), dict):
+        result["sync_state"] = json.dumps(result["sync_state"])
     if lease is not None:
-        if (
-            not isinstance(lease, dict)
-            or lease.get("repository") != repository
-            or lease.get("resource_id") != task_id
-            or not isinstance(lease.get("holder"), str)
-            or type(lease.get("fencing_token")) is not int
-            or lease["fencing_token"] < 1
-            or parse_timestamp(lease.get("expires_at")) is None
-        ):
-            raise SourceReadRefusal("task_lease_mismatch")
         result.update(claimed_by=lease["holder"], lease_expires_at=lease["expires_at"])
     return result
 
@@ -242,11 +253,14 @@ def _api_reads(
         "authority_epoch": config.authority_epoch,
         "outcome": "unavailable",
         "source_refs": [],
+        "projection_scope": "source-explicit-github-issue-tasks",
+        "unprojected_task_refs": [],
     }
     receipts: dict[str, Any] = {**work, "source_refs": []}
     transports["dispatcher-store"], transports["verification-runs"] = work, receipts
     tasks = None
     read_at = None
+    api_read_complete = False
     try:
         if (
             not repo
@@ -270,8 +284,8 @@ def _api_reads(
             seen: set[str] = set()
             receipt_reads = 0
             for listed in rows:
-                item = _task(listed, repository=repo)
-                task_id = item["task_id"]
+                _task(listed, repository=repo)
+                task_id = listed["task_id"]
                 if task_id in seen:
                     raise SourceReadRefusal("duplicate_task")
                 seen.add(task_id)
@@ -279,10 +293,12 @@ def _api_reads(
                 item = _task(row, repository=repo)
                 if row["version"] != listed["version"] or row["payload"] != listed["payload"]:
                     raise SourceReadRefusal("task_snapshot_changed")
-                current.append(item)
-                work["source_refs"].append(
-                    f"/v1/tasks/{task_id}?repository={repo}#version={row['version']}"
-                )
+                reference = f"/v1/tasks/{task_id}?repository={repo}#version={row['version']}"
+                work["source_refs"].append(reference)
+                if item is None:
+                    work["unprojected_task_refs"].append(reference)
+                else:
+                    current.append(item)
                 for reference in _reference(row, repository=repo).get("source_refs", []):
                     address = _receipt_address(reference, repo)
                     if address is None:
@@ -307,12 +323,17 @@ def _api_reads(
                         receipts["outcome"] = "partial"
             if client.status().get("authority_epoch") != config.authority_epoch:
                 raise StaleLeaseError("source epoch changed")
-            tasks, read_at = current, _now()
+            api_read_complete, read_at = True, _now()
+            work["read_at"] = read_at
+            # A fully read but unprojectable collection is an unknown work
+            # view, never a complete empty set. Mixed collections retain only
+            # the source-explicit Issue facts and name their partial scope.
+            tasks = current if current or not rows else None
             work["source_refs"].append(
                 f"builderops-api:{repo}@epoch={config.authority_epoch}#sha256="
                 + hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
             )
-            work["outcome"] = "available"
+            work["outcome"] = "partial" if work["unprojected_task_refs"] else "available"
             if receipts["outcome"] != "partial" and receipts["source_refs"]:
                 receipts["outcome"] = "available"
     except (ControlPlaneAuthError, ControlPlaneScopeError):
@@ -335,13 +356,13 @@ def _api_reads(
         work["code"] = code
     except Exception:
         work["outcome"] = "unavailable"
-    if tasks is None:
+    if not api_read_complete:
         receipts["outcome"], receipts["source_refs"] = "unavailable", []
     sources.add(
         _SourceRead(
             "dispatcher-store",
             "fresh" if tasks is not None else "unavailable",
-            read_at,
+            read_at if tasks is not None else None,
             "BuilderOps API task read",
             configured=True,
         )
@@ -375,7 +396,7 @@ def _candidate_docs(
     actual = {
         str(p.relative_to(root))
         for p in root.rglob("*")
-        if p.is_file() and p.name != "manifest.json"
+        if p.is_file() and p != root / "manifest.json"
     }
     if actual != set(files):
         raise SourceReadRefusal("candidate_files_mismatch")
@@ -508,7 +529,7 @@ def package_candidate(
     files = {
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(root.rglob("*"))
-        if p.is_file() and p.name != "manifest.json"
+        if p.is_file() and p != root / "manifest.json"
     }
     if capabilities not in files or matrix not in files or not files:
         raise SourceConfigurationError("candidate inputs missing")

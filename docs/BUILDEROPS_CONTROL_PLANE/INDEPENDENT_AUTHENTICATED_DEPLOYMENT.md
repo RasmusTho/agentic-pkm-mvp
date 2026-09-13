@@ -119,6 +119,10 @@ The image build now requires `SOURCE_REPOSITORY` alongside `VCS_REF`. The existi
 supplies both from its addressed GitHub candidate; `devui_sources.package_candidate` rejects missing
 identity or required document inputs. The immutable image contains the candidate docs/capability
 YAML/matrix and their hashes, plus `gh`, `httpx` and PyYAML in the Builder dependency closure.
+`Dockerfile.builderops.dockerignore` admits that Builder-only closure through the actual Docker
+context; the `devui-source-inputs` build stage permits a filtered-input export without booting a
+service. Packaged document and capability paths retain their repository-relative identities, so
+every emitted candidate URL resolves to the original source file.
 Runtime document reads are limited to that baked directory and verify its exact file set and
 content at every request; there is no operator-selected document root or store fallback. These
 configuration/packaging and real-GET fixture proofs establish repository wiring only.

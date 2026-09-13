@@ -99,7 +99,7 @@ def test_managed_configuration_keeps_listener_private() -> None:
 # These transports reach the production route, client, service authentication,
 # gh subprocess reader and candidate-doc reader. Only source storage is a fixture.
 @pytest.fixture
-def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     import copy
     import hashlib
     import socket
@@ -112,6 +112,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.builderops import devui_runtime
     from app.builderops.control_plane.auth import CredentialRegistry
     from app.builderops.control_plane.service import create_app as create_service
+    from app.builderops.control_plane.store import PostgresBuilderOpsStore
+    from app.dispatcher.models import TaskRecord
 
     repo = "example/fixture"
     stamp = datetime.now(timezone.utc).isoformat()
@@ -124,27 +126,33 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "source_refs": [source_ref],
         "schema_version": 1,
     }
-    task = {
-        "repository": repo,
-        "task_id": "task-1",
-        "state": "ready",
-        "version": 1,
-        "updated_at": stamp,
-        "authority_envelope": envelope,
-        "lease": None,
-        "payload": {
-            "task_id": "task-1",
-            "repo": repo,
-            "issue_number": 501,
-            "title": "Fixture work",
-            "status": "ready",
-            "priority": "high",
-            "created_at": stamp,
-            "updated_at": stamp,
-            "private": "fixture-secret-never-export",
-        },
-    }
-    state = SimpleNamespace(mode="ok", epoch=7, calls=[], tasks=[task])
+    task_payload = TaskRecord(
+        task_id="task-1",
+        repo=repo,
+        issue_number=501,
+        title="Fixture work",
+        status="ready",
+        priority="high",
+        source_anchor_refs=[],
+        created_at=stamp,
+        updated_at=stamp,
+        sync_state={"labels": []},
+    ).to_dict()
+    task_payload["private"] = "fixture-secret-never-export"
+    task = dict(
+        PostgresBuilderOpsStore._task_snapshot(
+            {
+                "repository": repo,
+                "task_id": "task-1",
+                "state": "ready",
+                "version": 1,
+                "updated_at": stamp,
+                "authority_envelope": envelope,
+                "payload": task_payload,
+            }
+        )
+    )
+    state = SimpleNamespace(mode="ok", epoch=7, calls=[], http_calls=[], tasks=[task])
 
     class Store:
         def readiness(self):
@@ -155,6 +163,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             state.calls.append(("list_tasks", repository))
             if state.mode == "unavailable":
                 raise OSError("fixture-secret-never-export")
+            if state.mode == "timeout":
+                time.sleep(0.15)
             return copy.deepcopy(state.tasks)
 
         def get_task(self, repository, task_id):
@@ -172,6 +182,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             state.calls.append(("get_receipt", repository, record_id))
             if state.mode == "receipt_missing":
                 raise KeyError(record_id)
+            if state.mode == "receipt_timeout":
+                time.sleep(0.15)
             return {
                 "repository": repository,
                 "record_id": record_id,
@@ -196,8 +208,19 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     auth = tmp_path / "source-auth.json"
     auth.write_text(json.dumps({"credentials": [credential]}))
-    monkeypatch.setenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", "10000")
+    # Ordinary cases exercise the actual default policy. A cap-specific case
+    # can explicitly model an independently configured larger source quota.
+    settings = getattr(request, "param", {})
+    monkeypatch.delenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", raising=False)
+    if "rate_limit" in settings:
+        monkeypatch.setenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", str(settings["rate_limit"]))
     service = create_service(store=Store(), credentials=CredentialRegistry(auth))
+
+    @service.middleware("http")
+    async def observe_request(request, call_next):
+        state.http_calls.append((request.method, request.url.path))
+        return await call_next(request)
+
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     server = uvicorn.Server(uvicorn.Config(service, log_level="critical", access_log=False))
@@ -303,7 +326,62 @@ def _managed_source(payload: dict, name: str) -> dict:
     return next(x for x in work["snapshot"]["sources"] if x["name"] == name)
 
 
+def _native_unprojected_tasks(source):
+    """Use actual producer documents and the store's JSON response projection."""
+    import copy
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import httpx
+    from app.builderops.control_plane.client import BuilderOpsControlPlaneClient, ClientConfig
+    from app.builderops.control_plane.client_cli import _dispatch
+    from app.builderops.control_plane.store import PostgresBuilderOpsStore
+    from app.dispatcher.verification_api import _run_document, project_verification_run
+    from tests.dispatcher import verification_helpers
+
+    posted = []
+
+    def capture(request):
+        if request.method == "POST":
+            posted.append(json.loads(request.content))
+        return httpx.Response(200, json={"authority_epoch": 7})
+
+    with httpx.Client(base_url="http://fixture", transport=httpx.MockTransport(capture)) as http:
+        with BuilderOpsControlPlaneClient(
+            ClientConfig(base_url="http://fixture", token="fixture-token"),
+            http_client=http,
+        ) as client:
+            _dispatch(
+                SimpleNamespace(
+                    command="task-claim",
+                    repository="example/fixture",
+                    scope="delivery",
+                    stack="builderops",
+                    source_refs=["github-issue:501"],
+                    task_id="task-cli",
+                    idempotency_key="fixture-claim",
+                    ttl_seconds=5400,
+                ),
+                client,
+            )
+    assert len(posted) == 1 and posted[0]["request"] == {}
+    with patch.object(verification_helpers, "REPO", "example/fixture"):
+        verification_request = verification_helpers.request()
+    run = project_verification_run(verification_request)
+    rows = []
+    for task_id, payload in (
+        ("task-cli", posted[0]["request"]),
+        (run.run_id, _run_document(run)),
+    ):
+        row = copy.deepcopy(source.tasks[0])
+        row.update(task_id=task_id, payload=payload)
+        row["authority_envelope"]["source_refs"] = ["github-issue:501"]
+        rows.append(dict(PostgresBuilderOpsStore._task_snapshot(row)))
+    return rows
+
+
 def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
+    managed_sources.tasks.extend(_native_unprojected_tasks(managed_sources))
     with managed_sources.client() as client:
         response = client.get("/api/devui/overview")
     assert response.status_code == 200
@@ -319,11 +397,26 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
         assert source["transport"]["source_refs"]
     assert _managed_source(payload, "docs-frontmatter")["transport"]["candidate_sha"] == "a" * 40
     assert _managed_source(payload, "dispatcher-store")["transport"]["authority_epoch"] == 7
+    assert _managed_source(payload, "dispatcher-store")["transport"]["outcome"] == "partial"
+    assert (
+        len(_managed_source(payload, "dispatcher-store")["transport"]["unprojected_task_refs"]) == 2
+    )
     assert any(x["role"] == "vm102_evidence" for x in payload["trust_frame"]["provider_states"])
     calls = [json.loads(line) for line in managed_sources.gh_calls.read_text().splitlines()]
     assert calls and all(
         call[:1] == ["api"] and call[1].startswith("repos/example/fixture/") for call in calls
     )
+
+
+def test_managed_overview_keeps_unprojectable_tasks_explicit(managed_sources) -> None:
+    managed_sources.tasks[:] = _native_unprojected_tasks(managed_sources)
+    with managed_sources.client() as client:
+        payload = client.get("/api/devui/overview").json()
+    work = _managed_source(payload, "dispatcher-store")
+    assert work["state"] == "unavailable" and work["transport"]["outcome"] == "partial"
+    assert payload["now"] == []
+    assert _managed_source(payload, "github-live")["state"] == "fresh"
+    assert _managed_source(payload, "docs-frontmatter")["state"] == "fresh"
 
 
 @pytest.mark.parametrize(
@@ -340,9 +433,19 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
         "docs_stale",
         "docs_mismatched",
         "bad_item",
+        "task_cap",
+        "duplicate_task",
+        "timeout",
+        "credential_revoked",
+        "docs_extra",
+        "docs_symlink",
+        "receipt_timeout",
+        "unprojected_bad_lease",
     ],
 )
-def test_managed_source_failure_matrix(managed_sources, case: str) -> None:
+def test_managed_source_failure_matrix(managed_sources, case: str, monkeypatch) -> None:
+    import copy
+
     source = managed_sources
     if case.startswith("github_"):
         source.gh_mode.write_text(case.removeprefix("github_"))
@@ -355,6 +458,27 @@ def test_managed_source_failure_matrix(managed_sources, case: str) -> None:
         (source.root / "docs" / "FIXTURE" / "TASK.md").write_text("foreign candidate")
     elif case == "bad_item":
         source.tasks.append({"repository": "example/fixture", "task_id": "broken", "payload": None})
+    elif case == "task_cap":
+        source.tasks[:] = [copy.deepcopy(source.tasks[0]) for _ in range(201)]
+    elif case == "duplicate_task":
+        source.tasks.append(copy.deepcopy(source.tasks[0]))
+    elif case in {"timeout", "receipt_timeout"}:
+        from app.builderops.control_plane import client as source_client
+
+        monkeypatch.setattr(source_client, "_DEFAULT_TIMEOUT_SECONDS", 0.05)
+        source.mode = case
+    elif case == "credential_revoked":
+        source.auth.write_text(json.dumps({"credentials": []}))
+    elif case == "docs_extra":
+        (source.root / "docs" / "FIXTURE" / "manifest.json").write_text("unaddressed input")
+    elif case == "docs_symlink":
+        task_doc = source.root / "docs" / "FIXTURE" / "TASK.md"
+        task_doc.unlink()
+        task_doc.symlink_to(source.auth)
+    elif case == "unprojected_bad_lease":
+        row = _native_unprojected_tasks(source)[0]
+        row["lease"] = {"repository": "foreign/repo"}
+        source.tasks.append(row)
     else:
         source.mode = case
     with source.client() as client:
@@ -362,7 +486,18 @@ def test_managed_source_failure_matrix(managed_sources, case: str) -> None:
     assert _managed_source(payload, "github-live")["state"] == (
         "unavailable" if case == "github_unavailable" else "fresh"
     )
-    if case in {"unavailable", "mismatched", "changed", "epoch_changed", "bad_item"}:
+    if case in {
+        "unavailable",
+        "mismatched",
+        "changed",
+        "epoch_changed",
+        "bad_item",
+        "task_cap",
+        "duplicate_task",
+        "timeout",
+        "credential_revoked",
+        "unprojected_bad_lease",
+    }:
         assert _managed_source(payload, "dispatcher-store")["transport"]["outcome"] in {
             "unavailable",
             "refused",
@@ -380,8 +515,54 @@ def test_managed_source_failure_matrix(managed_sources, case: str) -> None:
         assert docs["transport"]["outcome"] != "available"
     if case == "github_partial":
         assert _managed_source(payload, "github-live")["transport"]["outcome"] == "partial"
-    if case == "receipt_missing":
+    if case in {"receipt_missing", "receipt_timeout"}:
         assert _managed_source(payload, "verification-runs")["transport"]["outcome"] == "partial"
+
+
+@pytest.mark.parametrize("task_count, available", [(117, True), (118, False)])
+def test_managed_source_default_quota_withdrawal(
+    managed_sources,
+    task_count,
+    available,
+    monkeypatch,
+) -> None:
+    """Known P2 fanout boundary remains visible under the source's real default."""
+    import copy
+    from types import SimpleNamespace
+    from app.builderops.control_plane import auth
+
+    # Hold one real fixed window so a minute rollover cannot hide the quota.
+    monkeypatch.setattr(auth, "time", SimpleNamespace(monotonic=lambda: 1.0))
+
+    source = managed_sources
+    first = source.tasks[0]
+    source.tasks = []
+    for index in range(task_count):
+        row = copy.deepcopy(first)
+        row["task_id"] = row["payload"]["task_id"] = f"task-{index}"
+        row["payload"]["issue_number"] = index + 1
+        row["authority_envelope"]["source_refs"] = []
+        source.tasks.append(row)
+    with source.client() as client:
+        payload = client.get("/api/devui/overview").json()
+    assert len(source.http_calls) == 3 + task_count
+    assert bool(payload["now"]) is available
+    work = _managed_source(payload, "dispatcher-store")
+    assert work["state"] == ("fresh" if available else "unavailable")
+    assert _managed_source(payload, "github-live")["state"] == "fresh"
+    assert _managed_source(payload, "docs-frontmatter")["state"] == "fresh"
+
+
+@pytest.mark.parametrize("managed_sources", [{"rate_limit": 10000}], indirect=True)
+def test_managed_source_receipt_cap_with_qualified_larger_quota(managed_sources) -> None:
+    source = managed_sources
+    source.tasks[0]["authority_envelope"]["source_refs"] *= 201
+    with source.client() as client:
+        payload = client.get("/api/devui/overview").json()
+    reads = [x for x in source.calls if isinstance(x, tuple) and x[0] == "get_receipt"]
+    assert len(reads) == 200
+    assert [x["display_label"] for x in payload["now"]] == ["Fixture work"]
+    assert _managed_source(payload, "verification-runs")["transport"]["outcome"] == "partial"
 
 
 def test_managed_source_scope_and_candidate_binding(managed_sources) -> None:
@@ -485,6 +666,15 @@ def test_managed_source_packaging_and_isolation_contract(managed_sources) -> Non
     assert "gh" in dockerfile and "COPY docs" in dockerfile
     assert "app.builderops.devui_sources" in dockerfile
     assert "SOURCE_REPOSITORY" in dockerfile
+    assert "FROM scratch AS devui-source-inputs" in dockerfile
+    assert "COPY --from=devui-source-inputs /devui-candidate" in dockerfile
+    capability_path = "app/builderops/ckm/seed/capabilities.yaml"
+    assert f"--capabilities {capability_path}" in dockerfile
+    assert f"/devui-candidate/{capability_path}" in dockerfile
+    ignore = (ROOT / "Dockerfile.builderops.dockerignore").read_text().splitlines()
+    assert "**" in ignore and "!docs/**" in ignore and "!app/**" in ignore
+    assert (ROOT / capability_path).is_file()
+    assert (ROOT / "docs/architecture/traceability-matrix.md").is_file()
     assert "httpx==" in requirements and "PyYAML==" in requirements
     sources = yaml.safe_load((ROOT / "docker-compose.devui-sources.yml").read_text())["services"][
         "devui"

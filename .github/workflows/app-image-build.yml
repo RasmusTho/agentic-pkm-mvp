@@ -11,10 +11,12 @@ on:
       - 'scripts/start_api.sh'
       - 'Dockerfile'
       - 'Dockerfile.builderops'
+      - 'Dockerfile.builderops.dockerignore'
       - 'Dockerfile.builderops-postgres'
       - 'docker-compose.builderops.yml'
       - 'scripts/builderops/**'
       - 'requirements.txt'
+      - 'requirements-builderops.txt'
       - 'requirements-tts.txt'
       - '.github/workflows/app-image-build.yml'
 

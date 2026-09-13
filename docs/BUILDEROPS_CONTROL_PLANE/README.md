@@ -133,7 +133,7 @@ credentials. The existing source owners still decide whether the configured acce
 
 | Source | Existing producer and first managed admission target | Present state and failure boundary |
 | --- | --- | --- |
-| Work / lifecycle evidence | Repository-addressed `BuilderOpsControlPlaneClient.list_tasks`, `get_task` and `get_receipt`, through the existing authenticated `/v1/tasks` and `/v1/receipts/{object_kind}/{object_id}` service contracts; compose source-owned Cockpit facts without changing their semantics | Implemented by #5520 through `devui_sources.read_managed_cockpit` and the existing pure Cockpit composer. The source service enforces `receipts:read`, `status:read` and addressed repository grants. Each GET brackets task/receipt reads with the explicitly configured authority epoch, checks task versions and repository envelopes, and withdraws inconsistent or partial task collections. No legacy `read_cockpit_registry` direct-SQLite fallback or Product credentials. |
+| Work / lifecycle evidence | Repository-addressed `BuilderOpsControlPlaneClient.list_tasks`, `get_task` and `get_receipt`, through the existing authenticated `/v1/tasks` and `/v1/receipts/{object_kind}/{object_id}` service contracts; compose source-owned Cockpit facts without changing their semantics | Implemented by #5520 through `devui_sources.read_managed_cockpit` and the existing pure Cockpit composer. The source service enforces `receipts:read`, `status:read` and addressed repository grants. Each GET brackets task/receipt reads with the explicitly configured authority epoch, checks task versions and repository envelopes, and withdraws inconsistent or over-cap collections. The partial Issue-work projection explicitly names well-formed tasks that supply no Issue subject. No legacy `read_cockpit_registry` direct-SQLite fallback or Product credentials. |
 | GitHub / CI / delivery references | Existing `cockpit_github_plane.default_github_reader`, bounded REST via `gh`, for one explicitly configured repository; server-side credential custody stays with the existing source owner | Required when work/PR/check claims use it. #5520 packages `gh` in the Builder image and uses its existing REST pagination/timeout policy for the explicit repository. The optional source overlay supplies a fixed read-only host-owned gh configuration reference. Live credentials and source access still require qualification; no hub default, browser token, GraphQL substitution or inferred closed/merged readiness. Missing/refused/partial reads withdraw affected claims. |
 | Feature intent and architecture documents | Existing `cockpit_docs_plane.read_docs_plane`, addressed candidate repository docs, capability YAML and issue-capability matrix with immutable source refs | Required for M1 intent/requirement inspection. #5520 bakes docs, capability YAML and the traceability matrix into the image, with a build-time repository/SHA and complete file-hash manifest. Every GET checks that exact candidate and file set before the existing docs reader runs. Missing or changed inputs withdraw the source; arbitrary document-root selection is refused. Missing docs cannot become empty requirements. |
 | VM102 deployment evidence | Existing read-only `/opt/builderops/receipts` mount and `read_vm102_receipt_provider`, validated through the owner producers and retained `devui-runtime-prerequisites.json` | The retained independently composed managed evidence transport. It rereads each request and withdraws missing, stale, malformed, partial-update or mismatched candidate evidence. |
@@ -143,13 +143,22 @@ The source adapter retains observation time, immutable reference and typed refus
 provider; one optional provider failure must not erase healthy independent evidence. The existing
 Cockpit source-state vocabulary stays unchanged; each managed source additionally carries its
 transport outcome and repository/candidate/epoch provenance in the source snapshot. Task records
-must already carry the Cockpit fields they claim. Unsupported/malformed task payloads withdraw the
-work count; they do not fabricate a source-backed empty collection. Only explicitly addressed
+must already carry the Cockpit fields they claim. The bounded Issue-work projection accepts those
+explicit fields, including the native `TaskRecord` mapping. Generic CLI tasks and native verification
+documents have no Issue/title fact for this lens: their addressed references remain explicit as
+unprojected observations, and mixed collections retain only supported Issue facts with a partial
+transport outcome. A wholly unprojectable collection withdraws the work count; malformed common
+identity, repository, version or lease envelopes withdraw the collection. Neither case fabricates
+a source-backed empty collection. Only explicitly addressed
 `/v1/receipts/{kind}/{id}?repository=...` references in source-owned authority envelopes are read.
 Generic receipts contribute hashed observation references, never inferred verification, readiness
 or owner acceptance. The verification-run lens remains unavailable without its own run contract.
 Task and receipt walks are bounded at 200 each; API reads use the source client's 15-second timeout
-with no retry in this request-scoped projection. GitHub check failures retain the existing partial
+with no retry in this request-scoped projection. This cap does not guarantee source quota capacity:
+the current fanout consumes three epoch/list requests plus each task and addressed receipt read.
+The default 120-request/minute source limit therefore withdraws a 118-task read even with no receipt
+reads; this P2 fanout limitation remains deferred, and source qualification must retain the actual
+quota/refusal evidence. A rate-limited read cannot claim completeness. GitHub check failures retain the existing partial
 per-head refusal; docs retain their own stale watermark. CKM remains independently unavailable. The first
 read-journey implementation owns its bounded adapter/asset wiring and failure tests. Those owned
 deliverables are not prerequisites for its own pickup. By contrast, a downstream harness consuming
