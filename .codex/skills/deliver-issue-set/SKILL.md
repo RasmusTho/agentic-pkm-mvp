@@ -162,8 +162,10 @@ Delivery rules:
   Project, PR, branch/worktree, dispatcher lease, or agent-spawn mutation. Persist its
   `dispatch_decisions` only through the existing `epic-run-state record` path when the coordinator
   needs local coordination evidence.
-  When run-state contains reusable constraints, the helper includes those constraints in worker
-  context packs so later workers consume prior learning without rereading the full epic history.
+  Persisted run-state reusable constraints are evidence only and remain excluded from worker context
+  packs. If a later worker should reuse a constraint, verify it freshly against the current live source
+  authority and pass it as an explicit candidate constraint; never copy persisted state automatically or
+  waive context validation. See `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md :: Run-state authority`.
 - For an explicitly classified low-risk, low-ambiguity, unprotected `bounded_fast` candidate, the
   dispatch input may include the Phase 1 `execution_routing` shadow preflight. Supply only an
   explicit scoped allocation observation with its observation and expiry times; absence, unknown,
