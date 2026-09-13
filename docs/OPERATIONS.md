@@ -5,9 +5,9 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-09-08
+Last reviewed: 2026-09-13
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-08
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, Issue #5511 / PR #5513, merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-13
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -560,8 +560,11 @@ interval (default 60 s), curls `/readyz` and `/api/health` `required_ok` (NOT th
 top-level `ok`), checks worker-heartbeat staleness, and dispatches one push alert on
 the first outage transition. Once the probe sees the first healthy run after that
 outage, it emits one recovery signal and clears the outage state so a later distinct
-outage can alert again. The configured channel remains pluggable (ntfy / Telegram /
-mail — channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
+outage can alert again. The configured channel remains pluggable (ntfy / Telegram / mail / none /
+host-secret-bound Discord — channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
+Both probes use the shared `ops/host-setup/mac-mini/notification_channels.py` transport module.
+The Discord implementation is one-way code-path support only: provider/account/server/channel/
+webhook enactment and live delivery remain external Heimdal work tracked by #5506 and #4076.
 
 **Two distinct Makefile targets — do not confuse them:**
 
@@ -584,7 +587,9 @@ job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.
 
 `ops/host-setup/mac-mini/prod_backup_probe.py` is the watcher for the nightly prod DB
 dump (`local.prod-pgdump` on the mac mini, which runs `~/bin/prod-pgdump-run.sh`). It is
-installed as its own launchd job, `com.yggdrasil.prod-backup-probe`, and runs hourly.
+installed as its own launchd job, `com.yggdrasil.prod-backup-probe`, and runs hourly. The installer
+copies both the watcher and its shared `notification_channels.py` module to `~/bin` so the installed
+entrypoint does not depend on the repository checkout.
 
 **Why it exists:** the dump job failed every night from 2026-07-06 to 2026-07-29 and the
 gap went unseen for three weeks, because nothing read its log. The underlying TCC

@@ -40,6 +40,15 @@ def test_probes_use_shared_channel_module() -> None:
     assert "class NotificationChannel" not in backup_source
 
 
+def test_backup_install_copies_shared_channel_module() -> None:
+    install_source = (PROBE_MODULE_DIR / "install.sh").read_text(encoding="utf-8")
+
+    assert (
+        'install -m 0644 "$HERE/notification_channels.py" '
+        '"$HOME/bin/notification_channels.py"'
+    ) in install_source
+
+
 def test_existing_channel_names_are_compatible() -> None:
     for name in ("ntfy", "telegram", "mail", "none"):
         adapter = notification_channels.build_channel(name)
