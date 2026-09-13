@@ -1,0 +1,827 @@
+{
+  "payload_sha256": "sha256:09b34d0d7f099307e7f30bbd9be87ccd6d99a38cf41b0cd4c4e14f0ffb6ca82b",
+  "provenance_payload": {
+    "contract_version": "yggdrasil-constrained-reuse.v1",
+    "repository_commit": "725737c204e3494695fdc464f781967f1d156449",
+    "authorship": {
+      "author_identity": "codex-issue-5522",
+      "created_at": "2026-09-13T12:39:25.938760+00:00"
+    },
+    "authority_claims": {
+      "live_design_system_selection": "not_claimed",
+      "live_mcp_system_id": "not_claimed",
+      "live_project": "not_claimed",
+      "live_token_parity": "not_claimed"
+    },
+    "sources": [
+      {
+        "source_id": "source-devui.css",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
+        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "source_role": "component",
+        "content_sha256": "sha256:9094a547edafcc6bff80f82ddae3b57975cb98890a7b5d2d3a79fac35f6bc8f3"
+      },
+      {
+        "source_id": "source-focus.html",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html",
+        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "source_role": "component",
+        "content_sha256": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361"
+      },
+      {
+        "source_id": "source-focus.js",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
+        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "source_role": "pattern",
+        "content_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1"
+      },
+      {
+        "source_id": "source-overview.html",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
+        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "source_role": "component",
+        "content_sha256": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb"
+      },
+      {
+        "source_id": "source-overview.js",
+        "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "source_role": "pattern",
+        "content_sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b"
+      },
+      {
+        "source_id": "source-cockpit-wrap",
+        "source_path": "app/web/static/cockpit.css",
+        "stable_ref": ".rungs .r-val { overflow-wrap:break-word } (also authenticated at 339ec73ef93fb8af96a6dd7b1d739c147f5f69ea:139)",
+        "source_role": "pattern",
+        "content_sha256": "sha256:d34fadfdd619534f6e0f9480a979b5caae52b65b9b05d8bb6db99fa8ae1d1d93"
+      }
+    ],
+    "tokens": {
+      "source_path": "companion-ui/companion-app/colors_and_type.css",
+      "content_sha256": "sha256:7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1",
+      "declarations": [
+        {
+          "token_id": "--accent",
+          "declaration": "--accent:        #d4a843;",
+          "declaration_sha256": "sha256:97f3ed523141204c7dd2bcefa3704b4aaf31ce19138b79def8ab3b310015e4b0"
+        },
+        {
+          "token_id": "--amber",
+          "declaration": "--amber:         #f09030;",
+          "declaration_sha256": "sha256:4df8b2f36d01e311193538063326e7f9ebf052f9efc3aba00f02d1e7fde1d606"
+        },
+        {
+          "token_id": "--bg-base",
+          "declaration": "--bg-base:       #070b12;",
+          "declaration_sha256": "sha256:5fca5d696414f365990c4b475702ac1e2fa111ddb9021b28c2aeff2f41940892"
+        },
+        {
+          "token_id": "--bg-overlay",
+          "declaration": "--bg-overlay:    #162038;",
+          "declaration_sha256": "sha256:17d66ddd93d805c09587aa77d1436206d67eccb30c9a14ff5946452713b43d30"
+        },
+        {
+          "token_id": "--bg-raised",
+          "declaration": "--bg-raised:     #111a2e;",
+          "declaration_sha256": "sha256:c08f5b062528107efeb5cfd1fcc2c2f8be1ba82aef938540b5507befe963f937"
+        },
+        {
+          "token_id": "--bg-surface",
+          "declaration": "--bg-surface:    #0c1220;",
+          "declaration_sha256": "sha256:a2b98f0e189f52f29c9dd769a63d5433bffd57278f1979d27bb33288a41292f4"
+        },
+        {
+          "token_id": "--border",
+          "declaration": "--border:        #152030;",
+          "declaration_sha256": "sha256:3e4011f3310a0bec8fa462dbea4808a2728085b4b28334d2d2aafa9d3e2a1f0c"
+        },
+        {
+          "token_id": "--border-strong",
+          "declaration": "--border-strong: #1e3050;",
+          "declaration_sha256": "sha256:a2caa67382031eef64dae617545b477876adb4ca40f888e99a5d0c6787ee8dba"
+        },
+        {
+          "token_id": "--cyan",
+          "declaration": "--cyan:          #00d4e8;",
+          "declaration_sha256": "sha256:6c4111fac205f0a37d72498091cae2c77894e2a3877196b00270f4a0d1c35b02"
+        },
+        {
+          "token_id": "--cyan-dim",
+          "declaration": "--cyan-dim:      #007a8a;",
+          "declaration_sha256": "sha256:521c1c5d5266bdc3d351c319f70c461098fee8464a4b42cf49238dacb3d7e9f1"
+        },
+        {
+          "token_id": "--cyan-glow",
+          "declaration": "--cyan-glow:     0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);",
+          "declaration_sha256": "sha256:984591c95784e48a5d699bb184dd11efe8ab8ec82650c1f80f9bbea0e261e8fb"
+        },
+        {
+          "token_id": "--destructive",
+          "declaration": "--destructive:      #ff3d3d;",
+          "declaration_sha256": "sha256:b150ed4693390211c0d0c582beb2ea98c9ef7a389fee917e6884e860777f209e"
+        },
+        {
+          "token_id": "--destructive-muted",
+          "declaration": "--destructive-muted:#160404;",
+          "declaration_sha256": "sha256:c65581be66699bec5ead7904a636062962faf7fe3b53906ac9558707a7f8584f"
+        },
+        {
+          "token_id": "--fg-1",
+          "declaration": "--fg-1:          #dce8f0;",
+          "declaration_sha256": "sha256:8887fbda9664633c4baa27afe931c7d0d0097e00e6a5d16617ae0f1bede91925"
+        },
+        {
+          "token_id": "--fg-2",
+          "declaration": "--fg-2:          #7a9ab8;",
+          "declaration_sha256": "sha256:3e7003559888029ac1f8c12214874037801f6488760cb4db770467e0314d1527"
+        },
+        {
+          "token_id": "--fg-3",
+          "declaration": "--fg-3:          #3d5570;",
+          "declaration_sha256": "sha256:8cd8c37a7b63f644a8b5223b7f4c22932b84d6abe72203d0c0ff953a550c2058"
+        },
+        {
+          "token_id": "--font-display",
+          "declaration": "--font-display:  'EB Garamond', Georgia, serif;",
+          "declaration_sha256": "sha256:e1e06b2980e1a1b0fb56b7d8ee54495f47adbc0dd6298b1d435120db2ef7d3bd"
+        },
+        {
+          "token_id": "--font-mono",
+          "declaration": "--font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
+          "declaration_sha256": "sha256:749893fabe1decf61fb54f974b62798f51a5901cd385ef7d8c9e1d0b3e0e098d"
+        },
+        {
+          "token_id": "--font-ui",
+          "declaration": "--font-ui:       'Space Grotesk', system-ui, sans-serif;",
+          "declaration_sha256": "sha256:0e0f61b0971b93c89eca155a74a6933ac578f5b5593d6ce72a1def3b7394c044"
+        },
+        {
+          "token_id": "--leading-snug",
+          "declaration": "--leading-snug:   1.4;",
+          "declaration_sha256": "sha256:94154e4e1b8bfd267992865840b49ab8aba490d89d2863d68be44071f0d44d9a"
+        },
+        {
+          "token_id": "--radius-md",
+          "declaration": "--radius-md:   4px;",
+          "declaration_sha256": "sha256:ea4e91f125f2775061808f747c7006649fd98a6d82ef5ecba9104795ed2deb1d"
+        },
+        {
+          "token_id": "--radius-sm",
+          "declaration": "--radius-sm:   2px;",
+          "declaration_sha256": "sha256:8a1e7d4f4cfe88936a688fc7bb419ca8760ecd93356b34031ec193cad21970af"
+        },
+        {
+          "token_id": "--space-1",
+          "declaration": "--space-1:   4px;",
+          "declaration_sha256": "sha256:5ddd722b9f8de0f303ec59ff55402d60a4d11ad51dc49827a80128d7c10e78e0"
+        },
+        {
+          "token_id": "--space-10",
+          "declaration": "--space-10: 40px;",
+          "declaration_sha256": "sha256:b28c740e020425b8799010bb65d3e5df0f152dcb265859814c212da9c35a7d42"
+        },
+        {
+          "token_id": "--space-12",
+          "declaration": "--space-12: 48px;",
+          "declaration_sha256": "sha256:7f4fe53e528d265baf7a163fa0b2f86170c44e4723c642688bc5210f0b3ac41a"
+        },
+        {
+          "token_id": "--space-16",
+          "declaration": "--space-16: 64px;",
+          "declaration_sha256": "sha256:32cf2c5d195fb8220f9cd86d2e8b1e7412e5f1883036aeb38ebdc7238b078564"
+        },
+        {
+          "token_id": "--space-2",
+          "declaration": "--space-2:   8px;",
+          "declaration_sha256": "sha256:6a5592349d1f0f7e31f04e308e95fb5e79f1d734c6ecb50df8e533236bb9e342"
+        },
+        {
+          "token_id": "--space-3",
+          "declaration": "--space-3:  12px;",
+          "declaration_sha256": "sha256:9f8b6e43d3a32811fe671a45a2bd1af900a41584b9df7b3bd07016cee5c68e25"
+        },
+        {
+          "token_id": "--space-4",
+          "declaration": "--space-4:  16px;",
+          "declaration_sha256": "sha256:77ed2b36cd2a1cb2a35d216b8db36ab57cbf877824bb777314f29b15bd377792"
+        },
+        {
+          "token_id": "--space-5",
+          "declaration": "--space-5:  20px;",
+          "declaration_sha256": "sha256:e7c858c7f37d3550e7ea902b13ad5d795ece262cd0d316f8b4b017520de9341d"
+        },
+        {
+          "token_id": "--space-6",
+          "declaration": "--space-6:  24px;",
+          "declaration_sha256": "sha256:b93578e1b217d408dc79420223985dec323e6ca396cadc902668999904bfcaad"
+        },
+        {
+          "token_id": "--space-8",
+          "declaration": "--space-8:  32px;",
+          "declaration_sha256": "sha256:6387fd482ab122c613bf801312661bc7a6306facf06eeb98b76ef21392c1dc5b"
+        },
+        {
+          "token_id": "--text-2xl",
+          "declaration": "--text-2xl:   2rem;",
+          "declaration_sha256": "sha256:bd783716417f27bf0880f83dc12210dbed36d3a5403af10c424dc225fa65c4c3"
+        },
+        {
+          "token_id": "--text-base",
+          "declaration": "--text-base:  0.9375rem;",
+          "declaration_sha256": "sha256:b95bee6ef0623e44bf95a89918d22fa5b323a586a07aa0c4a219ac373c8cfc81"
+        },
+        {
+          "token_id": "--text-md",
+          "declaration": "--text-md:    1.0625rem;",
+          "declaration_sha256": "sha256:55f553b1f5960ee94ad5fe52f71e714a6a4eb5a14f921fae8632eb80cfd2e1a1"
+        },
+        {
+          "token_id": "--text-sm",
+          "declaration": "--text-sm:    0.8125rem;",
+          "declaration_sha256": "sha256:e761fb0504e3b9d29b8c0c20ada4e0ccd43845fe84c6317574a5b3879a20c211"
+        },
+        {
+          "token_id": "--text-xl",
+          "declaration": "--text-xl:    1.5rem;",
+          "declaration_sha256": "sha256:b416752602b5ea426df5cbe47195640addf3e3efb4381b9950aed1ea223f0269"
+        },
+        {
+          "token_id": "--text-xs",
+          "declaration": "--text-xs:    0.6875rem;",
+          "declaration_sha256": "sha256:7bd896e26f673d9b98e857470f24c3080f0e228c645a453fd726c8ea8ae6035c"
+        },
+        {
+          "token_id": "--tracking-tight",
+          "declaration": "--tracking-tight: -0.02em;",
+          "declaration_sha256": "sha256:34ec5a544a9ad169b2396e1cb4857bc22978d2cc614fecce2a31118a8a7b1134"
+        },
+        {
+          "token_id": "--tracking-wide",
+          "declaration": "--tracking-wide:   0.04em;",
+          "declaration_sha256": "sha256:cfa64b5c41cc560d077e9bacc4df40f4ddc36482ef4fc2d3843d5b4c6a2389ea"
+        },
+        {
+          "token_id": "--tracking-wider",
+          "declaration": "--tracking-wider:  0.08em;",
+          "declaration_sha256": "sha256:9770d1b96f7fd6b68d365bdc94bcb8dbb48a5c286544114b348b1bf99e8739bc"
+        },
+        {
+          "token_id": "--vault",
+          "declaration": "--vault:         #39e87d;",
+          "declaration_sha256": "sha256:b3d00755e338629911f3e01e3e30d559aa95c3978d7f0571a996dc66183f1399"
+        },
+        {
+          "token_id": "--vault-dim",
+          "declaration": "--vault-dim:     #1a7840;",
+          "declaration_sha256": "sha256:c677acefc2c692bdaef1fa39ae52577fe05d3f1f997be28fb978e3bf782035f9"
+        },
+        {
+          "token_id": "--weight-medium",
+          "declaration": "--weight-medium:  500;",
+          "declaration_sha256": "sha256:6512e4882f413b78b82f2456bcfb293697e996454ff1cecd5715a17f59fbc7ca"
+        }
+      ]
+    },
+    "allowed_transformations": [
+      {
+        "transformation_id": "inherit-font-normalization",
+        "kind": "local_system_font_no_egress_normalization",
+        "source_ids": [
+          "source-devui.css"
+        ],
+        "exact_rule": "Preserve the exact existing locally normalized font declarations and absent font import in the unchanged shipped devui.css. No new typography or egress normalization is introduced by the managed copy."
+      },
+      {
+        "transformation_id": "managed-limitations-wrap",
+        "kind": "layout_reflow",
+        "source_ids": [
+          "source-cockpit-wrap",
+          "source-devui.css"
+        ],
+        "exact_rule": "The managed CSS is byte-for-byte the shipped devui.css followed only by .limitations li{overflow-wrap:break-word} and a newline. Transfer the accepted .rungs .r-val source-value wrapping declaration to complete limitation text. No other layout, token, visual, interaction or authority change."
+      }
+    ],
+    "decision_inventory": [
+      {
+        "decision_id": "decision-devui.css",
+        "target_ref": "app/builderops/devui_managed.css (all original selectors/declarations and media behavior)",
+        "source_ids": [
+          "source-devui.css"
+        ],
+        "token_ids": [
+          "--accent",
+          "--amber",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-dim",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--fg-3",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-1",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--vault-dim",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "inherit-font-normalization"
+        ]
+      },
+      {
+        "decision_id": "decision-focus.html",
+        "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
+        "source_ids": [
+          "source-focus.html"
+        ],
+        "token_ids": [],
+        "transformation_ids": []
+      },
+      {
+        "decision_id": "decision-focus.js",
+        "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
+        "source_ids": [
+          "source-focus.js"
+        ],
+        "token_ids": [],
+        "transformation_ids": []
+      },
+      {
+        "decision_id": "decision-overview.html",
+        "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
+        "source_ids": [
+          "source-overview.html"
+        ],
+        "token_ids": [],
+        "transformation_ids": []
+      },
+      {
+        "decision_id": "decision-overview.js",
+        "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
+        "source_ids": [
+          "source-overview.js"
+        ],
+        "token_ids": [],
+        "transformation_ids": []
+      },
+      {
+        "decision_id": "decision-managed-limitations-wrap",
+        "target_ref": "app/builderops/devui_managed.css :: .limitations li",
+        "source_ids": [
+          "source-cockpit-wrap"
+        ],
+        "token_ids": [],
+        "transformation_ids": [
+          "managed-limitations-wrap"
+        ]
+      }
+    ],
+    "target_artifacts": [
+      {
+        "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html",
+        "content_sha256": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361"
+      },
+      {
+        "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
+        "content_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1"
+      },
+      {
+        "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
+        "content_sha256": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb"
+      },
+      {
+        "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+        "content_sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b"
+      },
+      {
+        "target_path": "app/builderops/devui_managed.css",
+        "content_sha256": "sha256:833dbf1d2cc70ecbcda13e3bf5d1c4091a3657d1fb636bd3978b3f7cbf43d635"
+      }
+    ],
+    "zero_novel_visual_language": {
+      "asserted": true,
+      "new_components": [],
+      "new_geometry_systems": [],
+      "new_tokens": [],
+      "new_typography_sources": [],
+      "new_motion_languages": [],
+      "new_icon_languages": [],
+      "new_interaction_classes": [],
+      "new_authority_affordances": []
+    },
+    "no_egress": {
+      "external_font_imports_removed": [
+        {
+          "declaration": "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&display=swap');",
+          "declaration_sha256": "sha256:d4c81030d0cc4820166f7e0c2c794ccb7853ffeeb358548c2ddeda19a0c6dfa2"
+        },
+        {
+          "declaration": "@import url('https://fonts.bunny.net/css?family=jetbrains-mono:400,500&display=swap');",
+          "declaration_sha256": "sha256:4a41f94cd9e317b332669af15a8fee0db04357fb67c6a186d398a1e58fb1f268"
+        }
+      ],
+      "font_normalization": {
+        "mode": "local_system_only",
+        "mappings": [
+          {
+            "source_token_id": "--font-display",
+            "source_declaration_sha256": "sha256:e1e06b2980e1a1b0fb56b7d8ee54495f47adbc0dd6298b1d435120db2ef7d3bd",
+            "normalized_declaration": "--font-display:Georgia,\"Times New Roman\",serif;",
+            "normalized_declaration_sha256": "sha256:9f3c1ec2d4ce11fea774865ced8db0e357470b29fd5f9df4e10000de5ecae4ee"
+          },
+          {
+            "source_token_id": "--font-mono",
+            "source_declaration_sha256": "sha256:749893fabe1decf61fb54f974b62798f51a5901cd385ef7d8c9e1d0b3e0e098d",
+            "normalized_declaration": "--font-mono:ui-monospace,\"SFMono-Regular\",Consolas,monospace;",
+            "normalized_declaration_sha256": "sha256:c44434646f3ccafed384061dc59fcd9c76f571e7a2d05b7eced4ce56fe9293af"
+          },
+          {
+            "source_token_id": "--font-ui",
+            "source_declaration_sha256": "sha256:0e0f61b0971b93c89eca155a74a6933ac578f5b5593d6ce72a1def3b7394c044",
+            "normalized_declaration": "--font-ui:system-ui,-apple-system,\"Segoe UI\",sans-serif;",
+            "normalized_declaration_sha256": "sha256:2dc7a9d49841c8b424f979dff6aa7ef015e3df785656a9a6fc1e743d22578361"
+          }
+        ]
+      },
+      "local_asset_refs": [
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html",
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+        "app/builderops/devui_managed.css"
+      ],
+      "cross_origin_request_count": 0,
+      "network_evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+      "network_evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6",
+      "csp_relaxations": []
+    },
+    "state_matrix": [
+      {
+        "state_id": "managed-source-ready",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_standalone_overview_focus_return_preserves_subject_and_candidate",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Render source-owned Overview and exact selected Issue Focus, unsupported Conversation Port, no inferred linkage; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "hostile-and-source-refused",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_hostile_accessibility_and_no_effect_matrix",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Render source text literally, preserve independent unavailable/refused metadata and complete text across all accessibility modes.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "refusal",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "timeout",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "404",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "http_status",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "malformed",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "request_failure",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "page_error",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "console_error",
+        "fixture_ref": "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "state_id": "candidate-missing",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+        "decision_ids": [
+          "decision-overview.js",
+          "decision-focus.js"
+        ],
+        "expected_behavior": "Production admission refuses the missing candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      },
+      {
+        "state_id": "candidate-sha",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+        "decision_ids": [
+          "decision-overview.js",
+          "decision-focus.js"
+        ],
+        "expected_behavior": "Production admission refuses the sha candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      },
+      {
+        "state_id": "candidate-inventory",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+        "decision_ids": [
+          "decision-overview.js",
+          "decision-focus.js"
+        ],
+        "expected_behavior": "Production admission refuses the inventory candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      },
+      {
+        "state_id": "candidate-bytes",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+        "decision_ids": [
+          "decision-overview.js",
+          "decision-focus.js"
+        ],
+        "expected_behavior": "Production admission refuses the bytes candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      },
+      {
+        "state_id": "candidate-extra",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+        "decision_ids": [
+          "decision-overview.js",
+          "decision-focus.js"
+        ],
+        "expected_behavior": "Production admission refuses the extra candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      },
+      {
+        "state_id": "managed-document-provenance",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_source_packaging_and_isolation_contract",
+        "decision_ids": [
+          "decision-overview.js"
+        ],
+        "expected_behavior": "Source-owned document references retain their exact repository paths and content hashes. Package-only shell aliases remain in the complete checked inventory and are not presented as repository document references. Existing text-only rendering is unchanged.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      },
+      {
+        "state_id": "managed-repository-identity",
+        "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_focus_preserves_canonical_repository_case",
+        "decision_ids": [
+          "decision-focus.js"
+        ],
+        "expected_behavior": "Existing canonical repository identity admits display-case variation while Focus retains the exact selected subject and original source URL. Foreign repository or malformed source identity remains unavailable. Real package_candidate and standalone Overview-to-Focus browser proof use mixed-case GitHub-style source identity; no visual or interaction change.",
+        "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
+        "evidence_sha256": "sha256:bb7d79e3612182fdc40c70df73631acd3f66607e886b8441a1efdf4caedf52e4"
+      }
+    ],
+    "accessibility_matrix": [
+      {
+        "mode": "desktop",
+        "requirement": "Both Overview and Focus preserve full source text, semantic naming and the sole keyboard navigation with zero persistence/egress/effects in this applicable mode.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "mode": "narrow",
+        "requirement": "Both Overview and Focus preserve full source text, semantic naming and the sole keyboard navigation with zero persistence/egress/effects in this applicable mode.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "mode": "zoom_200",
+        "requirement": "Both Overview and Focus preserve full source text, semantic naming and the sole keyboard navigation with zero persistence/egress/effects in this applicable mode.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "mode": "keyboard",
+        "requirement": "Both Overview and Focus preserve full source text, semantic naming and the sole keyboard navigation with zero persistence/egress/effects in this applicable mode.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "mode": "screen_reader",
+        "requirement": "Both Overview and Focus preserve full source text, semantic naming and the sole keyboard navigation with zero persistence/egress/effects in this applicable mode.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "mode": "print",
+        "requirement": "Both Overview and Focus preserve full source text, semantic naming and the sole keyboard navigation with zero persistence/egress/effects in this applicable mode.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      },
+      {
+        "mode": "javascript_off",
+        "requirement": "Both served pages show the existing semantic JavaScript-required fallback, without API/source requests or populated source content. Focus retains its literal Overview return link; Overview has no populated Focus links. No browser persistence or external requests.",
+        "decision_ids": [
+          "decision-devui.css",
+          "decision-focus.html",
+          "decision-focus.js",
+          "decision-overview.html",
+          "decision-overview.js",
+          "decision-managed-limitations-wrap"
+        ],
+        "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
+        "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
+      }
+    ]
+  },
+  "independent_review": {
+    "reviewer_identity": "codex-runtime:01a09aef-8404-7911-bdb1-efda4bb2e07a",
+    "independent_from_author": true,
+    "independence_basis": "Fresh read-only review context. Observed CODEX_THREAD_ID and CODEX_SESSION_ID match this identity, distinct from codex-issue-5522 and both supplied prior reviewers. No authorship or delegation. Retained unchanged evidence by identity comparison; independently inspected changed bindings, assertions, results and captures.",
+    "reviewed_at": "2026-09-13T13:28:50Z",
+    "reviewed_payload_sha256": "sha256:09b34d0d7f099307e7f30bbd9be87ccd6d99a38cf41b0cd4c4e14f0ffb6ca82b",
+    "verdict": "pass",
+    "findings": []
+  },
+  "receipt_sha256": "sha256:8bd73f5509562d883ba056e883ece98e3759648e2f2915e65dcab558f6b33862"
+}

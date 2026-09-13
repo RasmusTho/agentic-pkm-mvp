@@ -12,6 +12,9 @@ import copy
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from urllib.parse import quote
+
+from app.builderops.devui_focus import CONTRACT_VERSION as FOCUS_CONTRACT_VERSION
 from typing import Any
 
 
@@ -290,3 +293,33 @@ def derive_overview_inputs(
 
 
 __all__ = ["derive_overview_inputs"]
+
+
+def bind_visual_focus_targets(
+    candidates: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Attach the one shipped visual Focus root to real Now subjects.
+
+    The source adapter still owns subject identity and placement.  This route
+    owns only the presentation locator, and supplies it as a typed root rather
+    than asking the browser to construct or probe candidate URLs.
+    """
+
+    for item in candidates.get("now", []):
+        subject = item.get("subject_ref", {}).get("source_id")
+        if not isinstance(subject, str) or not subject:
+            continue
+        item["navigation_refs"] = [
+            {
+                "kind": "focus",
+                "navigation_ref": {
+                    "source_type": "devui_focus_route",
+                    "source_id": subject,
+                    "locator": f"/devui/focus?subject={quote(subject, safe='')}",
+                    "version": FOCUS_CONTRACT_VERSION,
+                },
+                "status": "available",
+                "limitation": None,
+            }
+        ]
+    return candidates

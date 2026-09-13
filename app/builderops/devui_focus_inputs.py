@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 import subprocess
 from typing import Any
+
+from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
 
 
 _ISSUE_SUBJECT = re.compile(r"github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)\Z")
@@ -32,7 +34,9 @@ def _source_ref(*, source_type: str, source_id: str, locator: str, version: str)
     }
 
 
-def _claim(*, claim_id: str, claim: str, source_ref: Mapping[str, str], captured_at: str) -> dict[str, Any]:
+def _claim(
+    *, claim_id: str, claim: str, source_ref: Mapping[str, str], captured_at: str
+) -> dict[str, Any]:
     return {
         "claim_id": claim_id,
         "claim": claim,
@@ -47,7 +51,9 @@ def _claim(*, claim_id: str, claim: str, source_ref: Mapping[str, str], captured
     }
 
 
-def _common_inputs(*, subject: Mapping[str, Any], source_ref: Mapping[str, str], summary: str, captured_at: str) -> dict[str, Any]:
+def _common_inputs(
+    *, subject: Mapping[str, Any], source_ref: Mapping[str, str], summary: str, captured_at: str
+) -> dict[str, Any]:
     return {
         "subject": dict(subject),
         "owner_intent": {"summary": summary, "source_ref": dict(source_ref)},
@@ -84,27 +90,48 @@ def _common_inputs(*, subject: Mapping[str, Any], source_ref: Mapping[str, str],
     }
 
 
-def _read_issue_inputs(subject_id: str, match: re.Match[str]) -> dict[str, Any]:
-    repository, number_text = match.groups()
-    configured_repo = os.environ.get("COCKPIT_GITHUB_REPO")
-    if configured_repo != repository:
+def _read_issue_inputs(
+    subject_id: str,
+    match: re.Match[str],
+    *,
+    repository: str | None = None,
+    issue_reader: Callable[[str, str], Any] | None = None,
+) -> dict[str, Any]:
+    requested_repository, number_text = match.groups()
+    configured_repo = (
+        repository if issue_reader is not None else os.environ.get("COCKPIT_GITHUB_REPO")
+    )
+    repository = requested_repository
+    matches_repository = configured_repo == repository
+    if issue_reader is not None and configured_repo is not None:
+        try:
+            matches_repository = canonical_repository(configured_repo) == canonical_repository(repository)
+        except EnvelopeValidationError:
+            matches_repository = False
+    if not matches_repository:
         raise FocusInputError("requested Issue repository is not configured for the local read")
-    try:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repository}/issues/{number_text}"],
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=20,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise FocusInputError("selected Issue source is unavailable") from exc
-    if result.returncode != 0:
-        raise FocusInputError("selected Issue is unavailable or unsupported")
-    try:
-        issue = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise FocusInputError("selected Issue source is unavailable") from exc
+    if issue_reader is not None:
+        try:
+            issue = issue_reader(repository, number_text)
+        except Exception as exc:
+            raise FocusInputError("selected Issue source is unavailable") from exc
+    else:
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{repository}/issues/{number_text}"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=20,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise FocusInputError("selected Issue source is unavailable") from exc
+        if result.returncode != 0:
+            raise FocusInputError("selected Issue is unavailable or unsupported")
+        try:
+            issue = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise FocusInputError("selected Issue source is unavailable") from exc
     if not isinstance(issue, Mapping) or issue.get("pull_request"):
         raise FocusInputError("selected Issue is unavailable or unsupported")
     title = issue.get("title")
@@ -136,14 +163,21 @@ def _read_issue_inputs(subject_id: str, match: re.Match[str]) -> dict[str, Any]:
     )
 
 
-def read_focus_inputs(subject_id: str) -> dict[str, Any]:
+def read_focus_inputs(
+    subject_id: str,
+    *,
+    repository: str | None = None,
+    issue_reader: Callable[[str, str], Any] | None = None,
+) -> dict[str, Any]:
     """Return detached composer inputs for exactly one stable governed subject."""
 
     if not isinstance(subject_id, str) or not subject_id:
         raise FocusInputError("subject must be a stable governed identity")
     match = _ISSUE_SUBJECT.fullmatch(subject_id)
     if match is not None:
-        return _read_issue_inputs(subject_id, match)
+        return _read_issue_inputs(
+            subject_id, match, repository=repository, issue_reader=issue_reader
+        )
     raise FocusInputError("selected subject is unsupported")
 
 

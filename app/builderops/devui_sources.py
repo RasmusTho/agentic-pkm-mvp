@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from app.builderops import cockpit_docs_plane, cockpit_github_plane
 from app.builderops.cockpit_chain import parse_timestamp
+from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
+from app.builderops.devui_assets import validate_packaged_assets
 from app.builderops.cockpit_registry import _SourceRead, _Sources, compose_registry
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
@@ -175,10 +177,7 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
         or type(lease.get("fencing_token")) is not int
         or lease["fencing_token"] < 1
         or parse_timestamp(lease.get("expires_at")) is None
-        or (
-            lease.get("updated_at") is not None
-            and parse_timestamp(lease["updated_at"]) is None
-        )
+        or (lease.get("updated_at") is not None and parse_timestamp(lease["updated_at"]) is None)
     ):
         raise SourceReadRefusal("task_lease_mismatch")
     # The API also stores generic CLI tasks and native verification documents.
@@ -437,6 +436,9 @@ def _candidate_docs(
     return result, [
         f"https://github.com/{config.repository}/blob/{config.candidate_sha}/{name}#sha256={digest}"
         for name, digest in files.items()
+        # The shell is copied under package aliases, not repository paths.
+        # It remains in the fully checked inventory above, not document provenance.
+        if not name.startswith("assets/")
     ]
 
 
@@ -535,6 +537,42 @@ def read_managed_cockpit(config: SourceConfiguration) -> dict[str, Any]:
     return payload
 
 
+def read_managed_focus(config: SourceConfiguration, subject: str) -> dict[str, Any]:
+    """Read only the addressed Issue via the same admitted gh REST owner."""
+    if not (
+        config.repository
+        and config.github_enabled
+        and config.github_config_dir
+        and config.github_config_dir.is_dir()
+    ):
+        raise FocusInputError("selected Issue source is unavailable")
+
+    def read_issue(repository: str, number: str) -> Any:
+        issue = cockpit_github_plane._run_gh(["api", f"repos/{repository}/issues/{number}"])
+        locator = issue.get("html_url") if isinstance(issue, dict) else None
+        addressed_issue = (
+            re.fullmatch(
+                r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)",
+                locator,
+            )
+            if isinstance(locator, str)
+            else None
+        )
+        if (
+            not isinstance(issue, dict)
+            or type(issue.get("number")) is not int
+            or issue.get("number") != int(number)
+            or parse_timestamp(issue.get("updated_at")) is None
+            or addressed_issue is None
+            or canonical_repository(addressed_issue[1]) != canonical_repository(repository)
+            or addressed_issue[2] != number
+        ):
+            raise FocusInputError("selected Issue response identity is invalid")
+        return issue
+
+    return read_focus_inputs(subject, repository=config.repository, issue_reader=read_issue)
+
+
 def package_candidate(
     root: Path, *, repository: str, source_sha: str, capabilities: str, matrix: str
 ) -> None:
@@ -561,6 +599,8 @@ def package_candidate(
             sort_keys=True,
         )
     )
+
+    validate_packaged_assets(root, source_sha=source_sha, repository=repo)
 
 
 if __name__ == "__main__":

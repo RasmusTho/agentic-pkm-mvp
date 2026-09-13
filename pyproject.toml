@@ -95,4 +95,5 @@ include = ["app*", "llm_contract*", "companion_ui*"]
 
 [tool.setuptools.package-data]
 "app.settings" = ["*.yaml"]
+"app.builderops" = ["devui_managed.css", "devui_managed_reuse.json"]
 "app.builderops.control_plane.migrations" = ["*.sql"]

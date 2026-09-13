@@ -1,0 +1,123 @@
+{
+  "contract": "devui-managed-browser-observation.v1",
+  "observed_at": "2026-09-13T13:19:34.409481+00:00",
+  "scope": "local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
+  "origin": "http://127.0.0.1:8113",
+  "candidate_diagnostics": {
+    "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "config_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "status": "explicit test-fixture identities, not attested deployment"
+  },
+  "passed_nodeids": [
+    "tests/companion_ui/test_devui_managed_journeys.py::test_standalone_overview_focus_return_preserves_subject_and_candidate",
+    "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_hostile_accessibility_and_no_effect_matrix",
+    "tests/companion_ui/test_devui_managed_journeys.py::test_managed_journey_preserves_focus_failures_and_fresh_return"
+  ],
+  "junit": {
+    "evidence_ref": "5522-browser-attempt5/junit.xml",
+    "sha256": "sha256:95105c5714168356c66e23121fdebaf2d492d2781988c695f646411702e8e49a",
+    "tests": 3,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0
+  },
+  "cross_origin_request_count": 0,
+  "mutating_browser_requests": 0,
+  "mutating_source_requests": 0,
+  "persistence": {
+    "cookies": 0,
+    "localStorage": 0,
+    "sessionStorage": 0,
+    "indexedDB_databases": 0,
+    "cache_names": 0,
+    "service_worker_registrations": 0
+  },
+  "modes": [
+    "desktop",
+    "narrow",
+    "zoom_200",
+    "keyboard",
+    "screen_reader",
+    "print",
+    "javascript_off"
+  ],
+  "failure_cases": [
+    "refusal",
+    "timeout",
+    "404",
+    "http_status",
+    "malformed",
+    "request_failure",
+    "page_error",
+    "console_error"
+  ],
+  "error_observation": "Unexpected page and console errors are asserted absent on healthy journeys; explicit injected error cases assert recorder detection and fresh-return navigation, not a false healthy verdict.",
+  "captures": {
+    "focus-desktop.aria.txt": "sha256:d21393593ffc9cc6e0e750541b7f532bef0923d90bd20824d0e92dcecf157b45",
+    "focus-desktop.png": "sha256:e0d88f39dd784a90da4bdf7ce228d83892d161c50e8d21d943160e1850d85fa6",
+    "focus-failure-404.aria.txt": "sha256:fc92cb5d5394fbaf98bf747c796d771c40d95e443d97cf637a79d85d0453228c",
+    "focus-failure-404.png": "sha256:21481616597e1b4fbf7c7c2abf92d98706127ae68e29f590dd01cb9b778217eb",
+    "focus-failure-console_error.aria.txt": "sha256:d733e4c01b39399425be01ce5801e20f8222c3ad3e0f121f18db8348396ecde4",
+    "focus-failure-console_error.png": "sha256:631afbb9003a643a5448fa413e456bf2fe9a2541b7e47621de79fed5f5d2f3f7",
+    "focus-failure-http_status.aria.txt": "sha256:a17bec269a17533c963a578229845e53b5f8e0855b539560e317c76ea11a017c",
+    "focus-failure-http_status.png": "sha256:84ecd9b0a540ef25ffd90f799e61c53296becfb35ecec244da35e873df2a0eca",
+    "focus-failure-malformed.aria.txt": "sha256:3ef4cacfd7864f31d02771f8ac71f426fbc104477264c9d2af47f2b2f1e67cd2",
+    "focus-failure-malformed.png": "sha256:b777e39c5dc74806c4168b6238f477626345bb2a812f4c42b214026040031c43",
+    "focus-failure-page_error.aria.txt": "sha256:046a807c299708481265f1865c77a73b6de1bad07e708abc6c9757231bc72edb",
+    "focus-failure-page_error.png": "sha256:ff0f9a358753f920d3be905b855b83a32792505e6814a844b5f328ffbc1166a8",
+    "focus-failure-refusal.aria.txt": "sha256:fc92cb5d5394fbaf98bf747c796d771c40d95e443d97cf637a79d85d0453228c",
+    "focus-failure-refusal.png": "sha256:3fba7f34df83cc176301f994f22fc7f4b5ff504f729039af789e90c85bbc2601",
+    "focus-failure-request_failure.aria.txt": "sha256:bdd3da666cc79ed9a3ea38a53dc668edaec8ad265c650ec933d5dbe7c82adf74",
+    "focus-failure-request_failure.png": "sha256:6e15b17abcc934e9dbedb6ff82b8b228f5cef2fed09a7c206e3822ae4a6d05f0",
+    "focus-failure-timeout.aria.txt": "sha256:bdd3da666cc79ed9a3ea38a53dc668edaec8ad265c650ec933d5dbe7c82adf74",
+    "focus-failure-timeout.png": "sha256:6e15b17abcc934e9dbedb6ff82b8b228f5cef2fed09a7c206e3822ae4a6d05f0",
+    "focus-javascript-off.aria.txt": "sha256:a58af8928c8c1a11e211007d553198e7867debd9bfa580115a047bba156cb90d",
+    "focus-javascript-off.png": "sha256:4c87d60389fe30c1f3113dba7e2862369fe6ec09630fb31691f5bed985212dc4",
+    "focus-narrow.aria.txt": "sha256:d21393593ffc9cc6e0e750541b7f532bef0923d90bd20824d0e92dcecf157b45",
+    "focus-narrow.png": "sha256:7edce35692519b4c482b38f861dc22377c58d8381cbd24dd633ebdb65d5afafb",
+    "focus-print.aria.txt": "sha256:d21393593ffc9cc6e0e750541b7f532bef0923d90bd20824d0e92dcecf157b45",
+    "focus-print.png": "sha256:9642068255b34f1bc6235175d0d0dd5388b2a830b1098e43b8132229727c5c7f",
+    "focus-zoom_200.aria.txt": "sha256:d21393593ffc9cc6e0e750541b7f532bef0923d90bd20824d0e92dcecf157b45",
+    "focus-zoom_200.png": "sha256:9642068255b34f1bc6235175d0d0dd5388b2a830b1098e43b8132229727c5c7f",
+    "managed-focus.aria.txt": "sha256:919315c2d1e60eff7ef664d3c1114246707bfe6de1c8592e1a0e5509b3ace8de",
+    "managed-focus.png": "sha256:c27882ea8d1e8dbad32644ff77339df6753e11dea72bd102d91811bb4281ff46",
+    "overview-desktop.aria.txt": "sha256:69e975e4a5c62467297d45cefceac6d45feb706c9beb33f9dfdbcf110299b2b7",
+    "overview-desktop.png": "sha256:82578e6ea78f3b80ab809b45e85641df0f68ffe683cf1304df3093be5315e78f",
+    "overview-javascript-off.aria.txt": "sha256:adebca306d8c0ae10e8356382de7288cee7fbfaaa7471a3b51bad6d3f7177f3f",
+    "overview-javascript-off.png": "sha256:37adf1369639d61e85ec025e74ac61169ad0f233cb743f6be85befacd0128d01",
+    "overview-narrow.aria.txt": "sha256:69e975e4a5c62467297d45cefceac6d45feb706c9beb33f9dfdbcf110299b2b7",
+    "overview-narrow.png": "sha256:d25790b2007ccb812797e4e034b76b3a26dd3b1c65faaa58f6cff9bf5601196f",
+    "overview-print.aria.txt": "sha256:69e975e4a5c62467297d45cefceac6d45feb706c9beb33f9dfdbcf110299b2b7",
+    "overview-print.png": "sha256:77a8db2798be5905b7ad1b86b966d002f86d3a4c7b4567fed37f27193eea24df",
+    "overview-zoom_200.aria.txt": "sha256:69e975e4a5c62467297d45cefceac6d45feb706c9beb33f9dfdbcf110299b2b7",
+    "overview-zoom_200.png": "sha256:77a8db2798be5905b7ad1b86b966d002f86d3a4c7b4567fed37f27193eea24df"
+  },
+  "raw_capture_package": "5522-browser-attempt5 (retained in the delivery evidence package)",
+  "production_code_sha256": {
+    "app/builderops/devui_runtime.py": "sha256:5db6cee5219854b8fbf1c38e5ccbb2b9dbc6c2cd0813fe7eb008741e82ae85f3",
+    "app/builderops/devui_assets.py": "sha256:4d4e6ba2e63b56e56832eea6d05eb0744b227c039fbd8321e4008bdca4ed688b",
+    "app/builderops/devui_sources.py": "sha256:5a8e87e1bdfaa12d7b32d0f879e9c6413fdace29937ee86f71501dd8003515f6",
+    "app/builderops/devui_focus_inputs.py": "sha256:6d72a0bdec8aa71fa08b213e46583da0f662a27205129ed1b299e41ee19656eb",
+    "app/builderops/devui_overview_inputs.py": "sha256:8d86d7c9b21b01cbc2defaba8e92c8078dd34e814b7d60ea79a19b2c5ead4cb3",
+    "app/builderops/control_plane/models.py": "sha256:cd6cb609b6eed449ca969f0c383ba3bcf700673e6c6644a240cbfe0d5563850b"
+  },
+  "asset_sha256": {
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b",
+    "app/builderops/devui_managed.css": "sha256:833dbf1d2cc70ecbcda13e3bf5d1c4091a3657d1fb636bd3978b3f7cbf43d635"
+  },
+  "fixture_code_sha256": {
+    "tests/companion_ui/test_devui_managed_journeys.py": "sha256:bae1da7eacaf10d2573bc5c7c42ba571f073a98781c6270f01cd30f72d40eec4",
+    "tests/builderops/test_devui_runtime.py": "sha256:41b3da4f0561fe00f0477f24bcca21975502dbcb0eb78af4701f2fde3e055343"
+  },
+  "repository_identity_observation": {
+    "fixture_repository": "Example/Fixture",
+    "canonical_repository": "example/fixture",
+    "selected_subject": "github:example/fixture#501",
+    "source_locator": "https://github.com/Example/Fixture/issues/501",
+    "packaging": "Real package_candidate producer executes before production_app startup; browser follows server-supplied Overview locator and preserves Focus source spelling."
+  }
+}

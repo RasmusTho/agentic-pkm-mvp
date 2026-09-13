@@ -35,7 +35,7 @@ class RejectProduct(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectProduct())
 from app.builderops.devui_runtime import production_app
 app = production_app()
-assert {r.path for r in app.routes} == {'/api/devui/overview', '/healthz', '/version'}
+assert {'/api/devui/overview', '/healthz', '/version', '/devui/overview', '/api/devui/focus'} <= {r.path for r in app.routes}
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -61,10 +61,8 @@ def test_managed_overview_admission(tmp_path: Path) -> None:
     app = create_app(load_configuration(_environment(tmp_path)))
     with TestClient(app, client=("127.0.0.1", 1000), base_url="http://127.0.0.1:8113") as client:
         response = client.get("/api/devui/overview")
-        assert response.status_code == 200
-        payload = response.json()
-        assert "refused" in json.dumps(payload)
-        assert "ready_to_try" in json.dumps(payload)
+        assert response.status_code == 503
+        assert "candidate" in response.text
         for headers in (
             {"X-Forwarded-For": "127.0.0.1"},
             {"Forwarded": "for=127.0.0.1"},
@@ -152,7 +150,9 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
             }
         )
     )
-    state = SimpleNamespace(mode="ok", epoch=7, calls=[], http_calls=[], tasks=[task], addressed_tasks=[])
+    state = SimpleNamespace(
+        mode="ok", epoch=7, calls=[], http_calls=[], tasks=[task], addressed_tasks=[]
+    )
 
     class Store:
         def readiness(self):
@@ -265,6 +265,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
         },
     }
     (root / "manifest.json").write_text(json.dumps(manifest))
+    _package_managed_shell(root)
+    manifest = json.loads((root / "manifest.json").read_text())
     monkeypatch.setattr(devui_runtime, "CANDIDATE_ROOT", root, raising=False)
 
     gh_config = tmp_path / "gh-config"
@@ -285,8 +287,35 @@ if mode == 'unavailable' or (mode == 'partial' and args[1].endswith('/status')):
     print('fixture-secret-never-export', file=sys.stderr)
     raise SystemExit(1)
 endpoint = args[1]
-if endpoint.endswith('/issues'):
+if endpoint.endswith('/issues/501'):
+    result = {'number': 501, 'title': '<img src=x onerror=alert(1)> Managed work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501', 'updated_at': '2026-09-13T10:00:00Z'}
+    if mode == 'identity_mismatch':
+        result['html_url'] = 'https://github.com/foreign/repo/issues/501'
+    if mode == 'canonical_case':
+        result['html_url'] = 'https://github.com/Example/Fixture/issues/501'
+    invalid_locators = {
+        'locator_query': 'https://github.com/Example/Fixture/issues/501?source=other',
+        'locator_userinfo': 'https://user@github.com/Example/Fixture/issues/501',
+        'locator_wrong_path': 'https://github.com/Example/Fixture/pull/501',
+        'locator_foreign_host': 'https://foreign.invalid/Example/Fixture/issues/501',
+    }
+    if mode in invalid_locators:
+        result['html_url'] = invalid_locators[mode]
+    if mode == 'wrong_number':
+        result['number'] = 999
+    if mode == 'wrong_kind':
+        result['pull_request'] = {'url': 'foreign'}
+    if mode == 'missing_title':
+        result['title'] = ''
+    if mode == 'bad_version':
+        result['updated_at'] = 'invalid-time'
+    if mode == 'malformed':
+        print('{broken')
+        raise SystemExit(0)
+elif endpoint.endswith('/issues'):
     result = [{'number': 501, 'title': 'Fixture work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501'}]
+    if mode == 'canonical_case':
+        result[0]['html_url'] = 'https://github.com/Example/Fixture/issues/501'
 elif endpoint.endswith('/pulls'):
     result = [] if mode == 'no_pull' else [{'number': 502, 'title': 'Fixture PR', 'state': 'open', 'html_url': 'https://github.com/example/fixture/pull/502', 'body': 'Governing-Issue: #501', 'head': {'sha': 'd' * 40, 'ref': 'codex/fixture'}}]
 elif endpoint.endswith('/status'):
@@ -466,7 +495,9 @@ def test_managed_source_preserves_native_activity(managed_sources, case, moving,
             fencing_token=1,
             expires_at=(now + timedelta(hours=1)).isoformat(),
             lease_kind="generic" if case == "generic_lease" else "task",
-            lease_updated_at=fresh if case in {"lease_activity", "expired_recent_activity"} else old,
+            lease_updated_at=fresh
+            if case in {"lease_activity", "expired_recent_activity"}
+            else old,
         )
         if case == "expired_recent_activity":
             row["expires_at"] = (now - timedelta(minutes=1)).isoformat()
@@ -494,7 +525,9 @@ def test_managed_source_preserves_native_activity(managed_sources, case, moving,
         assert task["updated_at"] == row["updated_at"]
         assert task.get("last_heartbeat_at") == row["payload"]["last_heartbeat_at"]
         assert task.get("lease_updated_at") == row.get("lease_updated_at")
-        digest = hashlib.sha256(json.dumps(source.addressed_tasks, sort_keys=True).encode()).hexdigest()
+        digest = hashlib.sha256(
+            json.dumps(source.addressed_tasks, sort_keys=True).encode()
+        ).hexdigest()
         assert any(
             ref.endswith("#sha256=" + digest)
             for ref in _managed_source(payload, "dispatcher-store")["transport"]["source_refs"]
@@ -792,10 +825,16 @@ def test_managed_source_packaging_and_isolation_contract(managed_sources) -> Non
     assert result.returncode == 0, result.stderr
     assert json.loads((source.root / "manifest.json").read_text()) == source.manifest
     with source.client() as client:
-        assert (
-            _managed_source(client.get("/api/devui/overview").json(), "docs-frontmatter")["state"]
-            == "fresh"
-        )
+        documents = _managed_source(client.get("/api/devui/overview").json(), "docs-frontmatter")
+        assert documents["state"] == "fresh"
+        refs = documents["transport"]["source_refs"]
+        assert refs and not any("/assets/" in ref for ref in refs)
+        assert set(refs) == {
+            f"https://github.com/example/fixture/blob/{'a' * 40}/{name}#sha256={digest}"
+            for name, digest in source.manifest["files"].items()
+            if name.startswith("docs/")
+        }
+        assert all("assets/" + name in source.manifest["files"] for name in MANAGED_ROUTES.values())
     workflow = yaml.safe_load((ROOT / ".github/workflows/app-image-build.yml").read_text())
     steps = [
         step
@@ -848,3 +887,241 @@ def test_managed_overview_rereads_sources_and_preserves_vm102(managed_sources) -
         withdrawn = client.get("/api/devui/overview").json()
         assert withdrawn["ready_to_try"] == []
         assert [x["display_label"] for x in withdrawn["now"]] == ["Fixture work"]
+
+
+MANAGED_ROUTES = {
+    "/devui/overview": "overview.html",
+    "/devui/focus": "focus.html",
+    "/devui/assets/devui.css": "devui.css",
+    "/devui/assets/overview.js": "overview.js",
+    "/devui/assets/focus.js": "focus.js",
+}
+MANAGED_SUBJECT = "github:example/fixture#501"
+
+
+def _package_managed_shell(root: Path) -> None:
+    import hashlib
+    import shutil
+
+    source = ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_candidate"
+    shutil.copytree(source, root / "assets", dirs_exist_ok=True)
+    shutil.copyfile(ROOT / "app/builderops/devui_managed.css", root / "assets/devui.css")
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"].update(
+        {
+            "assets/" + name: hashlib.sha256((root / "assets" / name).read_bytes()).hexdigest()
+            for name in MANAGED_ROUTES.values()
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def test_managed_journey_serves_exact_packaged_asset_allowlist(managed_sources) -> None:
+    source = managed_sources
+    _package_managed_shell(source.root)
+    with source.client() as client:
+        for route, filename in MANAGED_ROUTES.items():
+            query = {"subject": MANAGED_SUBJECT} if route == "/devui/focus" else {}
+            response = client.get(route, params=query)
+            assert response.status_code == 200
+            assert response.content == (source.root / "assets" / filename).read_bytes()
+            assert response.headers["cache-control"] == "no-store"
+            assert "default-src 'none'" in response.headers["content-security-policy"]
+        assert {r.path for r in client.app.routes} == set(MANAGED_ROUTES) | {
+            "/api/devui/overview",
+            "/api/devui/focus",
+            "/version",
+            "/healthz",
+        }
+        for route in ("/", "/devui", "/devui/assets/extra.js", "/api/devui/overview/synthesis"):
+            assert client.get(route).status_code == 404
+    assert source.http_calls == []
+    assert not source.gh_calls.exists()
+
+
+def test_managed_journey_boots_without_product_or_companion_gateway(tmp_path: Path) -> None:
+    script = """
+import importlib.abc, sys
+class Reject(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, *args):
+        if fullname in {'app.api', 'app.settings', 'app.auth', 'app.store', 'app.db', 'app.dispatcher'} or fullname.startswith('companion_ui'):
+            raise AssertionError('forbidden boot: ' + fullname)
+sys.meta_path.insert(0, Reject())
+from app.builderops.devui_runtime import production_app
+app = production_app()
+assert '/devui/overview' in {r.path for r in app.routes}
+assert '/api/devui/focus' in {r.path for r in app.routes}
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env={"PATH": os.environ["PATH"], **_environment(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed_sources) -> None:
+    source = managed_sources
+    _package_managed_shell(source.root)
+    with source.client() as client:
+        response = client.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT})
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["subject"]["stable_id"] == MANAGED_SUBJECT
+        assert (
+            payload["subject"]["authority_ref"]["locator"]
+            == "https://github.com/example/fixture/issues/501"
+        )
+        assert payload["receipts"] == payload["execution_observations"] == []
+        assert payload["next_legal_step"]["legality"] == "unavailable"
+        assert payload["conversation_port"]["availability"] == "unsupported"
+        assert source.http_calls == []
+        calls = source.gh_calls.read_text().splitlines()
+        assert len(calls) == 1
+        assert json.loads(calls[0])[:2] == ["api", "repos/example/fixture/issues/501"]
+        for subject in ("github:foreign/repository#501", "capability:fixture"):
+            refused = client.get("/api/devui/focus", params={"subject": subject})
+            assert refused.status_code == 404
+        assert source.gh_calls.read_text().splitlines() == calls
+        for mode in ("unavailable", "identity_mismatch", "wrong_number", "wrong_kind", "missing_title", "bad_version", "malformed", "locator_query", "locator_userinfo", "locator_wrong_path", "locator_foreign_host"):
+            source.gh_mode.write_text(mode)
+            refused = client.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT})
+            assert refused.status_code == 404, (mode, refused.text)
+            assert "fixture-secret-never-export" not in refused.text
+        source.environment["DEVUI_GITHUB_ENABLED"] = "false"
+        before = source.gh_calls.read_text()
+        with source.client() as disabled:
+            assert disabled.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT}).status_code == 404
+        assert source.gh_calls.read_text() == before
+
+    assert source.http_calls == []
+
+
+@pytest.mark.parametrize("subject", ["github:example/fixture#501", "github:Example/Fixture#501"])
+def test_managed_focus_preserves_canonical_repository_case(managed_sources, subject) -> None:
+    source = managed_sources
+    _package_managed_shell(source.root)
+    source.environment["DEVUI_REPOSITORY"] = "Example/Fixture"
+    source.gh_mode.write_text("canonical_case")
+    with source.client() as client:
+        response = client.get("/api/devui/focus", params={"subject": subject})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["subject"]["stable_id"] == subject
+    assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
+    assert source.http_calls == []
+
+
+def test_managed_journey_admission_and_typed_query_failure_matrix(managed_sources) -> None:
+    source = managed_sources
+    _package_managed_shell(source.root)
+    paths = list(MANAGED_ROUTES) + [
+        "/api/devui/overview",
+        "/api/devui/focus",
+        "/version",
+        "/healthz",
+    ]
+    with source.client() as client:
+        for path in paths:
+            params = {"subject": MANAGED_SUBJECT} if path.endswith("/focus") else {}
+            for headers in (
+                {"Host": "evil.example"},
+                {"Host": "127.0.0.1:8114"},
+                {"Forwarded": "for=127.0.0.1"},
+                {"X-Forwarded-Host": "localhost:8113"},
+                {"X-Real-IP": "127.0.0.1"},
+                {"Via": "proxy"},
+            ):
+                assert client.get(path, params=params, headers=headers).status_code == 403
+            for method in ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
+                assert client.request(method, path, params=params).status_code == 405
+            if not path.endswith("/focus"):
+                assert client.get(path + "?subject=x").status_code == 400
+        for path in ("/devui/focus", "/api/devui/focus"):
+            for query in (
+                "",
+                "?subject=",
+                "?subject=%20",
+                "?subject=a&subject=b",
+                "?subject=x&extra=y",
+                "?extra=x",
+                "?subject=%ZZ",
+                "?subject=%FF",
+                "?subject",
+                "?subject=github:x/y%230",
+                "?subject=../../../secret",
+                "?subject=github:x/y%231%00",
+            ):
+                assert client.get(path + query).status_code == 400, (path, query)
+        for path in (
+            "/devui/focus/",
+            "/devui/assets/secrets.json",
+            "/api/devui/composition",
+            "/openapi.json",
+        ):
+            assert client.get(path).status_code == 404
+    with TestClient(
+        create_app(load_configuration(source.environment)),
+        client=("192.0.2.5", 1000),
+        base_url="http://127.0.0.1:8113",
+    ) as remote:
+        for path in paths:
+            assert remote.get(path).status_code == 403
+    assert source.http_calls == []
+    assert not source.gh_calls.exists()
+
+
+def test_managed_shell_api_and_asset_inventory_bind_one_candidate(managed_sources) -> None:
+    import copy
+
+    source = managed_sources
+    _package_managed_shell(source.root)
+    with source.client() as client:
+        responses = [
+            client.get("/devui/overview"),
+            client.get("/devui/assets/devui.css"),
+            client.get("/api/devui/overview"),
+            client.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT}),
+        ]
+        version = client.get("/version").json()
+        for response in responses:
+            assert response.status_code == 200
+            assert response.headers["x-pkm-runtime-git-sha"] == version["source_sha"]
+            assert response.headers["x-devui-image-digest"] == version["image_digest"]
+            assert response.headers["x-devui-config-fingerprint"] == version["config_fingerprint"]
+            assert response.headers["x-devui-asset-inventory"] == version["asset_inventory_sha256"]
+        original = json.loads((source.root / "manifest.json").read_text())
+        calls = list(source.http_calls)
+        gh_calls = source.gh_calls.read_text()
+        for mutation in ("missing", "sha", "inventory", "bytes", "extra"):
+            manifest = copy.deepcopy(original)
+            if mutation == "sha":
+                manifest["source_sha"] = "d" * 40
+            if mutation == "inventory":
+                del manifest["files"]["assets/devui.css"]
+            (source.root / "manifest.json").write_text(json.dumps(manifest))
+            if mutation == "missing":
+                (source.root / "manifest.json").unlink()
+            if mutation == "bytes":
+                (source.root / "assets/devui.css").write_text("body { color: red; }")
+            if mutation == "extra":
+                (source.root / "assets/extra.js").write_text("alert(1)")
+            for route in (
+                "/devui/overview",
+                "/devui/assets/devui.css",
+                "/api/devui/overview",
+                "/api/devui/focus",
+            ):
+                params = {"subject": MANAGED_SUBJECT} if route.endswith("/focus") else {}
+                refused = client.get(route, params=params)
+                assert refused.status_code == 503, (mutation, route)
+                assert "candidate" in refused.text.lower()
+            assert source.http_calls == calls
+            assert source.gh_calls.read_text() == gh_calls
+            (source.root / "assets/extra.js").unlink(missing_ok=True)
+            _package_managed_shell(source.root) if mutation != "missing" else None
+            (source.root / "manifest.json").write_text(json.dumps(original))

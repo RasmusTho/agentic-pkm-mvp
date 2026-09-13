@@ -4,6 +4,7 @@ import copy
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -27,6 +28,29 @@ TYPES = {
     "deploy": "devsystem_vm102_deploy.v1",
     "health": "devsystem_vm102_health.v1",
 }
+
+
+def _package_runtime_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_sha: str
+) -> None:
+    from app.builderops import devui_runtime
+    from app.builderops.devui_assets import ASSET_SHA256
+    from app.builderops.devui_sources import package_candidate
+
+    root = tmp_path / "candidate"
+    (root / "assets").mkdir(parents=True)
+    (root / "docs").mkdir()
+    historical = ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_candidate"
+    for name in ASSET_SHA256:
+        source = ROOT / "app/builderops/devui_managed.css" if name == "devui.css" else historical / name
+        shutil.copyfile(source, root / "assets" / name)
+    shutil.copyfile(ROOT / "app/builderops/ckm/seed/capabilities.yaml", root / "docs/capabilities.yaml")
+    shutil.copyfile(ROOT / "docs/architecture/traceability-matrix.md", root / "docs/matrix.md")
+    package_candidate(
+        root, repository="example/fixture", source_sha=source_sha,
+        capabilities="docs/capabilities.yaml", matrix="docs/matrix.md",
+    )
+    monkeypatch.setattr(devui_runtime, "CANDIDATE_ROOT", root)
 
 
 def _bundle() -> dict:
@@ -331,7 +355,9 @@ def test_deploy_health_validation_rechecks_prerequisites(kind: str, failure: str
         validate_receipt(receipt, bundle["prerequisites"])
 
 
-def test_runtime_withdraws_another_candidate_chain(tmp_path: Path) -> None:
+def test_runtime_withdraws_another_candidate_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fastapi.testclient import TestClient
     from app.builderops.devui_runtime import create_app, load_configuration
 
@@ -342,6 +368,7 @@ def test_runtime_withdraws_another_candidate_chain(tmp_path: Path) -> None:
         json.dumps(bundle["prerequisites"])
     )
     candidate = bundle["evidence"]["candidate_identity"]
+    _package_runtime_candidate(tmp_path, monkeypatch, candidate["source_sha"])
     env = {
         "VCS_REF": candidate["source_sha"],
         "DEVUI_SOURCE_SHA": candidate["source_sha"],
@@ -634,7 +661,9 @@ def test_component_observations_follow_stage_prerequisites(kind: str) -> None:
 @pytest.mark.parametrize(
     "failure", [None, "qualification", "deploy", "health", "missing", "malformed", "source_packet", "activation"]
 )
-def test_listener_admits_only_owner_verified_typed_evidence(tmp_path: Path, failure: str | None) -> None:
+def test_listener_admits_only_owner_verified_typed_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
+) -> None:
     from fastapi.testclient import TestClient
     from app.builderops.devui_runtime import create_app, load_configuration
 
@@ -658,6 +687,7 @@ def test_listener_admits_only_owner_verified_typed_evidence(tmp_path: Path, fail
             "[" if failure == "malformed" else json.dumps(bundle["prerequisites"])
         )
     candidate = bundle["evidence"]["candidate_identity"]
+    _package_runtime_candidate(tmp_path, monkeypatch, candidate["source_sha"])
     configuration = load_configuration({
         "VCS_REF": candidate["source_sha"],
         "DEVUI_SOURCE_SHA": candidate["source_sha"],

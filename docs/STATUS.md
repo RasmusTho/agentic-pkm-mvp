@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-13 (bounded DevUI managed-source writeback)
+Last reviewed: 2026-09-13 (bounded DevUI managed read-journey writeback)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
@@ -31,7 +31,7 @@ Status snapshot now includes SoT baseline + release-line fields and intent/event
 
 Concept anchors: layering, portability, archive exposure, trust semantics, event compatibility, and config-as-product are now defined as concept contracts under `docs/CONCEPTS/` and are considered the canonical statements of intent. This status document describes operational snapshots and may lag those contracts.
 
-2026-09-13 DevUI read-model and prepared-runtime writeback (verified against `docs/DEVUI.md`,
+2026-09-13 DevUI read-model and managed-journey writeback (verified against `docs/DEVUI.md`,
 `docs/plans/DEVUI_IMPLEMENTATION.md`, `app/builderops/devui_overview.py`,
 `app/builderops/devui_runtime.py`, `app/builderops/devui_sources.py`, and
 `app/ops/devui_vm102_runtime_receipts.py`; repository evidence only):
@@ -40,17 +40,17 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
   `devui.composition.v1`, explicit producer evidence, and typed root references. It preserves
   unsupported owner and ready classification as withdrawal rather than an empty list; it performs
   no source I/O, persistence, mutation, task/session operation, inferred correlation, or browser
-  classification. The standalone Builder listener now prepares exact read-only
-  `/api/devui/overview` with private loopback admission and fail-loud configuration preflight,
-  without Product startup. Its typed qualification/deploy/health producers validate supplied
+  classification. The standalone Builder listener serves the finite managed Overview/Focus
+  read journey with direct loopback admission, checked package assets and fail-loud configuration
+  preflight (#5522), without Product or Companion gateway startup. Its typed qualification/deploy/health producers validate supplied
   component evidence and distinguish preparation from observed health. The managed GET now reads
   the admitted BuilderOps API, bounded gh REST and immutable candidate documents alongside the
   independent VM102 receipts (#5520); CKM remains unavailable. Source configuration, partial
   task projection, quota refusal and candidate provenance are defined at
   [Managed read journey admission](BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
-  The managed declaration and passing repository tests do not prove
-  VM102 deployment, live health, browser proof or owner acceptance; those gates remain under #5181
-  and #4749. The runtime/receipt owner contract is
+  The separate local browser proof and constrained-reuse envelope establish repository behavior;
+  VM102 deployment, qualified live sources, final-main deployed browser proof, complete health and
+  owner acceptance remain under #5181, #4749 and parent #4741. The runtime/receipt owner contract is
   `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Standalone DevUI receipt production`.
 - The pure `devui.discovery-projection.v1` composer derives detached discovery items from the
   existing composition envelope and caller-declared source records. It preserves authority,

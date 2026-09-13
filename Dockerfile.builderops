@@ -1,4 +1,6 @@
 FROM scratch AS devui-source-inputs
+COPY companion-ui/companion-app/companion_ui/workspace/devui_candidate /devui-candidate/assets
+COPY app/builderops/devui_managed.css /devui-candidate/assets/devui.css
 COPY docs /devui-candidate/docs
 COPY app/builderops/ckm/seed/capabilities.yaml /devui-candidate/app/builderops/ckm/seed/capabilities.yaml
 

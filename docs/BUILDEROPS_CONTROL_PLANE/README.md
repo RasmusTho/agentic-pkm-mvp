@@ -100,32 +100,44 @@ policy receipt and cannot substitute for live qualification.
 
 ### Managed read journey admission
 
-ARO-09 / #5504 defines the following target contract. The prepared listener in
-[Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-standalone-devui-listener)
-already fixes the origin to `http://127.0.0.1:8113`, entrypoint to
-`python -m app.builderops.devui_runtime`, and identity to `builderops-devui` / `devui` on the
-dedicated `builderops` engine. It currently serves only exact GET `/api/devui/overview`,
-`/version` and `/healthz`; it serves no browser shell, assets or Focus route.
+ARO-09 / #5504 owns this finite read contract. #5520 delivers source wiring and #5522
+connects the managed Overview → server-supplied Focus → fresh Overview journey in the independent
+Builder package. The listener remains `python -m app.builderops.devui_runtime` at
+`http://127.0.0.1:8113`, with `builderops-devui` / `devui` on the dedicated `builderops` engine.
+Its entire GET allowlist is `/devui/overview`, `/devui/focus`, `/devui/assets/devui.css`,
+`/devui/assets/overview.js`, `/devui/assets/focus.js`, `/api/devui/overview`, `/api/devui/focus`,
+`/version` and `/healthz`. There is no wildcard proxy, Product bootstrap, Companion gateway boot,
+external asset or browser credential.
 
-The first managed browser target is `http://127.0.0.1:8113/devui/overview`, with server-supplied
-`/devui/focus?subject=...` and a fresh Overview return. A separately governed implementation must
-package the existing #4836 shell/assets in the same attested Builder image and serve the exact
-allowlist from `devui_candidate_assets.py`: the two pages, `devui.css`, `overview.js` and
-`focus.js`, plus the existing Overview and typed Focus GET contracts. No wildcard proxy, Product
-API bootstrap, generic file server, external asset, credential-bearing browser or new navigation
-authority is admitted. The existing #4746 constrained-reuse receipt applies only within its exact
-envelope; a new/mixed design delta requires its own governed handoff. Packaging/admission and
-managed-origin browser proof remain undelivered; #4836 reuse provenance does not establish them.
+The five managed assets are image-baked and checked against their complete addressed inventory
+before source reads. Pages, assets and APIs carry the same source/image/config and asset-inventory
+diagnostics; missing or changed asset bytes or candidate metadata visibly withdraw the journey.
+Those diagnostics are inputs to independent image/config attestation, never attestation themselves.
+The managed CSS is an exact committed variant with only `.limitations li{overflow-wrap:break-word}`
+added to preserve complete limitation text at narrow widths. Its source-mapped `layout_reflow`
+and complete candidate reuse evidence remain distinct from the unchanged historical Companion
+assets, inventory/checker and #4833 five-node proof. The receipt is
+[`devui_managed_reuse.json`](../../app/builderops/devui_managed_reuse.json); it claims no live design
+selection or token parity. Any other visual delta needs its applicable governed design route.
 
-Direct-loopback admission is owned by `app/builderops/devui_runtime.py::_local_request` and
-`create_app.admit`: immediate loopback peer, exact `127.0.0.1:8113` or `localhost:8113` Host,
-no forwarded identity. Current routes reject all query parameters. The future Focus route must
-admit only its typed subject query under that same boundary; it cannot silently inherit a generic
-proxy/query exception. Approved private authenticated operator access, such as the governed SSH
-tunnel, must preserve this local origin. Ingress provisioning remains an operator action. The
-former Companion-to-Product `8113`/`18000` route, Demerzel authentication, boolean-only #4835
-Product credential prerequisite, and Product `/api/health.version` are historical proof inputs,
-not admission for the independent listener. Port equality alone never equates the two processes.
+Direct-loopback admission remains owned by `_local_request` and `create_app.admit`: immediate
+loopback peer, exact `127.0.0.1:8113` or `localhost:8113` Host, and no forwarded identity.
+Only the two Focus paths admit exactly one typed `subject`; all other paths reject queries.
+Unknown paths and non-GET requests stop before source reads. Focus reads only its selected Issue
+through the explicitly configured repository's admitted gh REST source, validates response identity,
+and uses the existing pure Focus input/composer contracts. Repository comparisons use the existing
+canonical identity while the selected subject and source URL retain their supplied spelling.
+Foreign repositories and malformed source URLs remain refused. Other subject kinds remain unsupported;
+Conversation Port and workflow transitions remain unavailable, and unrelated root/receipt/provider
+observations are never joined. Returning to Overview performs a fresh read.
+
+The standalone browser tests establish local managed repository behavior and source/transport
+failure handling. They do not qualify live sources, an operator tunnel, deployed final-main `M`,
+complete Dev System health, or owner acceptance. Approved private authenticated operator access must
+preserve the direct local origin; ingress provisioning remains an operator action. The historical
+Companion-to-Product `8113`/`18000` path and #4835 Product credential prerequisite are not admission
+for this independent listener. #5181, #4749 and parent #4741 retain their distinct qualification,
+deployment, final-main browser and owner-pilot obligations.
 
 The finite first-journey transport set is below. #5520 implements the source wiring in the
 managed Overview GET. Repository proof of that wiring does not qualify a live source or grant
