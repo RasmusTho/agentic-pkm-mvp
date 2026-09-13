@@ -183,6 +183,27 @@ def test_model_provider_identifiers_are_declared_data() -> None:
     assert contract.kind_for("anthropic.api-key") == "api-key"
 
 
+def test_discord_external_alert_binding_is_value_free() -> None:
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
+    contract = load_host_secret_contract()
+
+    assert contract.binding_for("discord.webhook") == "DISCORD_WEBHOOK"
+    assert contract.kind_for("discord.webhook") == "webhook"
+    assert contract.keychain_account(
+        channel="prod",
+        consumer="heimdal-external-alerts",
+        secret="discord.webhook",
+    ) == "prod:heimdal-external-alerts:discord.webhook"
+    for channel in ("dev", "test", "prod"):
+        contract.require_declared(
+            channel=channel,
+            consumer="heimdal-external-alerts",
+            secret="discord.webhook",
+        )
+
+    assert "value" not in json.dumps(payload).lower()
+
+
 def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
     contract = load_host_secret_contract()
@@ -228,6 +249,13 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "optional": False,
             "shared_key_domain": False,
         },
+        {
+            "logical_id": "discord.webhook",
+            "child_binding": "DISCORD_WEBHOOK",
+            "kind": "webhook",
+            "optional": False,
+            "shared_key_domain": False,
+        },
     ]
     assert payload["consumers"] == [
         {
@@ -269,6 +297,12 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "role_requirements": {
                 "ckm_semantic": ["openai.api-key"],
             },
+        },
+        {
+            "consumer": "heimdal-external-alerts",
+            "channels": ["dev", "test", "prod"],
+            "secrets": ["discord.webhook"],
+            "role_requirements": {},
         },
     ]
     assert all("design" not in item["consumer"] for item in payload["consumers"])

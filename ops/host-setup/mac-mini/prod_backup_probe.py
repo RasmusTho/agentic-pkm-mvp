@@ -48,7 +48,15 @@ import time
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
+
+from notification_channels import (
+    NotificationChannel,
+    NullChannel as NullChannel,
+    NtfyChannel as NtfyChannel,
+    ascii_header as ascii_header,
+    build_channel,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -100,117 +108,6 @@ ALERT_STATE_FILE = Path(
 PROD_BACKUP_PROBE_CHANNEL = os.environ.get("PROD_BACKUP_PROBE_CHANNEL", "ntfy")
 
 _HOUR = 3600.0
-
-
-# ---------------------------------------------------------------------------
-# Notification channel protocol + adapters
-# ---------------------------------------------------------------------------
-class NotificationChannel(Protocol):
-    def send(self, subject: str, body: str) -> None:
-        ...
-
-
-def ascii_header(value: str) -> str:
-    """Make a string safe for an HTTP header.
-
-    httplib encodes headers as latin-1, so a single em-dash in the title raises
-    UnicodeEncodeError and the alert is lost — the exact failure that kept this
-    channel from ever delivering. The body is a UTF-8 payload and is unaffected.
-    """
-    replacements = {"—": "-", "–": "-", "‘": "'", "’": "'", "…": "..."}
-    for bad, good in replacements.items():
-        value = value.replace(bad, good)
-    return value.encode("latin-1", "replace").decode("latin-1")
-
-
-class NtfyChannel:
-    """ntfy.sh push via HTTP POST."""
-
-    def __init__(self) -> None:
-        self.topic = os.environ.get("NTFY_TOPIC", "yggdrasil-prod-alerts")
-        self.server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-
-    def send(self, subject: str, body: str) -> None:
-        import urllib.request
-
-        url = f"{self.server}/{self.topic}"
-        req = urllib.request.Request(
-            url,
-            data=body.encode("utf-8"),
-            headers={
-                "Title": ascii_header(subject),
-                "Priority": "high",
-                "Tags": "floppy_disk,warning",
-                "Content-Type": "text/plain; charset=utf-8",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            log.info("ntfy push sent: %s %s", resp.status, url)
-
-
-class TelegramChannel:
-    """Telegram Bot API push."""
-
-    def __init__(self) -> None:
-        self.token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        self.chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-    def send(self, subject: str, body: str) -> None:
-        import urllib.parse
-        import urllib.request
-
-        text = f"*{subject}*\n{body}"
-        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        payload = urllib.parse.urlencode(
-            {"chat_id": self.chat_id, "text": text, "parse_mode": "Markdown"}
-        ).encode()
-        req = urllib.request.Request(url, data=payload, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            log.info("telegram push sent: %s", resp.status)
-
-
-class MailChannel:
-    """SMTP mail push."""
-
-    def send(self, subject: str, body: str) -> None:
-        import smtplib
-        from email.mime.text import MIMEText
-
-        smtp_host = os.environ.get("SMTP_HOST", "localhost")
-        smtp_port = int(os.environ.get("SMTP_PORT", "25"))
-        from_addr = os.environ.get("SMTP_FROM", "probe@yggdrasil.local")
-        to_addr = os.environ.get("SMTP_TO", "operator@yggdrasil.local")
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = to_addr
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as s:
-            s.sendmail(from_addr, [to_addr], msg.as_string())
-        log.info("mail push sent to %s", to_addr)
-
-
-class NullChannel:
-    """Dry-run: log only."""
-
-    def send(self, subject: str, body: str) -> None:
-        log.info("[dry-run] would push: %s — %s", subject, body)
-
-
-def build_channel(name: str) -> NotificationChannel:
-    """Return the appropriate channel adapter by name (env-selected)."""
-    mapping: dict[str, type] = {
-        "ntfy": NtfyChannel,
-        "telegram": TelegramChannel,
-        "mail": MailChannel,
-        "none": NullChannel,
-    }
-    cls = mapping.get(name.lower())
-    if cls is None:
-        raise ValueError(
-            f"Unknown PROD_BACKUP_PROBE_CHANNEL={name!r}. Choose one of: {list(mapping)}"
-        )
-    return cls()
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +423,10 @@ def run_probe(
     temp backup dir, a temp status file, and an injected channel.
     """
     if channel is None:
-        channel = build_channel(PROD_BACKUP_PROBE_CHANNEL)
+        channel = build_channel(
+            PROD_BACKUP_PROBE_CHANNEL,
+            ntfy_tags="floppy_disk,warning",
+        )
 
     failures: list[str] = []
 

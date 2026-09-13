@@ -28,6 +28,9 @@ HOST_SECRET_BOOTSTRAP_FAILURE_REF = "HOST_SECRET_BOOTSTRAP_FAILURE_REF"
 HOST_SECRET_BOOTSTRAP_CHANNEL = "HOST_SECRET_BOOTSTRAP_CHANNEL"
 HOST_SECRET_BOOTSTRAP_CONSUMER = "HOST_SECRET_BOOTSTRAP_CONSUMER"
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+_DISCORD_WEBHOOK_URL_PATTERN = re.compile(
+    r"^https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+$"
+)
 _ARCHIVE_PASSPHRASE_MIN_BYTES = 20
 _ARCHIVE_PASSPHRASE_MAX_BYTES = 512
 _CHILD_WAIT_POLL_SECONDS = 0.1
@@ -247,6 +250,8 @@ def _validate_secret(kind: str, value: str) -> bool:
             and "\x00" not in value
             and all(char.isprintable() and char not in {"\r", "\n"} for char in value)
         )
+    if kind == "webhook":
+        return _DISCORD_WEBHOOK_URL_PATTERN.fullmatch(value) is not None
     return False
 
 

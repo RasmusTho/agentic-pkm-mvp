@@ -99,6 +99,12 @@ both are deliberate:
   that key materializes no layer and therefore receives no `GITHUB_TOKEN` either — provisioning the
   token alone is not sufficient on the governed deploy path.
 
+The external-alert binding `discord.webhook` is declared for the Heimdal-owned
+`heimdal-external-alerts` consumer on `dev`, `test`, and `prod`. The consumer receives only the
+one-way Discord webhook binding through the same temporary mode-0600 runtime env-file boundary;
+provider/account/channel/webhook enactment remains an external Heimdal operation and is not implied
+by the repository declaration.
+
 The committed repository binding is not deployment or credential-presence evidence. The read-only
 prod prerequisite reports separate booleans for `github.token` and the coupled
 `heimdal.raw-store-key`; it creates, changes, persists, or reveals neither value. Repository
