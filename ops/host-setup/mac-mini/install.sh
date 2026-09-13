@@ -62,6 +62,7 @@ sleep 1
 # single producer of those copies, so host and repo cannot drift.
 mkdir -p "$HOME/bin"
 install -m 0755 "$HERE/prod_backup_list.sh" "$HOME/bin/prod-backup-list.sh"
+install -m 0644 "$HERE/notification_channels.py" "$HOME/bin/notification_channels.py"
 install -m 0755 "$HERE/prod_backup_probe.py" "$HOME/bin/prod-backup-probe.py"
 
 BACKUP_PROBE_PLIST="$HOME/Library/LaunchAgents/com.yggdrasil.prod-backup-probe.plist"

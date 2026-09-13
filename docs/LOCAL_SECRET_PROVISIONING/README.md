@@ -5,7 +5,7 @@ Owner: Architecture / operations
 Temporal class: strategic
 Review cadence: event-driven (task merge, host-topology change, or first CI/multi-host use)
 Source of truth: this directory for the proposed capability; GitHub parent/child issues are execution artifacts once filed
-Last reviewed: 2026-08-12
+Last reviewed: 2026-09-13
 
 # Local Secret Provisioning
 
@@ -26,8 +26,10 @@ authority, retention, or product memory.
 
 For external helper systems, Builder Vault records the non-secret credential reference and Heimdal
 ownership metadata; the execution host's approved secure store remains the secret source (macOS
-Keychain for the Mac-hosted path, or the approved Linux/Proxmox host-native store for that path). A
-Discord webhook is a future declared consumer binding, not a value stored in the Vault or repository.
+Keychain for the Mac-hosted path, or the approved Linux/Proxmox host-native store for that path).
+External provider identities, including the Discord webhook identity, remain owned and provisioned
+outside this design; the value-free binding is declared below and is not a value stored in the Vault
+or repository.
 
 The canonical v1 capture ingress is
 `~/Library/Mobile Documents/com~apple~CloudDocs/Yggdrasil/Heimdal/Capture/Inbox`. iCloud is an
@@ -55,7 +57,7 @@ ingress transport only; it is never a secret store or raw-audio archive.
 ### Declared identifier contract
 
 The value-free contract declares `heimdal.raw-store-key`, `heimdal.archive-pass`, `openai.api-key`,
-`anthropic.api-key`, and `github.token`, their child bindings, validation kinds, and whether each is optional. The
+`anthropic.api-key`, `github.token`, and `discord.webhook`, their child bindings, validation kinds, and whether each is optional. The
 raw-store key is granted to `heimdal-capture-watch`, `heimdal-api-ingress`, and the one-shot
 `heimdal-raw-migrate` transformer; both model-provider identifiers are granted only to
 `builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. Every grant is
@@ -63,6 +65,10 @@ declared for `dev`, `test`, and `prod` in
 `config/secrets/host_secret_contract.json`; no value or host path is stored in that file. This is the
 ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
 selection, calls, CKM access, or fallback.
+
+The Discord binding is granted only to the Heimdal-owned `heimdal-external-alerts` consumer on
+`dev`, `test`, and `prod`, and is one-way notification transport only. Creating, rotating, deleting,
+or live-validating the provider identity remains external operational work.
 
 HAR-02 adds no key, rotation, or provisioning authority. Its governed deploy path bootstraps the
 `heimdal-raw-migrate` consumer only when the trusted migration inventory contains HAR-02's exact
@@ -98,6 +104,12 @@ both are deliberate:
   compose with this consumer's bootstrap when `heimdal.raw-store-key` resolves, so a host without
   that key materializes no layer and therefore receives no `GITHUB_TOKEN` either — provisioning the
   token alone is not sufficient on the governed deploy path.
+
+The external-alert binding `discord.webhook` is declared for the Heimdal-owned
+`heimdal-external-alerts` consumer on `dev`, `test`, and `prod`. The consumer receives only the
+one-way Discord webhook binding through the same temporary mode-0600 runtime env-file boundary;
+provider/account/channel/webhook enactment remains an external Heimdal operation and is not implied
+by the repository declaration.
 
 The committed repository binding is not deployment or credential-presence evidence. The read-only
 prod prerequisite reports separate booleans for `github.token` and the coupled

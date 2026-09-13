@@ -21,10 +21,12 @@ can_parallelize_with:
 
 ## Current-state note (2026-09-12)
 
-The delivered provider-pluggable implementation currently supports the existing `ntfy`, Telegram,
-mail, and `none` paths. Discord is a target shared route, not a claim that the current probe
-implementation already provisions or dispatches through Discord. External provider/channel setup
-and the redacted live drill remain bounded by #5506 and #4076.
+The delivered provider-pluggable implementation uses one shared channel module for both the prod
+and prod-backup probes and supports the existing `ntfy`, Telegram, mail, and `none` paths. It also
+contains a Discord one-way webhook adapter whose credential is accepted only through the declared
+host-native runtime secret binding `discord.webhook` / `DISCORD_WEBHOOK`; it does not log or persist
+the webhook value. Discord provider/account/channel/webhook enactment, host bootstrap wiring, and
+the redacted live drill remain external delivery work bounded by #5506 and #4076.
 
 ## Owner decision (2026-09-12)
 
