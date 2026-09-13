@@ -532,14 +532,16 @@ reference. A model explanation or a technical label can explain a fact; it canno
 | --- | --- | --- | --- | --- |
 | `owner_ask` | The existing authenticated action boundary, from `TypedCommandProposal.v1` / `DeliveryRequest.v1` and its `DeliveryPreview.v1`; a Human Exception is the owner-decision category, not the fact store. | `subject_ref`, proposal/request id, preview hash, source snapshot refs, and expiry. | The owner principal is checked by the action boundary. Read back the initiation receipt or typed refusal; `Start/Hold` is the first bounded confirmation pair. | Changed subject, scope, source, or expiry withdraws the ask. devUI may project the pending ask and its consequence of waiting only from the returned source. |
 | `ready_to_try` | The deployment/verification owner, using an exact `DeliveryReceipt.v2` or equivalent BuilderOps deployment/readiness receipt. | Candidate source/image/config identity, target environment, verification revision, and receipt id. | The deployment owner proves health/read-only smoke, rollback identity, and absence of blocking evidence. Read back the receipt and current candidate identity. | A new candidate, environment, failed health/readback, or stale receipt withdraws readiness. Merge, Issue closure, availability, or a model claim never substitutes for it. |
-| `owner_trial` | The explicit owner disposition boundary described by ADR-0065; until that boundary is admitted, this fact remains withdrawn. | Ready-to-try receipt id plus candidate/environment identity, owner identity, observation time, and trial revision. | The owner records tried, rejected, or unable-to-try with the exact candidate and observed limitation. Readback is the immutable disposition receipt. | Candidate or permission change supersedes the trial for current projection; the historical receipt remains visible as history. |
-| `owner_acceptance` | The same explicit owner disposition boundary, with acceptance or rejection recorded against the exact candidate. | Candidate/environment identity, acceptance profile, owner identity, decision time, and superseded receipt refs. | Only the owner can record accept/reject. Readback is the immutable acceptance or rejection receipt; no fixture, merge, model, or agent status can stand in for it. | Any changed candidate, acceptance profile, source authority, or material limit supersedes the current decision and withdraws acceptance until a new disposition exists. |
+| `owner_trial` | The existing authenticated BuilderOps service's separate [candidate-bound outcome contract](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09), implemented by FCA-05/#5404; withdrawn until the writer and source admission are verified. | Exact subject/repository, candidate source/image/config, environment/readiness receipt, profile/AC revision, owner confirmation and observation time. | Only an authenticated, explicitly confirmed owner submission records `tried` or `unable_to_try` plus the bounded observation/limitation refs. Read the immutable outcome receipt and current source binding. | Changed binding or unavailable evidence withdraws current trial projection; the old receipt remains history. Trial does not decide acceptance. |
+| `owner_acceptance` | The same separate outcome writer with `fact_kind: owner_acceptance`; ADR-0065 supplies no acceptance authority. | The complete candidate/environment/readiness/profile/AC binding, exact criterion scope, owner confirmation, decision time and predecessor/trial refs. | Explicit owner `accepted`/`rejected` only. Whole-profile acceptance requires all required criteria and the matching current `tried` receipt; rejection can explicitly have no trial. | Changed candidate/profile/authority/limits or a corrected trial withdraws current acceptance. Corrections require new owner confirmation and append-only source lineage; timestamps never settle conflicts. |
 
 All four facts use existing source records and receipt carriers. A receipt is append-only, carries
 `source_refs`, an actor, the exact subject/candidate revision, and a supersession or withdrawal
 reference where applicable. Retention follows the owning source and receipt policy; devUI keeps no
-second copy. On restart, the view rereads the latest source receipt and returns the prior fact,
-withdrawal, or honest unknown. It never redispatches an action from regenerated text. An ambiguous
+second copy. On restart, the view rereads the source-owned current receipt chain and binding, and returns the
+prior fact, withdrawal, or honest unknown. Equal replay recovers the source receipt; competing
+submissions cannot be settled by the view. Post-write projection failure leaves the committed
+outcome intact and the view unavailable until source readback/rebuild succeeds. It never redispatches an action from regenerated text. An ambiguous
 launch remains `ambiguous` with its governed recovery/readback path and creates neither a trial nor
 acceptance fact.
 
@@ -554,8 +556,8 @@ The owner-facing examples therefore remain distinct:
 - a genuine decision is a fresh `owner_ask` with an exact proposal and owner consequence;
 - a technical wait is a missing, stale, contradictory, or unavailable source and stays **Blocked by evidence or system**, not **Your decision is needed**;
 - deployed-but-untried is a current `ready_to_try` receipt with no `owner_trial`;
-- owner rejection is an explicit `owner_acceptance` disposition with outcome `rejected`;
-- a changed candidate supersedes prior try/acceptance receipts and withdraws current readiness; and
+- owner rejection is an explicit `owner_acceptance` receipt with outcome `rejected`;
+- a changed candidate withdraws prior try/acceptance projections and current readiness while preserving historical receipts; and
 - an ambiguous action start remains ambiguous and is never retried by the projection.
 
 #### ARO dependency/status truth
@@ -797,8 +799,10 @@ Not delivered now: request/preview/authenticated approval in one owner experienc
 client-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
 provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
 Control route/UI and whole lens; managed DevUI production deployment; owner pilot and candidate-bound
-owner trial/acceptance producers. The latter authority gap has a separate
-[contract-repair task](BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md).
+owner trial/acceptance producers. Their separate target
+[outcome contract](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09)
+is defined by #5503; #5404 still owns implementation and source-admission proof. The facts remain
+withdrawn, and the retained P1 on #5404 is not resolved by specification delivery.
 
 The [2026-09-12 activation receipt on #5181](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647954880)
 records source `c7a4da3a80a1108b269bd8e88c4535a17499290a` deployed in the dedicated BuilderOps

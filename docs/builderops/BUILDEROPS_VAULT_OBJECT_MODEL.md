@@ -1,12 +1,12 @@
-State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, #1507 docs-freshness capture fields, and #1508 roadmap-execution capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. ADR-0065 adds a gated target-state boundary for future content-free temporal-intention evidence; no record type or runtime behavior is implemented by that decision.
+State: Initial schema contract for BuilderOps Vault object semantics. Store/CLI mechanics, including the #1502 local lease/idempotency/transition-receipt layer, #1507 docs-freshness capture fields, and #1508 roadmap-execution capture fields, are implemented separately in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics are documented separately in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. ADR-0065 adds a gated target-state boundary for future content-free temporal-intention evidence. FCA-09 separately defines the target owner-outcome payload and admission/readback invariants for FCA-05; neither contract implements a writer or grants runtime admission.
 Doc role: BuilderOps schema contract
-Authority: Defines the initial BuilderOps Vault object model for #1500, subordinate to ADR-0010 for authority and promotion boundaries.
+Authority: Owns BuilderOps object/schema semantics, including the separate FCA-09 owner-outcome payload and required admission/readback invariants for #5503, subordinate to ADR-0010 and ADR-0062. Existing service/store owners retain API transport and transaction implementation.
 Owner: BuilderOps governance
 Temporal class: strategic
 Review cadence: event-driven
-Source of truth: ADR-0010 plus issue #1500 for the initial model; ADR-0065 additionally owns the gated temporal-intention boundary until a later implementation contract is accepted
-Last reviewed: 2026-07-29
-Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md, docs/adr/ADR-0065-builderops-temporal-intention-authority.md, issues #1498/#1499/#1500/#1495/#1507/#1508/#3793, PR #1510
+Source of truth: ADR-0010 and #1500 for the initial model; ADR-0062 for the service/transaction owner; ADR-0065 for the separate gated temporal-intention boundary; FCA-09/#5503 for the owner-outcome target contract, with production implementation owned by FCA-05/#5404
+Last reviewed: 2026-09-13
+Last verified against: docs/adr/ADR-0010-builderops-vault-authority-boundary.md, docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md, docs/adr/ADR-0065-builderops-temporal-intention-authority.md, issues #1498/#1499/#1500/#1495/#1507/#1508/#3793, PR #1510; FCA-02/FCA-08/FCA-09 source contracts, #5503, and control_plane/auth.py, api_models.py and service.py at the reviewed PR head (source inspection, not runtime verification)
 
 # BuilderOps Vault Object Model
 
@@ -24,8 +24,10 @@ ADR-0010 is the authority baseline for this contract:
 
 This document defines object semantics and schema fields for the initial BuilderOps Vault. Store and
 CLI mechanics live in `docs/builderops/BUILDEROPS_VAULT_STORE.md`; generated projection mechanics
-live in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`; this contract does not define API/MCP
-access, migration logic, promotion-gateway behavior, or product/runtime authority changes.
+live in `docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md`. FCA-09 below owns its finite payload
+and the admission/readback invariants that existing service/store implementations must satisfy.
+API/MCP transport and access plumbing remain with those owners; this document creates no generic
+API, migration mechanism, promotion gateway or Product/Runtime authority change.
 
 The goal is a contract precise enough for implementations to use without redefining object meaning.
 Projection generation is an implementation layer over these objects. Promotion execution and
@@ -671,16 +673,182 @@ existing source contracts and, where a durable transition must be recorded, by a
 | --- | --- | --- | --- |
 | `owner_ask` | `TypedCommandProposal.v1` / `DeliveryRequest.v1` + `DeliveryPreview.v1` | Preserve source refs, proposal hash, expiry, action-boundary receipt, and refusal/withdrawal reason. | A model suggestion, Human Exception label, or preview authorizes execution. |
 | `ready_to_try` | Exact deployment/verification `DeliveryReceipt.v2` or equivalent runtime receipt | Preserve candidate/environment/source revision, health/read-only smoke, rollback identity, and current readback. | Merge, closure, availability, or image presence means ready. |
-| `owner_trial` | ADR-0065 owner disposition receipt when its boundary is admitted | Preserve the owner actor, candidate receipt, observation, outcome, and supersession chain. | A screenshot, model response, or agent status is a trial. |
-| `owner_acceptance` | ADR-0065 owner acceptance/rejection receipt when its boundary is admitted | Preserve exact candidate, acceptance profile, limits, owner actor, decision time, and correction/supersession refs. | A successful test, deployment, or BuilderDecision is owner acceptance. |
+| `owner_trial` | `BuilderOpsReceipt` with the separate `builder_owner_outcome.v1` payload below, after its writer is admitted | Preserve the authenticated owner actor, exact candidate/readiness/profile binding, bounded observation and correction lineage. | A screenshot, model response, temporal-intention disposition or agent status is a trial. |
+| `owner_acceptance` | The same existing receipt carrier with `fact_kind: owner_acceptance`, after its writer is admitted | Preserve the owner's explicit accepted/rejected decision, exact criterion/profile version and trial basis. | A successful test, deployment, BuilderDecision or `owner_trial` is owner acceptance. |
 
-The receipt body may use `fact_kind`, `subject_ref`, `candidate_ref`, `source_revision`,
-`authorization_ref`, `outcome`, `supersedes_receipt_id`, and `withdrawal_reason` fields inside the
-existing `BuilderOpsReceipt` envelope. These fields refine receipt meaning; they do not create a
-new table, queue, lifecycle authority, or projection store. A read projection may select the latest
-non-superseded receipt for an exact subject and revision, otherwise it must return withdrawn,
-stale, ambiguous, or unavailable. Restart rereads receipts and source readback; it never recreates
-an action from text or repeats an unknown effect.
+#### Candidate-bound owner outcome contract (FCA-09)
+
+This is the target contract defined by #5503. FCA-05/#5404 owns its producer and read-transport
+implementation. These facts remain withdrawn until that implementation and the selected source's
+authenticated authority/admission gates are verified. Publishing this contract admits no writer,
+deployment or human outcome. It neither extends nor interprets ADR-0065: `done`, `ignore` and
+`never_show_again` retain only their temporal-intention meanings.
+
+**Writer and actor.** The sole canonical writer is the existing authenticated BuilderOps
+control-plane service (`app/builderops/control_plane/service.py`) using its repository-scoped
+PostgreSQL record/transaction/receipt/outbox owner under ADR-0062. FCA-05 extends that owner's
+`commit_record` admission and source readback for this payload; it must not use a direct database,
+local-store fallback, new generic fact service or the temporal-intention record type. The current
+generic `POST /v1/records`, `records:write` permission and
+`GET /v1/receipts/{object_kind}/{object_id}` read primitive alone do not admit owner outcomes.
+They do not yet supply the owner confirmation, binding validation or ordered outcome lookup below.
+
+The confirmation issuer and verifier are the same existing service's `commit_record` admission,
+backed by `CredentialRegistry` in `app/builderops/control_plane/auth.py`. FCA-05 adds an explicit
+confirm-and-commit subtype on the existing `POST /v1/records` route, not a second confirmation
+service, endpoint or record type. The directly submitting credential must authenticate the one
+human owner principal designated by the addressed acceptance profile and carry both `records:write`
+and the dedicated target scope `owner_outcomes:confirm` for that repository. The host-owned
+credential configuration is the grant/revocation source; the profile's immutable owner designation
+is the subject authority. Generic write scopes, all-repository access and a caller's `actor_type`
+do not supply the dedicated grant. An agent credential must never carry it or act as the owner.
+Provisioning this human-only credential and activating its permission remain separately authorized
+operator work; this document neither provisions a credential nor admits the writer.
+
+The owner's client displays the complete immutable request, then sends that exact request and its
+hash with an explicit confirm action through this authenticated route. The service requires that
+action, recomputes the hash, matches the authenticated principal to `owner_actor` and the profile,
+and rechecks the current repository/subject grant, revocation/rotation and authority epoch before
+commit. It refuses any caller-supplied `confirmation_ref` or completed receipt metadata. Outer
+record identity/state/envelope fields must be generated by, or validated against, this admitted
+subtype; generic record ingestion cannot bypass it. An agent may prepare a proposal for that human
+client but cannot submit or forward an owner-confirming write under an agent credential. This
+contract adds no delegated confirmation or multi-owner voting. The accepted source's owner/permission
+policy reference is independent of client credential ids and rotation generations: credential
+rotation is revalidated for access, never used to create a second decision slot.
+
+**Required payload.** The existing `BuilderOpsReceipt` envelope remains mandatory, including
+`actor`, `created_by`, `occurred_at`, `source_refs`, `target_refs` and `idempotency_key`.
+`receipt_body` has exactly `contract`, `request`, `request_sha256`, `confirmation_ref` and
+`recorded_at`. `contract` is `builder_owner_outcome.v1`; no new top-level object type is
+introduced. `event_type` is `owner_outcome_recorded` or `owner_outcome_corrected`; `action` is
+`record_owner_trial` or `record_owner_acceptance` consistently with `fact_kind`. Envelope `outcome`
+records technical commit success, while payload `outcome` alone records the human outcome.
+The owner confirms `request`, whose complete closed field set is the table below. Unknown fields
+or missing required bindings are refused before any outcome write. `request_sha256` hashes the
+UTF-8 bytes of `builder_owner_outcome.v1`, one zero byte, then canonical JSON of `request`:
+`json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`. Requests admit
+objects, arrays, strings, integers and null only (no floats), with duplicate object keys rejected
+and array order retained. Canonicalization precedes owner confirmation, never changes it afterward.
+The contract tag and every decision, binding, actor, time and predecessor field below are covered;
+neither the request hash itself nor server-generated metadata is an input to its own hash.
+
+At authenticated admission T1, the service itself binds the confirmed request hash, human
+principal, current permission-authority reference and server `confirmed_at`. It generates
+`confirmation_ref` as inline receipt metadata: an identifier `<receipt_id>#confirmation`,
+`request_sha256`, confirmed human principal, `confirmed_at` and permission-authority reference.
+This is not an independently issued or transferable approval. The confirmation becomes durable
+and externally visible only in the same T2 transaction as its outcome receipt; no separate lookup,
+signature source or caller-authored confirmation exists. Authenticated outcome readback below
+returns the original receipt and its inline confirmation, and the verifier checks that persisted
+binding against the request and originating service/epoch. Historical evidence cannot authorize
+another write.
+
+Server-owned `recorded_at`, receipt id/hash/sequence, envelope commit timestamps/`created_by`, and
+the derived `binding_hash` are generated after admission and excluded from the confirmed request.
+None may change a confirmed request field. The receipt preserves the exact request, its hash and
+original confirmation reference. Its own integrity hash follows the existing receipt owner's rules,
+separately from the human-confirmed request hash. A pre-commit failure leaves neither durable
+confirmation nor outcome; a retry must pass current admission again. A post-commit replay returns
+the original confirmation and T2 metadata, rather than generating another confirmation.
+
+| Fields | Required meaning |
+| --- | --- |
+| `fact_kind`, `outcome` | `owner_trial`: exactly `tried` or `unable_to_try`. `owner_acceptance`: exactly `accepted` or `rejected`. These are distinct kinds, never lifecycle or temporal-intention aliases. |
+| `repository`, `subject_ref`, `source_revision` | Canonical `owner/repo`, exact addressed subject and immutable source revision/hash. No hub/default repository or mutable branch name can fill a missing binding. |
+| `candidate_ref` | Exact source commit, deployed image digest(s) and non-secret configuration identity/hash from the candidate owner. Each component has its identity; an absent image is explicitly not applicable only when the addressed source contract allows a non-image candidate. |
+| `environment_ref`, `readiness_receipt_ref` | Source-owned environment identity and exact readiness receipt identifier, immutable revision/hash and source owner. The receipt must address this candidate/environment and acceptance scope. Health, freshness and limitations are re-read; deployment or image presence alone is insufficient. |
+| `acceptance_profile_ref`, `criterion_refs` | Immutable profile identifier/version/hash and exact AC identifiers plus their content/version hash. A profile belongs to this subject/repository. An `accepted` decision covers every required criterion in that profile; a `rejected` decision names the rejected criterion(s). A subset cannot assert whole-profile acceptance. |
+| `owner_actor`, `authorization_ref` | Minimal opaque human ActorRef, plus non-secret permission reference/version and authority epoch, matched by the service to the authenticated confirmation. Envelope `actor` is that human; server-owned `created_by` separately identifies the authenticated submitting client/service. No token, email, transcript or credential material is retained. |
+| `observed_at`, `decided_at` | Owner-confirmed observation time for trials or decision time for decisions; the other field is explicitly null. Both use RFC 3339 and cannot be after the authenticated `confirmed_at`, which cannot be after server commit `recorded_at`. Time does not select a winning decision or manufacture freshness. |
+| `observation`, `limitation_refs` | For a trial, a bounded list of profile criterion refs with `observed` or `not_observed` and source-owned limitation refs; no free text. `unable_to_try` requires a limitation ref and no claimed observed trial. For acceptance, `observation` is null; current material limitations and the decision's exact criterion scope remain explicit. References bind source revisions and are subject to the owning source's access policy. |
+| `trial_receipt_ref` | Null for a trial. An `accepted` decision requires the current `tried` receipt for the same full candidate/environment/readiness/profile/owner binding. A rejection may reference that trial or explicitly use null; rejection without a trial never creates one. |
+| `expected_previous_receipt_id`, `supersedes_receipt_id`, `correction_reason` | Initial submission: all null. Correction: both identifiers name the same current receipt for this exact fact kind and binding; reason is `owner_correction`. A new explicit confirmation is required. Corrections append; old receipts remain immutable. |
+| `retention_policy_ref` | The versioned owning receipt/source policy reference applicable to these non-content fields, as constrained below. A reference is not permission to retain extra content. |
+
+Envelope source/target refs must agree with the payload and include the subject, candidate,
+readiness/profile and owner/permission authority sources, referenced trial and corrected receipt
+when present. Inline confirmation is read through its own outcome receipt, not treated as a
+separate external source that must pre-exist the write.
+The service validates references and all mutable authority immediately before commit. Stale,
+unavailable, revoked or contradictory bindings produce a typed refusal with no outcome write.
+For `unable_to_try`, an exact historical readiness receipt may identify what the owner attempted
+even when its current readiness has been withdrawn: persist only the inability observation, mark
+its readiness as withdrawn on readback and grant neither readiness nor acceptance. Other new
+outcomes require current readiness. A changed material limit invalidates confirmation before write.
+
+**Compatibility.** No admitted trial/acceptance vocabulary is supplied by ADR-0065. FCA-02's older
+`rejected` trial prose was an unadmitted contract error, not a stored trial alias. A `rejected`
+trial or unsupported legacy payload stays incompatible/withdrawn; it is not silently converted.
+The owner-facing verbs “accept/reject” and “unable-to-try” may label the exact `accepted`/`rejected`
+decision and `unable_to_try` trial payload respectively, without changing historical records.
+
+**Atomicity, conflict and correction.** One logical writer may receive competing client requests.
+Before reading or advancing either fact-kind slot, the transaction kernel acquires one shared
+source guard for `repository + subject + binding_hash` and holds it through commit. Both trial
+write/correction and acceptance write/correction use this same guard. It serializes the two
+existing current selections; within it each slot is
+`repository + subject + fact_kind + binding_hash`. Acceptance rechecks that its referenced trial
+is the current `tried` receipt while holding the guard, not in a pre-transaction read. The service computes `binding_hash` from the
+canonical subject/source revision, candidate, environment, readiness, profile/AC revision,
+material limitation refs and current owner-authority reference/version/epoch; callers cannot pick
+an alternative binding. It excludes submission keys, client credential identities and timestamps,
+so competing clients cannot create separate slots for the same owner decision. No extra queue or
+authority store is introduced. The writer compares
+`expected_previous_receipt_id` with that slot's current receipt, and atomically commits the receipt,
+current selection, idempotent response and any existing outbox projection intent. There is no
+success acknowledgement before commit and no projection work inside the authority transaction. Current selection is the predecessor for
+correction CAS; it is not by itself proof that the selected receipt remains eligible for projection.
+
+- Equal repository/operation/key and immutable `request_sha256` return the original committed
+  receipt and result, including its original confirmation reference and server metadata; replay
+  does not regenerate commit time or compare a fresh receipt hash with the request hash.
+  A changed request under that key returns `idempotency_conflict`, with no new outcome. Authenticate
+  read permission before revealing replay data. Revoked write permission never authorizes a new
+  effect; a permitted read may still recover historical evidence.
+- Two different keys with the same expected predecessor cannot both advance the slot, even if the
+  proposed outcomes are identical. One commits; the other returns `current_receipt_conflict` with
+  authorized current-source readback. Arrival order is not a new owner decision: the loser must
+  reread and obtain explicit confirmation of a correction; it cannot auto-retry with a new key.
+- Only a correction for the same full binding supersedes a receipt. Changed candidate, environment,
+  profile/AC, permission authority or material limitations withdraw current projection without
+  rewriting historical receipts. A new binding starts with no current outcome and needs new owner
+  evidence. If trial correction commits first, an acceptance referencing the old trial then refuses under
+  the shared guard without a receipt or intent. If acceptance commits first, it is valid at that
+  commit; the subsequent trial correction atomically changes the trial selection and records the
+  withdrawal intent for the dependent acceptance. Readback under a consistent source snapshot
+  reports that acceptance as withdrawn while preserving its predecessor lineage. A delayed old
+  projection intent must recheck this lineage and cannot resurrect it. New acceptance needs new
+  explicit confirmation naming the current trial and acceptance predecessor.
+
+**Readback and failures.** The authenticated source read, including lookup by the original
+idempotency key after a lost response, returns the receipt identifier/hash/sequence, complete
+binding, owner and confirmation refs, predecessor/current receipt refs, server observation time,
+source/epoch revision, and typed current-projection status with reason. `current`, `superseded`,
+`withdrawn`, `incompatible`, `conflict` and `unavailable` describe read evidence, not new human
+outcomes. Select current evidence by the committed predecessor chain and current source binding,
+never the greatest timestamp or a cached UI row. A non-unique or broken chain is `conflict` and
+withdraws the affected fact. An unauthorized read discloses no receipt payload.
+
+After a pre-commit failure, no outcome or outbox intent exists. After a timeout or crash with an
+unknown commit result, keep `unavailable`/reconciliation-needed and query that exact key through
+the source owner; absence of a UI row is not proof of no commit. A retry with the same key/payload
+can only recover the prior result or perform the first transaction after fresh authority checks.
+After commit, failed projection cannot undo the receipt or cause a second decision: re-read it and
+rebuild through the existing outbox/projection owner. Render a projection failure as unavailable
+evidence, not owner rejection. Restarts and receipt archival preserve predecessor and idempotency
+lineage. An authority rebuild/epoch change with missing history returns unavailable; it cannot
+reconstruct owner consent from GitHub closure, a fixture or text, or automatically resubmit it.
+
+**Retention boundary.** These payloads retain only bounded technical references, finite outcomes
+and minimal actor/time metadata. They use [BuilderOpsReceipt](#builderopsreceipt)'s existing
+append-only, corrective-receipt and archival-with-integrity policy; source content stays at its
+owner and DevUI retains no second copy. No expiry or physical-erasure guarantee is invented.
+The existing object/store contracts leave implementation-specific retention outside this model:
+they do not provide a policy for free-text trial observations, transcripts or personal-content
+copies. That is a real content-retention gap, so such content is refused by this bounded contract.
+Any later content-bearing extension must first obtain a named policy from the source/receipt owner
+and its own bounded implementation contract; ADR-0065's content-free first slice cannot supply it.
 
 ### PromotionIntent
 

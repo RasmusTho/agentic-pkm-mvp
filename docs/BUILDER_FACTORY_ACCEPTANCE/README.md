@@ -34,7 +34,7 @@ Serial pickup is the default. FCA-04 can run independently of the first two gove
 | #5405 [FCA-06 — Qualify a second consumer repository](QUALIFY_SECOND_CONSUMER_REPOSITORY.md) | qualify Builder against an explicitly addressed second repo | FCA-04, #3793, #5181 |
 | #5406 [FCA-07 — Prepare composed owner acceptance](PREPARE_COMPOSED_OWNER_ACCEPTANCE.md) | prepare whole owner-platform acceptance over existing workflow proofs | FCA-03, FCA-05, FCA-06, #4749, #4697, #4982, #5181 |
 
-FCA-02 is a contract-enrichment task, not authorization to invent a source store. FCA-05 cannot become ready until its exact producer/source/action contract exists. FCA-03 delivered independently using existing admitted sources; it emits interpretations/proposals rather than the missing canonical owner facts. Amend affected specs and live Issues before pickup. The bounded admission contract below separates the first inquiry seam from #4169's DDO bridge; neither this contract nor an inquiry delivers FCA-05's outcome writer or an Issue-delivery operation.
+FCA-02 is a contract-enrichment task, not authorization to invent a source store. FCA-05 pickup requires its exact accepted producer/source/action contracts and the selected operation's external admission/readback prerequisites. Its four producers and outcome read transport remain its own implementation work; runtime activation additionally requires their delivery and source admission. FCA-03 delivered independently using existing admitted sources; it emits interpretations/proposals rather than the missing canonical owner facts. Amend affected specs and live Issues before pickup. The bounded admission contract below separates the first inquiry seam from #4169's DDO bridge; neither this contract nor an inquiry delivers FCA-05's outcome writer or an Issue-delivery operation.
 
 ### Contract-repair tasks
 
@@ -47,7 +47,7 @@ breakdown follows their accepted results.
 | Task | Bounded outcome | Order |
 | --- | --- | --- |
 | #5502 [FCA-08 — Define bounded action admission](DEFINE_BOUNDED_ACTION_ADMISSION.md) | Contract defined below for the existing control plane and destination owners | Runtime admission, destination reservation/readback and activation remain separate work |
-| #5503 [FCA-09 — Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) | Resolve trial/acceptance authority in the existing receipt/object owner without overloading ADR-0065 dispositions | Second; before FCA-05 producer implementation |
+| #5503 [FCA-09 — Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) | Separate candidate-bound trial/acceptance contract defined in the existing object/receipt owner | FCA-05 still owns producer/readback implementation; runtime admission and owner observations remain separate |
 | #5504 [ARO-09 — Reconcile managed owner pilot](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md) | Reconcile runtime/source topology and pre-merge versus live evidence order | Third; owned by Stage A / #4741, not a new FCA child |
 
 #### FCA-08 — Bounded action contract repair
@@ -59,9 +59,12 @@ This is a target contract under existing owners, not runtime implementation or a
 
 #### FCA-09 — Owner outcome contract repair
 
-Source work is [DEFINE_OWNER_OUTCOME_AUTHORITY](DEFINE_OWNER_OUTCOME_AUTHORITY.md). The repair must
-resolve the distinction between temporal-intention dispositions and explicit candidate-bound owner
-trial/acceptance in the object-model owner before FCA-05 writes those facts.
+The [task contract](DEFINE_OWNER_OUTCOME_AUTHORITY.md) is realized by the object-model owner's
+[separate candidate-bound outcome contract](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09).
+It defines authenticated owner confirmation, finite trial/decision payloads, exact candidate/profile
+binding and atomic replay/correction/readback. ADR-0065 dispositions are separate. This is accepted
+target-contract direction, not an implemented writer or owner outcome. FCA-05 and its retained P1
+remain subject to the actual producer/source/admission proof; live Issue maintenance follows merge.
 
 ## Existing epics and validation hubs
 
