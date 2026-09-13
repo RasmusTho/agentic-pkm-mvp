@@ -148,63 +148,46 @@ def test_host_lease_is_atomic_across_processes_and_releases_after_exit(
 
 
 def test_child_keeps_lease_if_wrapper_is_killed(lease_repo: Path) -> None:
-    resource = _canonical_resource()
-    holder = subprocess.Popen(
-        _lease_command(resource, "crash-holder", "import time; time.sleep(0.8)"),
-        cwd=lease_repo,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    _assert_wrapper_group_crash_keeps_lease(
+        lease_repo,
+        execution_prefix="wrapper-crash",
+        kill_process_group=False,
     )
-    lock_path = _lease_lock_path(lease_repo)
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if lock_path.exists():
-            try:
-                if json.loads(lock_path.read_text())["event"] == "host_lease_acquired":
-                    break
-            except (json.JSONDecodeError, KeyError):
-                pass
-        time.sleep(0.02)
-    else:
-        holder.kill()
-        holder.wait()
-        pytest.fail("holder did not acquire the host lease")
 
-    holder.kill()
-    holder.wait(timeout=2)
-    contender = subprocess.run(
-        _lease_command(resource, "early-successor", "pass"),
-        cwd=lease_repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert contender.returncode == 75
 
-    time.sleep(0.9)
-    successor = subprocess.run(
-        _lease_command(resource, "late-successor", "pass"),
-        cwd=lease_repo,
-        capture_output=True,
-        text=True,
-        check=False,
+def test_wrapper_only_crash_proof_survives_delayed_contender(
+    lease_repo: Path,
+) -> None:
+    _assert_wrapper_group_crash_keeps_lease(
+        lease_repo,
+        execution_prefix="delayed-wrapper-crash",
+        kill_process_group=False,
+        contender_delay=1.1,
     )
-    assert successor.returncode == 0
 
 
 def _assert_wrapper_group_crash_keeps_lease(
-    lease_repo: Path, *, execution_prefix: str, contender_delay: float = 0
+    lease_repo: Path,
+    *,
+    execution_prefix: str,
+    kill_process_group: bool = True,
+    contender_delay: float = 0,
 ) -> None:
     resource = _canonical_resource()
     child_ready = lease_repo / f"{execution_prefix}-child-ready"
+    child_done = lease_repo / f"{execution_prefix}-child-done"
     release_child = lease_repo / f"release-{execution_prefix}-child"
     contender_ran = lease_repo / f"{execution_prefix}-contender-ran"
     holder_child = (
         "import sys, time; from pathlib import Path; "
         f"ready = Path({str(child_ready)!r}); release = Path({str(release_child)!r}); "
+        f"done = Path({str(child_done)!r}); "
         "ready.touch(); deadline = time.monotonic() + 5; "
-        "\nwhile not release.exists() and time.monotonic() < deadline: time.sleep(0.02)"
-        "\nsys.exit(0 if release.exists() else 2)"
+        "\nwhile True:"
+        "\n if release.exists(): done.write_text('released'); sys.exit(0)"
+        "\n if time.monotonic() >= deadline:"
+        "\n  done.write_text('watchdog-expired'); sys.exit(2)"
+        "\n time.sleep(0.02)"
     )
     holder = subprocess.Popen(
         _lease_command(resource, f"{execution_prefix}-holder", holder_child),
@@ -213,21 +196,6 @@ def _assert_wrapper_group_crash_keeps_lease(
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    lock_path = _lease_lock_path(lease_repo)
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if lock_path.exists():
-            try:
-                if json.loads(lock_path.read_text())["event"] == "host_lease_acquired":
-                    break
-            except (json.JSONDecodeError, KeyError):
-                pass
-        time.sleep(0.02)
-    else:
-        holder.kill()
-        holder.wait()
-        pytest.fail("holder did not acquire the host lease")
-
     try:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -237,10 +205,15 @@ def _assert_wrapper_group_crash_keeps_lease(
         else:
             pytest.fail("protected child did not report readiness")
 
-        os.killpg(holder.pid, signal.SIGKILL)
+        if kill_process_group:
+            os.killpg(holder.pid, signal.SIGKILL)
+        else:
+            holder.kill()
         holder.wait(timeout=2)
+        assert holder.returncode == -signal.SIGKILL
         if contender_delay:
             time.sleep(contender_delay)
+        assert not child_done.exists(), "fixture child exited before the contender"
         contender = subprocess.run(
             _lease_command(
                 resource,
@@ -251,13 +224,19 @@ def _assert_wrapper_group_crash_keeps_lease(
             capture_output=True,
             text=True,
             check=False,
+            timeout=4,
         )
-        assert contender.returncode == 75
+        assert not child_done.exists(), "fixture child exited during the contender"
+        assert contender.returncode == 75, contender.stderr
+        assert '"event": "host_lease_busy"' in contender.stderr
         assert not contender_ran.exists()
     finally:
         release_child.touch()
         if holder.poll() is None:
-            os.killpg(holder.pid, signal.SIGKILL)
+            try:
+                os.killpg(holder.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             holder.wait(timeout=2)
         successor = subprocess.run(
             _lease_command(resource, f"{execution_prefix}-successor", "pass", wait_seconds=3),
@@ -268,6 +247,10 @@ def _assert_wrapper_group_crash_keeps_lease(
             timeout=4,
         )
         assert successor.returncode == 0, successor.stderr
+        assert '"event": "host_lease_released"' in successor.stderr
+        if child_ready.exists():
+            assert child_done.exists(), "fixture child exit evidence is missing"
+            assert child_done.read_text() == "released", "fixture child watchdog expired"
 
 
 def test_supervisor_keeps_lease_if_wrapper_process_group_is_killed(
