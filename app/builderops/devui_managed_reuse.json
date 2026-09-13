@@ -813,5 +813,15 @@
         "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
       }
     ]
-  }
+  },
+  "independent_review": {
+    "reviewer_identity": "codex-runtime:01a09aef-8404-7911-bdb1-efda4bb2e07a",
+    "independent_from_author": true,
+    "independence_basis": "Fresh read-only review context. Observed CODEX_THREAD_ID and CODEX_SESSION_ID match this identity, distinct from codex-issue-5522 and both supplied prior reviewers. No authorship or delegation. Retained unchanged evidence by identity comparison; independently inspected changed bindings, assertions, results and captures.",
+    "reviewed_at": "2026-09-13T13:28:50Z",
+    "reviewed_payload_sha256": "sha256:09b34d0d7f099307e7f30bbd9be87ccd6d99a38cf41b0cd4c4e14f0ffb6ca82b",
+    "verdict": "pass",
+    "findings": []
+  },
+  "receipt_sha256": "sha256:8bd73f5509562d883ba056e883ece98e3759648e2f2915e65dcab558f6b33862"
 }
