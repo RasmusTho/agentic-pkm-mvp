@@ -38,7 +38,8 @@ python3 scripts/start_model_inquiry_workflow.py --question-file <exact-question-
 
 Treat the question as UTF-8 file bytes, not shell text. The facade preserves all bytes including
 trailing newlines, creates its own mode-0600 staging temporary, and never deletes an unowned input
-file. It runs the current manual fixed host launch exactly once. Manual authorization does not
+file. It validates and reads the same opened regular file, rejecting a symlink input and bounding
+the read. It runs the current manual fixed host launch exactly once. Manual authorization does not
 reuse a DevUI approval/key or gain command/readback authority over an operation-bound inquiry.
 The configured host launcher continues to own provider selection, subscription auth and its
 high-reasoning profile; do not inspect or override those settings.

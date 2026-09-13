@@ -468,9 +468,17 @@ class SanctionedModelInquiryWorkflow:
 
     def manual(self, question_file: Path) -> dict[str, Any]:
         """Use current manual authorization, with no operation approval authority."""
-        if question_file.is_symlink() or not question_file.is_file():
-            raise WorkflowUnavailable("exact question file unavailable")
-        raw = question_file.read_bytes()
+        try:
+            descriptor = os.open(question_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    raise WorkflowUnavailable("exact regular question file required")
+                with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                    raw = stream.read(16385)
+            finally:
+                os.close(descriptor)
+        except OSError as exc:
+            raise WorkflowUnavailable("exact question file unavailable") from exc
         if not raw or len(raw) > 16384 or not raw.decode("utf-8").strip():
             raise WorkflowUnavailable("bounded UTF-8 question required")
         return self._launch(self._route(), raw.decode("utf-8"), None, None)

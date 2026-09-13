@@ -42,6 +42,7 @@ def test_command_sources_are_exact_issue_or_packaged_owner(tmp_path, monkeypatch
         "html_url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697",
         "updated_at": NOW.isoformat(),
         "body": body,
+        "title": "Exact inquiry subject",
     }
     calls = []
     monkeypatch.setattr(
@@ -55,9 +56,10 @@ def test_command_sources_are_exact_issue_or_packaged_owner(tmp_path, monkeypatch
         "source_id": REPOSITORY + "#4697",
         "locator": issue["html_url"],
         "content_hash": hashlib.sha256(body.encode()).hexdigest(),
+        "version": issue["updated_at"],
     }
     pack = {
-        "subject_ref": {"kind": "issue", "stable_id": "github:" + REPOSITORY + "#4697"},
+        "subject_ref": {"kind": "issue", "stable_id": "github:" + REPOSITORY + "#4697", "title": issue["title"]},
         "source_states": [{"freshness": "fresh", "source_ref": ref}],
     }
     result = devui_sources.revalidate_inquiry_sources(
@@ -66,6 +68,14 @@ def test_command_sources_are_exact_issue_or_packaged_owner(tmp_path, monkeypatch
     assert result["issue_number"] == 4697
     assert result["issue_body_hash"] == ref["content_hash"]
     assert calls == [["api", "repos/rasmustho/agentic-pkm-mvp/issues/4697"]]
+    unversioned = deepcopy(pack)
+    del unversioned["source_states"][0]["source_ref"]["version"]
+    with pytest.raises(devui_sources.SourceReadRefusal, match="version"):
+        devui_sources.revalidate_inquiry_sources(config, repository=REPOSITORY, context_pack=unversioned)
+    changed_title = deepcopy(pack)
+    changed_title["subject_ref"]["title"] = "Different subject material"
+    with pytest.raises(devui_sources.SourceReadRefusal, match="subject"):
+        devui_sources.revalidate_inquiry_sources(config, repository=REPOSITORY, context_pack=changed_title)
     issue["body"] += "Changed scope.\n"
     with pytest.raises(devui_sources.SourceReadRefusal, match="changed"):
         devui_sources.revalidate_inquiry_sources(config, repository=REPOSITORY, context_pack=pack)
@@ -75,6 +85,40 @@ def test_command_sources_are_exact_issue_or_packaged_owner(tmp_path, monkeypatch
     with pytest.raises(devui_sources.SourceReadRefusal, match="unsupported"):
         devui_sources.revalidate_inquiry_sources(config, repository=REPOSITORY, context_pack=pack)
     assert len(calls) == before
+
+
+@pytest.mark.parametrize("change", ["title", "state"])
+def test_issue_material_is_current_at_start_and_destination_authority(tmp_path, monkeypatch, change):
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    now = datetime.now(timezone.utc)
+    issue = {
+        "number": 4697,
+        "html_url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697",
+        "title": "Exact inquiry subject",
+        "state": "open",
+        "body": "## Acceptance Criteria\n- [ ] Exact result. Verify: tests/example.py\n",
+        "updated_at": now.isoformat(),
+    }
+    monkeypatch.setenv("DEVUI_GITHUB_ENABLED", "true")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(devui_sources.cockpit_github_plane, "_run_gh", lambda _: deepcopy(issue))
+    preview = graph.preview(issue=issue)
+    unchanged = graph.start(preview)
+    assert unchanged.status_code == 200
+    approval = unchanged.json()["approval"]
+    assert graph.launches == 1
+    # Sequential source edits exercise ordinary freshness; no concurrent processes.
+    issue[change] = "Revised inquiry subject" if change == "title" else "closed"
+    if change == "state":
+        issue["updated_at"] = (now + timedelta(seconds=1)).isoformat()
+    assert graph.start(preview).status_code == 400
+    authority = graph.http.post(
+        "/v1/inquiries/command/authority",
+        headers=graph.headers("destination"),
+        json={"approval": approval, "purpose": "execute"},
+    )
+    assert authority.status_code == 400
+    assert graph.launches == 1 and len(graph.provider.calls) == 4
 
 
 @pytest.mark.parametrize(

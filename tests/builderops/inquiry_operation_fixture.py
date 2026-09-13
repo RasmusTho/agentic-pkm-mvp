@@ -188,7 +188,8 @@ class InquiryGraph:
         return {"Authorization": "Bearer " + name + "-fixture"}
 
     def preview(
-        self, *, approval_id: str = "approval-4697", question: str = "Exact question åäö\n\n"
+        self, *, approval_id: str = "approval-4697", question: str = "Exact question åäö\n\n",
+        issue: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         source = {
@@ -197,14 +198,29 @@ class InquiryGraph:
             "content_hash": self.source_hash,
             "locator": "docs/BUILDEROPS_MODEL_INQUIRY/README.md",
         }
+        subject = {
+            "kind": "capability",
+            "stable_id": "pre-ticket-model-inquiry",
+            "authority_ref": source,
+            "title": "Pre-ticket inquiry",
+        }
+        if issue is not None:
+            source = {
+                "source_type": "github_issue",
+                "source_id": f"{REPOSITORY}#{issue['number']}",
+                "version": issue["updated_at"],
+                "content_hash": hashlib.sha256(issue["body"].encode()).hexdigest(),
+                "locator": issue["html_url"],
+            }
+            subject = {
+                "kind": "issue",
+                "stable_id": f"github:{REPOSITORY}#{issue['number']}",
+                "authority_ref": source,
+                "title": issue["title"],
+            }
         pack = build_context_pack(
             pack_id="pack-inquiry",
-            subject_ref={
-                "kind": "capability",
-                "stable_id": "pre-ticket-model-inquiry",
-                "authority_ref": source,
-                "title": "Pre-ticket inquiry",
-            },
+            subject_ref=subject,
             purpose="Exact pre-ticket question",
             owner_intent_ref=source,
             source_refs=[source],

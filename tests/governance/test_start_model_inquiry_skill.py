@@ -433,6 +433,23 @@ def test_manual_skill_facade_preserves_fixed_route_and_exact_question(tmp_path, 
     assert help_result.returncode == 0 and "--question-file" in help_result.stdout
 
 
+@pytest.mark.parametrize("kind", ["empty", "blank", "oversized", "invalid_utf8", "directory", "missing"])
+def test_manual_question_refuses_invalid_input_before_host_use(tmp_path, monkeypatch, kind):
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow, WorkflowUnavailable
+    from tests.builderops.inquiry_operation_fixture import InquiryGraph
+
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    question = tmp_path / "ordinary-question.md"
+    if kind == "directory":
+        question.mkdir()
+    elif kind != "missing":
+        question.write_bytes({"empty": b"", "blank": b" \n", "oversized": b"q" * 16385, "invalid_utf8": b"\xff"}[kind])
+    with pytest.raises((WorkflowUnavailable, UnicodeError)):
+        SanctionedModelInquiryWorkflow().manual(question)
+    assert not graph.calls and not graph.provider.calls and graph.launches == 0
+    assert question.exists() is (kind != "missing")
+
+
 @pytest.mark.parametrize("lookup", ["plain", "none", "port", "second_file", "literal_alias"])
 def test_workflow_local_route_requires_complete_host_proof(monkeypatch, lookup) -> None:
     from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow

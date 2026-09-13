@@ -191,6 +191,10 @@ already-admitted `github_issue` and bounded repo-owned `owner_document` referenc
 source kinds and unconfigured roots withdraw Start. Do not add a capability-subject reader, general
 URL fetcher, session discovery, inferred Issue/correlation or broad repository-history collector.
 The delivered Conversation Port composer remains the canonical pack/hash/freshness owner.
+For inquiry admission, every `github_issue` reference must include the exact current Issue
+`updated_at` as its existing `version`; a body hash alone cannot establish Issue freshness.
+The addressed subject title must also match the current Issue. These inquiry-specific checks
+run at preview, Start and destination authority readback without changing the general pack schema.
 
 ### Durability, recovery and cleanup
 

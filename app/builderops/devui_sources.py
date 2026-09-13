@@ -591,6 +591,8 @@ def revalidate_inquiry_sources(config: SourceConfiguration, *, repository: str, 
             raise SourceReadRefusal("exact Issue subject required")
         number = int(match[2])
         issue = read_managed_issue(config, repository, match[2])
+        if not isinstance(issue.get("title"), str) or subject.get("title") != issue["title"]:
+            raise SourceReadRefusal("Issue subject material changed")
     # A pre-ticket subject is a pack identity, never a capability reader.
     for state in context_pack["source_states"]:
         ref = state["source_ref"]
@@ -599,8 +601,10 @@ def revalidate_inquiry_sources(config: SourceConfiguration, *, repository: str, 
         if ref["source_type"] == "github_issue":
             if issue is None or ref["source_id"].lower() != f"{repository}#{number}" or ref["locator"].lower() != issue["html_url"].lower():
                 raise SourceReadRefusal("only the addressed Issue may be read")
+            if ref.get("version") != issue["updated_at"]:
+                raise SourceReadRefusal("exact current Issue version required")
             body = issue.get("body")
-            if not isinstance(body, str) or (ref.get("version") is not None and ref["version"] != issue["updated_at"]) or (ref.get("content_hash") is not None and ref["content_hash"] != hashlib.sha256(body.encode()).hexdigest()):
+            if not isinstance(body, str) or (ref.get("content_hash") is not None and ref["content_hash"] != hashlib.sha256(body.encode()).hexdigest()):
                 raise SourceReadRefusal("Issue source changed")
         elif ref["source_type"] == "owner_document":
             name = ref["source_id"]
