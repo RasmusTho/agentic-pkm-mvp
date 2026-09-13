@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-13 (bounded DevUI managed read-journey writeback)
+Last reviewed: 2026-09-13 (bounded DevUI managed read-journey and inquiry-command writeback)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
@@ -52,6 +52,15 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
   VM102 deployment, qualified live sources, final-main deployed browser proof, complete health and
   owner acceptance remain under #5181, #4749 and parent #4741. The runtime/receipt owner contract is
   `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Standalone DevUI receipt production`.
+- FCP-04 (#4697) implements the exact nonvisual Start/Hold preview and authenticated bounded
+  Model Inquiry command in the existing BuilderOps service. Its production constructor uses the
+  single skill-owned facade and destination reservation/attempt/readback interface; the existing
+  manual entrypoint shares those mechanics. Hold invokes nothing, and replay or ambiguous outcomes
+  preserve the existing operation without relaunch. The governing behavior is linked from
+  [First command flow — Start Model Inquiry](DEVUI_FOCUS_CONVERSATION_PORT/README.md#first-command-flow--start-model-inquiry).
+  Production-path tests with fake host/provider boundaries and the packaged startup/refusal check
+  establish repository implementation proof. Service/destination activation and current permissions,
+  FCP-02 visual handoff, and parent/owner acceptance remain separate gates; no live inquiry is claimed.
 - The pure `devui.discovery-projection.v1` composer derives detached discovery items from the
   existing composition envelope and caller-declared source records. It preserves authority,
   provenance, lifecycle, source-state limitations, and source-bound read-only navigation; it adds
