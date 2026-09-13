@@ -1,7 +1,7 @@
-State: Accepted target-state specification with blocked parent #4693; FCP-01 #4694 and FCP-03 #4696
-delivered; FCP-02 #4695 and FCP-04 #4697 implementation pending; separate Builder System Control specification
-issue #4698 active. No visual or command implementation claimed. Delivered inputs are listed
-separately under Current-to-target truth.
+State: FCP-01 #4694, FCP-03 #4696 and the nonvisual FCP-04 #4697 implementation are delivered.
+Parent #4693 retains capability acceptance; FCP-02 #4695 retains the visual handoff. Live inquiry
+activation requires the separately configured service/destination permissions and conforming host
+wrapper. Builder System Control specification #4698 remains separate.
 Doc role: Capability specification and implementation boundary for the first subject-centred devUI
 Focus slice, its external Conversation Port, the Start Model Inquiry command preview, and the
 separate Builder System Control lens.
@@ -13,7 +13,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents and accepted specifications own intended behavior; live source
 artifacts and receipts own observations; GitHub and repository evidence own delivery truth.
-Last reviewed: 2026-09-12
+Last reviewed: 2026-09-13
 
 # devUI Focus + Conversation Port
 
@@ -39,7 +39,7 @@ Focus flow.
 | BuilderOps Cockpit | Fresh read-time work register | Explicitly correlated subject observations, not a copied work store |
 | `devui.composition.v1` | Local, read-only, per-request CKM/Cockpit composition with typed source degradation | Input to a subject composer; it does not already provide Focus |
 | Builder System process map | Governs pre-Issue routes, `PromotionIntent`, delivery correlation, and session provenance | Source for next-legal-step and limitation rendering |
-| Model Inquiry | Durable artifact-first launcher and terminal receipt contract | One devUI preview and confirmation adapter over that unchanged route |
+| Model Inquiry | Durable artifact-first launcher and terminal receipt contract | Nonvisual exact preview and authenticated confirmation through the one skill-owned facade |
 | Codex/Claude conversations | External provider interactions with no global authoritative session source | Export/open of one hash-bound context pack; no session inventory |
 | `focus-view.v1` composer | Delivered by PR #4703 as a pure read-only subject projection | Input to the future Focus UI; no route, UI, store, or effect implied |
 | Conversation pack/export composer | Delivered by PR #4704 with strict source freshness and non-authoritative dispositions | Nonvisual fixtures and adapter boundary; no embedded conversation runtime or command admission |
@@ -228,9 +228,9 @@ creation instead of being hidden behind a newly created pack timestamp.
 4. devUI exports/opens the immutable pack. It does not require or discover an existing provider
    session and does not ingest a global session list.
 5. The provider may reason and return `ConversationDisposition.v1`: one allowed dialogue outcome,
-   rationale, source references, limitations, and optionally a proposed command payload. Until
-   FCP-04 supplies the complete `TypedCommandProposal.v1` validator, a non-null command payload is
-   refused rather than partially accepted.
+   rationale, source references and limitations. The generic disposition validator accepts no
+   command authority. A proposed inquiry question and its exact pack go through the separate
+   authenticated FCP-04 preview boundary, which supplies the complete `TypedCommandProposal.v1`.
 6. Without a typed command proposal, the conversation ends with no durable effect.
 7. With a typed proposal, devUI validates it against the exact pack and renders a new preview. The
    provider transcript is only provenance for why it was proposed.
@@ -319,18 +319,27 @@ The preview shows:
 
 The loopback-only read admission of `/api/devui` is not approval authentication. FCP-04 implements
 the first operation of the accepted [FCA-08 bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
-in the existing authenticated BuilderOps service and sanctioned inquiry destination. **Start** remains
-unavailable until that implementation binds the authenticated principal to the exact proposal and
-provides destination reservation/readback. The current inquiry record endpoint is not a launcher.
+in the existing authenticated BuilderOps service and sanctioned inquiry destination. The nonvisual
+implementation binds the current authenticated principal to the exact proposal and provides
+destination reservation/readback. **Start** remains unavailable without current source/permission
+and matching live destination protocol support. The inquiry record endpoint is not a launcher.
 #4169 retains the DDO-specific bridge; full DDO completion is not an inquiry prerequisite.
 
-The current Model Inquiry launcher is single-flight but does not accept a durable operation key or
-support proposal readback after the lock is released. Therefore this specification does not claim
-refresh-safe or process-restart-safe at-most-once behavior from the current launcher. FCP-04 must
-extend the existing artifact-first flow with one proposal-scoped `operation_key` recorded in its
-existing inquiry artifacts. Replaying that key returns the existing inquiry/receipt or an honest
-active/ambiguous state; it never launches a second inquiry. This is destination-owned idempotency,
-not a devUI task store.
+The current manual launch contract alone supplies neither a service-callable workflow nor durable
+operation-key propagation/readback. FCP-04 implements the bounded
+[approved inquiry operation interface](../BUILDEROPS_MODEL_INQUIRY/README.md#approved-inquiry-operation-interface):
+one skill-owned executable facade, finite authenticated host control verbs and destination artifacts.
+This supersedes the earlier assumption that an unchanged question-file-only invocation can carry a
+reserved inquiry identity. It preserves host selection, single-flight, exact question bytes,
+configured provider/auth custody and ambiguous-outcome recovery. The existing manual skill delegates
+to that same implementation; the only changed cleanup mechanism is the exact-path runtime helper
+explicitly bounded in the owner contract. No generic agent executor or parallel launcher is admitted.
+
+The destination reserves one proposal-scoped `operation_key` and inquiry ID before the attempt,
+then consumes that attempt once before a runner effect. Replaying the binding returns its existing
+receipt or an honest reserved/ambiguous state without relaunch. This is destination-owned idempotency,
+not a devUI task store. A live wrapper without the explicit capabilities/version support refuses
+before reservation; repo implementation tests never install or change that host-owned wrapper.
 
 ### Confirmation and receipt
 
@@ -412,11 +421,11 @@ policy. A deviation is evidence for an existing repair route, not a new workflow
 | Dependency | Why it is needed | Current posture / next safe path |
 | --- | --- | --- |
 | Subject composer over CKM/Cockpit sources | Builds `FocusView.v1` without copying authority | Extend the delivered read-only composition seam through FCP-01. |
-| Canonical pack/proposal hashing and expiry policy | Makes preview and confirmation exact | Specify and test in FCP-03/FCP-04 before visual integration. |
+| Canonical pack/proposal hashing and expiry policy | Makes preview and confirmation exact | Delivered and tested in FCP-03/FCP-04; available for the later visual handoff. |
 | External Codex/Claude adapter boundary | Opens/exports a pack without session discovery or credentials in devUI | FCP-03; nonvisual core follows FCP-01 and starts with explicit availability/unsupported states. |
-| Model Inquiry invocation adapter | Submits one authenticated proposal operation key through the existing skill and maps destination readback/receipt/failure states | FCP-04; nonvisual core follows FCP-03 and does not duplicate route, artifact, or launcher logic. |
-| Authenticated Start admission | Proves that the caller approving a durable/cost-bearing effect is the admitted owner | FCP-04 implements the accepted FCA-08 manifest/admission contract in the existing BuilderOps service; loopback read admission is insufficient. Missing admission is this task's work and keeps runtime Start unavailable, not a prerequisite on #4169 or FCP-04 itself. |
-| Destination-owned operation key and readback | Prevents refresh/restart from launching the same proposal twice without a devUI store | FCP-04 implements reservation and authenticated recovery lookup in the existing Model Inquiry artifact flow; current single-flight locking or record storage alone is insufficient. This is its implementation deliverable, not an external predecessor. |
+| Model Inquiry invocation adapter | Submits one authenticated proposal operation key through the existing skill and maps destination readback/receipt/failure states | Delivered by FCP-04 through one concrete skill facade, including manual delegation and nonvisual fixtures. |
+| Authenticated Start admission | Proves that the caller approving a durable/cost-bearing effect is the admitted owner | FCP-04 implements exact immutable approval and current per-verb permissions in the existing service; live scoped credential/service activation remains separate. Loopback read admission is insufficient. |
+| Destination-owned operation key and readback | Prevents refresh/restart from launching the same proposal twice without a devUI store | FCP-04 implements reservation, one-time entry and authenticated lookup in existing Model Inquiry artifacts. Runtime use requires a conforming operator-owned wrapper; unsupported protocol refuses before reservation. |
 | Governed Yggdrasil visual handoff | Resolves layout, accessibility, unresolved-question treatment, external-port affordance, and command salience | FCP-02 follows the stable FCP-01/FCP-03/FCP-04 fixtures. External design access blocks this handoff and later visual implementation only. |
 | Local audience/auth policy | Current CKM/devUI read seam is single-operator local | Keep first slice local; route any audience expansion through the existing access-policy path. |
 | Builder System source registry/coverage composition | Required for a truthful control lens | Separate BSC specification issue after this boundary lands. Reuse DOCS_INDEX, skill contracts, process map, BuilderOps records, and live evidence. |
@@ -435,10 +444,10 @@ future authority questions and must not be answered implicitly by implementation
 3. Which future command types, if any, may use **Apply/Hold**? Each needs separate workflow and
    authority approval; none is assumed here.
 
-These questions do not block FCP-01, FCP-03 or the bounded FCP-04 implementation. FCP-04 pickup
-requires delivered FCP-03, the accepted FCA-08 contract and a fresh strict readiness check of its
-live Issue. The admission and destination-idempotency work above belongs to FCP-04; runtime Start
-remains unavailable until that work is verified. Local loopback admission does not waive it.
+These questions do not block the delivered nonvisual FCP-01/FCP-03/FCP-04 implementation.
+Runtime Start still requires current permission/source checks and conforming destination support;
+local loopback admission does not waive them. No live activation or owner acceptance is inferred
+from implementation tests.
 
 ## Sequenced follow-up breakdown
 
@@ -446,15 +455,14 @@ remains unavailable until that work is verified. Local loopback admission does n
 | --- | --- | --- | --- |
 | 1 | [FCP-01 — Compose Subject-Centred Focus (#4694)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4694) | Target contracts and read-only subject composition with explicit correlation | Delivered by PR #4703 |
 | 2 | [FCP-03 — Open External Conversation Port (#4696)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4696) | Nonvisual canonical pack/export adapter and non-authoritative disposition contract | Delivered by PR #4704 |
-| 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Authenticated proposal validation, destination-owned operation-key admission, Start/Hold, and honest receipt/readback/ambiguity | Requires delivered FCP-03 and accepted FCA-08/#5502 contract; implements its own bounded admission/reservation/readback, with fresh live readiness before pickup; no design receipt required |
+| 3 | [FCP-04 — Start Model Inquiry from Exact Preview (#4697)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4697) | Authenticated proposal validation, destination-owned operation-key admission, Start/Hold, and honest receipt/readback/ambiguity | Nonvisual implementation and production-seam fixtures delivered; live host/service activation and visual acceptance remain separate |
 | 4 | [FCP-02 — Validate Focus and Conversation Design (#4695)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4695) | Governed Yggdrasil handoff over stable fixtures, including unresolved-owner-question treatment and accessibility/degraded-state receipts | Depends on FCP-01/FCP-03/FCP-04 fixtures; technically blocked while external handoff is unavailable |
 | Separate | [Builder System Control lens specification (#4698)](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4698) | Detailed source/state contract, coverage/deviation semantics, visual boundary, and later task split | Active separate docs line; not a Focus child |
 
-The specification is merged and FCP-01/FCP-03 are delivered. FCP-04 owns the remaining inquiry
-admission and destination-idempotency implementation; its live Issue records current pickup state.
-FCP-02 remains blocked by FCP-04 fixtures and external design availability. The parent remains a validation hub and never becomes
-ready work. Builder System Control is filed separately so its meta-governance context cannot leak
-into the Focus capability flow.
+The nonvisual FCP-01/FCP-03/FCP-04 implementations and fixtures are delivered. FCP-02 retains
+the external design handoff and its fresh availability check. The parent remains a validation hub
+and never becomes ready work. Builder System Control is filed separately so its meta-governance
+context cannot leak into the Focus capability flow.
 
 FCP-01, FCP-03, and FCP-04 are independently mergeable nonvisual slices. FCP-02 owns the later
 governed visual acceptance; after that handoff, visual implementation is derived as a separate

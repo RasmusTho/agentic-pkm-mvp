@@ -15,6 +15,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.builderops.config import load_paths
+from app.builderops.devui_model_inquiry_command import validate_approval_identity
 from app.builderops.model_inquiry_contract import (
     MODEL_TURN_SYSTEM_PROMPT,
     canonical_hash,
@@ -121,7 +122,8 @@ class ModelInquiryService:
         inquiry_id: str | None = None,
         after_persist: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        question = _nonempty(question, "question")
+        if not isinstance(question, str) or not question.strip():
+            raise BuilderOpsValidationError("question must be non-empty UTF-8 text")
         workflow = _safe_id(workflow, "workflow")
         validate_source_refs(source_refs)
         actor = normalize_actor(created_by)
@@ -190,6 +192,164 @@ class ModelInquiryService:
         if after_persist is not None:
             after_persist(inquiry_id)
         return trace
+
+    def reserve_command_operation(
+        self, approval: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        """Reserve one inquiry identity in its existing artifact destination.
+
+        The atomic immutable artifact is the winner election on the bound
+        inquiry host. Shared-vault synchronization is not a distributed lock.
+        Creating this artifact neither starts an inquiry nor permits a replay
+        to continue a launch interrupted before its attempt was recorded.
+        """
+        reservation = _command_reservation(approval)
+        directory = self._inquiry_dir(reservation["inquiry_id"], create=True)
+        return self._write_immutable_status(
+            directory / "command-reservation.json", reservation,
+            label="inquiry command reservation",
+        )
+
+    def _read_command_reservation(self, approval: Mapping[str, Any]) -> dict[str, Any]:
+        expected = _command_reservation(approval)
+        directory = self._inquiry_dir(expected["inquiry_id"], create=False)
+        actual = self._read_required(directory / "command-reservation.json")
+        if actual != expected:
+            raise BuilderOpsConflictError("inquiry operation binding conflicts")
+        return actual
+
+    def record_command_launch_attempt(
+        self, approval: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist the exact attempt before crossing the sanctioned skill seam."""
+        reservation = self._read_command_reservation(approval)
+        directory = self._inquiry_dir(reservation["inquiry_id"], create=False)
+        attempt = {
+            "schema": "builderops.model-inquiry-command-attempt.v1",
+            "inquiry_id": reservation["inquiry_id"],
+            "reservation_hash": reservation["artifact_hash"],
+            "operation_key": reservation["operation_key"],
+        }
+        attempt["artifact_hash"] = _artifact_hash(attempt)
+        return self._write_immutable_status(
+            directory / "command-launch-attempt.json", attempt,
+            label="inquiry command launch attempt",
+        )
+
+    def record_command_response(
+        self, approval: Mapping[str, Any], *, returncode: int, stdout: str
+    ) -> dict[str, Any]:
+        """Retain only a valid, exact terminal response; ambiguity does no cleanup."""
+        reservation = self._read_command_reservation(approval)
+        inquiry_id = reservation["inquiry_id"]
+        directory = self._inquiry_dir(inquiry_id, create=False)
+        attempt = self._read_required(directory / "command-launch-attempt.json")
+        _validate_artifact_hash(attempt, label="command attempt")
+        if attempt.get("reservation_hash") != reservation["artifact_hash"]:
+            raise BuilderOpsConflictError("inquiry attempt binding conflicts")
+        try:
+            response = json.loads(stdout, object_pairs_hook=_unique_command_fields)
+            required = ("inquiry_id", "final_state", "terminal_receipt_id", "human_readable_report")
+            if type(returncode) is not int or returncode != 0 or not isinstance(response, dict):
+                raise ValueError
+            if not all(isinstance(response.get(key), str) and response[key].strip() for key in required):
+                raise ValueError
+            if response["inquiry_id"] != inquiry_id or response["final_state"] not in RUN_TERMINAL_OUTCOMES:
+                raise ValueError
+            if response["terminal_receipt_id"] != f"receipt_{inquiry_id}_run_terminal" or response["human_readable_report"] != str(directory / "report.md"):
+                raise ValueError
+            entry = self._read_required(directory / "command-invocation-entry.json")
+            _validate_artifact_hash(entry, label="command entry")
+            if entry.get("attempt_hash") != attempt["artifact_hash"] or entry.get("reservation_hash") != reservation["artifact_hash"]:
+                raise ValueError
+            trace = self.trace(inquiry_id)
+            receipt = next((item for item in trace["receipts"] if item["id"] == response["terminal_receipt_id"] and item.get("event_type") == "inquiry_run_terminal" and item.get("outcome") == response["final_state"]), None)
+            report = directory / "report.md"
+            if receipt is None or report.is_symlink() or not report.is_file() or trace["question"]["content"] != approval["proposal"]["exact_inputs"][0]["text"]:
+                raise ValueError
+            terminal = {
+                "schema": "builderops.model-inquiry-command-response.v1",
+                "reservation_hash": reservation["artifact_hash"],
+                "attempt_hash": attempt["artifact_hash"],
+                "terminal_receipt": {key: response[key] for key in required},
+                "inquiry_terminal_receipt_hash": canonical_hash(receipt),
+                "report_content_hash": hashlib.sha256(report.read_bytes()).hexdigest(),
+            }
+            terminal["artifact_hash"] = _artifact_hash(terminal)
+        except (ValueError, TypeError, KeyError):
+            return self.command_operation_readback(approval)
+        self._write_immutable(directory / "command-terminal-response.json", terminal, label="inquiry command terminal response")
+        return self.command_operation_readback(approval)
+
+    def enter_command_invocation(
+        self, approval: Mapping[str, Any], *, reservation_hash: str, attempt_hash: str
+    ) -> tuple[dict[str, Any], bool]:
+        """Consume one exact attempt atomically before any inquiry/provider effect.
+
+        An entry without a terminal response is deliberately ambiguous. Neither
+        a restart nor an authentication failure after entry can consume it again.
+        """
+        reservation = self._read_command_reservation(approval)
+        directory = self._inquiry_dir(reservation["inquiry_id"], create=False)
+        attempt = self._read_required(directory / "command-launch-attempt.json")
+        _validate_artifact_hash(attempt, label="command attempt")
+        if reservation_hash != reservation["artifact_hash"] or attempt_hash != attempt["artifact_hash"] or attempt["reservation_hash"] != reservation_hash:
+            raise BuilderOpsConflictError("inquiry invocation receipt binding conflicts")
+        entry = {
+            "schema": "builderops.model-inquiry-command-entry.v1",
+            "inquiry_id": reservation["inquiry_id"],
+            "reservation_hash": reservation_hash,
+            "attempt_hash": attempt_hash,
+        }
+        entry["artifact_hash"] = _artifact_hash(entry)
+        return self._write_immutable_status(directory / "command-invocation-entry.json", entry, label="inquiry command invocation entry")
+
+    def command_operation_readback(self, approval: Mapping[str, Any]) -> dict[str, Any]:
+        """Read this binding only; absent or damaged evidence cannot permit replay."""
+        reservation = self._read_command_reservation(approval)
+        directory = self._inquiry_dir(reservation["inquiry_id"], create=False)
+        attempt = self._read_optional(directory / "command-launch-attempt.json")
+        entry = self._read_optional(directory / "command-invocation-entry.json")
+        terminal = self._read_optional(directory / "command-terminal-response.json")
+        if attempt is not None:
+            _validate_artifact_hash(attempt, label="command attempt")
+            if attempt.get("reservation_hash") != reservation["artifact_hash"]:
+                raise BuilderOpsConflictError("inquiry attempt binding conflicts")
+        if terminal is not None:
+            _validate_artifact_hash(terminal, label="command response")
+            if attempt is None or terminal.get("reservation_hash") != reservation["artifact_hash"] or terminal.get("attempt_hash") != attempt["artifact_hash"]:
+                raise BuilderOpsConflictError("inquiry response binding conflicts")
+            receipt = next((item for item in self.trace(reservation["inquiry_id"])["receipts"] if item["id"] == terminal["terminal_receipt"]["terminal_receipt_id"]), None)
+            report = directory / "report.md"
+            if entry is None or receipt is None or canonical_hash(receipt) != terminal.get("inquiry_terminal_receipt_hash") or report.is_symlink() or hashlib.sha256(report.read_bytes()).hexdigest() != terminal.get("report_content_hash"):
+                raise BuilderOpsConflictError("inquiry terminal evidence changed")
+        if entry is not None:
+            _validate_artifact_hash(entry, label="command entry")
+            if attempt is None or entry.get("reservation_hash") != reservation["artifact_hash"] or entry.get("attempt_hash") != attempt["artifact_hash"] or entry.get("inquiry_id") != reservation["inquiry_id"]:
+                raise BuilderOpsConflictError("inquiry entry binding conflicts")
+        return {
+            "approval_id": approval["approval_id"],
+            "approval_manifest_hash": approval["approval_manifest_hash"],
+            "repository": reservation["repository"],
+            "subject_ref": approval["proposal"]["subject_ref"],
+            "operation_type": "start_model_inquiry",
+            "operation_key": reservation["operation_key"],
+            "destination": approval["proposal"]["destination"],
+            "admission_receipt_ref": approval["approval_receipt_ref"],
+            "inquiry_id": reservation["inquiry_id"],
+            "reservation_receipt_hash": reservation["artifact_hash"],
+            "launch_attempt_receipt_hash": attempt["artifact_hash"] if attempt else None,
+            "invocation_entry_receipt_hash": entry["artifact_hash"] if entry else None,
+            "launch_evidence": {"kind": "invocation_entry", "receipt_hash": entry["artifact_hash"]} if entry else None,
+            "terminal_receipt": terminal["terminal_receipt"] if terminal else None,
+            "terminal_response_hash": terminal["artifact_hash"] if terminal else None,
+            "state": "terminal" if terminal else "ambiguous" if attempt else "reserved",
+            "reason": None if terminal else "launch_attempt_without_terminal_response" if attempt else "reservation_is_not_launch",
+            "observed_at": utc_now(),
+            "source_epoch": approval["proposal"]["approval_rule"]["authority_epoch"],
+            "stop_support": "unsupported",
+            "stop_status": "unsupported",
+        }
 
     def commit_turn(
         self,
@@ -1851,6 +2011,50 @@ class ModelInquiryService:
                 f"inquiry artifact parent must not be a symlink: {path.parent}"
             )
         self._require_within_vault(path.parent.resolve(strict=False), label="inquiry artifact parent")
+
+
+def _unique_command_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate command response field")
+        result[key] = value
+    return result
+
+
+def _command_reservation(approval: Mapping[str, Any]) -> dict[str, Any]:
+    """Check content identity; authenticated permission belongs to the protocol."""
+    try:
+        approval = validate_approval_identity(approval)
+        proposal = approval["proposal"]
+        content = {key: value for key, value in proposal.items() if key != "proposal_hash"}
+        if canonical_hash(content) != proposal["proposal_hash"]:
+            raise ValueError
+        if proposal["proposal_id"] != approval["approval_id"] or proposal["approval_rule"]["authenticated_principal_ref"] != approval["owner_principal"]:
+            raise ValueError
+        key = canonical_hash({
+            "repository": proposal["repository"], "approval_id": approval["approval_id"],
+            "operation_type": "start_model_inquiry", "destination": "Tailscale_macmini",
+            "workflow_ref": ".codex/skills/start-model-inquiry/SKILL.md",
+        })
+        if proposal["command_type"] != "start_model_inquiry" or proposal["operation_key"] != key:
+            raise ValueError
+        if proposal["destination"]["identity"] != "Tailscale_macmini" or proposal["destination"]["workflow_ref"] != ".codex/skills/start-model-inquiry/SKILL.md":
+            raise ValueError
+        for field in ("approval_id", "owner_principal", "approved_at", "approval_receipt_ref"):
+            if not isinstance(approval[field], str) or not approval[field].strip():
+                raise ValueError
+        reservation = {
+            "schema": "builderops.model-inquiry-command-reservation.v1",
+            "repository": proposal["repository"],
+            "operation_key": key,
+            "inquiry_id": f"inq_operation_{key}",
+            "approval": json.loads(json.dumps(approval, allow_nan=False)),
+        }
+        reservation["artifact_hash"] = _artifact_hash(reservation)
+        return reservation
+    except (ValueError, TypeError, KeyError) as exc:
+        raise BuilderOpsValidationError("invalid inquiry command approval binding") from exc
 
 
 def _new_inquiry_id() -> str:

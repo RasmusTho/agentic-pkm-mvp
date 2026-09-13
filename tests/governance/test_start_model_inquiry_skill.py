@@ -351,35 +351,36 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     for skill in (codex, claude):
         normalized_skill = " ".join(skill.split())
         for contract_field in (
-            "mode `0600`",
-            "scp \"$QUESTION_FILE\" Tailscale_macmini:/tmp/model-inquiry-question.md",
-            "ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'",
+            "mode-0600",
+            "scripts/start_model_inquiry_workflow.py --question-file <exact-question-file>",
+            "SanctionedModelInquiryWorkflow",
+            "Tailscale_macmini",
+            "$HOME/.local/bin/yggdrasil-model-inquiry",
             "inquiry_id",
             "final_state",
             "terminal_receipt_id",
             "human_readable_report",
-            "empty stdout",
-            "malformed JSON",
-            "Do not re-run the inquiry",
-            "single-flight operation",
-            "mkdir /tmp/yggdrasil-model-inquiry.lock",
-            "rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock",
-            "Do not remove an existing lock",
-            "Do not register remote lock release until the launch outcome is known",
-            "Do not release the remote lock after an ambiguous launcher outcome",
+            "duplicate JSON fields",
+            "malformed output is ambiguous",
+            "No automatic second launch",
+            "/tmp/yggdrasil-model-inquiry.lock",
+            "/tmp/model-inquiry-question.md",
+            "Failed acquisition cannot remove the existing lock",
+            "Ambiguous attempts preserve both",
+            "exact-path runtime helper",
             "high-reasoning profile",
-            "status zero",
-            "sanctioned subscription session",
-            "nonzero status",
-            "does not satisfy the withdrawn",
+            "exit zero",
+            "provider selection, subscription auth",
+            "Nonzero status",
+            "never a CKM credential source",
             "inq_20260730T075136Z_b73ed0da",
         ):
             assert contract_field in normalized_skill
         for required_boundary in (
-            "Do not run local BuilderOps, Python, Codex, or Claude commands",
-            "Do not install dependencies, run vault-init, configure adapters, or provision API keys.",
-            "Do not configure, inspect, copy, or print subscription-session material",
-            "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`",
+            "Never invoke a generic agent runner",
+            "Do not install dependencies, initialize a vault, configure adapters, provision credentials",
+            "Do not inspect, modify, replace or reproduce the host-owned subscription session or bridge",
+            "dormant `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api` path as a substitute",
         ):
             assert required_boundary in normalized_skill
         for forbidden in (
@@ -409,6 +410,87 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     with zipfile.ZipFile(archive) as bundle:
         assert bundle.namelist() == ["start-model-inquiry/SKILL.md"]
         assert bundle.read(bundle.namelist()[0]).decode() == claude
+
+
+def test_manual_skill_facade_preserves_fixed_route_and_exact_question(tmp_path, monkeypatch) -> None:
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow
+    from tests.builderops.inquiry_operation_fixture import InquiryGraph
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    question = tmp_path / "user-owned-question.md"
+    exact = "Question with ' shell ; text $HOME `unchanged` åäö\n\n".encode()
+    question.write_bytes(exact)
+    result = SanctionedModelInquiryWorkflow().manual(question)
+    assert result["state"] == "terminal"
+    assert graph.manual_question == exact and question.read_bytes() == exact
+    assert graph.launches == 1 and graph.reserves == 0
+    assert graph.calls[0] == ["/usr/bin/ssh", "-G", "Tailscale_macmini"]
+    launcher_calls = [call for call in graph.calls if "yggdrasil-model-inquiry\" --question-file" in call[-1]]
+    assert len(launcher_calls) == 1 and launcher_calls[0][-1] == '"$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md'
+    assert not graph.lock.exists() and not graph.stage.exists()
+    # The documented direct script boot does not depend on the caller's cwd.
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    help_result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/start_model_inquiry_workflow.py"), "--help"], cwd=tmp_path, env=environment, capture_output=True, text=True, check=False)
+    assert help_result.returncode == 0 and "--question-file" in help_result.stdout
+
+
+def test_workflow_local_route_requires_complete_host_proof(monkeypatch) -> None:
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow
+    real_is_file, real_read_text = Path.is_file, Path.read_text
+    key_path = Path("/etc/ssh/ssh_host_ed25519_key.pub")
+    monkeypatch.setattr(Path, "is_file", lambda path: True if path == key_path else real_is_file(path))
+    monkeypatch.setattr(Path, "read_text", lambda path, *args, **kwargs: "ssh-ed25519 exact-public-test-key" if path == key_path else real_read_text(path, *args, **kwargs))
+    state = {"home": str(Path.home()), "key": "exact-public-test-key"}
+    calls = []
+    def process(argv, **kwargs):
+        calls.append(argv)
+        if argv[:2] == ["/usr/bin/ssh", "-G"]:
+            raw = "user fixture-user\nhostname fixed-host\nuserknownhostsfile /fixture/known_hosts\n"
+        elif argv == ["/usr/bin/id", "-un"]:
+            raw = "fixture-user\n"
+        elif argv[0] == "/usr/bin/dscl":
+            raw = "NFSHomeDirectory: " + state["home"]
+        elif argv[0] == "/usr/bin/ssh-keygen":
+            raw = "fixed-host ssh-ed25519 " + state["key"]
+        else:
+            raise AssertionError(argv)
+        return subprocess.CompletedProcess(argv, 0, raw.encode(), b"")
+    monkeypatch.setattr(SanctionedModelInquiryWorkflow, "_process", staticmethod(process))
+    assert SanctionedModelInquiryWorkflow()._route() is True
+    state["key"] = "mismatched-public-key"
+    assert SanctionedModelInquiryWorkflow()._route() is False
+    state["home"] = "/another/home"
+    assert SanctionedModelInquiryWorkflow()._route() is False
+    assert not any("yggdrasil-model-inquiry" in argument for call in calls for argument in call)
+
+
+@pytest.mark.parametrize("outcome", ["malformed", "nonzero", "empty", "prefix", "duplicate", "timeout", "existing_lock", "existing_stage"])
+def test_facade_cleanup_preserves_ambiguous_recovery_state(tmp_path, monkeypatch, outcome) -> None:
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow, canonical_bytes
+    from tests.builderops.inquiry_operation_fixture import InquiryGraph
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    question = tmp_path / "user-question.md"
+    question.write_text("Keep the exact question.\n")
+    if outcome == "existing_lock":
+        graph.lock.mkdir()
+        graph.stage.write_text("protected existing question")
+    elif outcome == "existing_stage":
+        graph.stage.write_text("protected existing question")
+    else:
+        def response(argv, value):
+            if outcome == "timeout":
+                raise subprocess.TimeoutExpired(argv, 1)
+            raw = {"malformed": b"[]", "nonzero": canonical_bytes(value), "empty": b"", "prefix": b"prefix " + canonical_bytes(value), "duplicate": b'{"inquiry_id":"one","inquiry_id":"two"}'}[outcome]
+            return subprocess.CompletedProcess(argv, 1 if outcome == "nonzero" else 0, raw, b"")
+        graph.manual_response = response
+    result = SanctionedModelInquiryWorkflow().manual(question)
+    assert question.exists()
+    assert graph.stage.exists()
+    if outcome in {"existing_lock", "existing_stage"}:
+        assert graph.launches == 0 and graph.stage.read_text() == "protected existing question"
+        assert graph.lock.exists() is (outcome == "existing_lock")
+    else:
+        assert result["state"] == "ambiguous" and graph.lock.exists()
+        assert result["workflow_cleanup"] == "preserved_for_reconciliation" and graph.launches == 1
 
 
 def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:

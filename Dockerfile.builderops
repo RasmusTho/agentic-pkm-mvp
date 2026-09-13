@@ -22,7 +22,7 @@ ENV VCS_REF=$VCS_REF \
 
 # The existing Cockpit source owns gh REST timeout/pagination and credentials.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gh \
+    && apt-get install -y --no-install-recommends gh openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -32,6 +32,7 @@ RUN pip install --no-cache-dir -r requirements-builderops.txt
 
 COPY pyproject.toml ./
 COPY app ./app
+COPY .codex/skills/start-model-inquiry/SKILL.md ./.codex/skills/start-model-inquiry/SKILL.md
 COPY --from=devui-source-inputs /devui-candidate ./devui-candidate
 RUN python -m app.builderops.devui_sources --root /app/devui-candidate \
     --repository "$SOURCE_REPOSITORY" --source-sha "$VCS_REF" \

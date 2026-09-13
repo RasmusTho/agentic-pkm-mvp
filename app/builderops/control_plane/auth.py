@@ -231,6 +231,10 @@ class CredentialRegistry:
         with self._lock:
             self._failures += 1
 
+    def current_credential(self, credential_id: str) -> Credential | None:
+        """Re-read non-secret permission metadata, including revocation/rotation."""
+        return next((credential for credential, _ in self._entries() if credential.credential_id == credential_id), None)
+
     def is_registered_secret(self, value: str) -> bool:
         """Check a candidate without retaining or returning raw credential material."""
         fingerprint = self._fingerprint(value)

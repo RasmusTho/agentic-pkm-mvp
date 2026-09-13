@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from collections.abc import Callable
 from collections.abc import Mapping
 from typing import Any
@@ -15,6 +17,9 @@ from starlette.concurrency import run_in_threadpool
 from app.builderops.control_plane.api_models import (
     AttemptCommitRequest,
     InquiryCommitRequest,
+    InquiryCommandPreviewRequest,
+    InquiryCommandStartRequest,
+    InquiryCommandAuthorityRequest,
     LeaseClaimRequest,
     LeaseInput,
     OutboxClaimRequest,
@@ -54,8 +59,13 @@ from app.builderops.control_plane.models import (
 )
 from app.builderops.control_plane.selection import database_environment, production_store
 from app.middleware.trace import TraceIdMiddleware
+from app.builderops.devui_conversation_port import canonical_context_pack_bytes, validate_context_pack_bytes
+from app.builderops.devui_model_inquiry_command import approval_manifest, build_command_proposal, canonical_hash, validate_approval_identity, validate_command_proposal
+from app.builderops.devui_sources import load_source_configuration, revalidate_inquiry_sources
+from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow, WorkflowUnavailable
 
 bearer = HTTPBearer(auto_error=False)
+INQUIRY_CANDIDATE_ROOT = Path(__file__).resolve().parents[3] / "devui-candidate"
 
 _FORBIDDEN_DURABLE_KEYS = re.compile(
     r"(^|_)(authorization|bearer|credential|password|passwd|secret|token|api_key|"
@@ -427,6 +437,8 @@ def _assert_durable_payload_safe(
 
 
 def _control_plane_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, WorkflowUnavailable):
+        return HTTPException(status_code=503, detail="workflow_unavailable")
     if isinstance(exc, HTTPException):
         # A scope/auth/epoch rejection raised inside the handler body must keep
         # its typed status code instead of collapsing into a 503.
@@ -589,6 +601,12 @@ def create_app(
     lease_write = _credential_dependency(credentials, rate_limiter, "leases:write")
     record_write = _credential_dependency(credentials, rate_limiter, "records:write")
     inquiry_write = _credential_dependency(credentials, rate_limiter, "inquiries:write")
+    inquiry_approve = _credential_dependency(credentials, rate_limiter, "inquiries:approve")
+    inquiry_read = _credential_dependency(credentials, rate_limiter, "inquiries:read")
+    inquiry_control = _credential_dependency(credentials, rate_limiter)
+    # The actual production constructor has this complete concrete path. No
+    # caller-supplied executor or no-op production port is accepted.
+    inquiry_workflow = SanctionedModelInquiryWorkflow()
     task_write = _credential_dependency(credentials, rate_limiter, "tasks:write")
     attempt_write = _credential_dependency(credentials, rate_limiter, "attempts:write")
     promotion_write = _credential_dependency(credentials, rate_limiter, "promotions:write")
@@ -597,6 +615,127 @@ def create_app(
     # client credential never holds; only the host-privileged executor is
     # granted it.
     outbox_write = _credential_dependency(credentials, rate_limiter, "outbox:write")
+
+    def current_sources(repository: str, pack: dict[str, Any]) -> dict[str, Any]:
+        validate_context_pack_bytes(canonical_context_pack_bytes(pack), now=datetime.now(timezone.utc))
+        # Reuse only the managed read configuration; database/host credentials
+        # are not transported into a source reader or a command manifest.
+        keys = ("DEVUI_REPOSITORY", "DEVUI_GITHUB_ENABLED", "GH_CONFIG_DIR", "GH_HOST")
+        config = load_source_configuration({key: os.environ[key] for key in keys if key in os.environ}, candidate_root=INQUIRY_CANDIDATE_ROOT, source_sha=os.getenv("VCS_REF", "unknown"))
+        return revalidate_inquiry_sources(config, repository=repository, context_pack=pack)
+
+    def permission(credential: Credential) -> dict[str, Any]:
+        return {
+            "owner_principal": credential.principal,
+            "permission_ref": f"credential:{credential.credential_id}",
+            "permission_version": canonical_hash({"principal": credential.principal, "generation": credential.rotation_generation, "scopes": sorted(credential.scopes), "repositories": sorted(credential.repositories), "all_repositories": credential.all_repositories, "fingerprint": credential.fingerprint}),
+            "authority_epoch": store.readiness()["authority_epoch"],
+        }
+
+    def current_material(material: dict[str, Any], *, check_workflow: bool) -> dict[str, Any]:
+        current = {**material, **current_sources(material["repository"], material["context_pack"])}
+        if check_workflow:
+            current.update(inquiry_workflow.current_bindings())
+        return current
+
+    def exact_approval(repository: str, approval_id: str) -> dict[str, Any]:
+        row = store.get_record(repository, "inquiry-approval:" + approval_id)
+        approval = validate_approval_identity(row["payload"])
+        envelope = row["authority_envelope"]
+        if row["record_type"] != "ModelInquiryApproval" or row["state"] != "approved" or approval["proposal"]["repository"] != repository or approval["approval_id"] != approval_id or envelope["actor"] != approval["owner_principal"] or envelope["scope"] != "model-inquiry-approval":
+            raise ValueError("exact service-owned inquiry approval required")
+        return approval
+
+    def command_preview(request: InquiryCommandPreviewRequest, credential: Credential) -> dict[str, Any]:
+        _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+        repo = canonical_repository(request.repository)
+        material = {"repository": repo, "question": request.question, "context_pack": request.context_pack, **current_sources(repo, request.context_pack), **inquiry_workflow.current_bindings()}
+        proposal = build_command_proposal(approval_id=request.approval_id, material=material, **permission(credential), now=datetime.now(timezone.utc), expires_at=request.expires_at)
+        approval_manifest(proposal, material, approved_at=datetime.now(timezone.utc))
+        return {"proposal": proposal, "material": material, "choices": ["start", "hold"], "state": "preview"}
+
+    def command_start(request: InquiryCommandStartRequest, credential: Credential) -> dict[str, Any]:
+        if request.decision == "hold":
+            return {"state": "held", "effects": []}
+        _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+        repo = request.proposal["repository"]
+        _enforce_repo_scope(credential, repo)
+        material = current_material(request.material, check_workflow=True)
+        exact = validate_command_proposal(request.proposal, current_material=material, **permission(credential), now=datetime.now(timezone.utc))
+        try:
+            approved = exact_approval(repo, exact["proposal_id"])
+        except KeyError:
+            proposed = approval_manifest(exact, material, approved_at=datetime.now(timezone.utc))
+            _assert_durable_payload_safe(proposed, credentials)
+            try:
+                store.commit_record(envelope=AuthorityEnvelope(repository=repo, scope="model-inquiry-approval", stack="builderops", actor=credential.principal, source_refs=(exact["context_pack_ref"]["content_hash"],)), record_id="inquiry-approval:" + exact["proposal_id"], record_type="ModelInquiryApproval", state="approved", payload=proposed, idempotency_key="inquiry-approval:" + exact["proposal_hash"])
+            except (IdempotencyConflict, StateConflict, LeaseRequired):
+                # A concurrent first writer may win with a different approval
+                # timestamp. Only its exact immutable proposal can be reused.
+                pass
+            approved = exact_approval(repo, exact["proposal_id"])
+        if approved["proposal"] != exact or approved["material"] != material or approved["owner_principal"] != credential.principal:
+            raise StateConflict("inquiry approval already binds another proposal")
+        return {"approval": approved, "operation": inquiry_workflow.start(approved)}
+
+    def command_authority(request: InquiryCommandAuthorityRequest, credential: Credential) -> dict[str, Any]:
+        _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+        supplied = validate_approval_identity(request.approval)
+        repo = supplied["proposal"]["repository"]
+        _enforce_repo_scope(credential, repo)
+        required_scope = "inquiries:read" if request.purpose == "readback" else "inquiries:execute"
+        if required_scope not in credential.scopes:
+            raise HTTPException(status_code=403, detail="inquiry action permission required")
+        approved = exact_approval(repo, supplied["approval_id"])
+        if approved != supplied:
+            raise StateConflict("inquiry approval manifest changed")
+        epoch = store.readiness()["authority_epoch"]
+        if request.purpose != "readback":
+            permission_ref = approved["proposal"]["approval_rule"]["permission_ref"]
+            if not permission_ref.startswith("credential:"):
+                raise ValueError("current owner permission required")
+            owner = credentials.current_credential(permission_ref.removeprefix("credential:"))
+            if owner is None or "inquiries:approve" not in owner.scopes or not owner.may_address(repo):
+                raise HTTPException(status_code=403, detail="inquiry owner approval was revoked")
+            # Destination separately re-reads its actual configured profile;
+            # querying it here would recurse through the same SSH invocation.
+            validate_command_proposal(approved["proposal"], current_material=current_material(approved["material"], check_workflow=False), **permission(owner), now=datetime.now(timezone.utc))
+        return {"approval": approved, "purpose": request.purpose, "authority_epoch": epoch, "observed_at": datetime.now(timezone.utc).isoformat()}
+
+    @application.post("/v1/inquiries/command/preview")
+    async def inquiry_command_preview(request: InquiryCommandPreviewRequest, credential: Credential = Depends(inquiry_approve)) -> dict[str, Any]:
+        _enforce_repo_scope(credential, request.repository)
+        try:
+            return await run_in_threadpool(command_preview, request, credential)
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.post("/v1/inquiries/command/start")
+    async def inquiry_command_start(request: InquiryCommandStartRequest, credential: Credential = Depends(inquiry_approve)) -> dict[str, Any]:
+        try:
+            return await run_in_threadpool(command_start, request, credential)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.post("/v1/inquiries/command/authority")
+    async def inquiry_command_authority(request: InquiryCommandAuthorityRequest, credential: Credential = Depends(inquiry_control)) -> dict[str, Any]:
+        try:
+            return await run_in_threadpool(command_authority, request, credential)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.get("/v1/inquiries/command/{approval_id}")
+    async def inquiry_command_readback(approval_id: str, repository: str, credential: Credential = Depends(inquiry_read)) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        try:
+            approved = await run_in_threadpool(exact_approval, canonical_repository(repository), approval_id)
+            return await run_in_threadpool(inquiry_workflow.readback, approved)
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
 
     async def require_authority_epoch(
         x_builderops_authority_epoch: str | None = Header(default=None),
@@ -709,6 +848,8 @@ def create_app(
         _epoch: None = Depends(require_authority_epoch),
     ) -> dict[str, Any]:
         _enforce_repo_scope(credential, request.envelope.repository)
+        if request.record_type == "ModelInquiryApproval" or request.record_id.startswith("inquiry-approval:"):
+            raise HTTPException(status_code=403, detail="inquiry approvals require owner command admission")
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
             result = await run_in_threadpool(

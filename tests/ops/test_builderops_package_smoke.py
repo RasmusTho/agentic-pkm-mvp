@@ -39,12 +39,17 @@ def test_minimal_builder_package_boots_without_product_runtime() -> None:
     assert "uvicorn==" in manifest
     assert "faster-whisper" not in manifest
     assert "langgraph" not in manifest
+    assert "gh openssh-client" in dockerfile
+    assert "COPY .codex/skills/start-model-inquiry/SKILL.md ./.codex/skills/start-model-inquiry/SKILL.md" in dockerfile
+    assert "!.codex/skills/start-model-inquiry/SKILL.md" in (ROOT / "Dockerfile.builderops.dockerignore").read_text()
 
     code = """
 import json
 import sys
 
 from app.builderops.control_plane import migrate, service, worker
+from app.builderops.model_inquiry_workflow import workflow_binding
+assert len(workflow_binding()["content_hash"]) == 64
 
 results = {}
 for name, callback in (

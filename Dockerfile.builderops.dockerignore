@@ -5,6 +5,10 @@
 !requirements-builderops.txt
 !app
 !app/**
+!.codex
+!.codex/skills
+!.codex/skills/start-model-inquiry
+!.codex/skills/start-model-inquiry/SKILL.md
 !docs
 !docs/**
 !config
