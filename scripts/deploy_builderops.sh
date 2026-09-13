@@ -163,13 +163,43 @@ wait_ready() {
   return 1
 }
 
-refresh_loopback_forwarder() {
-  local service="builderops-loopback-forwarder.service"
-  command -v systemctl >/dev/null 2>&1 || {
+BUILDEROPS_LOOPBACK_FORWARDER_SERVICE="builderops-loopback-forwarder.service"
+
+preflight_loopback_forwarder() {
+  local service="${BUILDEROPS_LOOPBACK_FORWARDER_SERVICE}" systemctl_bin unit_state
+  systemctl_bin="$(command -v systemctl)" || {
     echo "BuilderOps loopback forwarder refresh requires systemctl" >&2
     return 75
   }
-  systemctl restart "${service}" || {
+  [ -x "${systemctl_bin}" ] || {
+    echo "BuilderOps loopback forwarder requires an executable systemctl" >&2
+    return 75
+  }
+  unit_state="$("${systemctl_bin}" show --property=LoadState --value "${service}")" || {
+    echo "BuilderOps loopback forwarder unit preflight failed for ${service}" >&2
+    return 75
+  }
+  [ "${unit_state}" = "loaded" ] || {
+    echo "BuilderOps loopback forwarder unit is not loaded: ${service} (${unit_state})" >&2
+    return 75
+  }
+  "${systemctl_bin}" restart "${service}" || {
+    echo "BuilderOps loopback forwarder refresh failed" >&2
+    return 75
+  }
+}
+
+refresh_loopback_forwarder() {
+  local service="${BUILDEROPS_LOOPBACK_FORWARDER_SERVICE}" systemctl_bin
+  systemctl_bin="$(command -v systemctl)" || {
+    echo "BuilderOps loopback forwarder refresh requires systemctl" >&2
+    return 75
+  }
+  [ -x "${systemctl_bin}" ] || {
+    echo "BuilderOps loopback forwarder refresh requires an executable systemctl" >&2
+    return 75
+  }
+  "${systemctl_bin}" restart "${service}" || {
     echo "BuilderOps loopback forwarder refresh failed" >&2
     return 75
   }
@@ -340,9 +370,10 @@ cp "${PIN_FILE}" "${pin_backup}"
 activate_target() {
   builderops_preflight_app_password_secret || return
   # Refuse before pin, database, or container mutation when the fixed
-  # loopback boundary cannot be refreshed. The post-recreation refresh below
-  # is still required because API recreation invalidates the cached address.
-  refresh_loopback_forwarder || return
+  # loopback unit or restart authority is unavailable. The post-recreation
+  # refresh below is still required because API recreation invalidates the
+  # cached address.
+  preflight_loopback_forwarder || return
   write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" || return
   builderops_compose "${ROOT}" pull db api worker migrate || return
   builderops_compose "${ROOT}" up -d db || return
@@ -360,10 +391,10 @@ reactivate_previous_release() {
   # the operator must resolve the writer boundary before another mutation.
   builderops_assert_failure_domain || return
   builderops_preflight_app_password_secret || return
-  # A rollback must also prove the loopback boundary before restoring its pin
-  # or recreating any service; otherwise a forwarder outage becomes a second
-  # late mutation failure.
-  refresh_loopback_forwarder || return
+  # A rollback must also prove the loopback unit and restart authority before
+  # restoring its pin or recreating any service; otherwise a forwarder outage
+  # becomes a second late mutation failure.
+  preflight_loopback_forwarder || return
   cp "${pin_backup}" "${PIN_FILE}" || return
   builderops_compose "${ROOT}" pull db api worker || return
   builderops_compose "${ROOT}" up -d --force-recreate db api worker || return
