@@ -202,7 +202,7 @@ def proposal(material: dict | None = None) -> dict:
     return build_command_proposal(
         approval_id="approval-4697",
         material=material or command_material(),
-        owner_principal="owner:rasmus",
+        owner_principal="owner:fixture",
         permission_ref="credential:owner",
         permission_version="1",
         authority_epoch=1,
@@ -215,7 +215,7 @@ def validate(value: dict, material: dict | None = None, **kwargs) -> dict:
     return validate_command_proposal(
         value,
         current_material=material or command_material(),
-        owner_principal="owner:rasmus",
+        owner_principal="owner:fixture",
         permission_ref="credential:owner",
         permission_version="1",
         authority_epoch=1,
