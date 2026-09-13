@@ -1,6 +1,7 @@
 State: Target-state implementation plan; current/target boundary reviewed 2026-09-13. Read-only
 composers, local Overview/Focus routes, the connected Companion repository shell, LLM-assisted
-synthesis, and the bounded managed DevUI listener/receipt producers are delivered. Source admission,
+synthesis, and the bounded managed DevUI listener/receipt producers and #5520 source readers are
+delivered. Qualified live source access,
 managed DevUI deployment, richer Focus/conversation/actions, whole BSC lens and actual owner
 acceptance remain targets. The active BuilderOps control plane does not establish those outcomes.
 Existing GitHub Issues remain executable backlog truth.
@@ -10,7 +11,7 @@ Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-09-12
+Last reviewed: 2026-09-13 for the bounded #5520 source-wiring update; broader baseline 2026-09-12.
 
 # devUI implementation plan
 
@@ -79,7 +80,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 
 ## Reuse before construction
 
-| Need | Reuse | Repository/evidence status reviewed 2026-09-12 |
+| Need | Reuse | Repository/evidence status (2026-09-12 baseline; noted updates) |
 | --- | --- | --- |
 | Capability/evidence snapshot | `CkmQueryService`, `CkmProjectionBatch`, Direction B owner-readable models | Delivered for local single-operator access; remote policy absent |
 | Work/freshness | `build_registry`, Cockpit chain predicates, source-state model | Delivered read-only |
@@ -90,7 +91,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Subject focus | `FocusView.v1` over existing read sources | Composer PR #4703, local GET PR #4771, and connected read-only Companion shell PR #5157 delivered; richer source-linked feature/conversation experience remains target |
 | LLM-assisted overview | Existing source-linked owner synthesis | PR #5413 delivered bounded proposal-only synthesis; model text supplies no canonical owner fact or approval |
 | Bounded VM102 readiness | Existing qualification/deploy/health receipt chain | PR #5469 projects exact `devui_projection` evidence or withdrawal; no generic feature readiness or live deployment is implied |
-| Managed DevUI runtime | Standalone listener and typed receipt producers | PR #5477 repository preparation delivered; work/CKM transports remain unadmitted; qualified deployment/readiness requires its exact typed chain, independently of process liveness |
+| Managed DevUI runtime | Standalone listener, admitted source readers and typed receipt producers | Source-wiring update reviewed 2026-09-13: #5520 extends PR #5477 preparation with BuilderOps API, bounded GitHub REST and immutable candidate-document reads in the managed Overview GET. CKM remains unadmitted; live source access and qualified deployment/readiness require separate evidence, independently of process liveness |
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
 | First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |

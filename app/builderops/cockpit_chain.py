@@ -238,7 +238,7 @@ def _last_movement(task: dict[str, Any]) -> tuple[datetime | None, str | None]:
     """The latest timestamp the dispatcher authority carries for this thread."""
     best: datetime | None = None
     best_text: str | None = None
-    for field in ("updated_at", "last_heartbeat_at"):
+    for field in ("updated_at", "last_heartbeat_at", "lease_updated_at"):
         parsed = parse_timestamp(task.get(field))
         if parsed is None:
             continue
@@ -331,6 +331,7 @@ def derive_position(
                 "dispatcher_status": status,
                 "updated_at": task.get("updated_at"),
                 "last_heartbeat_at": task.get("last_heartbeat_at"),
+                "lease_updated_at": task.get("lease_updated_at"),
             },
             unresolved_reason=(
                 "open thread carries no readable movement timestamp, so the"

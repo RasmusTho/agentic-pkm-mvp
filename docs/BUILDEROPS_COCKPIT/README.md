@@ -38,8 +38,10 @@ pack is supporting input.
 in motion, delivery decisions, active runs, and receipts. This cockpit remains the delivered
 read-only work register and a source view for that target. Its registry, freshness, chain, and lens
 contracts are reused by #5520's managed adapter through the extracted pure `compose_registry` seam;
-the legacy `build_registry` reader and source fact semantics stay unchanged. Managed transport
-admission and typed provenance belong to
+the legacy `build_registry` reader and source fact semantics stay unchanged. Managed source
+activity retains native task heartbeats and the API task lease's own update time separately;
+the existing latest-movement rule uses either without inferring live ownership from recency.
+Managed transport admission and typed provenance belong to
 [the Builder runtime owner](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
 Its no-decision, no-persistence, and no-authority boundaries do not move.
 

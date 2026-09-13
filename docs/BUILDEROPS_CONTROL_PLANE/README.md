@@ -144,7 +144,14 @@ provider; one optional provider failure must not erase healthy independent evide
 Cockpit source-state vocabulary stays unchanged; each managed source additionally carries its
 transport outcome and repository/candidate/epoch provenance in the source snapshot. Task records
 must already carry the Cockpit fields they claim. The bounded Issue-work projection accepts those
-explicit fields, including the native `TaskRecord` mapping. Generic CLI tasks and native verification
+explicit fields, including the native `TaskRecord` mapping. Native `last_heartbeat_at` stays distinct from task
+`updated_at`. The task API exposes the matching task lease's source-owned `updated_at`; the adapter
+passes it as `lease_updated_at` to the existing latest-movement rule. Claim, heartbeat and terminal
+lease activity is not relabelled as a heartbeat or an active lease. Generic leases sharing a
+resource id cannot contribute task ownership or activity. The read provenance hashes the addressed
+get-task observations, including lease changes since the collection read.
+
+Generic CLI tasks and native verification
 documents have no Issue/title fact for this lens: their addressed references remain explicit as
 unprojected observations, and mixed collections retain only supported Issue facts with a partial
 transport outcome. A wholly unprojectable collection withdraws the work count; malformed common

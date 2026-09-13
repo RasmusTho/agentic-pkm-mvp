@@ -170,10 +170,15 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
         not isinstance(lease, dict)
         or lease.get("repository") != repository
         or lease.get("resource_id") != task_id
+        or lease.get("lease_kind") != "task"
         or not isinstance(lease.get("holder"), str)
         or type(lease.get("fencing_token")) is not int
         or lease["fencing_token"] < 1
         or parse_timestamp(lease.get("expires_at")) is None
+        or (
+            lease.get("updated_at") is not None
+            and parse_timestamp(lease["updated_at"]) is None
+        )
     ):
         raise SourceReadRefusal("task_lease_mismatch")
     # The API also stores generic CLI tasks and native verification documents.
@@ -188,6 +193,10 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
         or payload["issue_number"] <= 0
         or not isinstance(payload.get("title"), str)
         or not payload["title"].strip()
+        or (
+            payload.get("last_heartbeat_at") is not None
+            and parse_timestamp(payload["last_heartbeat_at"]) is None
+        )
     ):
         raise SourceReadRefusal("task_payload_invalid")
     # Copy only existing Cockpit fields; never expose the authority envelope or
@@ -203,6 +212,7 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
             "priority",
             "created_at",
             "updated_at",
+            "last_heartbeat_at",
             "linked_pr",
             "blocked_reason",
             "sync_state",
@@ -216,6 +226,10 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
         result["sync_state"] = json.dumps(result["sync_state"])
     if lease is not None:
         result.update(claimed_by=lease["holder"], lease_expires_at=lease["expires_at"])
+        # The lease writer owns activity across claim, heartbeat and completion.
+        # Keep that timestamp distinct from task updates and native heartbeats.
+        if lease.get("updated_at") is not None:
+            result["lease_updated_at"] = lease["updated_at"]
     return result
 
 
@@ -283,6 +297,7 @@ def _api_reads(
             current: list[dict[str, Any]] = []
             seen: set[str] = set()
             receipt_reads = 0
+            observed_rows = []
             for listed in rows:
                 _task(listed, repository=repo)
                 task_id = listed["task_id"]
@@ -293,6 +308,7 @@ def _api_reads(
                 item = _task(row, repository=repo)
                 if row["version"] != listed["version"] or row["payload"] != listed["payload"]:
                     raise SourceReadRefusal("task_snapshot_changed")
+                observed_rows.append(row)
                 reference = f"/v1/tasks/{task_id}?repository={repo}#version={row['version']}"
                 work["source_refs"].append(reference)
                 if item is None:
@@ -331,7 +347,7 @@ def _api_reads(
             tasks = current if current or not rows else None
             work["source_refs"].append(
                 f"builderops-api:{repo}@epoch={config.authority_epoch}#sha256="
-                + hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+                + hashlib.sha256(json.dumps(observed_rows, sort_keys=True).encode()).hexdigest()
             )
             work["outcome"] = "partial" if work["unprojected_task_refs"] else "available"
             if receipts["outcome"] != "partial" and receipts["source_refs"]:

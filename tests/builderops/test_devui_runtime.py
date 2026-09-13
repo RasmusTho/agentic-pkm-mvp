@@ -152,7 +152,7 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
             }
         )
     )
-    state = SimpleNamespace(mode="ok", epoch=7, calls=[], http_calls=[], tasks=[task])
+    state = SimpleNamespace(mode="ok", epoch=7, calls=[], http_calls=[], tasks=[task], addressed_tasks=[])
 
     class Store:
         def readiness(self):
@@ -161,6 +161,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
 
         def list_tasks(self, repository, **kwargs):
             state.calls.append(("list_tasks", repository))
+            if hasattr(state, "native_store"):
+                return state.native_store.list_tasks(repository, **kwargs)
             if state.mode == "unavailable":
                 raise OSError("fixture-secret-never-export")
             if state.mode == "timeout":
@@ -169,6 +171,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
 
         def get_task(self, repository, task_id):
             state.calls.append(("get_task", repository, task_id))
+            if hasattr(state, "native_store"):
+                return state.native_store.get_task(repository, task_id)
             if state.mode == "epoch_changed":
                 state.epoch += 1
             row = copy.deepcopy(next(x for x in state.tasks if x["task_id"] == task_id))
@@ -176,6 +180,9 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
                 row["repository"] = "foreign/repository"
             if state.mode == "changed":
                 row["version"] += 1
+            if state.mode == "activity_changed":
+                row["lease"]["updated_at"] = stamp
+            state.addressed_tasks.append(copy.deepcopy(row))
             return row
 
         def get_record(self, repository, record_id):
@@ -281,7 +288,7 @@ endpoint = args[1]
 if endpoint.endswith('/issues'):
     result = [{'number': 501, 'title': 'Fixture work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501'}]
 elif endpoint.endswith('/pulls'):
-    result = [{'number': 502, 'title': 'Fixture PR', 'state': 'open', 'html_url': 'https://github.com/example/fixture/pull/502', 'body': 'Governing-Issue: #501', 'head': {'sha': 'd' * 40, 'ref': 'codex/fixture'}}]
+    result = [] if mode == 'no_pull' else [{'number': 502, 'title': 'Fixture PR', 'state': 'open', 'html_url': 'https://github.com/example/fixture/pull/502', 'body': 'Governing-Issue: #501', 'head': {'sha': 'd' * 40, 'ref': 'codex/fixture'}}]
 elif endpoint.endswith('/status'):
     result = {'state': 'success'}
 else:
@@ -417,6 +424,81 @@ def test_managed_overview_keeps_unprojectable_tasks_explicit(managed_sources) ->
     assert payload["now"] == []
     assert _managed_source(payload, "github-live")["state"] == "fresh"
     assert _managed_source(payload, "docs-frontmatter")["state"] == "fresh"
+
+
+@pytest.mark.parametrize(
+    "case, moving, admitted",
+    [
+        ("native_heartbeat", True, True),
+        ("lease_activity", True, True),
+        ("expired_recent_activity", True, True),
+        ("old_activity", False, True),
+        ("missing_activity", False, True),
+        ("fresh_task", True, True),
+        ("newer_native_heartbeat", True, True),
+        ("concurrent_heartbeat", True, True),
+        ("malformed_activity", False, False),
+        ("malformed_heartbeat", False, False),
+        ("generic_lease", False, False),
+    ],
+)
+def test_managed_source_preserves_native_activity(managed_sources, case, moving, admitted) -> None:
+    import copy
+    from datetime import datetime, timedelta, timezone
+
+    from app.builderops.control_plane.store import PostgresBuilderOpsStore
+    from app.builderops.devui_sources import _task
+
+    source = managed_sources
+    source.gh_mode.write_text("no_pull")
+    now = datetime.now(timezone.utc)
+    fresh, old = now.isoformat(), (now - timedelta(days=15)).isoformat()
+    row = copy.deepcopy(source.tasks[0])
+    row.update(state="claimed", updated_at=fresh if case == "fresh_task" else old)
+    row["payload"].update(status="claimed", updated_at=old, last_heartbeat_at=None)
+    if case in {"native_heartbeat", "newer_native_heartbeat"}:
+        row["payload"]["last_heartbeat_at"] = fresh
+    if case == "malformed_heartbeat":
+        row["payload"]["last_heartbeat_at"] = "invalid"
+    if case != "native_heartbeat":
+        row.update(
+            lease_holder="worker",
+            fencing_token=1,
+            expires_at=(now + timedelta(hours=1)).isoformat(),
+            lease_kind="generic" if case == "generic_lease" else "task",
+            lease_updated_at=fresh if case in {"lease_activity", "expired_recent_activity"} else old,
+        )
+        if case == "expired_recent_activity":
+            row["expires_at"] = (now - timedelta(minutes=1)).isoformat()
+        if case == "missing_activity":
+            row.pop("lease_updated_at")
+        if case == "malformed_activity":
+            row["lease_updated_at"] = "invalid"
+    source.tasks[:] = [dict(PostgresBuilderOpsStore._task_snapshot(row))]
+    if case == "concurrent_heartbeat":
+        source.mode = "activity_changed"
+    with source.client() as client:
+        response = client.get("/api/devui/overview")
+    assert response.status_code == 200
+    payload = response.json()
+    assert _managed_source(payload, "dispatcher-store")["state"] == (
+        "fresh" if admitted else "unavailable"
+    )
+    assert bool(payload["now"]) is moving
+    assert _managed_source(payload, "github-live")["state"] == "fresh"
+    assert _managed_source(payload, "docs-frontmatter")["state"] == "fresh"
+    if admitted:
+        import hashlib
+
+        task = _task(source.tasks[0], repository="example/fixture")
+        assert task["updated_at"] == row["updated_at"]
+        assert task.get("last_heartbeat_at") == row["payload"]["last_heartbeat_at"]
+        assert task.get("lease_updated_at") == row.get("lease_updated_at")
+        digest = hashlib.sha256(json.dumps(source.addressed_tasks, sort_keys=True).encode()).hexdigest()
+        assert any(
+            ref.endswith("#sha256=" + digest)
+            for ref in _managed_source(payload, "dispatcher-store")["transport"]["source_refs"]
+        )
 
 
 @pytest.mark.parametrize(
