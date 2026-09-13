@@ -1281,3 +1281,88 @@ def test_watchdog_current_only_history_uses_one_terminal_gate(body_mode: str, pr
         if proof == "merged":
             assert (resolve_verified_merge_phase(comments, authority_receipt=_receipt_payload(authority),
                     pr=observed, allow_merged_body_drift=True) is not None) is expected
+
+
+@pytest.mark.parametrize("body_mode", ["canonical", "neutralized", "raced"])
+@pytest.mark.parametrize("chain_role", ["current", "older-edit", "prior-head"])
+@pytest.mark.parametrize("phase_kind", ["prepared", "merged", "reconciled", "restored"])
+def test_watchdog_and_shared_owner_authenticate_every_retained_phase_chain(
+    body_mode: str, chain_role: str, phase_kind: str,
+) -> None:
+    from app.dispatcher.verified_merge import resolve_verified_merge_phase
+
+    current = _authority_comment()
+    older = copy.deepcopy(current)
+    if chain_role == "prior-head":
+        payload = _receipt_payload(older)
+        payload.update(head_sha="d" * 40, run_id="older-head")
+        older["body"] = "verified issue-set merge authority:\n```json\n" + json.dumps(payload) + "\n```"
+    selected = current if chain_role == "current" else older
+    kwargs = projection_phase_kwargs(_receipt_payload(selected), _pr(_neutralized_body(_body())),
+        body_edit={"node_id": "UCE_tested_chain", "edited_at": "2026-08-12T05:00:00Z",
+                   "editor_login": "fixture-owner", "editor_association": "OWNER"})
+    phases = ["prepared", "merged", "reconciled", "restored"]
+    tested_phases = [_phase_comment(selected, phase=name, merge_commit_sha=None if name == "prepared" else "c" * 40,
+                                   phase_kwargs=kwargs) for name in phases[:phases.index(phase_kind) + 1]]
+    prefix = [selected, projection_convergence_comment(kwargs)]
+    suffix = [] if chain_role == "current" else [
+        *([current] if chain_role == "prior-head" else []), _convergence_comment(current),
+        _phase_comment(current, phase="prepared", merge_commit_sha=None),
+        _phase_comment(current, phase="merged", merge_commit_sha="c" * 40),
+    ]
+    live = _merged_pr({"canonical": _body(), "neutralized": _neutralized_body(_body()),
+                      "raced": "Governing-Issue: #4999\n\nFixes #4999\n"}[body_mode])
+
+    def assert_outcome(comments: list[dict[str, object]], expected: bool) -> None:
+        resolved = resolve_verified_merge_phase(comments, authority_receipt=_receipt_payload(current),
+                                                pr=live, allow_merged_body_drift=True)
+        assert (resolved is not None and resolved["phase"] != "prepared") is expected
+        request = {"comments": comments, "expectedRepository": REPOSITORY, "linkedIssues": [4999], "livePr": live}
+        selected_authority = _node("selectWatchdogAuthority(inputs[0])", request)
+        assert selected_authority == ({"mode": "durable_receipt", "closing_issues": [3820, 3823], "governing_issue": 3821}
+                                     if expected else {"mode": "trusted_receipt_invalid", "closing_issues": [], "governing_issue": None})
+
+    expected = phase_kind != "prepared" if chain_role == "current" else phase_kind == "prepared"
+    assert_outcome(prefix + tested_phases + suffix, expected)
+    # Identical phase replay is idempotent; convergence multiplicity is not.
+    assert_outcome(prefix + tested_phases + [copy.deepcopy(tested_phases[-1])] + suffix, expected)
+    assert_outcome(prefix + tested_phases + [copy.deepcopy(prefix[1])] + suffix, False)
+    for field, value in (("body_sha256", "0" * 64), ("extra", True)):
+        forged = copy.deepcopy(tested_phases)
+        payload = _receipt_payload(forged[-1])
+        payload[field] = value
+        forged[-1]["body"] = "verified issue-set merge phase:\n```json\n" + json.dumps(payload) + "\n```"
+        assert_outcome(prefix + forged + suffix, False)
+    if phase_kind != "prepared":
+        assert_outcome(prefix + tested_phases[1:] + suffix, False)
+    if phase_kind in {"reconciled", "restored"}:
+        for target in (["reconciled"] if phase_kind == "reconciled" else ["reconciled", "restored"]):
+            conflicting = copy.deepcopy(tested_phases[phases.index(target)])
+            payload = _receipt_payload(conflicting)
+            payload["reopened_unauthorized_issues"] = [4998]
+            conflicting["body"] = "verified issue-set merge phase:\n```json\n" + json.dumps(payload) + "\n```"
+            assert_outcome(prefix + tested_phases + [conflicting] + suffix, False)
+            if target == "restored":
+                assert_outcome(prefix + tested_phases[:-1] + [conflicting] + suffix, False)
+
+
+@pytest.mark.parametrize("body_mode", ["canonical", "neutralized"])
+def test_watchdog_no_history_distinguishes_quoted_from_malformed_markers(body_mode: str) -> None:
+    from app.dispatcher.verified_merge import resolve_verified_merge_phase
+
+    authority = _authority_comment()
+    comments = [authority]
+    for phase in ("prepared", "merged"):
+        comment = _phase_comment(authority, phase=phase, merge_commit_sha=None if phase == "prepared" else "c" * 40)
+        payload = _receipt_payload(comment)
+        payload.pop("projection_convergence_sha256")
+        payload.pop("final_projection_observation_sha256")
+        comment["body"] = "verified issue-set merge phase:\n```json\n" + json.dumps(payload) + "\n```"
+        comments.append(comment)
+    live = _merged_pr(_body() if body_mode == "canonical" else _neutralized_body(_body()))
+    marker = "verified merge closing projection convergence:"
+    for quote, expected in ((f"```text\n{marker}\n```", True), (f"{marker}\n```json\n{{bad}}\n```", False)):
+        evidence = comments + [{"author_association": "OWNER", "body": quote}]
+        assert (resolve_verified_merge_phase(evidence, authority_receipt=_receipt_payload(authority), pr=live) is not None) is expected
+        request = {"comments": evidence, "expectedRepository": REPOSITORY, "linkedIssues": [4999], "livePr": live}
+        assert (_node("selectWatchdogAuthority(inputs[0])", request)["mode"] == "durable_receipt") is expected

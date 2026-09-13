@@ -409,6 +409,34 @@ jobs:
               );
             };
 
+            // Standalone github-script has no Python carrier. Mirror the shared
+            // verified_merge.py owner and prove parity for every retained phase.
+            const validProjectionPhase = (phase, authorityReceipt, convergence) => {
+              const name = phase.phase;
+              if (!PHASES.includes(name) || !hasExactFields(phase, PHASE_FIELDS)) return false;
+              const reconciled = ["reconciled", "restored"].includes(name);
+              const closed = phase.closed_issues;
+              const reopened = phase.reopened_unauthorized_issues;
+              if (!isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
+                  (reconciled && !arraysEqual(closed, authorityReceipt.closing_issues)) ||
+                  (!reconciled && (closed.length > 0 || reopened.length > 0)) ||
+                  closed.some(number => reopened.includes(number)) ||
+                  (name === "prepared" ? phase.merge_commit_sha !== null :
+                    typeof phase.merge_commit_sha !== "string" || !/^[0-9a-f]{40}$/.test(phase.merge_commit_sha))) return false;
+              return canonicalJson(phase) === canonicalJson({
+                authority_sha256: canonicalSha256(authorityReceipt),
+                body_sha256: name === "restored" ? authorityReceipt.body_sha256 : authorityReceipt.neutralized_body_sha256,
+                closed_issues: closed, contract: "verified_issue_set_merge_phase.v1",
+                final_projection_observation_sha256: name === "prepared"
+                  ? canonicalSha256(convergence.final_projection_observation) : null,
+                head_sha: authorityReceipt.head_sha, merge_commit_sha: phase.merge_commit_sha,
+                phase: name, pr_number: authorityReceipt.pr_number,
+                projection_convergence_sha256: convergence.receipt_sha256,
+                reopened_unauthorized_issues: reopened, repository: authorityReceipt.repository,
+                run_id: authorityReceipt.run_id,
+              });
+            };
+
             const resolveDurableConvergences = (comments, authorityReceipt) => {
               const attempts = comments.filter(comment =>
                 TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
@@ -422,6 +450,7 @@ jobs:
                 ),
                 0
               );
+              if (markerAttempts === 0) return new Map();
               if (receipts.length !== markerAttempts) return null;
               // Mirror verified_merge.py's shared history classification:
               // authenticate every candidate before selecting current proof.
@@ -466,9 +495,8 @@ jobs:
                 seenContracts.add(contractIdentity);
                 if (receipt.authority_sha256 === currentDigest) {
                   byDigest.set(receipt.receipt_sha256, receipt);
-                } else {
-                  history.set(receipt.receipt_sha256, [receiptAuthority, receipt]);
                 }
+                history.set(receipt.receipt_sha256, [receiptAuthority, receipt]);
               }
               const phases = commentReceipts(comments, PHASE_MARKER);
               const phaseAttempts = comments.reduce((count, comment) => count + (
@@ -476,165 +504,54 @@ jobs:
                   ? structuralMarkerOccurrences(comment.body, PHASE_MARKER) : 0
               ), 0);
               if (phases.length !== phaseAttempts) return null;
+              // Authenticate every phase and every chain before current selection.
+              // An invalid non-selected chain is an error, never a null result to drop.
+              const phasesByChain = new Map();
               for (const phase of phases) {
-                if (!hasExactFields(phase, PHASE_FIELDS)) return null;
-                if (phase.authority_sha256 === currentDigest) continue;
                 const historical = history.get(phase.projection_convergence_sha256);
-                if (historical === undefined || phase.phase !== "prepared") return null;
-                const [historicalAuthority, convergence] = historical;
-                const expected = {
-                  authority_sha256: canonicalSha256(historicalAuthority),
-                  body_sha256: historicalAuthority.neutralized_body_sha256,
-                  closed_issues: [], contract: "verified_issue_set_merge_phase.v1",
-                  final_projection_observation_sha256: canonicalSha256(convergence.final_projection_observation),
-                  head_sha: historicalAuthority.head_sha, merge_commit_sha: null, phase: "prepared",
-                  pr_number: historicalAuthority.pr_number,
-                  projection_convergence_sha256: convergence.receipt_sha256,
-                  reopened_unauthorized_issues: [], repository: historicalAuthority.repository,
-                  run_id: historicalAuthority.run_id,
-                };
-                if (canonicalJson(phase) !== canonicalJson(expected)) return null;
+                if (historical === undefined) return null;
+                const [phaseAuthority, convergence] = historical;
+                if ((phase.authority_sha256 !== currentDigest && phase.phase !== "prepared") ||
+                    !validProjectionPhase(phase, phaseAuthority, convergence)) return null;
+                const digest = convergence.receipt_sha256;
+                if (!phasesByChain.has(digest)) phasesByChain.set(digest, new Map());
+                const chain = phasesByChain.get(digest);
+                if (chain.has(phase.phase) && canonicalJson(chain.get(phase.phase)) !== canonicalJson(phase)) return null;
+                chain.set(phase.phase, phase);
               }
+              let deliveredChains = 0;
+              for (const chain of phasesByChain.values()) {
+                const last = Math.max(...[...chain.keys()].map(name => PHASES.indexOf(name)));
+                if (PHASES.slice(0, last + 1).some(name => !chain.has(name))) return null;
+                const merged = chain.get("merged");
+                if (merged !== undefined) {
+                  deliveredChains += 1;
+                  if ([...chain.entries()].some(([name, phase]) =>
+                    name !== "prepared" && phase.merge_commit_sha !== merged.merge_commit_sha
+                  )) return null;
+                }
+                if (chain.has("restored") && ["closed_issues", "reopened_unauthorized_issues"].some(field =>
+                  !arraysEqual(chain.get("restored")[field], chain.get("reconciled")[field])
+                )) return null;
+              }
+              if (deliveredChains > 1) return null;
               return byDigest;
             };
 
             const resolveContinuousMergePhase = (comments, authorityReceipt, livePr) => {
               if (!hasCompleteMergedIdentity(livePr)) return null;
-              const authorityDigest = canonicalSha256(authorityReceipt);
               const convergences = resolveDurableConvergences(comments, authorityReceipt);
               if (convergences === null || convergences.size === 0) return null;
-              const validByChain = new Map(
-                [...convergences.keys()].map(digest => [
-                  digest, new Map(PHASES.map(phase => [phase, []])),
-                ])
-              );
-              const phaseAttempts = comments.filter(comment =>
-                TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
-                typeof comment.body === "string" && comment.body.includes(PHASE_MARKER)
-              );
-              const phaseReceipts = commentReceipts(phaseAttempts, PHASE_MARKER);
-              const phaseMarkerAttempts = phaseAttempts.reduce(
-                (count, comment) => count + structuralMarkerOccurrences(
-                  comment.body, PHASE_MARKER
-                ),
-                0
-              );
-              if (phaseReceipts.length !== phaseMarkerAttempts) return null;
-              let invalidCurrentProjectionPhase = false;
-              for (const receipt of phaseReceipts) {
-                const phase = receipt.phase;
-                const phaseIndex = PHASES.indexOf(phase);
-                const mergedPhase = phaseIndex >= PHASES.indexOf("merged");
-                const reconciledPhase = phaseIndex >= PHASES.indexOf("reconciled");
-                const closed = receipt.closed_issues;
-                const reopened = receipt.reopened_unauthorized_issues;
-                const expectedDigest = phase === "restored"
-                  ? authorityReceipt.body_sha256
-                  : authorityReceipt.neutralized_body_sha256;
-                const projectionDigest = receipt.projection_convergence_sha256;
-                const phaseFinalObservationDigest = receipt.final_projection_observation_sha256;
-                const convergenceReceipt = typeof projectionDigest === "string"
-                  ? convergences.get(projectionDigest)
-                  : null;
-                const finalObservationDigest = convergenceReceipt === undefined || convergenceReceipt === null
-                  ? null
-                  : canonicalSha256(convergenceReceipt.final_projection_observation);
-                const sameAuthorityIdentity = receipt.authority_sha256 === authorityDigest;
-                const matchingIdentity =
-                  sameAuthorityIdentity && phaseIndex >= 0 &&
-                  receipt.contract === "verified_issue_set_merge_phase.v1";
-                const exactCurrentSchema = hasExactFields(receipt, PHASE_FIELDS);
-                const carriesCurrentProjectionFields =
-                  Object.prototype.hasOwnProperty.call(receipt, "projection_convergence_sha256") ||
-                  Object.prototype.hasOwnProperty.call(receipt, "final_projection_observation_sha256");
-                const invalidCurrent = sameAuthorityIdentity && (
-                  (!exactCurrentSchema && carriesCurrentProjectionFields) ||
-                  (exactCurrentSchema && (!matchingIdentity || (
-                    typeof projectionDigest !== "string" ||
-                    !/^[0-9a-f]{64}$/.test(projectionDigest) ||
-                    convergenceReceipt === undefined || convergenceReceipt === null ||
-                    (phase === "prepared" && (
-                      typeof phaseFinalObservationDigest !== "string" ||
-                      !/^[0-9a-f]{64}$/.test(phaseFinalObservationDigest) ||
-                      phaseFinalObservationDigest !== finalObservationDigest
-                    )) ||
-                    (phase !== "prepared" && phaseFinalObservationDigest !== null)
-                    || receipt.repository !== authorityReceipt.repository
-                    || receipt.pr_number !== authorityReceipt.pr_number
-                    || receipt.head_sha !== authorityReceipt.head_sha
-                    || receipt.run_id !== authorityReceipt.run_id
-                    || receipt.body_sha256 !== expectedDigest ||
-                    !isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
-                    closed.some(number => reopened.includes(number)) ||
-                    (reconciledPhase && !arraysEqual(closed, authorityReceipt.closing_issues)) ||
-                    (!reconciledPhase && (closed.length > 0 || reopened.length > 0)) ||
-                    (mergedPhase && receipt.merge_commit_sha !== livePr.merge_commit_sha) ||
-                    (!mergedPhase && receipt.merge_commit_sha !== null)
-                  )))
-                );
-                if (invalidCurrent) invalidCurrentProjectionPhase = true;
-                if (
-                  !hasExactFields(receipt, PHASE_FIELDS) || phaseIndex < 0 ||
-                  receipt.contract !== "verified_issue_set_merge_phase.v1" ||
-                  receipt.authority_sha256 !== authorityDigest ||
-                  receipt.repository !== authorityReceipt.repository ||
-                  receipt.pr_number !== authorityReceipt.pr_number ||
-                  receipt.head_sha !== authorityReceipt.head_sha ||
-                  receipt.run_id !== authorityReceipt.run_id ||
-                  receipt.body_sha256 !== expectedDigest ||
-                  typeof projectionDigest !== "string" ||
-                  !/^[0-9a-f]{64}$/.test(projectionDigest) ||
-                  convergenceReceipt === undefined || convergenceReceipt === null ||
-                  (phase === "prepared"
-                    ? typeof phaseFinalObservationDigest !== "string" ||
-                      !/^[0-9a-f]{64}$/.test(phaseFinalObservationDigest) ||
-                      phaseFinalObservationDigest !== finalObservationDigest
-                    : phaseFinalObservationDigest !== null) ||
-                  !isSortedIssueArray(closed) || !isSortedIssueArray(reopened) ||
-                  closed.some(number => reopened.includes(number)) ||
-                  (reconciledPhase && !arraysEqual(closed, authorityReceipt.closing_issues)) ||
-                  (!reconciledPhase && (closed.length > 0 || reopened.length > 0)) ||
-                  (mergedPhase && receipt.merge_commit_sha !== livePr.merge_commit_sha) ||
-                  (!mergedPhase && receipt.merge_commit_sha !== null)
-                ) continue;
-                validByChain.get(projectionDigest).get(phase).push(receipt);
+              const currentDigest = canonicalSha256(authorityReceipt);
+              let highest = null;
+              // The classifier already proved all fields, phase continuity,
+              // conflicts and uniqueness. Only the live merge binding remains.
+              for (const phase of commentReceipts(comments, PHASE_MARKER)) {
+                if (phase.authority_sha256 !== currentDigest || phase.phase === "prepared") continue;
+                if (phase.merge_commit_sha !== livePr.merge_commit_sha) return null;
+                if (highest === null || PHASES.indexOf(phase.phase) > PHASES.indexOf(highest.phase)) highest = phase;
               }
-              for (const validByPhase of validByChain.values()) {
-                const occupied = PHASES.map(phase => validByPhase.get(phase).length > 0);
-                const first = occupied.findIndex(Boolean);
-                const last = occupied.lastIndexOf(true);
-                if (first !== -1 && (first !== 0 ||
-                    occupied.slice(first, last + 1).some(phasePresent => !phasePresent))) {
-                  invalidCurrentProjectionPhase = true;
-                }
-              }
-              if (invalidCurrentProjectionPhase) return null;
-              const resolveChain = validByPhase => {
-                let highest = null;
-                let reconciledEvidence = null;
-                for (const phase of PHASES) {
-                  const receipts = validByPhase.get(phase);
-                  if (receipts.length === 0) {
-                    if (phase === "prepared" ||
-                        PHASES.slice(PHASES.indexOf(phase) + 1)
-                          .some(later => validByPhase.get(later).length > 0)) return null;
-                    break;
-                  }
-                  if (new Set(receipts.map(canonicalSha256)).size !== 1) return null;
-                  highest = receipts[receipts.length - 1];
-                  const evidence = canonicalJson([
-                    highest.closed_issues, highest.reopened_unauthorized_issues,
-                  ]);
-                  if (phase === "reconciled") reconciledEvidence = evidence;
-                  if (phase === "restored" && evidence !== reconciledEvidence) return null;
-                }
-                return highest;
-              };
-              const deliveredChains = [...validByChain.values()]
-                .map(resolveChain)
-                .filter(receipt => receipt !== null &&
-                  PHASES.indexOf(receipt.phase) >= PHASES.indexOf("merged"));
-              return deliveredChains.length === 1 ? deliveredChains[0] : null;
+              return highest;
             };
 
             const resolveAuthorityReceipt = (comments, livePr, expectedRepository) => {
