@@ -94,7 +94,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Managed DevUI runtime | Standalone listener, admitted source readers, packaged Overview/Focus journey and typed receipt producers | Read-journey update reviewed 2026-09-13: #5522 connects the separately proven managed browser journey; #5520 extends PR #5477 preparation with BuilderOps API, bounded GitHub REST and immutable candidate-document reads in the managed Overview GET. CKM remains unadmitted; live source access and qualified deployment/readiness require separate evidence, independently of process liveness |
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
-| First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
+| First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | FCP-04 / #4697 delivers nonvisual exact preview, authenticated admission, shared facade and destination reservation/readback; operator-owned host activation and visual/capability acceptance remain separate |
 | Builder System Control | Owner docs, process map, skill contracts, bounded capability declarations, source-owned intent/decision/evidence joins, BuilderOps/live evidence | BSC-01..03 pure nonvisual inputs delivered; source-connected route/UI, previews and whole lens remain targets |
 | Proposal/preview | `DeliveryRequest.v1`, `DeliveryPreview.v1`, pure plan compiler | DDO-06 target; compiler seam delivered |
 | Lawful transitions | DDO reducer and versioned lifecycle commands | Pure reducer delivered; durable binding is DDO-05 target |
@@ -134,8 +134,9 @@ The first contract tasks are [bounded action admission](../BUILDER_FACTORY_ACCEP
 [owner outcome authority](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md), and
 [managed runtime/pilot reconciliation](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md).
 The [bounded action contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
-now separates the inquiry seam from DDO-specific #4169. Its runtime admission, destination
-reservation/readback and activation remain undelivered. The outcome and managed-pilot contracts are also defined; source-backed dependent Issue
+now separates the inquiry seam from DDO-specific #4169. FCP-04 / #4697 delivers its repository
+admission and destination reservation/readback implementation; live host activation remains
+operator-owned. The outcome and managed-pilot contracts are also defined; source-backed dependent Issue
 maintenance follows their merge. Live readiness still depends on each exact Issue, its consumed
 production seams and current claims; this milestone table does not grant runtime admission.
 
@@ -222,11 +223,11 @@ narrow pre-Issue workflow documented in the Builder System process map, but its 
 still crosses the existing BuilderOps control-plane service under the
 [bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission).
 #4169 owns the DDO-specific bridge. The current loopback-only read
-route is not approval authentication, and the current single-flight launcher is not durable
-idempotency. FCP-04 pickup requires delivered FCP-03, accepted FCA-08/#5502 and fresh live Issue
-readiness. It implements authenticated admission and proposal-scoped operation-key
-reservation/readback in the existing inquiry destination; its own deliverables are not external
-prerequisites. Runtime Start remains unavailable until that implementation is verified. A stored
+route is not approval authentication, and single-flight locking alone is not durable idempotency.
+FCP-04 / #4697 delivers authenticated admission and proposal-scoped operation-key reservation/readback
+in the existing inquiry destination, with production-constructor and no-effect host-boundary proof.
+Its versioned host protocol requires separate operator activation and current permissions before
+live Start. A stored
 `POST /v1/inquiries` record is not a sanctioned launch; stop remains unsupported by the current
 inquiry skill. Contract repair #5502 alone does not enable runtime Start. The slice
 adds no delivery request, GitHub/repository mutation, task store, provider-session store, global
@@ -236,8 +237,8 @@ remain separate governed workflows.
 Builder System Control is a sibling system-governance lens, not a Focus task. Its detailed target
 contract is `docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`, developed separately under Issue #4698.
 Parent #4693 and children #4694–#4697 own only the Focus/Conversation chain; FCP-01 and FCP-03 are
-delivered. FCP-04 owns the pending inquiry implementation, with live pickup state on its Issue;
-FCP-02 still needs FCP-04 fixtures and the external design handoff. The control lens may compose document
+delivered. FCP-04 adds the nonvisual inquiry implementation and fixtures; live host activation and
+FCP-02's governed design handoff remain separate. The control lens may compose document
 roles, versioned workflow adapters, bounded tool capabilities, policy/source coverage, drift,
 exceptions, unknowns, and explicitly evidenced route deviations. It may not own policy, workflow
 state, tasks, or source truth.

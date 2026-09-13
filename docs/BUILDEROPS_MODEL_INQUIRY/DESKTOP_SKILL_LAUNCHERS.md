@@ -18,73 +18,36 @@ orchestrator inside either chat history or configuring providers in the local wo
 
 ## What This Task Does
 
-Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both
-write the question verbatim to a mode-`0600` local Markdown file. Remote callers copy it to
-`Tailscale_macmini:/tmp/model-inquiry-question.md`, then run exactly:
+BMI-04 delivered the fixed host-bound manual skill. FCP-04/#4697 explicitly extends its previously
+question-file-only mechanics through the
+[approved inquiry operation interface](README.md#approved-inquiry-operation-interface).
+That section is the exact protocol, ownership, authentication, cleanup and compatibility authority;
+this task no longer carries a second executable route/lock/staging recipe.
 
-```bash
-ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
-```
+One repo-governed `SanctionedModelInquiryWorkflow` facade implements the existing skill boundary.
+The repo-local skill and portable manual entrypoint delegate to it. Manual use preserves the fixed
+host launch and exact question bytes. Authenticated service use additionally supplies the immutable
+approval, operation key and reserved inquiry identity through the finite host protocol. Capability
+readback, reservation and attempt verbs cannot call a model, and only the single approved launch
+verb can reach the existing configured runner. FCP-04 delivers this bounded implementation and
+its production-seam proof; the current live host wrapper's activation remains separately gated.
 
-The configured inquiry host owns the BuilderOps vault, adapters, durable artifacts, and sanctioned
-subscription session. Its launcher settings, authentication material, bridge, and executable paths
-are host-specific operator configuration and stay outside Git. Neither desktop skill rebuilds that
-environment, configures providers, handles authentication material, or reimplements orchestration
-in prompt prose. Under ADR-0064's 2026-07-30 owner-cost ruling,
-`yggdrasil-model-inquiry` is the operational host-local subscription launcher.
+The operational `$HOME/.local/bin/yggdrasil-model-inquiry` wrapper, subscription session and provider
+configuration remain host-owned and outside Git. The repo provides a complete operation protocol
+implementation and production-seam fixtures but never inspects, replaces or provisions the live
+wrapper or its credentials. ADR-0064's subscription cost/auth ruling is unchanged.
 
-The repo-local Codex skill also supports a caller already running on the configured inquiry host. Before
-any connection attempt or lock mutation, it expands the fixed `Tailscale_macmini` alias with
-the fixed system `ssh -G`. The effective SSH user must equal the current fixed-system `id -un`, and
-the process `$HOME` must byte-match that account's `NFSHomeDirectory` from macOS directory service.
-The local route then requires a public key pinned for the effective SSH host identity in one of the
-two fixed user `known_hosts` files to exactly match a local public SSH host key under `/etc/ssh/`.
-The proof uses fixed system tools, reads no private key, and prints no key material. Missing,
-invalid, or non-matching alias, principal, home, or host-key evidence selects the remote route. A
-failed SSH, copy, DNS, or alias-resolution attempt never proves local identity. The proven-local
-route copies to the same fixed staging file and directly invokes only:
+The shared facade preserves fixed alias/principal/home/public-host-key route proof, single-flight
+locking, exact fixed staging, capture of exit status and stdout before cleanup, no retry after an
+ambiguous outcome, and separation of cleanup failures from the original result. FCP-04 explicitly
+admits one exact-path runtime cleanup helper in place of the former assistant-tool-specific
+`apply_patch` deletion mechanics. The caller temp is the only unconditional deletion; ambiguous
+attempts preserve staging and lock, and no durable inquiry artifact is deleted.
 
-```bash
-"$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md
-```
-
-The operator machine needs the `Tailscale_macmini` SSH alias. Desktop skill packages neither
-provision nor access metered credentials and never inspect or modify the subscription session or
-bridge. A valid terminal response is exit status zero plus one JSON object carrying non-empty
-`inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report` strings. A failed
-copy, any nonzero launcher status, empty stdout, malformed/non-object JSON, or absent/empty response
-field fails loudly and remains ambiguous after launch begins. Do not retry, inspect the vault for a
-substitute response, invoke the dormant provider-API launcher, or fall back to an in-chat inquiry.
-The response is a Model Inquiry artifact only; it is not a provider-enabled MAS receipt or CKM
-credential evidence.
-
-The established host command has one fixed `/tmp/model-inquiry-question.md` input path. Before
-copying the question, both packages acquire `/tmp/yggdrasil-model-inquiry.lock` atomically: through
-SSH for remote callers and directly only for a proven-local Codex caller. A failed lock acquisition
-stops the launch without removing the existing lock. Both routes therefore share one single-flight
-boundary and cannot overwrite another inquiry's question.
-
-After lock acquisition, local temporary-file cleanup is a registered `finally` action. The remote
-or proven-local staged question and lock are released only when staging failed before the launcher
-attempt began or when the launcher returned exit zero with one valid terminal JSON object.
-Any other transport or launcher failure, empty stdout, malformed/non-object JSON, or invalid required
-field after launch begins is ambiguous: the launcher may have created durable artifacts, so both
-routes leave the shared lock and staged question in place, report the error, and do not retry or
-infer completion. A valid terminal response and a pre-launch failure use the same route by which the
-lock was acquired for cleanup; cleanup failure is reported without masking the original outcome.
-Codex deletes its dynamic caller-temp file and any allowed proven-local fixed staging file through
-exact-target `apply_patch` deletion, never a shell `rm -f`; it removes the empty fixed lock directory
-only after staging deletion succeeded or the staged path was absent. Launcher status and JSON are
-captured and validated before cleanup, so a cleanup failure is reported separately and cannot erase
-or reclassify the launcher outcome.
-
-The operational `yggdrasil-model-inquiry` launcher is host-owned and outside the provider-API
-installer. The repository separately preserves a dormant declared-credential mechanism under the
-distinct `yggdrasil-model-inquiry-provider-api` name plus the two durable role entrypoints. The
-repository-owned `scripts/install_model_inquiry_host.py` routine installs and checks only those
-three provider-API wrappers. It must not inspect, overwrite, retire, or claim readiness for the
-sanctioned subscription launcher or bridge. Desktop skills never invoke the dormant provider-API
-identity.
+The dormant provider-API mechanism remains under its distinct
+`yggdrasil-model-inquiry-provider-api` identity. `scripts/install_model_inquiry_host.py` owns only
+that dormant wrapper and its two role entrypoints. Neither the skill facade nor this Issue may use
+that installer to inspect, alter or claim readiness for the operational subscription wrapper.
 
 ## Concretely
 

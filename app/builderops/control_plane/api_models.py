@@ -59,6 +59,28 @@ class InquiryCommitRequest(BaseModel):
     idempotency_key: str
 
 
+class InquiryCommandPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    repository: str
+    approval_id: str = Field(min_length=1, max_length=128)
+    question: str = Field(min_length=1, max_length=16384)
+    context_pack: dict[str, Any]
+    expires_at: datetime
+
+
+class InquiryCommandStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["start", "hold"]
+    proposal: dict[str, Any]
+    material: dict[str, Any]
+
+
+class InquiryCommandAuthorityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval: dict[str, Any]
+    purpose: Literal["reserve", "attempt", "execute", "readback"]
+
+
 class TaskClaimRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     task_id: str

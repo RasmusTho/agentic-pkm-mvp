@@ -1,4 +1,4 @@
-State: Active blocked validation hub #4693; no implementation delivery is claimed.
+State: Active blocked validation hub #4693; FCP-01/FCP-03/FCP-04 repository implementation is delivered; visual and capability acceptance remain open.
 Doc role: Parent feature issue contract
 Authority: The capability README owns the stable design and decomposition. The live GitHub parent
 owns backlog and validation state after filing.
@@ -7,10 +7,11 @@ owns backlog and validation state after filing.
 
 ## Context
 
-The delivered devUI composition seam can read CKM and BuilderOps sources honestly, but the owner
-does not yet have a subject-centred Focus view or a governed external Conversation Port. Provider
-sessions remain provenance, and the existing Model Inquiry route is artifact-first and separate
-from GitHub/repository delivery.
+FCP-01 delivers the subject-centred Focus composer, and FCP-03 delivers the nonvisual external
+Conversation Port contract. FCP-04 delivers the authenticated exact Start/Hold service boundary,
+shared sanctioned facade and destination reservation/readback in the repository. Governed visual
+handoff, operator activation of the versioned host protocol and full capability acceptance remain
+separate. Provider sessions remain provenance; inquiry remains separate from GitHub/repository delivery.
 
 ## Scope
 
@@ -55,7 +56,8 @@ from GitHub/repository delivery.
   [FCA-08 bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
   from #5502. FCP-04 implements admission in the existing authenticated BuilderOps service and
   reservation/readback in the sanctioned inquiry destination; these are its deliverables, not
-  self-dependencies. Runtime Start stays unavailable until that implementation is verified. #4169
+  self-dependencies. The repository implementation and no-effect production-seam proof are delivered;
+  live Start additionally requires current operator-owned host activation and permissions. #4169
   remains the DDO-specific bridge. Neither nonvisual slice requires a design receipt.
 - FCP-02 remains technically blocked until FCP-01/FCP-03/FCP-04 fixtures and the governed Yggdrasil
   design handoff are available. Later visual implementation is a separately derived slice.
@@ -109,12 +111,12 @@ from GitHub/repository delivery.
 
 ## Implementation Tasks
 
-| Task | Issue | Initial lifecycle | Dependency |
+| Task | Issue | Repository delivery / remaining gate | Dependency |
 | --- | --- | --- | --- |
-| FCP-01 — Compose Subject-Centred Focus | #4694 | blocked until spec merge | none |
-| FCP-03 — Open External Conversation Port | #4696 | blocked until FCP-01 delivery | FCP-01 |
-| FCP-04 — Start Model Inquiry from Exact Preview | #4697 | reconcile live readiness after accepted contract | FCP-03 and accepted FCA-08/#5502; bounded admission and destination reservation/readback are FCP-04 deliverables |
-| FCP-02 — Validate Focus and Conversation Design | #4695 | blocked on stable fixtures and handoff availability | FCP-01, FCP-03, and FCP-04 |
+| FCP-01 — Compose Subject-Centred Focus | #4694 | delivered by PR #4703 | none |
+| FCP-03 — Open External Conversation Port | #4696 | nonvisual contract delivered by PR #4704 | FCP-01 |
+| FCP-04 — Start Model Inquiry from Exact Preview | #4697 | repository implementation and no-effect production proof delivered; live host activation separate | FCP-03 and accepted FCA-08/#5502 |
+| FCP-02 — Validate Focus and Conversation Design | #4695 | governed design handoff and capability validation remain | FCP-01, FCP-03, and FCP-04 fixtures |
 
 Live backlog and capability-validation state is maintained on
 [#4693](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4693).

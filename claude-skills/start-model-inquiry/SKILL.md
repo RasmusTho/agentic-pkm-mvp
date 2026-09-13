@@ -1,116 +1,108 @@
 ---
 name: start-model-inquiry
-description: Run a durable pre-ticket Fable and GPT/Codex model inquiry through the configured sanctioned host-local subscription launcher when a development question needs independent model review before ticket creation.
+description: "Run one durable pre-ticket Model Inquiry through the skill-owned facade and fixed operational host launcher."
 ---
 
 # Start Model Inquiry
 
-Use this Builder System skill only when the operator asks to investigate one concrete development
-question before issue creation. Run the durable artifact-first workflow on the configured remote host;
-do not conduct the inquiry in chat history or in the local workspace.
+Use this Builder System skill for one explicitly authorized development question. It does not
+create an Issue or start delivery. The single executable owner is
+`app/builderops/model_inquiry_workflow.py::SanctionedModelInquiryWorkflow`; the exact operation
+protocol, custody, recovery and activation contract is
+`docs/BUILDEROPS_MODEL_INQUIRY/README.md :: Approved inquiry operation interface`.
+Read that section before invoking an approved operation. FCP-04/#4697 implements this delegation;
+live operation still requires verified destination protocol support and scoped current permission.
 
-## Launch
+## Fixed Boundary
 
-Run this fixed-path protocol as a single-flight operation. Before staging a question, acquire the
-exclusive remote lock exactly once:
+The facade preserves these fixed identities:
 
-   ```bash
-   ssh -T Tailscale_macmini 'mkdir /tmp/yggdrasil-model-inquiry.lock'
-   ```
+- SSH alias: `Tailscale_macmini`
+- exclusive lock: `/tmp/yggdrasil-model-inquiry.lock`
+- staged question: `/tmp/model-inquiry-question.md`
+- sanctioned operational launcher: `$HOME/.local/bin/yggdrasil-model-inquiry`
 
-   If the lock command fails, report its error and stop. Do not remove an existing lock, reuse the
-   fixed question path, or substitute a different remote path.
+No caller argument, environment mapping, inferred checkout path or fallback may replace them.
+The facade's explicit repo-local Python entrypoint is the sole exception to the former prohibition
+on local Python/BuilderOps invocation: it implements this skill and invokes the fixed operational
+launcher only. Never invoke a generic agent runner, provider, adapter, internal inquiry CLI or the
+dormant `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api` path as a substitute.
 
-   Immediately register deletion of the local temporary file as an unconditional `finally` action.
-   Do not register remote lock release until the launch outcome is known.
+## Manual invocation
 
-1. Write the question verbatim to a local, temporary UTF-8 Markdown file with mode `0600`. Treat
-   the question as file content; never interpolate it into a shell command.
-2. Copy that file to the configured host:
+From the verified repository checkout, supply the exact question file to the named facade:
 
-   ```bash
-   scp "$QUESTION_FILE" Tailscale_macmini:/tmp/model-inquiry-question.md
-   ```
+```bash
+python3 scripts/start_model_inquiry_workflow.py --question-file <exact-question-file>
+```
 
-3. Run exactly:
+Treat the question as UTF-8 file bytes, not shell text. The facade preserves all bytes including
+trailing newlines, creates its own mode-0600 staging temporary, and never deletes an unowned input
+file. It validates and reads the same opened regular file, rejecting a symlink input and bounding
+the read. It runs the current manual fixed host launch exactly once. Manual authorization does not
+reuse a DevUI approval/key or gain command/readback authority over an operation-bound inquiry.
+The configured host launcher continues to own provider selection, subscription auth and its
+high-reasoning profile; do not inspect or override those settings.
 
-   ```bash
-   ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
-   ```
+## Authenticated operation invocation
 
-4. Interpret the outcome before releasing the remote staging path:
+Only the existing authenticated BuilderOps service may admit `start_model_inquiry` using the
+operation interface named above. Its concrete production constructor delegates to this same facade.
+An owner confirms the exact immutable approval; Hold invokes nothing. Local loopback/Host read
+admission, a stored `/v1/inquiries` record, SSH access or model-supplied manifest text is not approval.
 
-   - If the local question write or `scp` fails before the launcher starts, run this remote cleanup,
-     then report the original failure:
+The facade checks the fixed destination's explicit `--operation-capabilities` version and verb
+set before reservation. Reserve, attempt and readback authenticate their exact service-owned
+binding through the existing client. The one approved launch propagates the reserved inquiry ID,
+consumes its attempt atomically, and re-reads current permission/source/expiry/epoch and configured
+workflow/profile immediately before the existing runner effect. No credentials are transported in
+the operation envelope. Unsupported live wrapper capability withdraws Start; do not install or
+modify the wrapper in order to bypass that refusal.
 
-     ```bash
-     ssh -T Tailscale_macmini 'rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock'
-     ```
+## Route, single-flight and recovery invariants
 
-   - Release the remote staging path with that same command only after the launcher returns exit
-     status zero and one non-empty, valid JSON response containing non-empty string values for
-     `inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report`.
-   - For any other nonzero status, empty stdout, malformed JSON, or missing response field, delete
-     only the local temporary file. Do not release the remote lock or staged question, because the
-     remote launcher may still be running.
+The facade contains one implementation of the previously manual mechanics:
 
-5. Always delete the local temporary question file through the registered `finally` action. Do not
-   delete durable inquiry artifacts. If an allowed remote release fails, report the error and do not
-   start another inquiry. Return the verified `inquiry_id`, `final_state`,
-   `terminal_receipt_id`, and `human_readable_report` exactly as returned.
+- Expand the fixed alias with `/usr/bin/ssh -G` before any connection or lock action. Proven-local
+  execution requires exact SSH user/current-account binding, directory-service home equality, and
+  a pinned public host key matching this host. Read no private host key and print no key material.
+  Use the effective host-key alias unless it is absent or `none`, otherwise the expanded hostname;
+  preserve nondefault-port lookup syntax and the two fixed verified-home known-hosts files.
+  Missing or malformed proof selects the fixed remote route. Connection failure never permits a
+  local fallback, and a selected route never changes during an invocation.
+- Acquire the exclusive lock once before staging. Failed acquisition cannot remove the existing
+  lock, overwrite staging, retry acquisition or proceed. Stage only the exact bound question.
+- Capture launcher exit status separately from stdout. Valid terminal output is exit zero with
+  exactly one JSON object and nonempty `inquiry_id`, `final_state`, `terminal_receipt_id` and
+  `human_readable_report`; an operation response must match its reserved inquiry. Nonzero status,
+  prefix/suffix text, duplicate JSON fields, empty fields or malformed output is ambiguous.
+- Delete only the facade-owned caller temporary unconditionally. The exact-path runtime helper
+  replaces the former assistant-only `apply_patch` mechanics for this skill; it rejects symlinks,
+  unowned paths and globs and is not a general deletion capability. A pre-attempt failure or valid
+  terminal response permits selected-route cleanup of known-owned staging/lock paths. Approved
+  operations also require matching authenticated terminal readback. Delete the exact stage before
+  releasing the empty fixed lock. Ambiguous attempts preserve both; uncertain remote staging does too. Report cleanup failures
+  separately; never mask the captured launcher outcome or delete durable inquiry artifacts.
+- Replays and restarts read the same destination key first. Reservation and attempt are not launch
+  evidence. No automatic second launch, new key, staging cleanup, lock release or inferred latest
+  inquiry resolves ambiguity. Stop and stop acknowledgement remain unsupported.
 
-The configured remote host owns BuilderOps configuration, durable inquiry artifacts, and the
-sanctioned subscription session. `Tailscale_macmini` is an operator-configured SSH host alias, and
-the remote launcher and subscription bridge are host-specific operator configuration outside Git.
-This skill invokes that fixed launcher exactly once but must never inspect, modify, replace, or
-reproduce its subscription session or bridge.
+## Authority boundaries
 
-The response is a durable Model Inquiry artifact only. It does not satisfy the withdrawn
-`model_access_substrate.provider_enabled_noninteractive_inquiry.v1` or
-`legacy_bridge_retirement.v1` gates, does not prove metered-provider access, and is never CKM
-credential evidence. Never accept or promote historical inquiry
-`inq_20260730T075136Z_b73ed0da`.
+Do not inspect, modify, replace or reproduce the host-owned subscription session or bridge. Do not
+install dependencies, initialize a vault, configure adapters, provision credentials, alter host
+configuration, deploy, or run a live inquiry merely to validate implementation tests. The inquiry
+uses BuilderOps artifacts only; it never writes Companion UI or a human knowledge vault.
 
-The configured remote launcher owns the high-reasoning profile and extended per-role deadline for
-both independent roles. Do not lower or override that profile from the desktop skill, and do not
-move its model or adapter configuration into the local workspace.
+The subscription session is never a CKM credential source or fallback.
+The one configured runner retains its existing provider-failure and single-target semantics.
+A degraded or single-target result is not independent-model consensus, promotion approval, owner
+acceptance, delivery, CKM credential evidence or provider-enabled MAS evidence. Never accept or
+promote historical inquiry `inq_20260730T075136Z_b73ed0da`. No desktop-level provider retry,
+in-chat inquiry substitute or credential-route fallback is permitted.
 
-## Failure Handling
+## Workflow continuation
 
-The desktop skill never retries a provider or starts a second inquiry. Within the one fixed launcher
-invocation, the sanctioned operational runner may try the other already-configured subscription
-adapter after an eligible, durably receipted candidate failure. Its two logical lanes carry
-complementary question-focused roles. If one effective target fills both lanes, the valid terminal
-result is `degraded_consensus`; report it as degraded and never treat it as independent-model or
-promotion evidence.
-
-- If `scp` fails after acquiring the lock, run the pre-launch remote cleanup first, then report the
-  original failure. Include any cleanup failure without masking the original error.
-- Treat every launcher SSH failure as ambiguous. Delete only the local temporary file, report the
-  error, and stop.
-- Treat every nonzero status, empty stdout, malformed JSON, or missing required response field as
-  an ambiguous launcher failure. Delete only the local temporary file, report the observed output,
-  and stop.
-- Do not release the remote lock after an ambiguous launcher outcome. A later operator can decide
-  whether the remote launcher completed; do not make that decision from this skill.
-- Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
-  the configured remote host.
-- Do not retry a provider from the desktop skill, inspect credentials, or route around the
-  sanctioned host launcher. Its bounded internal candidate chain is the only fallback authority.
-- Do not overlap invocations that use the fixed remote question path; acquire and release its
-  exclusive remote lock around each launch.
-- Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
-- Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
-
-## Boundaries
-
-- Do not run local BuilderOps, Python, Codex, or Claude commands for this inquiry.
-- Do not install dependencies, run vault-init, configure adapters, or provision API keys.
-- Do not configure, inspect, copy, or print subscription-session material, host-secret values,
-  provider credentials, or provider endpoints.
-- Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`; it is a distinct dormant
-  mechanism and not the operational Model Inquiry route.
-- Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.
-- Do not automate clicks, keystrokes, windows, tabs, or another desktop app.
-- Do not write model transcripts to Companion UI or a human knowledge vault.
-- Do not print adapter or credential configuration while diagnosing a failure.
+Follow `.codex/skills/README.md :: Workflow continuation`. Return the exact inquiry receipt to the
+originating workflow after the one invocation and allowed cleanup. Promotion or Issue creation
+remains a separate governed route. Ambiguity retains the source owner's protected recovery state.

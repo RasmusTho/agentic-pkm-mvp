@@ -1208,6 +1208,7 @@ FOCUSED_REGRESSION_SUITES: tuple[str, ...] = (
     "tests/builderops/test_design_run_cli.py",
     "tests/builderops/test_design_run_contract.py",
     "tests/builderops/test_design_run_governance.py",
+    "tests/builderops/test_devui_model_inquiry_command.py",
     "tests/builderops/test_model_inquiry_adapters.py",
     "tests/builderops/test_model_inquiry_cli.py",
     "tests/builderops/test_model_inquiry_contract.py",

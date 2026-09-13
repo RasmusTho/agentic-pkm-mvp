@@ -93,6 +93,164 @@ references.
 BMI-04 may be prepared after BMI-02, but cannot claim autonomous model collaboration until BMI-03
 is delivered. No task is ready to make a Product/Runtime write.
 
+## Approved inquiry operation interface
+
+FCP-04/#4697 delivers this bounded repository implementation; live host activation and parent
+acceptance remain separate verification gates. It preserves the eight Start/Hold outcomes and extends the
+previous question-file-only skill mechanics explicitly. The [FCA-08 manifest](../BUILDER_FACTORY_ACCEPTANCE/README.md#immutable-approval-manifest-and-operation-permissions)
+remains the approval-field authority. This section owns the finite executable interface; it grants
+no new provider, credential, delivery, Product, or stop authority.
+
+### One skill-owned facade
+
+`app/builderops/model_inquiry_workflow.py::SanctionedModelInquiryWorkflow` is the single executable
+implementation of `.codex/skills/start-model-inquiry/SKILL.md`. The existing authenticated service's
+`production_app` constructs it. Manual skill use delegates through
+`scripts/start_model_inquiry_workflow.py --question-file <exact-file>` to the same implementation.
+Neither production entrypoint may require a test-only injected callback, a generic agent executor,
+or a second copy of the host/lock/staging/cleanup recipe.
+
+The service exposes `POST /v1/inquiries/command/preview`,
+`POST /v1/inquiries/command/start` with exact `start` or `hold`,
+`POST /v1/inquiries/command/authority` for the four fixed destination control purposes, and
+`GET /v1/inquiries/command/{approval_id}` for authenticated readback. The existing record owner
+persists `ModelInquiryApproval` at `inquiry-approval:<approval_id>`; generic record writes cannot
+create or overwrite that reserved admission surface. Its permission version hashes the current
+credential registration, scope/repository grants, principal, rotation and verifier identity;
+raw bearer material is never part of the proposal or operation envelope.
+
+The facade preserves the fixed `Tailscale_macmini` alias, verified local/remote route, exclusive
+`/tmp/yggdrasil-model-inquiry.lock`, exact `/tmp/model-inquiry-question.md` staging and host-owned
+`$HOME/.local/bin/yggdrasil-model-inquiry` launcher. Local route proof still requires effective
+SSH alias expansion, exact principal/home binding and a matching pinned public host key before any
+connection or lock action. Missing proof selects the fixed remote route; connection failure never
+permits a local fallback. Caller text cannot select an executable, host, path, environment mapping,
+provider, or capability substitute. Question UTF-8 bytes are preserved, including trailing newlines.
+
+The operational wrapper and subscription session stay host-owned and outside Git. The repository
+provides the complete operation protocol in `app/builderops/model_inquiry_operation.py`, backed by
+`ModelInquiryService` and the existing configured runner. An operator must separately install or
+confirm the wrapper's delegation to that protocol. This task neither inspects nor modifies the
+live wrapper, subscription bridge, provider adapters, credentials, or host configuration.
+
+### Fixed operation verbs and authentication
+
+All operation envelopes are canonical UTF-8 JSON on stdin. Never interpolate their fields or the
+question into a command. No additional fixed staging file is introduced. Only these new verbs of
+the existing operational launcher are admitted:
+
+| Verb | Bounded result and effect |
+| --- | --- |
+| `--operation-capabilities` | Read-only protocol version, supported verb set and workflow/destination revision. No secret/profile values, inquiry access, reservation or model call. Unsupported/malformed version or incomplete support withdraws Start before reservation. |
+| `--operation-reserve-stdin` | Authenticate the exact service-owned approval and durably reserve one operation/key/manifest to one inquiry identity in the existing destination artifacts; no launch, staging or lock cleanup. |
+| `--operation-attempt-stdin` | Authenticate that approval again, compare the exact reservation, and atomically record the one attempt before crossing the launch boundary; no model call. |
+| `--question-file /tmp/model-inquiry-question.md --approved-operation-stdin` | The only operation launch verb. Authenticate and bind the reservation and attempt, atomically consume the attempt once before any runner effect, re-read final current authority, compare exact staged bytes, and pass the reserved `inquiry_id` to `ModelInquiryService.start(inquiry_id=...)` and the existing runner. |
+| `--operation-readback-stdin` | Authenticate read access through the same service and compare the full stored approval/binding before reading that destination's operation artifacts. No launch, lock/staging change, cleanup or retry. |
+
+The updated single-flight rule permits control verbs that never call a model and exactly one
+invocation of the launch verb. A transport retry cannot turn a control verb into launch. Reserve,
+attempt and readback must authenticate their exact approval with the existing control-plane client;
+SSH transport, manifest text and self-computed hashes alone are not admission evidence. Readback
+may inspect an expired approval with current authorized read permission; expiry never authorizes
+another launch. A capabilities response is compatibility evidence only, never owner approval.
+
+The operation envelope carries the full immutable manifest and hash, exact admission receipt,
+canonical repository/subject, operation type/key, reserved inquiry ID and the reservation/attempt
+hashes required by its verb. It carries no bearer token or credential material. Derive the operation
+key from the stable approval identity, repository, operation type and fixed destination/workflow
+identity, and derive `inquiry_id` as `inq_operation_<operation_key>`. Bind both into the immutable
+approval. Same-key changed content and same-approval changed-key attempts refuse.
+
+### Current authority and finite source scope
+
+The existing service uses `CredentialRegistry`, repository guards, the store authority epoch and
+`store.commit_record`/receipt primitives. Persist a `ModelInquiryApproval` payload in that existing
+record authority with immutable first-write content and idempotency conflict checks; add no service,
+task store, queue or approval ledger. Owner confirmation requires explicit repository-scoped
+`inquiries:approve`; existing `inquiries:write`, a record commit, model-supplied identity and the
+local loopback/Host read route are insufficient. Readback requires `inquiries:read`. A destination
+caller with `inquiries:execute` may query the exact prelaunch authority but cannot approve it.
+These scopes do not provision or broaden any credential.
+
+After authenticating the caller, the service persists only the approving principal's identity,
+credential reference, permission/rotation version and epoch metadata. Before every authority-bearing
+control verb, and again at the destination immediately before a runner effect, it re-reads the
+approving credential's current registration and permission, exact sources, expiry and epoch.
+The destination uses `BuilderOpsControlPlaneClient` and existing host-owned client configuration
+for this check; the owner's bearer token is never forwarded. Deletion/revocation, changed identity,
+permission, source, workflow, policy/configuration/resolved target or epoch, and unavailable or
+contradictory authority all refuse launch. Destination policy/profile checks use the declared
+resolver and current local workflow version, not client-provided executable choices or cached proof.
+The existing runner consumes that same validated resolver and environment snapshot; artifact writes
+between validation and runner construction cannot cause a second selection from changed declarations.
+
+Initial addressed subjects are an exact configured GitHub Issue or an explicit-null pre-ticket
+question. Reuse the existing admitted bounded GitHub REST reader and exact question/context/source
+material. Pre-ticket Issue number/body/AC fields are explicitly null. Restrict source kinds to the
+already-admitted `github_issue` and bounded repo-owned `owner_document` references; unsupported
+source kinds and unconfigured roots withdraw Start. Do not add a capability-subject reader, general
+URL fetcher, session discovery, inferred Issue/correlation or broad repository-history collector.
+The delivered Conversation Port composer remains the canonical pack/hash/freshness owner.
+For inquiry admission, every `github_issue` reference must include the exact current Issue
+`updated_at` as its existing `version`; a body hash alone cannot establish Issue freshness.
+The addressed subject title must also match the current Issue. These inquiry-specific checks
+run at preview, Start and destination authority readback without changing the general pack schema.
+
+### Durability, recovery and cleanup
+
+Reserve before invocation and record the attempt before the facade crosses the launch boundary.
+Only a newly created reservation may enter that route; duplicate submit, refresh, restart or
+unknown outcome first reads the same binding. A separate immutable invocation-entry artifact
+consumes the exact attempt atomically inside the destination before the first runner effect, so a
+second process cannot execute that attempt even if a caller violates the no-retry rule. Reservation
+and attempt receipts never establish a running process. All artifacts remain under the existing
+Model Inquiry destination; shared-vault sync is not a distributed lock service.
+
+A reservation interrupted before its attempt remains reconciliation-needed. Any loss after attempt
+recording or invocation entry is indeterminate until the destination proves the exact outcome;
+absence, time elapsed or an empty result cannot permit a second launch or new key. Authenticated
+readback names the approval/manifest/subject/key/workflow/destination, admission and destination
+receipts/hashes, known inquiry ID, observation time/source epoch, truthful state and uncertainty.
+Valid terminal output preserves the four existing launcher fields and exact inquiry identity.
+`stop_support` and `stop_status` remain `unsupported`; Hold invokes nothing.
+
+The facade owns one exact-path runtime cleanup helper. This explicitly replaces the former
+assistant-tool-specific `apply_patch` requirement for this skill's temporary-file mechanics; it is
+not a general deletion helper or an expansion of cleanup authority. It records and validates the
+caller temporary path, rejects symlinks/unowned paths and globs, and deletes only that caller temp
+unconditionally. Stage and lock release use the selected route only after a failure before the
+attempt boundary with known ownership or a valid terminal response. For approved operations, cleanup
+requires the matching authenticated terminal readback too; failed readback never permits deletion.
+Ambiguous attempt/launcher output or uncertain remote staging preserves both. Owned caller and local
+stage identity is recorded before writes so failed writes cannot strand a known-owned temporary.
+Delete the exact staging path before releasing the empty fixed lock. Cleanup failures are reported
+separately and cannot replace the captured launcher exit status or response. Never delete inquiry
+artifacts, inspect the vault to infer a substitute response, or clean another invocation's files.
+
+Manual skill invocations without an operation manifest use the same facade and retain the current
+fixed `--question-file` host launch, one invocation and cleanup/ambiguity matrix. They gain no DevUI
+approval or access to an operation reservation; their host launcher may choose its own inquiry ID.
+
+### Verification and activation boundary
+
+Pre-merge proof exercises the real production service constructor/handlers, concrete facade,
+operation protocol and destination artifact methods with a fake at the host-process/provider seam.
+It must demonstrate success and refusal, exact reserved-ID propagation, per-verb authentication,
+final revocation/expiry after queued work, concurrent/restart/partial-write behavior and manual
+cleanup/route compatibility. A permanently unwired production port cannot satisfy FCP-04.
+A complete production implementation must instead report an unsupported live destination honestly.
+
+Focused proof is executable at the Issue's 15 `Verify:` targets, including the actual
+`production_app` constructor, facade/process boundary, destination protocol CLI, existing runner
+and artifact readback. The BuilderOps image packages OpenSSH client tools and the exact skill
+contract used for its workflow hash. Its documented Uvicorn factory boot remains independent of
+Product Runtime. Existing managed source configuration and operator-owned SSH alias/key/credential
+configuration must be present; absence withdraws Start without provisioning them.
+
+Live operation separately requires an operator-confirmed conforming wrapper and deliberate scoped
+credential/service deployment. Repo implementation tests do not install that wrapper, change
+credentials, restart services, run an inquiry, or establish parent capability/owner acceptance.
+
 ## Cross-Task Invariants / Interaction Safety
 
 1. **Vault separation.** Shared iCloud files are Builder System artifacts, never a Mimer human vault

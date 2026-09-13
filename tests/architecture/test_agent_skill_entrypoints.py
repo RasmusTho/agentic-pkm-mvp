@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+
+import pytest
 
 from scripts.lint_skills_consistency import run_lint
 
@@ -538,101 +541,73 @@ def test_independent_fast_lane_has_no_routine_worker_coordination() -> None:
     assert "the affected issue is paused" not in owner_spec
 
 
-def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed() -> None:
-    skill = _read(".codex/skills/start-model-inquiry/SKILL.md")
-    normalized_skill = " ".join(skill.split())
+def test_model_inquiry_local_host_route_is_identity_gated_and_fail_closed(
+    tmp_path, monkeypatch,
+) -> None:
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow
+    from tests.builderops.inquiry_operation_fixture import InquiryGraph
 
-    assert skill.index("## Route Selection") < skill.index("## Single-Flight Launch")
-    for identity_contract in (
-        "/usr/bin/ssh -G Tailscale_macmini",
-        "/usr/bin/id -un",
-        "NFSHomeDirectory",
-        "require the current `$HOME` to equal it byte-for-byte",
-        "`$HOME/.ssh/known_hosts` and `$HOME/.ssh/known_hosts2`",
-        "`/usr/bin/ssh-keygen -F`",
-        "`/etc/ssh/ssh_host_*_key.pub`",
-        "Never read a private host-key file",
-        "Use the **proven-local route** only when alias expansion, principal binding, home binding, and the pinned host-key proof all succeed.",
-        "Never infer that the caller is local because",
-        "Once selected, do not switch routes during the invocation.",
-    ):
-        assert identity_contract in normalized_skill
+    # FCP-04 delegates the old manual procedure to one executable owner. Its
+    # failed identity proof must still select remote, with no connection fallback.
+    for path in (".codex/skills/start-model-inquiry/SKILL.md", "claude-skills/start-model-inquiry/SKILL.md"):
+        skill = _read(path)
+        assert "app/builderops/model_inquiry_workflow.py::SanctionedModelInquiryWorkflow" in skill
+        assert "python3 scripts/start_model_inquiry_workflow.py --question-file" in skill
+        assert "ssh -T Tailscale_macmini" not in skill
 
-    launcher_invocations = [
-        line.strip()
-        for line in skill.splitlines()
-        if "yggdrasil-model-inquiry" in line and "--question-file" in line
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    question = tmp_path / "question.md"
+    question.write_text("Keep the fixed route.\n")
+
+    def failed_connection(argv, **kwargs):
+        if argv[:2] == ["/usr/bin/ssh", "-G"] or argv == ["/usr/bin/id", "-un"]:
+            return graph.process(argv, **kwargs)
+        graph.calls.append(argv)
+        assert argv[0] == "/usr/bin/ssh"
+        return subprocess.CompletedProcess(argv, 255, b"", b"fixture connection unavailable")
+
+    monkeypatch.setattr(SanctionedModelInquiryWorkflow, "_process", staticmethod(failed_connection))
+    result = SanctionedModelInquiryWorkflow().manual(question)
+    assert result["state"] == "unavailable"
+    assert graph.calls == [
+        ["/usr/bin/ssh", "-G", "Tailscale_macmini"],
+        ["/usr/bin/id", "-un"],
+        ["/usr/bin/ssh", "-oBatchMode=yes", "-oStrictHostKeyChecking=yes", "-oConnectTimeout=10", "Tailscale_macmini", "/bin/mkdir -m 700 /tmp/yggdrasil-model-inquiry.lock"],
     ]
-    assert launcher_invocations == [
-        "ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'",
-        '"$HOME/.local/bin/yggdrasil-model-inquiry" --question-file /tmp/model-inquiry-question.md',
-    ]
-
-    lock_invocations = [
-        line.strip()
-        for line in skill.splitlines()
-        if "mkdir /tmp/yggdrasil-model-inquiry.lock" in line
-    ]
-    assert lock_invocations == [
-        "ssh -T Tailscale_macmini 'mkdir /tmp/yggdrasil-model-inquiry.lock'",
-        "/bin/mkdir /tmp/yggdrasil-model-inquiry.lock",
-    ]
-
-    local_release = _section_between(
-        skill,
-        "Fixed proven-local release procedure:",
-        "The configured inquiry host owns",
-    )
-    assert "*** Delete File: /tmp/model-inquiry-question.md" in local_release
-    assert "/bin/rmdir /tmp/yggdrasil-model-inquiry.lock" in local_release
-    assert "rm -f" not in local_release
-
-    for local_contract in (
-        '/usr/bin/install -m 0600 "$QUESTION_FILE" /tmp/model-inquiry-question.md',
-        "*** Delete File: <absolute QUESTION_FILE>",
-        "Do not use `rm`, `unlink`, a glob, or a shell cleanup wrapper for this local temporary file.",
-        "sanctioned host-local subscription launcher",
-        "non-empty stdout whose entire contents parse as exactly one JSON object",
-        "with non-empty string values for `inquiry_id`, `final_state`, `terminal_receipt_id`, and",
-        "Any nonzero status",
-        "does not satisfy the withdrawn `model_access_substrate.provider_enabled_noninteractive_inquiry.v1`",
-        "| Failure after lock acquisition but before step 5 starts | Run the fixed remote release command below; report the original failure and any cleanup failure. | Run the fixed proven-local release procedure below; report the original failure and any cleanup failure. |",
-        "| Valid exit-zero terminal response | Preserve the response, then run the fixed remote release command. | Preserve the response, then run the fixed proven-local release procedure. |",
-        "| Ambiguous launcher outcome after step 5 starts | Preserve the remote staging file and lock. | Preserve the local staging file and lock. |",
-        "a cleanup failure must not replace or reclassify the captured launcher outcome.",
-        "The proven-local route may invoke only the fixed sanctioned host-local subscription launcher.",
-        "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`",
-    ):
-        assert local_contract in normalized_skill
-
-    for forbidden_bypass in (
-        "BUILDEROPS_VAULT_ROOT",
-        "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON",
-        "scripts/start_model_inquiry.sh",
-        "/etc/ssh/ssh_host_ed25519_key",
-        "/etc/ssh/ssh_host_rsa_key",
-        "tailscale status --json",
-        "/bin/rm -f /tmp/model-inquiry-question.md",
-    ):
-        assert forbidden_bypass not in skill
+    assert graph.launches == 0 and graph.reserves == 0
+    assert question.exists() and not graph.stage.exists() and not graph.lock.exists()
 
 
-def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanism() -> None:
-    codex_skill = _read(".codex/skills/start-model-inquiry/SKILL.md")
-    claude_skill = _read("claude-skills/start-model-inquiry/SKILL.md")
+@pytest.mark.parametrize("exit_status", [0, 1])
+def test_model_inquiry_subscription_route_is_distinct_from_provider_api_mechanism(
+    tmp_path, monkeypatch, exit_status,
+) -> None:
+    from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow, canonical_bytes
+    from tests.builderops.inquiry_operation_fixture import InquiryGraph
+
     installer = _read("scripts/install_model_inquiry_host.py")
-
-    for skill in (codex_skill, claude_skill):
-        assert "sanctioned host-local subscription launcher" in skill
-        assert "$HOME/.local/bin/yggdrasil-model-inquiry --question-file" in skill
-        assert (
-            "Do not invoke `$HOME/.local/bin/yggdrasil-model-inquiry-provider-api`"
-            in skill
-        )
-        assert "treat every nonzero" in skill.lower()
-
     assert 'FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry-provider-api"' in installer
     assert 'FIXED_LAUNCHER_NAME = "yggdrasil-model-inquiry"' not in installer
+
+    graph = InquiryGraph(tmp_path, monkeypatch)
+    question = tmp_path / "question.md"
+    exact = b"One subscription launch.\n\n"
+    question.write_bytes(exact)
+    graph.manual_response = lambda argv, value: subprocess.CompletedProcess(
+        argv, exit_status, canonical_bytes(value), b"",
+    )
+    result = SanctionedModelInquiryWorkflow().manual(question)
+    launch_calls = [call for call in graph.calls if "yggdrasil-model-inquiry" in call[-1] and "--question-file" in call[-1]]
+    assert len(launch_calls) == 1
+    assert launch_calls[0][-1] == '\"$HOME/.local/bin/yggdrasil-model-inquiry\" --question-file /tmp/model-inquiry-question.md'
+    assert launch_calls[0][-2] == "Tailscale_macmini"
+    assert not any("yggdrasil-model-inquiry-provider-api" in item for call in graph.calls for item in call)
+    assert graph.launches == 1 and graph.reserves == 0
+    assert graph.manual_question == exact and question.read_bytes() == exact
+    assert result["state"] == ("terminal" if exit_status == 0 else "ambiguous")
+    assert result["workflow_cleanup"] == ("complete" if exit_status == 0 else "preserved_for_reconciliation")
+    assert graph.stage.exists() is (exit_status != 0)
+    assert graph.lock.exists() is (exit_status != 0)
 
     withdrawn_gate = "model_access_substrate.provider_enabled_noninteractive_inquiry.v1"
     for doc_path in (

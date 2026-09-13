@@ -537,40 +537,97 @@ def read_managed_cockpit(config: SourceConfiguration) -> dict[str, Any]:
     return payload
 
 
-def read_managed_focus(config: SourceConfiguration, subject: str) -> dict[str, Any]:
-    """Read only the addressed Issue via the same admitted gh REST owner."""
+def read_managed_issue(config: SourceConfiguration, repository: str, number: str) -> dict[str, Any]:
+    """Exact existing Issue REST boundary, shared by Focus and command revalidation."""
     if not (
         config.repository
+        and canonical_repository(repository) == config.repository
+        and re.fullmatch(r"[1-9][0-9]*", number)
         and config.github_enabled
         and config.github_config_dir
         and config.github_config_dir.is_dir()
     ):
         raise FocusInputError("selected Issue source is unavailable")
 
-    def read_issue(repository: str, number: str) -> Any:
-        issue = cockpit_github_plane._run_gh(["api", f"repos/{repository}/issues/{number}"])
-        locator = issue.get("html_url") if isinstance(issue, dict) else None
-        addressed_issue = (
-            re.fullmatch(
-                r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)",
-                locator,
-            )
-            if isinstance(locator, str)
-            else None
+    issue = cockpit_github_plane._run_gh(["api", f"repos/{repository}/issues/{number}"])
+    locator = issue.get("html_url") if isinstance(issue, dict) else None
+    addressed_issue = (
+        re.fullmatch(
+            r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([1-9][0-9]*)",
+            locator,
         )
-        if (
-            not isinstance(issue, dict)
-            or type(issue.get("number")) is not int
-            or issue.get("number") != int(number)
-            or parse_timestamp(issue.get("updated_at")) is None
-            or addressed_issue is None
-            or canonical_repository(addressed_issue[1]) != canonical_repository(repository)
-            or addressed_issue[2] != number
-        ):
-            raise FocusInputError("selected Issue response identity is invalid")
-        return issue
+        if isinstance(locator, str)
+        else None
+    )
+    if (
+        not isinstance(issue, dict)
+        or issue.get("pull_request")
+        or type(issue.get("number")) is not int
+        or issue.get("number") != int(number)
+        or parse_timestamp(issue.get("updated_at")) is None
+        or addressed_issue is None
+        or canonical_repository(addressed_issue[1]) != canonical_repository(repository)
+        or addressed_issue[2] != number
+    ):
+        raise FocusInputError("selected Issue response identity is invalid")
+    return issue
 
-    return read_focus_inputs(subject, repository=config.repository, issue_reader=read_issue)
+
+def read_managed_focus(config: SourceConfiguration, subject: str) -> dict[str, Any]:
+    """Read only the addressed Issue via the same admitted gh REST owner."""
+    return read_focus_inputs(subject, repository=config.repository, issue_reader=lambda repository, number: read_managed_issue(config, repository, number))
+
+
+def revalidate_inquiry_sources(config: SourceConfiguration, *, repository: str, context_pack: dict[str, Any]) -> dict[str, Any]:
+    """Re-read only exact Issue/packaged owner-document sources; never discover."""
+    if repository != config.repository:
+        raise SourceReadRefusal("command repository is not configured")
+    subject = context_pack["subject_ref"]
+    issue: dict[str, Any] | None = None
+    number: int | None = None
+    if subject["kind"] == "issue":
+        match = re.fullmatch(r"github:([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)#([1-9][0-9]*)", subject["stable_id"])
+        if match is None or match[1].lower() != repository:
+            raise SourceReadRefusal("exact Issue subject required")
+        number = int(match[2])
+        issue = read_managed_issue(config, repository, match[2])
+        if not isinstance(issue.get("title"), str) or subject.get("title") != issue["title"]:
+            raise SourceReadRefusal("Issue subject material changed")
+    # A pre-ticket subject is a pack identity, never a capability reader.
+    for state in context_pack["source_states"]:
+        ref = state["source_ref"]
+        if state["freshness"] != "fresh":
+            raise SourceReadRefusal("source is not fresh")
+        if ref["source_type"] == "github_issue":
+            if issue is None or ref["source_id"].lower() != f"{repository}#{number}" or ref["locator"].lower() != issue["html_url"].lower():
+                raise SourceReadRefusal("only the addressed Issue may be read")
+            if ref.get("version") != issue["updated_at"]:
+                raise SourceReadRefusal("exact current Issue version required")
+            body = issue.get("body")
+            if not isinstance(body, str) or (ref.get("content_hash") is not None and ref["content_hash"] != hashlib.sha256(body.encode()).hexdigest()):
+                raise SourceReadRefusal("Issue source changed")
+        elif ref["source_type"] == "owner_document":
+            name = ref["source_id"]
+            manifest = _manifest(config.candidate_root)
+            if manifest.get("repository") != repository or manifest.get("source_sha") != config.candidate_sha or not isinstance(name, str) or not name.startswith("docs/") or ".." in Path(name).parts or not name.endswith(".md") or ref["locator"] != name:
+                raise SourceReadRefusal("bounded owner document required")
+            path = config.candidate_root / name
+            if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
+                raise SourceReadRefusal("owner document unavailable")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if manifest.get("files", {}).get(name) != digest or ref.get("content_hash") != digest or (ref.get("version") is not None and ref["version"] != config.candidate_sha):
+                raise SourceReadRefusal("owner document changed")
+        else:
+            raise SourceReadRefusal("command source kind is unsupported")
+    if issue is None:
+        return {"issue_number": None, "issue_body_hash": None, "acceptance_criteria_hash": None}
+    body = issue.get("body")
+    if not isinstance(body, str):
+        raise SourceReadRefusal("Issue body unavailable")
+    ac = re.search(r"^## Acceptance Criteria\s*\n(.*?)(?=^## |\Z)", body, re.MULTILINE | re.DOTALL)
+    if ac is None:
+        raise SourceReadRefusal("Issue acceptance criteria unavailable")
+    return {"issue_number": number, "issue_body_hash": hashlib.sha256(body.encode()).hexdigest(), "acceptance_criteria_hash": hashlib.sha256(ac[1].encode()).hexdigest()}
 
 
 def package_candidate(

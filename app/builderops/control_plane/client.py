@@ -175,6 +175,10 @@ class BuilderOpsControlPlaneClient:
         return self._pinned_epoch
 
     # -- reads ---------------------------------------------------------------
+    def inquiry_command_authority(self, *, approval: dict[str, Any], purpose: str) -> dict[str, Any]:
+        """Read exact current approval authority; never admit or launch a command."""
+        return self._request("POST", "/v1/inquiries/command/authority", json_body={"approval": approval, "purpose": purpose}, pin_epoch=False)
+
     def status(self) -> dict[str, Any]:
         return self._request("GET", f"/{API_VERSION}/status", pin_epoch=False)
 
