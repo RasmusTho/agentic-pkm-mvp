@@ -463,10 +463,11 @@ class PostgresBuilderOpsStore:
                 "SELECT task.repository, task.task_id, task.state, task.payload, "
                 "task.authority_envelope, task.version, task.updated_at, "
                 "lease.holder AS lease_holder, lease.fencing_token, "
-                "lease.expires_at, lease.lease_kind "
+                "lease.expires_at, lease.lease_kind, lease.updated_at AS lease_updated_at "
                 "FROM builderops_tasks AS task LEFT JOIN builderops_leases AS lease "
                 "ON lease.repository = task.repository "
                 "AND lease.resource_id = task.task_id "
+                "AND lease.lease_kind = 'task' "
                 "WHERE task.repository = %s AND task.task_id = %s",
                 (canonical, task_id),
             ).fetchone()
@@ -484,10 +485,11 @@ class PostgresBuilderOpsStore:
                     "SELECT task.repository, task.task_id, task.state, task.payload, "
                     "task.authority_envelope, task.version, task.updated_at, "
                     "lease.holder AS lease_holder, lease.fencing_token, "
-                    "lease.expires_at, lease.lease_kind "
+                    "lease.expires_at, lease.lease_kind, lease.updated_at AS lease_updated_at "
                     "FROM builderops_tasks AS task LEFT JOIN builderops_leases AS lease "
                     "ON lease.repository = task.repository "
                     "AND lease.resource_id = task.task_id "
+                    "AND lease.lease_kind = 'task' "
                     "WHERE task.repository = %s "
                     "ORDER BY task.updated_at DESC, task.task_id",
                     (canonical,),
@@ -497,10 +499,11 @@ class PostgresBuilderOpsStore:
                     "SELECT task.repository, task.task_id, task.state, task.payload, "
                     "task.authority_envelope, task.version, task.updated_at, "
                     "lease.holder AS lease_holder, lease.fencing_token, "
-                    "lease.expires_at, lease.lease_kind "
+                    "lease.expires_at, lease.lease_kind, lease.updated_at AS lease_updated_at "
                     "FROM builderops_tasks AS task LEFT JOIN builderops_leases AS lease "
                     "ON lease.repository = task.repository "
                     "AND lease.resource_id = task.task_id "
+                    "AND lease.lease_kind = 'task' "
                     "WHERE task.repository = %s AND task.task_id LIKE %s "
                     "ORDER BY task.updated_at DESC, task.task_id",
                     (canonical, f"{task_prefix}%"),
@@ -529,6 +532,7 @@ class PostgresBuilderOpsStore:
                 "fencing_token": row["fencing_token"],
                 "expires_at": row["expires_at"],
                 "lease_kind": row["lease_kind"],
+                "updated_at": row.get("lease_updated_at"),
             }
         else:
             snapshot["lease"] = None

@@ -85,10 +85,9 @@ the governed release path. Neither `deploy_channel.sh` nor an ad hoc process sta
 The declaration is not installed or enabled by this repository change.
 
 The container uses host networking with a fixed process bind to `127.0.0.1:8113`, a read-only
-root filesystem, dropped capabilities and managed restart. The sole mount is the existing
+root filesystem, dropped capabilities and managed restart. The base declaration mounts the existing
 `/opt/builderops/receipts` source, read-only at `/run/builderops/devui-receipts`; Compose must not
-create an absent source directory. No Product mounts, secret mounts, env files, public port or
-generic upstream selector are supplied. Source SHA must equal image-baked `VCS_REF`; image and
+create an absent source directory. No Product mounts, env files, public port or generic upstream selector are supplied by the base declaration. Source SHA must equal image-baked `VCS_REF`; image and
 DevUI configuration fingerprints and a readable receipt directory are mandatory before binding.
 Missing or malformed configuration refuses startup loudly. Candidate markers remain diagnostic
 inputs to the external image/config readback, not attestation proof by themselves.
@@ -100,19 +99,43 @@ and `/healthz` accompany it. Private authenticated operator access must preserve
 boundary, for example through the approved SSH tunnel; this declaration does not provision ingress
 or enable Funnel. It is not a general Companion gateway and does not deliver a browser/Focus pilot.
 
-The process composes the existing pure Overview functions and the B1 receipt reader. Work and CKM
-transports are explicitly unavailable in this bounded runtime until their owning boundaries admit
-them; no legacy SQLite selector, Product authentication module, or synthetic source is substituted.
+The process composes the existing pure Overview functions, the B1 receipt reader and #5520's
+finite managed source adapter. `DEVUI_REPOSITORY` is explicit, with no hub default. Missing source
+configuration leaves the affected source unavailable; contradictory repository, epoch, URL, legacy
+selector or baked-document identity refuses startup. Work reads use the existing authenticated
+BuilderOps client with source-owned repository and `receipts:read` / `status:read` permission checks
+and an explicitly pinned `DEVUI_BUILDEROPS_AUTHORITY_EPOCH`. The source token file is reread each
+request, and service revocation or epoch movement withdraws work. CKM stays unavailable.
+
+[`docker-compose.devui-sources.yml`](../../docker-compose.devui-sources.yml) is an optional managed
+source-configuration overlay, owned by the Builder runtime/release owner; Platform and Operations
+owns its qualified host/container bindings. It adds only the fixed read-only Builder API token-file
+and gh configuration-directory mounts, both with `create_host_path: false`. It enables bounded gh
+REST and names the qualified BuilderOps URL and epoch. Source credential scope/custody and network
+admission remain with the existing security and source owners. No credential value enters the
+Overview or diagnostics. Host provisioning and use of this overlay are separate operator actions.
+
+The image build now requires `SOURCE_REPOSITORY` alongside `VCS_REF`. The existing image workflow
+supplies both from its addressed GitHub candidate; `devui_sources.package_candidate` rejects missing
+identity or required document inputs. The immutable image contains the candidate docs/capability
+YAML/matrix and their hashes, plus `gh`, `httpx` and PyYAML in the Builder dependency closure.
+`Dockerfile.builderops.dockerignore` admits that Builder-only closure through the actual Docker
+context; the `devui-source-inputs` build stage permits a filtered-input export without booting a
+service. Packaged document and capability paths retain their repository-relative identities, so
+every emitted candidate URL resolves to the original source file.
+Runtime document reads are limited to that baked directory and verify its exact file set and
+content at every request; there is no operator-selected document root or store fallback. These
+configuration/packaging and real-GET fixture proofs establish repository wiring only.
 The mounted source must retain `devui-runtime-prerequisites.json` as specified by the receipt owner.
 The listener validates all three typed receipts with those prerequisites before publishing status.
 An empty/invalid receipt source or missing verification input withdraws deployment status.
 Even a valid chain is withdrawn when
 its source SHA, DevUI image, or DevUI configuration differs from this listener. Liveness explicitly
 reports `complete_dev_system_health: false`; it cannot satisfy the complete health/owner-pilot
-contract. These remaining source and browser gates stay visible under #5181 and #4749.
-ARO-09's [managed read journey admission](README.md#managed-read-journey-admission) owns the finite
-future source/browser extension and its exact-candidate proof. It does not change this delivered
-three-GET process boundary or install any service.
+contract. Live source qualification, managed shell/Focus delivery, browser and pilot gates stay visible
+under #5181 and #4749. ARO-09's
+[managed read journey admission](README.md#managed-read-journey-admission) owns those boundaries.
+#5520 preserves the delivered three-GET process boundary and installs no service.
 
 ### Approved candidate attestation runner
 

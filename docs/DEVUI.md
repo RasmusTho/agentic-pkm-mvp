@@ -12,7 +12,8 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-09-12 for current-state and milestone boundaries at `main`
+Last reviewed: 2026-09-13 for the bounded #5520 managed-source current-state writeback.
+Prior broader current-state and milestone review: 2026-09-12 at `main`
 `c7a4da3a80a1108b269bd8e88c4535a17499290a`, #5399 delivery ledger and #5181's cited operational receipts.
 Earlier Stage A verification baseline: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub state
 for #4741, #4742–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857, the merged
@@ -763,8 +764,10 @@ Delivered now:
 - the #5468 / PR #5469 read adapter for an exact VM102 qualification/deploy/health chain, which
   can project bounded `ready_to_try` evidence for `devui_projection` and otherwise withdraws it;
 - the #5476 / PR #5477 standalone managed DevUI listener and pure typed receipt producers,
-  with work/CKM transports still unadmitted; their [runtime owner](BUILDEROPS_CONTROL_PLANE/README.md#standalone-devui-receipt-production)
-  defines prerequisites and limits; and
+  extended by #5520 with admitted BuilderOps API, bounded GitHub REST and immutable candidate-document
+  reads in the managed Overview GET. CKM remains unadmitted; the
+  [runtime owner](BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission) defines source
+  configuration, withdrawal and separate live-source qualification; and
 - the BuilderOps API/PostgreSQL control-plane implementation and independent package boot.
 
 The production Companion transport prerequisite for the existing Overview and Focus reads is

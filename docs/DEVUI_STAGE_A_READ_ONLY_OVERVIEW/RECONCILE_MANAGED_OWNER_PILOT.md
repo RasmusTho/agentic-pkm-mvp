@@ -10,7 +10,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Contract defined by #5504; managed source/browser implementation and live qualification/pilot remain gated.
+State: Contract defined by #5504; #5520 delivers managed source wiring. Browser implementation and live source qualification/pilot remain gated.
 Doc role: Contract-repair task specification and source writeback pointer.
 Authority: The control-plane receipt owner and Stage A pilot specification below own the repaired contract. This task records the bounded repair; it grants no runtime or owner authority. Source disposition: #5399 comment 5648534770.
 

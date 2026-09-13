@@ -1,7 +1,12 @@
+FROM scratch AS devui-source-inputs
+COPY docs /devui-candidate/docs
+COPY app/builderops/ckm/seed/capabilities.yaml /devui-candidate/app/builderops/ckm/seed/capabilities.yaml
+
 FROM python:3.12-slim
 
 ARG VCS_REF=unknown
 ARG BUILT_AT=unknown
+ARG SOURCE_REPOSITORY
 
 LABEL org.opencontainers.image.title="BuilderOps control plane" \
       org.opencontainers.image.revision="$VCS_REF" \
@@ -13,6 +18,11 @@ ENV VCS_REF=$VCS_REF \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# The existing Cockpit source owns gh REST timeout/pagination and credentials.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements-builderops.txt ./
@@ -20,6 +30,10 @@ RUN pip install --no-cache-dir -r requirements-builderops.txt
 
 COPY pyproject.toml ./
 COPY app ./app
+COPY --from=devui-source-inputs /devui-candidate ./devui-candidate
+RUN python -m app.builderops.devui_sources --root /app/devui-candidate \
+    --repository "$SOURCE_REPOSITORY" --source-sha "$VCS_REF" \
+    --capabilities app/builderops/ckm/seed/capabilities.yaml --matrix docs/architecture/traceability-matrix.md
 COPY config/platform/builderops_vm_rebuild_activation.v1.schema.json config/platform/devsystem_vm102_component_inventory.v1.schema.json config/platform/devui_vm102_runtime_qualification.v1.schema.json config/platform/devsystem_vm102_deploy.v1.schema.json config/platform/devsystem_vm102_health.v1.schema.json ./config/platform/
 RUN pip install --no-cache-dir --no-deps . \
     && addgroup --system builderops \

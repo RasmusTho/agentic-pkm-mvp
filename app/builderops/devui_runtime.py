@@ -1,8 +1,8 @@
 """Standalone, read-only Builder DevUI listener; never boot Product.
 
 The managed Linux container uses host networking and a fixed loopback bind.
-Only the retained VM102 receipt transport is admitted in this slice. Other
-provider transports remain refused until independently admitted by their owners.
+The finite managed source transports retain their existing owners and fail
+independently. This listener never starts Product or an action boundary.
 """
 
 from __future__ import annotations
@@ -23,6 +23,14 @@ from app.builderops.devui_composition import compose_owner_snapshot
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs
 from app.builderops.devui_receipts import read_vm102_receipt_provider
+from app.builderops.devui_sources import (
+    SourceConfiguration,
+    SourceConfigurationError,
+    load_source_configuration,
+    read_managed_cockpit,
+)
+
+CANDIDATE_ROOT = Path(__file__).resolve().parents[2] / "devui-candidate"
 
 
 class RuntimeConfigurationError(ValueError):
@@ -35,6 +43,7 @@ class RuntimeConfiguration:
     image_digest: str
     config_fingerprint: str
     receipt_dir: Path
+    sources: SourceConfiguration
 
 
 def load_configuration(environment: Mapping[str, str]) -> RuntimeConfiguration:
@@ -77,7 +86,13 @@ def load_configuration(environment: Mapping[str, str]) -> RuntimeConfiguration:
             next(entries, None)
     except OSError as exc:
         raise RuntimeConfigurationError("Builder receipt source is unavailable") from exc
-    return RuntimeConfiguration(values[0], values[1], values[2], receipt_dir=path)
+    try:
+        sources = load_source_configuration(
+            environment, candidate_root=CANDIDATE_ROOT, source_sha=values[0]
+        )
+    except SourceConfigurationError as exc:
+        raise RuntimeConfigurationError("managed source configuration is invalid") from exc
+    return RuntimeConfiguration(values[0], values[1], values[2], receipt_dir=path, sources=sources)
 
 
 def _unavailable_provider() -> Any:
@@ -153,7 +168,7 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
     @app.get("/api/devui/overview")
     def overview() -> dict[str, Any]:
         snapshot = compose_owner_snapshot(
-            cockpit_reader=_unavailable_provider,
+            cockpit_reader=lambda: read_managed_cockpit(configuration.sources),
             ckm_reader=_unavailable_provider,
             receipt_reader=receipt_provider,
         )

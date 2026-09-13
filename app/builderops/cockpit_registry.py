@@ -931,6 +931,24 @@ def build_registry(
         docs_root, capabilities_yaml_path, matrix_path, sources
     )
 
+    return compose_registry(
+        tasks=tasks, verification=verification, deployments=deployments,
+        sources=sources, github_snapshot=github_snapshot, docs_snapshot=docs_snapshot,
+        github_repo=github_repo,
+    )
+
+
+def compose_registry(
+    *,
+    tasks: list[dict[str, Any]] | None,
+    verification: dict[tuple[str, int], dict[str, Any]],
+    deployments: list[dict[str, Any]],
+    sources: _Sources,
+    github_snapshot: GithubLiveSnapshot | None,
+    docs_snapshot: DocsPlaneSnapshot | None,
+    github_repo: str | None,
+) -> dict[str, Any]:
+    """Compose source-owned Cockpit facts from already read inputs; no I/O."""
     now = datetime.now(timezone.utc)
     # EXT-3's third pill state, enacted (#4452): flip readable-but-old sources
     # to "stale" before anything reads their state. Everything downstream —

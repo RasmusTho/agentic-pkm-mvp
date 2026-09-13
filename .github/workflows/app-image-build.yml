@@ -11,10 +11,12 @@ on:
       - 'scripts/start_api.sh'
       - 'Dockerfile'
       - 'Dockerfile.builderops'
+      - 'Dockerfile.builderops.dockerignore'
       - 'Dockerfile.builderops-postgres'
       - 'docker-compose.builderops.yml'
       - 'scripts/builderops/**'
       - 'requirements.txt'
+      - 'requirements-builderops.txt'
       - 'requirements-tts.txt'
       - '.github/workflows/app-image-build.yml'
 
@@ -225,6 +227,7 @@ jobs:
           build-args: |
             VCS_REF=${{ github.sha }}
             BUILT_AT=${{ env.BUILT_AT }}
+            SOURCE_REPOSITORY=${{ github.repository }}
 
       - name: Build BuilderOps PostgreSQL candidate image
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')

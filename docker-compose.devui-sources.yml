@@ -1,0 +1,26 @@
+# Optional, operator-qualified source configuration for docker-compose.devui.yml.
+# No mounts are created by Compose; missing qualification never grants live access.
+services:
+  devui:
+    environment:
+      DEVUI_REPOSITORY: ${DEVUI_REPOSITORY:?explicit candidate repository required}
+      DEVUI_BUILDEROPS_AUTHORITY_EPOCH: ${DEVUI_BUILDEROPS_AUTHORITY_EPOCH:?qualified source epoch required}
+      BUILDEROPS_API_URL: ${DEVUI_BUILDEROPS_API_URL:?qualified BuilderOps API required}
+      BUILDEROPS_API_TOKEN_FILE: /run/builderops/devui-api-token
+      DEVUI_GITHUB_ENABLED: "true"
+      GH_CONFIG_DIR: /run/builderops/devui-gh
+      GH_HOST: github.com
+      GH_PROMPT_DISABLED: "1"
+    volumes:
+      - type: bind
+        source: /opt/builderops/secrets/devui-api-token
+        target: /run/builderops/devui-api-token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/builderops/devui-gh
+        target: /run/builderops/devui-gh
+        read_only: true
+        bind:
+          create_host_path: false
