@@ -5,12 +5,12 @@ task_id: FCA-06
 github_issue: 5405
 source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
-prerequisites: [FCA-04, "#3793", "#5181"]
+prerequisites: [FCA-04, FCA-08, ARO-09, "implemented selected production admission/read/launch seams"]
 depends_on: [ISOLATE_BUILDER_PACKAGE_BOOT.md]
 can_parallelize_with: []
 ---
 
-State: Target-state task specification; not implemented or runtime acceptance.
+State: Target-state pre-merge conformance task; harness not implemented and live second-consumer acceptance remains parent-owned.
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -23,6 +23,20 @@ RepoRef and delivery manifests already support multiple repositories with no pol
 ## What This Task Does
 
 Create a bounded conformance/pilot harness over existing manifest routing, DevUI read composition and the admitted agent/workflow launcher. Exercise two explicitly different repo identities with separate policies/credentials and a third unauthorized identity. The second consumer must have its own source/skill delivery contract and must not require a Product Runtime DB/vault/service or hub-specific default. A local fixture establishes pre-merge behavior; a separately authorized low-risk live second-consumer pilot belongs to parent validation. The pilot may use existing governed agent workflows and does not require full DDO. Select the live repo/branch/allowed effects explicitly in its admission receipt; do not create a repo or grant credentials in this child.
+
+## Pickup, owned work and later validation
+
+Pickup requires accepted FCA-08/ARO-09 contracts, delivered independent package boot, and the
+selected operation's actual production admission/read/launch seams. The first inquiry adapter
+belongs to #4697; an Issue-delivery workflow has separate admission and cannot borrow inquiry
+permissions. If a consumed seam is absent, preserve that exact external implementation blocker.
+
+This child owns the composed conformance fixtures/tests, receipt validator and self-contained
+`builder_second_consumer_pilot_plan.v1` procedure. Those deliverables are not pickup prerequisites.
+No live #5181 deployment, #3793 authority cutover, selected real repository/credentials or #4749
+owner pilot is required to build them. Parent #5399 must later qualify independent authority and
+VM102, explicitly admit the real consumer/repo/branch/effects and collect actual result/readback.
+Neither a fixture nor the plan receipt satisfies those live obligations.
 
 ## Concretely
 
@@ -63,8 +77,9 @@ No new parallel authority store is introduced. Source facts and authorized opera
 
 ## Related GitHub Issues
 
-- #3793
-- #5181
+- #3793 and #5181 — retained parent live qualification/authority gates, not pre-merge scheduling edges
+- #4697 — first inquiry seam when selected; separate Issue-workflow admission when delivery is selected
+- #5504 — managed source/runtime and ordered evidence contract
 
 Execution context: `fresh_issue_agent`; issue-local helper budget: 1.
 Capability recommendation: Tier 3 multi-repo/auth boundary; fresh issue agent, configured Codex high reasoning, independent mechanism review; helper budget 1.

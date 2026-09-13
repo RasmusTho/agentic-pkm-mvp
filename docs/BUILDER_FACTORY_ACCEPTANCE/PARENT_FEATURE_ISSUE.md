@@ -1,4 +1,4 @@
-State: Filed parent #5399, open; FCA-01..04 are delivered, while full platform deployment and owner acceptance remain unproved. Contract-repair children #5502/#5503 are filed; GitHub owns live readiness.
+State: Filed parent #5399, open; FCA-01..04 are delivered, while full platform deployment and owner acceptance remain unproved. Contracts #5502/#5503 and Stage A #5504 are defined; producer, managed runtime and full-platform evidence remain separate.
 Doc role: Specification / parent pointer
 Authority: GitHub owns live backlog state.
 
@@ -24,4 +24,4 @@ remains under Stage A parent #4741; it is not an FCA child.
 
 ## Verification and acceptance
 
-[README](README.md) defines task order, existing dependencies, cross-task invariants and parent acceptance. Source publication and strict readiness precede implementation. The final child supplies a composed harness and parent-validation handoff; actual VM102, second-consumer and human acceptance receipts remain on the parent. Full deterministic DDO is not the first owner-platform acceptance gate.
+[README](README.md) defines task order, existing dependencies, cross-task invariants and parent acceptance. Source publication and strict readiness precede implementation. FCA-06/07 supply pre-merge harnesses, validators and parent-validation procedures after their consumed production seams exist. Their own deliverables are not prerequisites for pickup. Actual VM102, independent authority, second-consumer and human acceptance receipts remain on the parent, under the [ordered stages](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph). Full deterministic DDO is not the first owner-platform acceptance gate.

@@ -1,7 +1,8 @@
 State: Accepted target-state gap/acceptance specification. In the 2026-09-12 repository snapshot,
 FCA-01..04 are delivered; composed platform deployment and owner acceptance remain unproved.
 Parent #5399 is the live validation hub; seven original children and contract-repair children
-#5502/#5503 are filed. Live readiness is owned by GitHub.
+#5502/#5503 define the bounded admission/outcome contracts; ARO-09/#5504 defines managed runtime
+and pilot sequencing under #4741. Runtime implementation and live readiness remain separately gated.
 Doc role: Specification directory
 Authority: User-authorized research-to-backlog handoff `prom_20260907052807_ef79007c`, accepted receipt `receipt_20260907052822_aa95b743`; subordinate to DEVUI, ADR-0062 and the Builder System process map.
 Owner: Builder System governance and owner-experience acceptance
@@ -31,8 +32,8 @@ Serial pickup is the default. FCA-04 can run independently of the first two gove
 | #5402 [FCA-03 — Compose LLM-assisted owner overview](COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md) | Delivered by PR #5413; source-linked proposal-only synthesis | Closed; runtime acceptance remains parent-owned |
 | #5403 [FCA-04 — Isolate Builder package boot](ISOLATE_BUILDER_PACKAGE_BOOT.md) | Delivered by PR #5421; package/build independence | Closed; no live platform acceptance implied |
 | #5404 [FCA-05 — Produce owner decision and trial facts](PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md) | produce and project explicit owner decision and trial receipts | FCA-02, FCA-09 outcome authority, and the selected operation's implemented admission/readback seam |
-| #5405 [FCA-06 — Qualify a second consumer repository](QUALIFY_SECOND_CONSUMER_REPOSITORY.md) | qualify Builder against an explicitly addressed second repo | FCA-04, #3793, #5181 |
-| #5406 [FCA-07 — Prepare composed owner acceptance](PREPARE_COMPOSED_OWNER_ACCEPTANCE.md) | prepare whole owner-platform acceptance over existing workflow proofs | FCA-03, FCA-05, FCA-06, #4749, #4697, #4982, #5181 |
+| #5405 [FCA-06 — Qualify a second consumer repository](QUALIFY_SECOND_CONSUMER_REPOSITORY.md) | Pre-merge conformance harness, validator and second-consumer pilot procedure | FCA-04 and accepted FCA-08/ARO-09 contracts; implemented selected production admission/read/launch seams. Live #3793/#5181 qualification and the real second consumer are parent gates. |
+| #5406 [FCA-07 — Prepare composed owner acceptance](PREPARE_COMPOSED_OWNER_ACCEPTANCE.md) | Pre-merge composed harness, validator and owner-pilot procedure | FCA-03, implemented FCA-05 outcome/readback and selected production read/action seams, applicable design contract. #5405 contributes its procedure where available; its live pilot, #4749/#5181 and owner acceptance are later parent gates. |
 
 FCA-02 is a contract-enrichment task, not authorization to invent a source store. FCA-05 pickup requires its exact accepted producer/source/action contracts and the selected operation's external admission/readback prerequisites. Its four producers and outcome read transport remain its own implementation work; runtime activation additionally requires their delivery and source admission. FCA-03 delivered independently using existing admitted sources; it emits interpretations/proposals rather than the missing canonical owner facts. Amend affected specs and live Issues before pickup. The bounded admission contract below separates the first inquiry seam from #4169's DDO bridge; neither this contract nor an inquiry delivers FCA-05's outcome writer or an Issue-delivery operation.
 
@@ -48,7 +49,7 @@ breakdown follows their accepted results.
 | --- | --- | --- |
 | #5502 [FCA-08 — Define bounded action admission](DEFINE_BOUNDED_ACTION_ADMISSION.md) | Contract defined below for the existing control plane and destination owners | Runtime admission, destination reservation/readback and activation remain separate work |
 | #5503 [FCA-09 — Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) | Separate candidate-bound trial/acceptance contract defined in the existing object/receipt owner | FCA-05 still owns producer/readback implementation; runtime admission and owner observations remain separate |
-| #5504 [ARO-09 — Reconcile managed owner pilot](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md) | Reconcile runtime/source topology and pre-merge versus live evidence order | Third; owned by Stage A / #4741, not a new FCA child |
+| #5504 [ARO-09 — Reconcile managed owner pilot](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md) | Managed runtime/source and pre-merge versus live evidence contract defined | Owned by Stage A / #4741; runtime, read-only pilot and full-platform acceptance remain separate. |
 
 #### FCA-08 — Bounded action contract repair
 
@@ -65,6 +66,16 @@ It defines authenticated owner confirmation, finite trial/decision payloads, exa
 binding and atomic replay/correction/readback. ADR-0065 dispositions are separate. This is accepted
 target-contract direction, not an implemented writer or owner outcome. FCA-05 and its retained P1
 remain subject to the actual producer/source/admission proof; live Issue maintenance follows merge.
+
+### Implementation and live-evidence order
+
+The [dependency graph](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph) is the single sequencing
+owner. FCA-06/07 own reusable harnesses, validators and procedures; they do not wait for the live
+evidence those procedures will later collect. Their actual external production seams must exist
+before the child can test them. #4697 owns the first inquiry seam; it does not deliver a separately
+approved Issue workflow or FCA-05's outcome writer. #4169/#4170 apply only when DDO is selected.
+Removing #5181/#4749 live scheduling edges removes no #5399 acceptance obligation: complete-system
+identity/authority, real second-consumer effects, and explicit owner trial/acceptance remain required.
 
 ## Existing epics and validation hubs
 

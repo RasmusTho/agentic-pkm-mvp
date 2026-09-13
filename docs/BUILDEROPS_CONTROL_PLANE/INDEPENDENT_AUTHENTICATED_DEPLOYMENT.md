@@ -110,6 +110,9 @@ Even a valid chain is withdrawn when
 its source SHA, DevUI image, or DevUI configuration differs from this listener. Liveness explicitly
 reports `complete_dev_system_health: false`; it cannot satisfy the complete health/owner-pilot
 contract. These remaining source and browser gates stay visible under #5181 and #4749.
+ARO-09's [managed read journey admission](README.md#managed-read-journey-admission) owns the finite
+future source/browser extension and its exact-candidate proof. It does not change this delivered
+three-GET process boundary or install any service.
 
 ### Approved candidate attestation runner
 

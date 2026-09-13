@@ -19,6 +19,10 @@ defect_blast_radius: medium
 review_gate: independent evidence review at exact tested SHA
 ---
 
+State: Delivered historical exact-SHA proof #4748; a new managed candidate needs fresh applicable evidence.
+Doc role: Verification task specification and historical proof boundary
+Authority: #4833 artifacts and authenticated #4748 receipt own exact-run browser evidence, never deployment or owner acceptance.
+
 # Prove Overview Browser and Accessibility States
 
 ## Purpose
@@ -45,6 +49,21 @@ acceptance receipt.
 - Keep the source `devui-overview-browser-accessibility.v1` receipt self-describing for its own
   exact tested run. The downstream `devui-stage-a-read-only-owner-pilot.v1` ledger later binds
   this final-M artifact to independent production evidence; neither receipt claims deployment.
+
+## Managed candidate applicability
+
+The delivered five-node Companion proof and #4836 constrained-reuse provenance remain valid only
+for their exact tested SHA and transport. The [managed read contract](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
+uses the independent Builder entrypoint. Its shell/assets/Focus/source packaging is not delivered
+by an old gateway run. A later managed implementation must add production-path admission and browser
+coverage for that exact entrypoint, origin and source/image/config identity, preserving the five
+existing hostile/accessibility/no-effect obligations. Do not rename, drop or silently substitute
+the authenticated #4833 five-node inventory to make a different runtime pass.
+
+At each deployed final-main `M`, retain the exact five-node wrapper and separately bind the managed
+route/admission/asset journey evidence in the pilot's production inventory. If the old harness
+cannot prove an affected managed behavior, supply its governed implementation/browser proof before
+the pilot; do not inherit the claim from port equality, a prior SHA or a liveness response.
 
 ## What This Task Does
 

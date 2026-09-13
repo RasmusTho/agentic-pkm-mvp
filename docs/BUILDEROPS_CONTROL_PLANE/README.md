@@ -37,9 +37,10 @@ migration/test adapter. BCP-02 (#3790) adds the independent scoped-auth service,
 BuilderOps Compose project, separate-engine preflight, immutable pins, authenticated probes,
 secret-safe status/metrics, deploy/rollback receipts, and rebuildable local durability. Candidate
 images and readiness deliberately have no WAL-G, backup service, recovery target, or restore gate.
-This is still not a production cutover: the checked-in zero pins are non-runnable placeholders, no
-live authority was activated, and client migration, legacy import, privileged execution, and Product
-Runtime route removal remain owned by BCP-03 through BCP-06.
+This repository delivery is not a full production authority cutover: checked-in zero pins are
+non-runnable placeholders. Dated independent component activation evidence is recorded below;
+client migration, legacy import, privileged execution and Product Runtime route removal still
+require their own BCP-03 through BCP-06 acceptance.
 
 ## Builder-system rebuildable deployment posture
 
@@ -68,7 +69,7 @@ row must be retained in `devsystem_vm102_component_inventory.v1`, including rows
 | Component ID | Placement class | Owner / service or project | Identity, ingress, health, and lifecycle contract | Migration / rollback boundary | Current reconciliation state |
 | --- | --- | --- | --- | --- | --- |
 | `devui_projection` | VM-102 resident (target) | Dev UI owner; read-only projection component | Exact source SHA and image digest; internal authenticated GET-only path; `devsystem_vm102_health.v1` plus #4748 browser evidence; GitHub/BuilderOps remain authority | No local workflow state; no migration; restore previous image/config only | `gap`: no VM-102 Dev UI deployment receipt or candidate identity is proven |
-| `builderops_control_plane` | VM-102 resident (target) | BuilderOps; PostgreSQL, migrations, API, worker, internal network, dedicated engine/context, service manager, epoch fencing, journal/outbox, health receipts; `builderops-control-plane` | Repository SHA and attested image digests; loopback API with private authenticated ingress and no Funnel; schema/epoch/fencing and BuilderOps receipts | Migration-gated; classify forward-only versus reversible; rollback pins compatible code/config/image and never rewinds authority data | `gap`: no bound receipt proves the complete engine/project/service identity and runtime state |
+| `builderops_control_plane` | VM-102 resident (target) | BuilderOps; PostgreSQL, migrations, API, worker, internal network, dedicated engine/context, service manager, epoch fencing, journal/outbox, health receipts; `builderops-control-plane` | Repository SHA and attested image digests; loopback API with private authenticated ingress and no Funnel; schema/epoch/fencing and BuilderOps receipts | Migration-gated; classify forward-only versus reversible; rollback pins compatible code/config/image and never rewinds authority data | Dated component-only activation is reported under #5181; complete-system/client-authority qualification remains unproved (see operational evidence below) |
 | `builderops_cockpit` | VM-102 resident (target) | BuilderOps Cockpit read-time join | Source-owned BuilderOps read path; authenticated internal access; health/version and freshness in component inventory; BuilderOps receipt lineage | Read-only projection; no independent state migration; rebuild from source and prior compatible image | `gap`: service/project and runtime identity not evidenced |
 | `dispatcher_signboard` | VM-102 resident (target) | Dispatcher queue/claim/lease/activity providers and Signboard diagnostic projection | BuilderOps-owned API/read path, fenced lease evidence, exact source/image identity, health/readiness receipt; no local lifecycle authority | Lease/state migration only through BuilderOps contract; rollback preserves GitHub and BuilderOps authority | `gap`: complete VM-102 service and project inventory not evidenced |
 | `ddo` | VM-102 resident (target) | Deterministic Delivery Orchestration plans, reducer, worker/effect boundaries, reconciliation, receipts | Source/image identity and authenticated internal boundary; reducer and receipt health evidence; BuilderOps journal/outbox lifecycle | Apply only governed, classified migrations; rollback compatible executor/config without replaying or rewinding effects | `gap`: runtime residency and version evidence not proven |
@@ -96,6 +97,87 @@ receipt is redaction-safe and binds its observations to the target VM identity a
 deployment and health receipts additionally bind the exact candidate SHA, image digests, and
 configuration fingerprint. `tars_host_qualification.v1` is only the repository-side candidate
 policy receipt and cannot substitute for live qualification.
+
+### Managed read journey admission
+
+ARO-09 / #5504 defines the following target contract. The prepared listener in
+[Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#prepared-standalone-devui-listener)
+already fixes the origin to `http://127.0.0.1:8113`, entrypoint to
+`python -m app.builderops.devui_runtime`, and identity to `builderops-devui` / `devui` on the
+dedicated `builderops` engine. It currently serves only exact GET `/api/devui/overview`,
+`/version` and `/healthz`; it serves no browser shell, assets or Focus route.
+
+The first managed browser target is `http://127.0.0.1:8113/devui/overview`, with server-supplied
+`/devui/focus?subject=...` and a fresh Overview return. A separately governed implementation must
+package the existing #4836 shell/assets in the same attested Builder image and serve the exact
+allowlist from `devui_candidate_assets.py`: the two pages, `devui.css`, `overview.js` and
+`focus.js`, plus the existing Overview and typed Focus GET contracts. No wildcard proxy, Product
+API bootstrap, generic file server, external asset, credential-bearing browser or new navigation
+authority is admitted. The existing #4746 constrained-reuse receipt applies only within its exact
+envelope; a new/mixed design delta requires its own governed handoff. Packaging/admission and
+managed-origin browser proof remain undelivered; #4836 reuse provenance does not establish them.
+
+Direct-loopback admission is owned by `app/builderops/devui_runtime.py::_local_request` and
+`create_app.admit`: immediate loopback peer, exact `127.0.0.1:8113` or `localhost:8113` Host,
+no forwarded identity. Current routes reject all query parameters. The future Focus route must
+admit only its typed subject query under that same boundary; it cannot silently inherit a generic
+proxy/query exception. Approved private authenticated operator access, such as the governed SSH
+tunnel, must preserve this local origin. Ingress provisioning remains an operator action. The
+former Companion-to-Product `8113`/`18000` route, Demerzel authentication, boolean-only #4835
+Product credential prerequisite, and Product `/api/health.version` are historical proof inputs,
+not admission for the independent listener. Port equality alone never equates the two processes.
+
+The finite first-journey transport set is below. A target row is implementation direction under
+its existing owner, not a claim that the managed runtime has that transport or credentials.
+
+| Source | Existing producer and first managed admission target | Present state and failure boundary |
+| --- | --- | --- |
+| Work / lifecycle evidence | Repository-addressed `BuilderOpsControlPlaneClient.list_tasks`, `get_task` and `get_receipt`, through the existing authenticated `/v1/tasks` and `/v1/receipts/{object_kind}/{object_id}` service contracts; compose source-owned Cockpit facts without changing their semantics | Required for the useful work journey; unavailable in the current listener. Later wiring must prove repository/permission/epoch scope and freshness. No legacy `read_cockpit_registry` direct-SQLite fallback or Product credentials. |
+| GitHub / CI / delivery references | Existing `cockpit_github_plane.default_github_reader`, bounded REST via `gh`, for one explicitly configured repository; server-side credential custody stays with the existing source owner | Required when work/PR/check claims use it. The managed image/host transport and scoped credential reference must be admitted before qualification; no hub default, browser token, GraphQL substitution or inferred closed/merged readiness. Missing/refused/partial reads withdraw affected claims. |
+| Feature intent and architecture documents | Existing `cockpit_docs_plane.read_docs_plane`, addressed candidate repository docs, capability YAML and issue-capability matrix with immutable source refs | Required for M1 intent/requirement inspection. Packaging or read-only mounting and exact candidate identity still need explicit managed implementation; an arbitrary operator filesystem path is not admission. Missing docs remain unavailable and cannot become empty requirements. |
+| VM102 deployment evidence | Existing read-only `/opt/builderops/receipts` mount and `read_vm102_receipt_provider`, validated through the owner producers and retained `devui-runtime-prerequisites.json` | The only currently admitted managed evidence transport. It rereads each request and withdraws missing, stale, malformed, partial-update or mismatched candidate evidence. |
+| CKM/Kvasir capability context | Existing local-only `CkmQueryService` policy; no remote transport is admitted by that policy | Optional for the first bounded work journey and currently unavailable. Do not turn a local policy into a remote query, add a DB mount, or present missing context as empty/complete. A later required CKM lens needs its own source admission. |
+
+The source adapter retains observation time, immutable reference and typed refusal for each
+provider; one optional provider failure must not erase healthy independent evidence. The first
+read-journey implementation owns its bounded adapter/asset wiring and failure tests. Those owned
+deliverables are not prerequisites for its own pickup. By contrast, a downstream harness consuming
+that production seam requires it to exist. No target transport may be treated as live until its
+existing source/auth owner and qualified runtime admit it.
+
+### Liveness, candidate and operational evidence
+
+`load_configuration` checks image-baked source equality, nonzero image/config fingerprints,
+absence of Product configuration and an existing readable receipt directory. An empty readable
+directory permits process startup; missing/malformed local configuration refuses before binding.
+Typed qualification/deploy/health files are checked at read time. Their absence withdraws
+deployment readiness; `/healthz` still reports only `listener_alive: true` and
+`complete_dev_system_health: false`. The dated #5181 report of a stopped DevUI is an operational
+observation, not proof that missing typed files necessarily prevent this code from starting.
+
+`/version` supplies `source_sha`, `image_digest`, `config_fingerprint` and
+`component_id: devui_projection`. These are diagnostics to compare with independently attested
+image/config and typed deploy/health evidence. They do not attest themselves. Before a managed
+pilot, the served shell/asset identity, this diagnostic identity, exact final-main browser proof
+and the independently observed deployment must all bind the same candidate `M`. A new SHA,
+image, configuration or route/origin requires affected proof again; an older receipt remains history.
+
+The [2026-09-12 #5181 activation receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647954880)
+reports the dedicated BuilderOps control plane at `c7a4da3a80a1108b269bd8e88c4535a17499290a`.
+It is bounded component evidence, not current-main DevUI, complete-system health or full API-only
+client-authority cutover. Fresh live evidence still belongs to these producers:
+
+| Missing or separately bounded evidence | Producing authority / next admissible boundary |
+| --- | --- |
+| Complete 12-component topology, prepared/deployed identities and read smoke | #5181 consumes every inventory row above. Resident components need their own source/image/config and lifecycle observations; external rows remain external and Product Runtime remains excluded. Component liveness cannot substitute for complete-system smoke. |
+| SoI Evidence availability, identity, authentication and freshness | Product/Runtime SoI owner supplies redacted read-only provider evidence from the qualified Dev System access path; no Product service/data is moved onto the Builder engine. |
+| Model service identity, access and degradation | Model Access Substrate / model-service owner supplies fresh provider evidence; a model adapter, configured endpoint or fixture response is not observed reachability. |
+| Linux outage/recovery probe and private Discord | #4076's current selected TEST-channel target must first be qualified by Platform and Operations. Heimdal/#5506 owns provider/channel/webhook and the consuming host's native secret reference. Only its redacted `probe_installation.v1` and `heimdal_discord_alert_channel.v1` evidence proves installation/drill. The latest [#4076 readback](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4076#issuecomment-5650928513) leaves target qualification, provider/binding and live drill absent. It does not authorize a Builder VM installation or turn Product `/api/health` into a DevUI health signal; any Builder-specific probe requirement needs its own admitted target/config under those same owners. |
+| Deploy wrapper host authority | PR #5516 adds fixed forwarder unit/systemctl/restart-authority preflight before deployment mutation and preserves refresh after API recreation. PR #5513 adds the shared Discord adapter and value-free host-secret contract. Both are repository evidence only; neither supplies live host, secret, drill or DevUI acceptance evidence. |
+
+No part of this reconciliation authorizes service activation, credentials, provider changes,
+deployment, a drill or owner acceptance. Keep the real operator gates and exact source producer
+gaps visible on #5181/#4076; never fabricate their observations with a repository receipt producer.
 
 ### Normative receipt dependency order
 

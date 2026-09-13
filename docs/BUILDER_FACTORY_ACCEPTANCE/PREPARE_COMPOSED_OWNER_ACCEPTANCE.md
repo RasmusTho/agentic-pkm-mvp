@@ -5,12 +5,12 @@ task_id: FCA-07
 github_issue: 5406
 source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
-prerequisites: [FCA-03, FCA-05, FCA-06, "#4749", "#4697", "#4982", "#5181"]
-depends_on: [COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md, PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md, QUALIFY_SECOND_CONSUMER_REPOSITORY.md]
+prerequisites: [FCA-03, FCA-05, "implemented selected production read/action seams", "applicable design contract"]
+depends_on: [COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md, PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md]
 can_parallelize_with: []
 ---
 
-State: Target-state task specification; not implemented or runtime acceptance.
+State: Target-state pre-merge acceptance-harness task; harness not implemented and live platform/owner acceptance remains parent-owned.
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -23,6 +23,23 @@ The owner prioritizes useful oversight and control; complete deterministic orche
 ## What This Task Does
 
 Add a bounded acceptance harness/scenario specification that composes the admitted DevUI overview/Focus, LLM synthesis, exact action handoff, existing agent workflow, actual receipt readback, candidate tryability and owner trial/acceptance. Cover normal work, one real owner decision, technical wait, stale/contradictory evidence, model unavailable, ambiguous action start and owner-client disconnection. Exercise the selected workflow's existing pause/revocation/recovery proof; reuse #4170 if DDO is selected, without making DDO mandatory. Record predeclared questions and observable success criteria for the owner. The parent retains live VM102/second-repo pilot and explicit owner acceptance; this child delivers the reusable harness, receipt validator and procedure, not owner acceptance itself.
+
+## Pickup, owned work and later validation
+
+Pickup requires implemented FCA-03 synthesis, FCA-05 outcome/readback and the selected production
+read/action seams with applicable design authority. A missing consumed producer or admission seam
+is a real external implementation prerequisite; this child does not implement it through mocks.
+#4697 owns the first inquiry seam. A full Issue delivery needs its separately accepted operation;
+#4169/#4170 are dependencies only for DDO-specific initiation/recovery. #4982 design is required only
+where the selected visual surface changes within its scope.
+
+The child owns its composed scenario harness, validator and operator-readable
+`builder_owner_platform_acceptance_plan.v1`. It may reuse FCA-06's procedure/fixtures when delivered,
+but neither #5405's live second-repo pilot nor #4749/#5181 live evidence is a pickup prerequisite.
+The plan must enumerate those pending receipts as incomplete, including real second-consumer
+scope, exact VM102 identity/epoch, selected workflow effects, operator acknowledgement and explicit
+owner trial/acceptance. #5399 retains every obligation; pre-merge fixture success cannot pass the
+live plan. The read-only #4749 acknowledgement is distinct from effectful owner acceptance.
 
 ## Concretely
 
@@ -63,10 +80,10 @@ No new parallel authority store is introduced. Source facts and authorized opera
 
 ## Related GitHub Issues
 
-- #4749
-- #4697
-- #4982
-- #5181
+- #4749 and #5181 — retained parent runtime/read-only pilot gates, not child pickup edges
+- #4697 — selected inquiry seam; separate admission for an Issue-delivery operation
+- #4982 — applicable design scope only
+- #5405 — reusable conformance procedure and separately retained real second-consumer acceptance
 
 Execution context: `fresh_issue_agent`; issue-local helper budget: 1.
 Capability recommendation: Tier 2/3 composed verification; fresh issue agent, configured Codex high reasoning; helper budget 1 for independent acceptance review.
