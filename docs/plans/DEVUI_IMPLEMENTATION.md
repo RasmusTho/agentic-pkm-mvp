@@ -132,9 +132,11 @@ retains its no-code/no-GitHub-effect boundary. Full DDO completion is not a univ
 The first contract tasks are [bounded action admission](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_BOUNDED_ACTION_ADMISSION.md),
 [owner outcome authority](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md), and
 [managed runtime/pilot reconciliation](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md).
-They must update their owning contracts and dependent Issue wording before later implementation
-uses the repaired boundary. In particular, the existing dependency graph below remains subject to
-that reconciliation; this milestone map does not silently change #4169, #4697 or #4749 admission.
+The [bounded action contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission)
+now separates the inquiry seam from DDO-specific #4169. Its runtime admission, destination
+reservation/readback and activation remain undelivered. The other repair tasks and dependent live
+Issue reconciliation remain prerequisites before later implementation uses their boundaries; this
+milestone map does not make #4697, #5404 or #4749 ready.
 
 ### Stage A — see: coherent read-only devUI
 
@@ -208,18 +210,24 @@ specified in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`:
    observations;
 2. export/open one immutable hash-bound context pack to an external Codex or Claude conversation,
    with provider transcript/session data retained as provenance only; and
-3. admit one typed command, Start Model Inquiry, through exact preview and explicit Start/Hold into
-   the artifact-first workflow and its existing receipt, but only after the separately
-   authenticated action boundary and destination-owned operation-key/readback support exist; then
+3. implement one typed command, Start Model Inquiry, including authenticated admission and
+   destination-owned reservation/readback, then enable exact-preview Start/Hold only after that
+   implementation is verified against the artifact-first workflow and its existing receipt; then
 4. complete the governed Yggdrasil handoff from the stable Focus, source-state, conversation, and
    command/receipt fixtures before deriving any visual implementation slice.
 
 This is not an early activation of the general Stage B DDO command chain. Start Model Inquiry is a
 narrow pre-Issue workflow documented in the Builder System process map, but its cost-bearing Start
-still crosses the authenticated action boundary owned by #4169. The current loopback-only read
+still crosses the existing BuilderOps control-plane service under the
+[bounded admission contract](../BUILDER_FACTORY_ACCEPTANCE/README.md#bounded-action-admission).
+#4169 owns the DDO-specific bridge. The current loopback-only read
 route is not approval authentication, and the current single-flight launcher is not durable
-idempotency. FCP-04 therefore remains blocked until the authenticated boundary and a proposal-scoped
-operation key/readback in the existing inquiry artifacts are available. The slice
+idempotency. FCP-04 pickup requires delivered FCP-03, accepted FCA-08/#5502 and fresh live Issue
+readiness. It implements authenticated admission and proposal-scoped operation-key
+reservation/readback in the existing inquiry destination; its own deliverables are not external
+prerequisites. Runtime Start remains unavailable until that implementation is verified. A stored
+`POST /v1/inquiries` record is not a sanctioned launch; stop remains unsupported by the current
+inquiry skill. Contract repair #5502 alone does not enable runtime Start. The slice
 adds no delivery request, GitHub/repository mutation, task store, provider-session store, global
 session view, or direct provider invocation. Inquiry promotion and any later Issue/repo consequence
 remain separate governed workflows.
@@ -227,7 +235,8 @@ remain separate governed workflows.
 Builder System Control is a sibling system-governance lens, not a Focus task. Its detailed target
 contract is `docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`, developed separately under Issue #4698.
 Parent #4693 and children #4694–#4697 own only the Focus/Conversation chain; FCP-01 and FCP-03 are
-delivered while FCP-02 and FCP-04 retain their named blockers. The control lens may compose document
+delivered. FCP-04 owns the pending inquiry implementation, with live pickup state on its Issue;
+FCP-02 still needs FCP-04 fixtures and the external design handoff. The control lens may compose document
 roles, versioned workflow adapters, bounded tool capabilities, policy/source coverage, drift,
 exceptions, unknowns, and explicitly evidenced route deviations. It may not own policy, workflow
 state, tasks, or source truth.
@@ -249,9 +258,9 @@ trial or acceptance.
 
 The delivery order is:
 
-1. the authenticated action boundary emits an exact `TypedCommandProposal.v1` /
-   `DeliveryRequest.v1` + `DeliveryPreview.v1` owner ask, with `Start/Hold` for the first bounded
-   Start Model Inquiry path;
+1. the authenticated action boundary binds the exact `TypedCommandProposal.v1` and immutable
+   approval manifest for `Start/Hold` on the first bounded Model Inquiry path; a separately
+   approved DDO operation uses `DeliveryRequest.v1` + `DeliveryPreview.v1` under #4169;
 2. the deployment/verification owner emits an exact candidate-bound ready-to-try receipt, including
    environment, health/read-only smoke, rollback identity, and source freshness;
 3. the existing owner-disposition boundary records an explicit trial or rejection, and later an

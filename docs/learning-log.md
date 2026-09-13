@@ -278,3 +278,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The earlier plan treated Discord and similar helper systems as provider configuration without one ecosystem owner, while current authority required a single system-owned lifecycle and credential boundary.
 **Upstream artifact:** `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md :: Decision`
 **BuilderOps LearningSignal:** `lrn_20260912213739_dc53bfc9`
+
+## 2026-09-12 — #5502 (bounded inquiry admission contract)
+**Source:** verification-and-closure / independent GitHub review
+**Diverged:** The first contract repair passed local independent review but required FCP-04 to pre-deliver its own admission/reservation scope and left its capability owner and parent pointer on the old DDO dependency.
+**Upstream artifact:** `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md :: Open implementation dependencies` and its FCP-04/parent task pointers; check each prerequisite against the same task's deliverables before validating the dependency graph.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent, and the documented CLI selects a local SQLite store that this run is not authorized to use. No store write was attempted; convert this entry to a LearningSignal when the admitted source is available. PR #5509 repairs the named source pointers and records both P1 findings before a fresh independent review.
