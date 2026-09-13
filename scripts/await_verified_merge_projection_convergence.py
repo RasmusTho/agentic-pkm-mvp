@@ -198,9 +198,9 @@ def _authenticate_unique_authority(
     durable_convergence = resolve_verified_merge_projection_convergence_receipt(
         comments, authority_receipt=authority, pr_contract=pr_contract
     )
-    # Historical receipts from earlier body edits are retained as audit
-    # evidence.  They must still authenticate against the authority, but only
-    # a receipt for this exact post-edit contract can shortcut the quorum.
+    # Earlier candidates/body edits remain audit evidence authenticated by the
+    # shared owner under their own unique authority. Only this exact current
+    # authority and post-edit contract can shortcut the quorum.
     if (
         trusted_convergence_attempt
         and not projection_convergence_receipts_authenticate_authority(

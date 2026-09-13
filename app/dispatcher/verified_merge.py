@@ -510,6 +510,13 @@ def _live_body_matches_authority_receipt(
 
 def _complete_merged_identity(pr: Mapping[str, object]) -> bool:
     merge_commit_sha = pr.get("merge_commit_sha")
+    merged_at = pr.get("merged_at")
+    if not isinstance(merged_at, str) or _CANONICAL_UTC_TIMESTAMP_PATTERN.fullmatch(merged_at) is None:
+        return False
+    try:
+        datetime.strptime(merged_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
     return bool(
         pr.get("state") == "closed"
         and pr.get("merged") is True
@@ -571,6 +578,8 @@ def _valid_authority_receipt(
         or receipt.get("pr_number") != pr.get("number")
         or not isinstance(head, Mapping)
         or receipt.get("head_sha") != head.get("sha")
+        or not isinstance(receipt.get("head_sha"), str)
+        or _SHA_PATTERN.fullmatch(cast(str, receipt["head_sha"])) is None
         or not isinstance(receipt.get("run_id"), str)
         or not receipt.get("run_id")
         or (
@@ -1863,12 +1872,61 @@ def _projection_convergence_matches_authority(
     return True
 
 
+def _projection_phase_matches_authority(
+    phase: Mapping[str, object],
+    *,
+    authority_receipt: Mapping[str, object],
+    convergence_receipt: Mapping[str, object],
+) -> bool:
+    """Authenticate a retained phase before a consumer selects its live chain."""
+    name = phase.get("phase")
+    if name not in _PHASES or set(phase) != _PHASE_RECEIPT_FIELDS:
+        return False
+    reconciled = name in {"reconciled", "restored"}
+    try:
+        closed = _issue_tuple(phase.get("closed_issues"), field="closed issues", allow_empty=True)
+        reopened = _issue_tuple(phase.get("reopened_unauthorized_issues"), field="reopened issues", allow_empty=True)
+    except ValueError:
+        return False
+    merge_sha = phase.get("merge_commit_sha")
+    if (
+        (reconciled and list(closed) != authority_receipt.get("closing_issues"))
+        or (not reconciled and (closed or reopened))
+        or bool(set(closed) & set(reopened))
+        or (name == "prepared" and merge_sha is not None)
+        or (name != "prepared" and (
+            not isinstance(merge_sha, str) or _SHA_PATTERN.fullmatch(merge_sha) is None
+        ))
+    ):
+        return False
+    expected = {
+        "authority_sha256": _canonical_digest(authority_receipt),
+        "body_sha256": authority_receipt["body_sha256" if name == "restored" else "neutralized_body_sha256"],
+        "closed_issues": list(closed), "contract": VERIFIED_MERGE_PHASE_CONTRACT,
+        "final_projection_observation_sha256": (
+            _canonical_digest(cast(Mapping[str, object], convergence_receipt["final_projection_observation"]))
+            if name == "prepared" else None
+        ),
+        "head_sha": authority_receipt["head_sha"], "merge_commit_sha": merge_sha,
+        "phase": name, "pr_number": authority_receipt["pr_number"],
+        "projection_convergence_sha256": convergence_receipt["receipt_sha256"],
+        "reopened_unauthorized_issues": list(reopened),
+        "repository": authority_receipt["repository"], "run_id": authority_receipt["run_id"],
+    }
+    return phase == expected
+
+
 def _authenticated_projection_convergence_receipts(
     comments: Sequence[Mapping[str, object]],
     *,
     authority_receipt: Mapping[str, object],
 ) -> list[Mapping[str, object]] | None:
-    """Return all authenticated convergence receipts, including audit history."""
+    """Authenticate the complete history, then return only current-authority proof.
+
+    Earlier candidates are not authenticated against the live head. Their own
+    unique trusted authority and frozen final observation must agree first.
+    Keeping that evidence does not let it satisfy any current convergence gate.
+    """
 
     trusted_attempts = [
         comment
@@ -1888,18 +1946,121 @@ def _authenticated_projection_convergence_receipts(
     )
     if len(entries) != marker_attempts:
         return None
-    allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
-        comments, authority_receipt
+    authority_entries = _comment_receipt_entries(
+        comments, VERIFIED_MERGE_AUTHORITY_MARKER
     )
-    receipts = [receipt for receipt, _comment in entries]
-    if any(
-        not _projection_convergence_matches_authority(
+    current_digest = _canonical_digest(authority_receipt)
+    receipts: list[Mapping[str, object]] = []
+    seen_contracts: set[tuple[str, str]] = set()
+    history: dict[str, tuple[Mapping[str, object], Mapping[str, object]]] = {}
+    for receipt, _comment in entries:
+        receipt_authority = authority_receipt
+        if receipt.get("authority_sha256") != current_digest:
+            # A claimed different head/run is not enough to discard evidence.
+            # Bind to one same-PR authority, including conflicting/duplicate
+            # comments for that candidate identity in the uniqueness check.
+            if len(authority_entries) != _trusted_structural_marker_occurrences(
+                comments, VERIFIED_MERGE_AUTHORITY_MARKER
+            ):
+                return None
+            matching_authorities = [
+                (candidate, comment)
+                for candidate, comment in authority_entries
+                if all(
+                    candidate.get(field) == receipt.get(field)
+                    for field in ("repository", "pr_number", "head_sha", "run_id")
+                )
+            ]
+            if len(matching_authorities) != 1:
+                return None
+            receipt_authority, authority_comment = matching_authorities[0]
+            final_observation = receipt.get("final_projection_observation")
+            pull = (
+                final_observation.get("pull_request")
+                if isinstance(final_observation, Mapping)
+                else None
+            )
+            if (
+                receipt.get("repository") != authority_receipt.get("repository")
+                or receipt.get("pr_number") != authority_receipt.get("pr_number")
+                or not isinstance(receipt.get("head_sha"), str)
+                or _SHA_PATTERN.fullmatch(cast(str, receipt["head_sha"])) is None
+                or not isinstance(pull, Mapping)
+                or not _valid_authority_receipt(
+                    receipt_authority,
+                    pr={
+                        "number": pull.get("number"),
+                        "head": {"sha": pull.get("head_sha")},
+                        "body": pull.get("body"),
+                    },
+                    repository=cast(str, authority_receipt.get("repository")),
+                    expected_run_id=cast(str, receipt.get("run_id")),
+                    allow_legacy_terminal_lf=_legacy_terminal_lf_provenance(
+                        authority_comment
+                    ),
+                )
+            ):
+                return None
+        if not _projection_convergence_matches_authority(
             receipt,
-            authority_receipt=authority_receipt,
-            allow_legacy_terminal_lf=allow_legacy_terminal_lf,
+            authority_receipt=receipt_authority,
+            allow_legacy_terminal_lf=_comments_authenticate_legacy_authority(
+                comments, receipt_authority
+            ),
+        ):
+            return None
+        contract_identity = (
+            _canonical_digest(receipt_authority),
+            _canonical_digest(cast(Mapping[str, object], receipt["pr_contract"])),
         )
-        for receipt in receipts
+        if contract_identity in seen_contracts:
+            # Duplicate or competing POSTs for one exact post-edit check do
+            # not become a unique durable proof merely by selecting one.
+            return None
+        seen_contracts.add(contract_identity)
+        if receipt.get("authority_sha256") == current_digest:
+            receipts.append(receipt)
+        history[cast(str, receipt["receipt_sha256"])] = (receipt_authority, receipt)
+
+    phases = _comment_receipt_entries(comments, VERIFIED_MERGE_PHASE_MARKER)
+    if len(phases) != _trusted_structural_marker_occurrences(
+        comments, VERIFIED_MERGE_PHASE_MARKER
     ):
+        return None
+    phases_by_chain: dict[str, dict[str, Mapping[str, object]]] = {}
+    for phase, _comment in phases:
+        convergence_digest = phase.get("projection_convergence_sha256")
+        historical = history.get(convergence_digest) if isinstance(convergence_digest, str) else None
+        if historical is None:
+            return None
+        phase_authority, convergence = historical
+        if (
+            phase.get("authority_sha256") != current_digest and phase.get("phase") != "prepared"
+        ) or not _projection_phase_matches_authority(
+            phase, authority_receipt=phase_authority, convergence_receipt=convergence,
+        ):
+            return None
+        chain = phases_by_chain.setdefault(cast(str, convergence_digest), {})
+        name = cast(str, phase["phase"])
+        if name in chain and chain[name] != phase:
+            return None
+        chain[name] = phase
+    delivered_chains = 0
+    for chain in phases_by_chain.values():
+        last = max(_PHASES.index(name) for name in chain)
+        if any(name not in chain for name in _PHASES[:last + 1]):
+            return None
+        merged = chain.get("merged")
+        if merged is not None:
+            delivered_chains += 1
+            if any(phase["merge_commit_sha"] != merged["merge_commit_sha"] for name, phase in chain.items() if name != "prepared"):
+                return None
+        if "restored" in chain and any(
+            chain["restored"][field] != chain["reconciled"][field]
+            for field in ("closed_issues", "reopened_unauthorized_issues")
+        ):
+            return None
+    if delivered_chains > 1:
         return None
     return receipts
 
@@ -2128,17 +2289,7 @@ def build_verified_merge_phase(
                 allow_legacy_terminal_lf=allow_legacy_terminal_lf,
             )
         )
-        or (
-            merged_phase
-            and (
-                pr.get("state") != "closed"
-                or pr.get("merged") is not True
-                or not isinstance(pr.get("merged_at"), str)
-                or not pr.get("merged_at")
-                or not isinstance(merge_commit_sha, str)
-                or _SHA_PATTERN.fullmatch(merge_commit_sha) is None
-            )
-        )
+        or (merged_phase and not _complete_merged_identity(pr))
         or (
             not merged_phase
             and (
@@ -2308,13 +2459,6 @@ def resolve_verified_merge_phase(
             ):
                 invalid_current_projection_phase = True
                 continue
-            if (
-                active_convergence_digest is not None
-                and convergence_digest != active_convergence_digest
-            ):
-                # Authentic historical phase receipts remain audit evidence,
-                # but cannot compete with the live body-edit contract.
-                continue
         expected_digest = (
             authority_receipt.get("body_sha256")
             if phase == "restored"
@@ -2442,7 +2586,9 @@ def resolve_verified_merge_phase(
         highest = resolve_chain(
             valid_by_chain.get(chain, {phase: [] for phase in _PHASES})
         )
-    if highest is None:
+    if highest is None or (
+        highest["phase"] != "prepared" and not _complete_merged_identity(pr)
+    ):
         return None
     current_body = pr.get("body")
     allow_legacy_terminal_lf = _comments_authenticate_legacy_authority(
