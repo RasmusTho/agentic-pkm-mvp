@@ -37,6 +37,10 @@ independent managed runtime is a different process at the same port and currentl
 those pages nor Focus. Its remaining extension is governed by
 [Managed read journey admission](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
 
+Historical #4841/#4836 Companion transport bound `127.0.0.1:8113`. Port `18000` remains
+direct API diagnostics for that historical transport, never the independent managed browser origin.
+This provenance does not import the Companion/Product admission into the managed runtime.
+
 ## Complete Dev System placement boundary
 
 Stage A is one read-only Dev UI projection component within the complete Builder System / Dev

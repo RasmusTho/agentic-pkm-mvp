@@ -92,6 +92,10 @@ it supplies neither a page nor a visual destination.
   walkthrough and separate acknowledgement. A disposable-state receipt is needed only for an
   explicitly used `pkm-test` supplement. A closed historical proof cannot satisfy a changed candidate.
 
+Historical #4841/#4836 Companion transport bound `127.0.0.1:8113`. Port `18000` remains
+direct API diagnostics for that historical transport, never the independent managed browser origin.
+This provenance does not import the Companion/Product admission into the managed runtime.
+
 ## Acceptance Criteria
 
 - [ ] Every child has a terminal receipt or explicit superseding/withdrawal disposition.
