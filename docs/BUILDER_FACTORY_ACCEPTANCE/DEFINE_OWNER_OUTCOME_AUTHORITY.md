@@ -10,9 +10,9 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Filed as #5503 for bounded contract repair; repair not yet delivered. No runtime implementation or deployment is claimed.
+State: Contract defined by #5503 in the existing object/receipt owner. Producer implementation, source admission, deployment and actual owner outcomes remain gated.
 Doc role: Target-state task specification in an existing capability directory.
-Authority: Existing capability and owner documents govern the repair. This task defines work and verification, not the repaired action/data/runtime authority. Source disposition: #5399 comment 5648534770.
+Authority: Existing capability and owner documents govern the repair. The object-model owner now defines the separate target outcome contract; this task records its scope and verification, not live action/data/runtime authority. Source disposition: #5399 comment 5648534770.
 
 # Define owner outcome authority
 
@@ -20,7 +20,8 @@ Authority: Existing capability and owner documents govern the repair. This task 
 
 The [retained P1 on #5404](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5404#issuecomment-5578318482)
 identifies an invalid use of ADR-0065 dispositions. Define a separate bounded outcome receipt
-contract before any producer writes trial or acceptance. Publishing this repair specification does
+contract before any producer writes trial or acceptance. The repaired contract is in
+[the existing object-model owner](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09). Contract delivery does
 not resolve that review finding or admit a writer.
 
 ## What This Task Does
@@ -41,9 +42,16 @@ The complete owner journey depends on this finite seam. Delivering the module or
 
 ## Acceptance Criteria
 
-- [ ] Trial/decision kinds, source/writer, payload, readback and correction semantics are fully named without overloading temporal-intention dispositions. Verify: doc writeback at `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md :: Owner-fact carriers and bounded handoff (FCA-02)`
-- [ ] DEVUI references the separate outcome contract and still withdraws outcomes until the admitted writer exists. Verify: doc writeback at `docs/DEVUI.md :: FCA-02 source-backed owner facts and bounded handoff (2026-09-07)`
-- [ ] Changed candidate/profile, two conflicting submissions, unavailable writer and post-write projection failure are specified with exact expected outcomes. Verify: doc writeback at `docs/BUILDER_FACTORY_ACCEPTANCE/PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md :: Acceptance Criteria`
+- [x] Trial/decision kinds, source/writer, payload, readback and correction semantics are fully named without overloading temporal-intention dispositions. Verify: doc writeback at `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md :: Owner-fact carriers and bounded handoff (FCA-02)`
+- [x] DEVUI references the separate outcome contract and still withdraws outcomes until the admitted writer exists. Verify: doc writeback at `docs/DEVUI.md :: FCA-02 source-backed owner facts and bounded handoff (2026-09-07)`
+- [x] Changed candidate/profile, two conflicting submissions, unavailable writer and post-write projection failure are specified with exact expected outcomes. Verify: doc writeback at `docs/BUILDER_FACTORY_ACCEPTANCE/PRODUCE_OWNER_DECISION_AND_TRIAL_FACTS.md :: Acceptance Criteria`
+
+- [x] Companion source references and delivery statements converge on the separate outcome contract and merged FCA-08, preserving runtime withdrawal and distinguishing pickup dependencies from owned implementation. Only changed FCA/DEVUI/object-model index rows are in scope.
+  - Verify: doc writeback at `docs/BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md :: What This Task Does`
+  - Verify: doc writeback at `docs/BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md :: Acceptance Criteria`
+  - Verify: doc writeback at `docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: FCA-09 — Owner outcome contract repair`
+  - Verify: doc writeback at `docs/DOCS_INDEX.md :: Core SoT Docs`
+  - Verify: doc writeback at `docs/DOCS_INDEX.md :: Supporting Docs (Quality, Ops, Flows, Data)`
 
 ## How to Verify (Pre-Merge)
 

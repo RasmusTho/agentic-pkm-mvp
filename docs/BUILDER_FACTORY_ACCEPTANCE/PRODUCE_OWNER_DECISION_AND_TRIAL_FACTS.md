@@ -5,8 +5,8 @@ task_id: FCA-05
 github_issue: 5404
 source_anchor: "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: Capability intent"
 parent_capability: Builder Factory Acceptance
-prerequisites: [FCA-02, "#4169"]
-depends_on: [DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md]
+prerequisites: [FCA-02, FCA-08, FCA-09]
+depends_on: [DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md, DEFINE_BOUNDED_ACTION_ADMISSION.md, DEFINE_OWNER_OUTCOME_AUTHORITY.md]
 can_parallelize_with: []
 ---
 
@@ -22,7 +22,16 @@ The future fact contract in FCA-02 replaces neither GitHub nor deployment author
 
 ## What This Task Does
 
-Implement only the four fact producers and read transport enumerated by the accepted FCA-02 contract, using its named existing authenticated writer and BuilderOps/GitHub receipt boundary. Bind asks to exact subjects/options/authority class; bind tryability to exact candidate, environment and deployment/evidence identity; record explicit owner trial/acceptance/rejection. Project them through existing DevUI Overview/Focus inputs with exact-source links and invalidation on supersession. Prefer extending the existing receipt schema/transport; no new generic store, queue or command service. #4169 remains action-boundary owner; after FCA-01 reconcile its prerequisite to the admitted bounded action, not unconditional full DDO completion.
+Implement the four FCA-02 fact producers and read transport, with trial/acceptance governed by the separate [FCA-09 outcome contract](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09) in the existing authenticated BuilderOps service and receipt owner. Bind asks to exact subjects/options/authority class; bind tryability to exact candidate, environment and deployment/evidence identity; record explicit owner trial/acceptance/rejection. Project them through existing DevUI Overview/Focus inputs with exact-source links and invalidation on supersession. Prefer extending the existing receipt schema/transport; no new generic store, queue or command service. The accepted [FCA-08 bounded admission contract](README.md#bounded-action-admission) retains the existing service and selected destination owners. #4697 owns the first inquiry admission/reservation/readback seam; #4169 is required only for a selected DDO operation. Inquiry approval or generic record storage supplies neither owner confirmation nor permission for an Issue-delivery operation.
+
+Pickup requires the accepted FCA-02/FCA-08/FCA-09 contracts and the selected operation's separately
+implemented authenticated admission and destination reservation/readback prerequisites. It does
+not require this task's four producers, outcome validation/atomic write, or read transport to
+already exist: those are its owned implementation. Runtime projection/activation additionally
+requires that delivered writer, source authority/deployment and actual candidate/readiness/profile
+readback. Missing external evidence remains blocked; no full DDO portfolio is imposed on inquiry.
+The retained P1 on #5404 remains unresolved until this task proves the repaired production path;
+#5503's specification delivery alone does not resolve its source review thread.
 
 ## Concretely
 
@@ -34,14 +43,21 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The production writer requires the authorized subject/version and uses the FCA-02 source boundary; replay and concurrent attempts do not duplicate an accepted fact.
+- [ ] The production writer in the existing BuilderOps service authenticates the confirmed human actor, repository/subject and finite FCA-09 payload, checks current permission/epoch and source versions, and commits guarded receipt selection, idempotency result and projection intent atomically. Generic agent write permission and caller-supplied human identity refuse without an outcome.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_production_writer_is_authorized_version_bound_and_idempotent`
-- [ ] Deployed candidate, verification, ready-to-try, trial and acceptance remain distinct; a new candidate invalidates old try/accept projection rather than borrowing its result.
+- [ ] Equal-key/equal-payload replay returns the original receipt; changed payload under the same key returns `idempotency_conflict`. Two different-key initial submissions (`accepted` versus `rejected`, or equal outcomes) against the same predecessor yield one commit and one `current_receipt_conflict`, never two current decisions. A correction requires new explicit owner confirmation of the current predecessor.
+  - Verify: `tests/builderops/test_owner_fact_producers.py::test_conflicting_submissions_require_explicit_correction`
+- [ ] Deployed candidate, verification, ready-to-try, trial and acceptance stay distinct. C/P1's trial and decision remain historical when C2, environment E2, profile/AC P2, readiness binding or material limits change; the new binding has neither trial nor acceptance. Correcting the referenced trial withdraws its acceptance. A rejected decision without a trial creates no trial, and `unable_to_try` cannot support acceptance.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_changed_candidate_cannot_inherit_trial_or_acceptance`
-- [ ] Overview/Focus production composition distinguishes canonical asks, technical waits and LLM suggestions and withdraws stale/unavailable source claims.
+  - Verify: `tests/builderops/test_owner_fact_producers.py::test_changed_profile_and_trial_correction_withdraw_acceptance`
+- [ ] Overview/Focus production composition reads exact source receipt lineage and current bindings, distinguishes canonical asks, technical waits and LLM suggestions, and withdraws stale/unavailable/incompatible/conflicting claims. An unavailable or unadmitted writer returns a typed unavailable/refusal with no new outcome; it cannot fabricate rejection, trial, acceptance or an empty successful result. An unavailable read never proves no prior commit.
   - Verify: `tests/api/test_devui_owner_facts.py::test_production_reads_use_source_facts_without_label_or_model_inference`
-- [ ] After interruption between the authorized fact write and downstream projection, readback/retry returns the existing receipt and rebuilding the view preserves the outcome.
+  - Verify: `tests/builderops/test_owner_fact_producers.py::test_unavailable_writer_does_not_create_owner_outcome`
+- [ ] A pre-commit interruption exposes no receipt or projection intent. A lost response after commit is reconciled by the same key/payload; post-write projection failure preserves the exact committed outcome and returns unavailable projection evidence until source readback rebuilds it. Restart cannot issue a duplicate outcome or infer consent when authority history is missing.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_restart_reconciles_written_fact_before_projection`
+
+These are FCA-05's future production-path proofs. FCA-09 verifies this finite expected-outcome
+matrix as a document target; it does not claim that these tests or the production writer exist.
 
 ## How to Verify (Pre-Merge)
 
@@ -49,7 +65,7 @@ Run named producer/API tests against the production call sites, auth/receipt reg
 
 ## Out of Scope
 
-No new authority store, visual shell or decision classifier based only on a label; no deployment, actor credential provisioning or duplicate #4169 command API.
+No new authority store, visual shell or decision classifier based only on a label; no deployment, actor credential provisioning, content-retention programme or duplicate action command API.
 
 ## Restart / Durability Posture
 
@@ -65,7 +81,7 @@ No new parallel authority store is introduced. Source facts and authorized opera
 
 ## Related GitHub Issues
 
-- #4169
+- #5502, #5503, #4697; #4169 only when the selected operation uses DDO.
 
 Execution context: `fresh_issue_agent`; issue-local helper budget: 1.
 Capability recommendation: Tier 3 authenticated durable-state boundary; fresh issue agent, configured Codex high reasoning, independent mechanism review; helper budget 1.

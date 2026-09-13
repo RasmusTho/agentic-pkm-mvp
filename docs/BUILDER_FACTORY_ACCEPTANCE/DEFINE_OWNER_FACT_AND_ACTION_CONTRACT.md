@@ -22,7 +22,7 @@ DEVUI ARO-01 deliberately withdrew Needs you and Ready to try because no source 
 
 ## What This Task Does
 
-Specify the minimal source-owned owner ask, ready-to-try, trial and acceptance facts using existing GitHub Issue/PR, deployment receipts and BuilderOps receipt infrastructure. Name the precise producer, identifier/version, authorization, revision/supersession, readback, retention and projection behavior for each; do not invent a new generic task or intent store. Extend the relevant owner sections in docs/DEVUI.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md and docs/plans/DEVUI_IMPLEMENTATION.md. Define LLM summary/proposal output as non-authoritative and source-linked. Specify the first bounded authenticated handoff through the action owner retained by FCA-01/#4169/#4697, including ambiguous launch outcome and restart reconciliation. Do not require DDO for an existing admitted agent workflow.
+Specify the minimal source-owned owner ask, ready-to-try, trial and acceptance facts using existing GitHub Issue/PR, deployment receipts and BuilderOps receipt infrastructure. Name the precise producer, identifier/version, authorization, revision/supersession, readback, retention and projection behavior for each; do not invent a new generic task or intent store. Extend the relevant owner sections in docs/DEVUI.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md and docs/plans/DEVUI_IMPLEMENTATION.md. Define LLM summary/proposal output as non-authoritative and source-linked. The current bounded handoff contract is [FCA-08](README.md#bounded-action-admission), implemented for the first inquiry by #4697; #4169 retains only the selected DDO-specific bridge. The current trial/acceptance contract is the separate [FCA-09 payload](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09), not ADR-0065 dispositions. #5404 owns its producer/readback implementation; those facts remain withdrawn until admission is verified. Do not require DDO for an existing admitted agent workflow.
 
 ## Concretely
 
@@ -47,7 +47,7 @@ Review the finite examples against existing source contracts and production seam
 
 ## Delivery Verification
 
-PR #5424 merged exact head `3238909926f31228da35f43124aca2663917e307` at `f002f3016460c18410d35eea1f38f3a4928effbc` after the named source-backed owner-fact sections, 68 targeted DevUI/governance tests, documentation guard, contract validation, and the full non-PG CI lane passed. The delivery defines carriers and handoff boundaries only; runtime fact producers, UI changes, VM102 operation, and owner acceptance remain separately gated.
+PR #5424 merged exact head `3238909926f31228da35f43124aca2663917e307` at `f002f3016460c18410d35eea1f38f3a4928effbc` after the named source-backed owner-fact sections, 68 targeted DevUI/governance tests, documentation guard, contract validation, and the full non-PG CI lane passed. FCA-08/#5502 and FCA-09/#5503 subsequently repair the bounded-action and separate outcome authority references; the retained #5404 P1 still needs production-path proof. The delivery defines carriers and handoff boundaries only; runtime fact producers, UI changes, VM102 operation, and owner acceptance remain separately gated.
 
 ## Out of Scope
 
