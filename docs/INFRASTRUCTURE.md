@@ -52,7 +52,7 @@ API and worker share the same Python image built from the repo.
 
 For ordinary deploy-selected Compose overlays, the full-host-vault overlay binds
 the selected host vault read-only or writable at the runtime consumers' shared
-container path (`api`, `worker`, and `watcher`). It does not bind the selected
+container path (`api`, `worker`, `watcher`, and `heimdal-capture-watch`). It does not bind the selected
 vault, `/Users`, or `/Volumes` into `instance-state-init`; host-side deployment
 admission validates legacy-owner roots and passes only its bounded opaque receipt
 to that fence controller. The separately governed MVR-01C authority-cutover

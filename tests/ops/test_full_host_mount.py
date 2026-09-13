@@ -22,8 +22,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPOSE = _REPO_ROOT / "docker-compose.yaml"
 _LEGACY_COMPOSE = _REPO_ROOT / "docker-compose.legacy-vault.yml"
 _ENVIRONMENTS_DOC = _REPO_ROOT / "docs" / "ENVIRONMENTS.md"
+_FULL_HOST_OVERLAY = _REPO_ROOT / "docker-compose.full-host-vault.yml"
+_DEPLOYMENT_DOC = _REPO_ROOT / "docs" / "deployment" / "DEPLOYMENT_AND_ENVIRONMENTS.md"
+_INFRASTRUCTURE_DOC = _REPO_ROOT / "docs" / "INFRASTRUCTURE.md"
 _START_SCRIPT = _REPO_ROOT / "scripts" / "start_full_system.sh"
 _SERVICES = ("api", "worker", "watcher")
+_FULL_HOST_SERVICES = ("api", "worker", "watcher", "heimdal-capture-watch")
 
 
 def _service_volumes(compose: Path, service: str) -> list[str]:
@@ -114,6 +118,24 @@ def test_start_script_includes_legacy_overlay_only_for_explicit_vault() -> None:
     assert "docker-compose.legacy-vault.yml" in text, (
         "start_full_system.sh must reference the legacy overlay for explicit vaults"
     )
+
+
+def test_environment_docs_match_merged_full_host_consumer_contract() -> None:
+    """Owner docs must name every merged full-host runtime consumer."""
+    overlay = yaml.safe_load(_FULL_HOST_OVERLAY.read_text(encoding="utf-8"))
+    overlay_services = set((overlay.get("services") or {}).keys())
+    assert set(_FULL_HOST_SERVICES) <= overlay_services
+
+    infrastructure = _INFRASTRUCTURE_DOC.read_text(encoding="utf-8")
+    deployment = _DEPLOYMENT_DOC.read_text(encoding="utf-8")
+    for service in _FULL_HOST_SERVICES:
+        assert f"`{service}`" in infrastructure
+        assert f"`{service}`" in deployment
+
+    for text in (infrastructure, deployment):
+        assert "`instance-state-init`" in text
+        assert "MVR-01C" in text
+        assert "read-only at `/app/selected-vault`" in text
 
 
 def test_environment_docs_match_legacy_mount_contract() -> None:
