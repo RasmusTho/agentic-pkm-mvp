@@ -254,7 +254,7 @@ jobs:
             );
             const hasCompleteMergedIdentity = livePr =>
               livePr.state === "closed" && livePr.merged === true &&
-              typeof livePr.merged_at === "string" && livePr.merged_at.length > 0 &&
+              canonicalUtcInstant(livePr.merged_at) !== null &&
               typeof livePr.merge_commit_sha === "string" && /^[0-9a-f]{40}$/.test(livePr.merge_commit_sha);
 
             const validAuthorityReceipt = (
@@ -270,6 +270,7 @@ jobs:
                 receipt.contract !== "verified_issue_set_merge_authority.v1" ||
                 receipt.repository !== expectedRepository || receipt.pr_number !== livePr.number ||
                 receipt.head_sha !== livePr.head?.sha ||
+                typeof receipt.head_sha !== "string" || !/^[0-9a-f]{40}$/.test(receipt.head_sha) ||
                 typeof receipt.run_id !== "string" || receipt.run_id.length === 0 ||
                 receipt.repair_budget === null || typeof receipt.repair_budget !== "object" ||
                 Array.isArray(receipt.repair_budget) ||
@@ -304,7 +305,7 @@ jobs:
               Number.isInteger(rateLimit.remaining) && rateLimit.remaining >= 0 &&
               canonicalUtcInstant(rateLimit.reset_at) !== null;
 
-            const validDurableFinalObservation = (observation, receipt, authorityReceipt) => {
+            const validDurableFinalObservation = (observation, receipt, authorityReceipt, {allowLegacy = false} = {}) => {
               if (!hasExactFields(observation, RAW_OBSERVATION_FIELDS) ||
                   !Array.isArray(observation.errors) || !arraysEqual(observation.errors, []) ||
                   !validRateLimit(observation.rate_limit) ||
@@ -331,7 +332,7 @@ jobs:
                 hasExactFields(pull.closing_issues_page_info, ["has_next_page"]) &&
                 pull.closing_issues_page_info.has_next_page === false &&
                 typeof pull.body === "string" &&
-                matchesStoredBodyDigest(pull.body, authorityReceipt.neutralized_body_sha256);
+                matchesStoredBodyDigest(pull.body, authorityReceipt.neutralized_body_sha256, {allowLegacy});
             };
 
             const validProjectionPrContract = (contract, receipt, authorityReceipt) => {
@@ -361,7 +362,7 @@ jobs:
                 canonicalJson(bodyEdit) === canonicalJson(receipt.body_edit);
             };
 
-            const validConvergenceReceipt = (receipt, authorityReceipt) => {
+            const validConvergenceReceipt = (receipt, authorityReceipt, {allowLegacy = false} = {}) => {
               if (!hasExactFields(receipt, CONVERGENCE_FIELDS)) return false;
               const digestInput = {...receipt};
               delete digestInput.receipt_sha256;
@@ -404,7 +405,7 @@ jobs:
                 }
               }
               return validDurableFinalObservation(
-                receipt.final_projection_observation, receipt, authorityReceipt
+                receipt.final_projection_observation, receipt, authorityReceipt, {allowLegacy}
               );
             };
 
@@ -426,6 +427,10 @@ jobs:
               // authenticate every candidate before selecting current proof.
               const authorities = commentReceipts(comments, AUTHORITY_MARKER);
               const currentDigest = canonicalSha256(authorityReceipt);
+              const allowsLegacy = authority => comments.some(comment =>
+                legacyAuthorityEligible(comment) && commentReceipts([comment], AUTHORITY_MARKER)
+                  .some(candidate => canonicalSha256(candidate) === canonicalSha256(authority))
+              );
               const seenContracts = new Set();
               const byDigest = new Map();
               const history = new Map();
@@ -451,9 +456,9 @@ jobs:
                       pull === null || typeof pull !== "object" ||
                       !validAuthorityReceipt(receiptAuthority, {
                         number: pull.number, head: {sha: pull.head_sha}, body: pull.body,
-                      }, authorityReceipt.repository)) return null;
+                      }, authorityReceipt.repository, {allowLegacy: allowsLegacy(receiptAuthority)})) return null;
                 }
-                if (!validConvergenceReceipt(receipt, receiptAuthority)) return null;
+                if (!validConvergenceReceipt(receipt, receiptAuthority, {allowLegacy: allowsLegacy(receiptAuthority)})) return null;
                 const contractIdentity = canonicalJson([
                   canonicalSha256(receiptAuthority), receipt.pr_contract,
                 ]);
@@ -472,6 +477,7 @@ jobs:
               ), 0);
               if (phases.length !== phaseAttempts) return null;
               for (const phase of phases) {
+                if (!hasExactFields(phase, PHASE_FIELDS)) return null;
                 if (phase.authority_sha256 === currentDigest) continue;
                 const historical = history.get(phase.projection_convergence_sha256);
                 if (historical === undefined || phase.phase !== "prepared") return null;
@@ -674,7 +680,7 @@ jobs:
                   .some(receipt => canonicalSha256(receipt) === canonicalSha256(authorityReceipt))
               );
               if (
-                ((hasCompleteMergedIdentity(livePr) && hasConvergenceHistory) ||
+                (hasConvergenceHistory ||
                 ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256]
                   .some(storedDigest => matchesStoredBodyDigest(
                     livePr.body || "", storedDigest, {allowLegacy}

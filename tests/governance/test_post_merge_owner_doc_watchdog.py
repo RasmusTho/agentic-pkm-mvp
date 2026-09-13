@@ -581,6 +581,15 @@ def test_watchdog_authenticates_current_chain_with_prior_head_history(body_mode:
     assert _node("selectWatchdogAuthority(inputs[0])", {
         **request, "livePr": changed_merge,
     })["mode"] == "trusted_receipt_invalid"
+    for field, value in (
+        ("merged_at", None), ("merged_at", "not-a-time"),
+        ("merged_at", "2026-02-30T00:00:00Z"),
+        ("merge_commit_sha", None), ("merge_commit_sha", "not-a-sha"),
+        ("merged", None), ("merged", False), ("state", None), ("state", "open"),
+    ):
+        assert _node("selectWatchdogAuthority(inputs[0])", {
+            **request, "livePr": {**request["livePr"], field: value},
+        })["mode"] == "trusted_receipt_invalid"
 
 
 def test_watchdog_parses_dynamic_convergence_fence_for_embedded_pr_body_fence() -> None:
@@ -1199,3 +1208,76 @@ def test_watchdog_production_path_uses_authority_receipt_and_pr_specific_targets
         "for (const issueNumber of targets)",
     ):
         assert fragment in text
+
+
+@pytest.mark.parametrize("legacy_position", ["current", "prior"])
+@pytest.mark.parametrize("body_mode", ["canonical", "neutralized", "raced"])
+def test_watchdog_history_preserves_provenance_bound_legacy_convergence(
+    legacy_position: str, body_mode: str,
+) -> None:
+    from app.dispatcher.verified_merge import resolve_verified_merge_phase
+
+    def chain(*, legacy: bool, prior: bool) -> tuple[list[dict[str, object]], str, str]:
+        original = _body().rstrip("\n")
+        neutralized = _neutralized_body(_body()).rstrip("\n")
+        authority = _receipt_payload(_authority_comment())
+        if legacy:
+            authority["body_sha256"] = hashlib.sha256((original + "\n").encode()).hexdigest()
+            authority["neutralized_body_sha256"] = hashlib.sha256((neutralized + "\n").encode()).hexdigest()
+        if prior:
+            authority.update(head_sha="d" * 40, run_id="prior-candidate")
+        comment = {
+            "author_association": "OWNER",
+            "body": "verified issue-set merge authority:\n```json\n" + json.dumps(authority) + "\n```",
+            "created_at": "2026-07-21T16:16:34Z", "updated_at": "2026-07-21T16:16:34Z",
+        }
+        kwargs = projection_phase_kwargs(authority, _pr(neutralized), authority_comment=comment)
+        comments = [comment, projection_convergence_comment(kwargs),
+                    _phase_comment(comment, phase="prepared", merge_commit_sha=None, phase_kwargs=kwargs)]
+        if not prior:
+            comments.append(_phase_comment(comment, phase="merged", merge_commit_sha="c" * 40, phase_kwargs=kwargs))
+        return comments, original, neutralized
+
+    prior, _, _ = chain(legacy=legacy_position == "prior", prior=True)
+    current, original, neutralized = chain(legacy=legacy_position == "current", prior=False)
+    comments = prior + current
+    live = _merged_pr({"canonical": original, "neutralized": neutralized,
+                       "raced": "Governing-Issue: #4999\n\nFixes #4999\n"}[body_mode])
+    request = {"comments": comments, "expectedRepository": REPOSITORY, "linkedIssues": [4999], "livePr": live}
+    assert resolve_verified_merge_phase(comments, authority_receipt=_receipt_payload(current[0]),
+                                       pr=live, allow_merged_body_drift=True) == _receipt_payload(current[-1])
+    assert _node("selectWatchdogAuthority(inputs[0])", request)["mode"] == "durable_receipt"
+    legacy_index = 0 if legacy_position == "prior" else len(prior)
+    for timestamps in ({}, {"created_at": "2026-07-21T16:32:11Z", "updated_at": "2026-07-21T16:32:11Z"}):
+        invalid = copy.deepcopy(comments)
+        invalid[legacy_index].pop("created_at")
+        invalid[legacy_index].pop("updated_at")
+        invalid[legacy_index].update(timestamps)
+        assert _node("selectWatchdogAuthority(inputs[0])", {**request, "comments": invalid})["mode"] == "trusted_receipt_invalid"
+
+
+@pytest.mark.parametrize("body_mode", ["canonical", "neutralized", "raced"])
+@pytest.mark.parametrize("proof", ["no-history", "prepared", "merged"])
+def test_watchdog_current_only_history_uses_one_terminal_gate(body_mode: str, proof: str) -> None:
+    from app.dispatcher.verified_merge import resolve_verified_merge_phase
+
+    authority = _authority_comment()
+    comments = [authority]
+    if proof != "no-history":
+        comments += [_convergence_comment(authority), _phase_comment(authority, phase="prepared", merge_commit_sha=None)]
+    if proof == "merged":
+        comments += [_phase_comment(authority, phase="merged", merge_commit_sha="c" * 40)]
+    body = {"canonical": _body(), "neutralized": _neutralized_body(_body()),
+            "raced": "Governing-Issue: #4999\n\nFixes #4999\n"}[body_mode]
+    live = _merged_pr(body)
+    for delta in ({}, {"merged_at": None}, {"merged_at": "not-a-time"},
+                  {"merge_commit_sha": "not-a-sha"}, {"merge_commit_sha": "e" * 40},
+                  {"merged": False}, {"state": "open"}):
+        observed = {**live, **delta}
+        expected = ((proof == "no-history" and body_mode != "raced") or (proof == "merged" and not delta))
+        request = {"comments": comments, "expectedRepository": REPOSITORY,
+                   "linkedIssues": [4999], "livePr": observed}
+        assert (_node("selectWatchdogAuthority(inputs[0])", request)["mode"] == "durable_receipt") is expected
+        if proof == "merged":
+            assert (resolve_verified_merge_phase(comments, authority_receipt=_receipt_payload(authority),
+                    pr=observed, allow_merged_body_drift=True) is not None) is expected

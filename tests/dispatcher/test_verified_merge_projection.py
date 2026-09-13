@@ -1863,7 +1863,8 @@ def test_projection_convergence_cli_rebuilds_after_body_edit_aba(
     assert output["convergence_receipt"] == replacement_convergence
 
 
-def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() -> None:
+@pytest.mark.parametrize("corruption", [None, "body_sha256", "closed_issues", "repository", "merge_commit_sha", "missing-prepared", "legacy-schema"])
+def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest(corruption: str | None) -> None:
     authority, neutralized_body, stale_pr_contract, stale_convergence = (
         _projection_fixture()
     )
@@ -1919,6 +1920,30 @@ def test_phase_recovery_binds_same_second_aba_replacement_by_receipt_digest() ->
         _trusted_comment(str(stale_prepared["phase_receipt_comment"])),
         _trusted_comment(str(prepared["phase_receipt_comment"])),
     ]
+
+    if corruption is not None:
+        stale = copy.deepcopy(stale_prepared["phase_receipt"])
+        if corruption == "missing-prepared":
+            stale.update(phase="merged", final_projection_observation_sha256=None, merge_commit_sha="c" * 40)
+        elif corruption == "legacy-schema":
+            stale.pop("projection_convergence_sha256")
+            stale.pop("final_projection_observation_sha256")
+        else:
+            stale[corruption] = [3820] if corruption == "closed_issues" else "forged"
+        comments[2] = _trusted_comment(
+            verified_merge.VERIFIED_MERGE_PHASE_MARKER + "\n```json\n" + json.dumps(stale) + "\n```"
+        )
+        assert not verified_merge.projection_convergence_receipts_authenticate_authority(
+            comments, authority_receipt=authority,
+        )
+        assert verified_merge.resolve_verified_merge_projection_convergence_receipt(
+            comments, authority_receipt=authority, pr_contract=current_pr_contract,
+        ) is None
+        assert verified_merge.resolve_verified_merge_phase(
+            comments, authority_receipt=authority, pr=neutralized_pr,
+            current_body_edit=current_body_edit,
+        ) is None
+        return
 
     assert verified_merge.resolve_verified_merge_phase(
         comments,

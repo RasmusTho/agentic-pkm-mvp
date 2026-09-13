@@ -1375,9 +1375,12 @@ exactly from their own authenticated convergence; earlier candidates cannot carr
 chain for the same PR. A claimed different head or run is insufficient: missing, malformed, forged,
 duplicate, or conflicting historical proof refuses the gate. Only the current authority's exact
 body-edit/check receipt can satisfy convergence and phase recovery; the watchdog selects only its
-continuous chain reaching the exact merged identity even when the live body still matches.
-Earlier proof cannot grant current merge or
-closure authority, and no recovery step deletes or rewrites the audit trail.
+continuous chain reaching a complete, valid, exact merged identity in every live-body mode.
+Authenticate retained same-authority body-edit phases and their continuity before excluding them
+from current selection. Provenance-qualified legacy terminal-LF authority remains eligible through
+its own convergence and final observation; the no-history compatibility path stays unchanged.
+Earlier proof cannot grant current merge or closure authority, and no recovery step deletes or
+rewrites the audit trail.
 
 Same-head deployed-v1 recovery preserves historical attempts and repair budget only when the fresh
 v2 artifact retains the exact legacy supporting set and its authenticated closing set stays within
