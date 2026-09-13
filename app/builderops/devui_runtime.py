@@ -15,19 +15,30 @@ from pathlib import Path
 import re
 import sys
 from typing import Any
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
+from app.builderops.devui_assets import (
+    CSP,
+    INVENTORY_SHA256,
+    ROUTES,
+    CandidateAssetError,
+    validate_packaged_assets,
+)
 from app.builderops.devui_composition import compose_owner_snapshot
+from app.builderops.devui_focus import FocusContractError, compose_focus_view
+from app.builderops.devui_focus_inputs import FocusInputError
 from app.builderops.devui_overview import compose_overview_view
-from app.builderops.devui_overview_inputs import derive_overview_inputs
+from app.builderops.devui_overview_inputs import derive_overview_inputs, bind_visual_focus_targets
 from app.builderops.devui_receipts import read_vm102_receipt_provider
 from app.builderops.devui_sources import (
     SourceConfiguration,
     SourceConfigurationError,
     load_source_configuration,
     read_managed_cockpit,
+    read_managed_focus,
 )
 
 CANDIDATE_ROOT = Path(__file__).resolve().parents[2] / "devui-candidate"
@@ -155,15 +166,93 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
 
     @app.middleware("http")
     async def admit(request: Request, call_next: Any) -> Any:
+        response: Response
         if not _local_request(request):
-            return JSONResponse(
+            response = JSONResponse(
                 {"detail": "DevUI requires direct local admission"}, status_code=403
             )
-        if request.url.query:
-            return JSONResponse(
-                {"detail": "DevUI listener does not accept query parameters"}, status_code=400
+        elif request.url.path not in {
+            *ROUTES,
+            "/api/devui/overview",
+            "/api/devui/focus",
+            "/version",
+            "/healthz",
+        }:
+            response = JSONResponse({"detail": "Unknown DevUI route"}, status_code=404)
+        elif request.method != "GET":
+            response = JSONResponse({"detail": "DevUI admits GET only"}, status_code=405)
+        else:
+            try:
+                query = request.scope["query_string"].decode("ascii")
+                if request.url.path in {"/devui/focus", "/api/devui/focus"}:
+                    if re.search(r"%(?![0-9a-fA-F]{2})", query):
+                        raise ValueError()
+                    pairs = parse_qsl(
+                        query, keep_blank_values=True, strict_parsing=True, errors="strict"
+                    )
+                    if (
+                        len(pairs) != 1
+                        or pairs[0][0] != "subject"
+                        or re.fullmatch(
+                            r"(?:github:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*|[a-z][a-z0-9_.:-]{2,127})",
+                            pairs[0][1],
+                        )
+                        is None
+                    ):
+                        raise ValueError()
+                    request.state.subject = pairs[0][1]
+                elif query:
+                    raise ValueError()
+            except (ValueError, UnicodeError):
+                response = JSONResponse(
+                    {"detail": "One typed Focus subject is required; other routes accept no query"},
+                    status_code=400,
+                )
+            else:
+                try:
+                    if request.url.path not in {"/version", "/healthz"}:
+                        request.state.assets = validate_packaged_assets(
+                            configuration.sources.candidate_root,
+                            source_sha=configuration.source_sha,
+                            repository=configuration.sources.repository,
+                        )
+                    response = await call_next(request)
+                except CandidateAssetError:
+                    response = JSONResponse(
+                        {"detail": "Managed DevUI candidate assets or metadata are unavailable"},
+                        status_code=503,
+                    )
+        response.headers.update(
+            {
+                "Cache-Control": "no-store",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": CSP,
+                "X-PKM-Runtime-Git-SHA": configuration.source_sha,
+                "X-DevUI-Image-Digest": configuration.image_digest,
+                "X-DevUI-Config-Fingerprint": configuration.config_fingerprint,
+                "X-DevUI-Asset-Inventory": INVENTORY_SHA256,
+            }
+        )
+        return response
+
+    def asset(request: Request) -> Response:
+        media_type, filename = ROUTES[request.url.path]
+        return Response(request.state.assets[filename], media_type=media_type)
+
+    for path in ROUTES:
+        app.add_api_route(path, asset, methods=["GET"], response_class=Response)
+
+    @app.get("/api/devui/focus")
+    def focus(request: Request) -> Any:
+        try:
+            return compose_focus_view(
+                **read_managed_focus(configuration.sources, request.state.subject)
             )
-        return await call_next(request)
+        except (FocusInputError, FocusContractError):
+            return JSONResponse(
+                {"detail": "DevUI Focus subject is unavailable or unsupported"}, status_code=404
+            )
 
     @app.get("/api/devui/overview")
     def overview() -> dict[str, Any]:
@@ -176,7 +265,9 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
             work_provider=snapshot["providers"]["work"],
             receipt_provider=snapshot["providers"]["vm102_evidence"],
         )
-        return compose_overview_view(composition=snapshot, candidates=inputs)
+        return compose_overview_view(
+            composition=snapshot, candidates=bind_visual_focus_targets(inputs)
+        )
 
     @app.get("/version")
     def version() -> dict[str, str]:
@@ -185,6 +276,7 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
             "image_digest": configuration.image_digest,
             "config_fingerprint": configuration.config_fingerprint,
             "component_id": "devui_projection",
+            "asset_inventory_sha256": INVENTORY_SHA256,
         }
 
     @app.get("/healthz")

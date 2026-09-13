@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ipaddress import ip_address
 from typing import Any
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -14,13 +13,15 @@ from app.builderops.ckm.query_service import CkmQueryService
 from app.builderops.config import load_paths as load_builderops_paths
 from app.builderops.devui_composition import compose_owner_snapshot
 from app.builderops.devui_focus import (
-    CONTRACT_VERSION as FOCUS_CONTRACT_VERSION,
     FocusContractError,
     compose_focus_view,
 )
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
 from app.builderops.devui_overview import compose_overview_view
-from app.builderops.devui_overview_inputs import derive_overview_inputs
+from app.builderops.devui_overview_inputs import (
+    derive_overview_inputs,
+    bind_visual_focus_targets as _bind_visual_focus_targets,
+)
 from app.builderops.devui_receipts import read_vm102_receipt_provider
 from app.builderops.devui_owner_synthesis import (
     OwnerSynthesisInputError,
@@ -118,36 +119,6 @@ router = APIRouter(
 def _read_ckm_capabilities() -> Any:
     paths = load_builderops_paths()
     return CkmQueryService(paths.db_path).list_capabilities()
-
-
-def _bind_visual_focus_targets(
-    candidates: dict[str, list[dict[str, Any]]],
-) -> dict[str, list[dict[str, Any]]]:
-    """Attach the one shipped visual Focus root to real Now subjects.
-
-    The source adapter still owns subject identity and placement.  This route
-    owns only the presentation locator, and supplies it as a typed root rather
-    than asking the browser to construct or probe candidate URLs.
-    """
-
-    for item in candidates.get("now", []):
-        subject = item.get("subject_ref", {}).get("source_id")
-        if not isinstance(subject, str) or not subject:
-            continue
-        item["navigation_refs"] = [
-            {
-                "kind": "focus",
-                "navigation_ref": {
-                    "source_type": "devui_focus_route",
-                    "source_id": subject,
-                    "locator": f"/devui/focus?subject={quote(subject, safe='')}",
-                    "version": FOCUS_CONTRACT_VERSION,
-                },
-                "status": "available",
-                "limitation": None,
-            }
-        ]
-    return candidates
 
 
 @router.get("/composition")

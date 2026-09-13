@@ -1,6 +1,6 @@
 State: Target-state implementation plan; current/target boundary reviewed 2026-09-13. Read-only
 composers, local Overview/Focus routes, the connected Companion repository shell, LLM-assisted
-synthesis, and the bounded managed DevUI listener/receipt producers and #5520 source readers are
+synthesis, and the bounded managed DevUI listener/receipt producers and #5520 source readers plus #5522 managed browser/Focus journey are
 delivered. Qualified live source access,
 managed DevUI deployment, richer Focus/conversation/actions, whole BSC lens and actual owner
 acceptance remain targets. The active BuilderOps control plane does not establish those outcomes.
@@ -11,7 +11,7 @@ Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-09-13 for the bounded #5520 source-wiring update; broader baseline 2026-09-12.
+Last reviewed: 2026-09-13 for #5520 source wiring and #5522 managed journey delivery; broader baseline 2026-09-12.
 
 # devUI implementation plan
 
@@ -91,7 +91,7 @@ it. See `docs/audits/BUILDER_SYSTEM_INTENT_EVIDENCE_GOVERNANCE_2026-08-10.md`.
 | Subject focus | `FocusView.v1` over existing read sources | Composer PR #4703, local GET PR #4771, and connected read-only Companion shell PR #5157 delivered; richer source-linked feature/conversation experience remains target |
 | LLM-assisted overview | Existing source-linked owner synthesis | PR #5413 delivered bounded proposal-only synthesis; model text supplies no canonical owner fact or approval |
 | Bounded VM102 readiness | Existing qualification/deploy/health receipt chain | PR #5469 projects exact `devui_projection` evidence or withdrawal; no generic feature readiness or live deployment is implied |
-| Managed DevUI runtime | Standalone listener, admitted source readers and typed receipt producers | Source-wiring update reviewed 2026-09-13: #5520 extends PR #5477 preparation with BuilderOps API, bounded GitHub REST and immutable candidate-document reads in the managed Overview GET. CKM remains unadmitted; live source access and qualified deployment/readiness require separate evidence, independently of process liveness |
+| Managed DevUI runtime | Standalone listener, admitted source readers, packaged Overview/Focus journey and typed receipt producers | Read-journey update reviewed 2026-09-13: #5522 connects the separately proven managed browser journey; #5520 extends PR #5477 preparation with BuilderOps API, bounded GitHub REST and immutable candidate-document reads in the managed Overview GET. CKM remains unadmitted; live source access and qualified deployment/readiness require separate evidence, independently of process liveness |
 | External conversation | `conversation-context-pack.v1` and explicit external adapter boundary | Nonvisual pack/export/disposition composer delivered by PR #4704; provider opening, embedded runtime, and session integration not delivered |
 | Product/Runtime SoI evidence | bounded SoI Evidence View v0 composer and manifest | Read-only proof delivered by PR #4711; optional Overview reference retains explicit denominator and claim horizons |
 | First narrow command | Existing artifact-first `start-model-inquiry` skill and receipt | Workflow delivered; devUI preview/Start/Hold adapter not delivered |
@@ -347,7 +347,7 @@ defines the exact topology, candidate, source and operational boundaries.
 | Stage | Required external input | Work/evidence owned here | Next gate and retained obligation |
 | --- | --- | --- | --- |
 | M0 contract foundation | Accepted owner sources | #5502 action, #5503 outcome, #5504 runtime/pilot reconciliation | Bounded implementation can be extracted from the merged contracts; no runtime activation. |
-| Pre-merge managed read/source implementation | ARO-09 finite transport/asset contract and applicable #4746 design/reuse authority | Managed shell/assets/Focus and required work/GitHub/document adapters, actual production-path admission/withdrawal/identity and browser tests | #4836 reuse is an input, not managed deployment. Missing required source wiring is this slice's work, not a self-dependency. |
+| Managed read/source repository delivery | ARO-09 finite transport/asset contract and complete current constrained-reuse evidence | #5520 source adapters and #5522 independent packaged shell/typed Focus, production admission/withdrawal/identity and local browser proof are delivered | #4833 historical five-node proof remains separate. #5181 live source/final-main deployment/complete health and #4749 owner pilot remain required; no parent acceptance is inferred. |
 | Pre-merge action/outcome implementation | FCA-08/FCA-09 contracts and each selected external destination's support | #4697 first inquiry adapter; separately admitted Issue-delivery operation; #5404's four producers and outcome transport after its selected operation's admission/readback exists | Inquiry cannot perform a feature delivery. Missing external admission/readback still blocks a consumer; its own producer work does not. |
 | Pre-merge #5405 / #5406 | Delivered consumed production seams; #5406 also consumes FCA-05 outcomes and applicable synthesis/design | Conformance/composed harness, validators and explicit pilot plans; finite missing/stale/unknown-effect tests | No live #5181/#4749 or second-consumer/owner observation needed before child merge. Missing consumed seams remain explicit pickup blockers. |
 | Candidate and deployment | Current-head CI/review, applicable exact-candidate browser proof, operator/promotion acknowledgement, qualified host/source boundaries | #5181 inventory → activation + prepared qualification → immutable deployment → complete health/read smoke; source-owned external SoI/model evidence | Repository producers and component liveness cannot fabricate these observations. #4076 remains its actual selected TEST-channel Heimdal/Platform operation; a Builder probe is not implicitly authorized. |

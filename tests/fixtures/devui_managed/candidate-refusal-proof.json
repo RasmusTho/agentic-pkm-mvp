@@ -1,0 +1,54 @@
+{
+  "scope": "Local production create_app/load_configuration and real admitted source boundaries; no deployment or attestation",
+  "recorded_at": "2026-09-13T12:15:35.017143+00:00",
+  "passed_nodeids": [
+    "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate"
+  ],
+  "mutations": [
+    "missing",
+    "sha",
+    "inventory",
+    "bytes",
+    "extra"
+  ],
+  "routes": [
+    "/devui/overview",
+    "/devui/assets/devui.css",
+    "/api/devui/overview",
+    "/api/devui/focus"
+  ],
+  "postconditions": [
+    "503 explicit candidate unavailability for each route and mutation",
+    "unchanged HTTP/gh source calls after every refusal",
+    "matching served shell/API/version candidate diagnostics before mutations"
+  ],
+  "junit": {
+    "evidence_ref": "5522-candidate-refusal-junit.xml",
+    "sha256": "sha256:bdd336ba5a97960661aa450ba1f21cb4812f08457c60b10213a8652e1ca7c00a",
+    "tests": 1,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0
+  },
+  "log": {
+    "evidence_ref": "5522-candidate-refusal.log",
+    "sha256": "sha256:503d829e31a191cfbe987a82e555bcce22f7b2417e5da0a02aed5a0f7ca30fb1"
+  },
+  "fixture_code_sha256": {
+    "tests/builderops/test_devui_runtime.py": "sha256:001fdc7f24f8a95fa1632aa7c77b8a0e4a29b0a5bb52c1a7ece7d8e8ca0978eb"
+  },
+  "production_code_sha256": {
+    "app/builderops/devui_runtime.py": "sha256:5db6cee5219854b8fbf1c38e5ccbb2b9dbc6c2cd0813fe7eb008741e82ae85f3",
+    "app/builderops/devui_assets.py": "sha256:4d4e6ba2e63b56e56832eea6d05eb0744b227c039fbd8321e4008bdca4ed688b",
+    "app/builderops/devui_sources.py": "sha256:c57a393c457f88501b08297d5fe7407348654afb8d9fba4e3934c009b2a64d0e",
+    "app/builderops/devui_focus_inputs.py": "sha256:820137055d7bf0fb8fb278df8a467f0acb6bde5bb5eafb0df0c97ab990fa81a5",
+    "app/builderops/devui_overview_inputs.py": "sha256:8d86d7c9b21b01cbc2defaba8e92c8078dd34e814b7d60ea79a19b2c5ead4cb3"
+  },
+  "asset_sha256": {
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b",
+    "app/builderops/devui_managed.css": "sha256:833dbf1d2cc70ecbcda13e3bf5d1c4091a3657d1fb636bd3978b3f7cbf43d635"
+  }
+}

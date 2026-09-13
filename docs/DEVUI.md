@@ -12,7 +12,7 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-09-13 for the bounded #5520 managed-source current-state writeback.
+Last reviewed: 2026-09-13 for #5520 source wiring and #5522 managed read-journey writeback.
 Prior broader current-state and milestone review: 2026-09-12 at `main`
 `c7a4da3a80a1108b269bd8e88c4535a17499290a`, #5399 delivery ledger and #5181's cited operational receipts.
 Earlier Stage A verification baseline: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub state
@@ -574,6 +574,13 @@ rather than fabricating facts or measured-empty claims.
 
 ### DEVUI-FCP-BOUNDARY — Focus and Conversation Port
 
+#5522 serves the existing read-only Focus contract at the independent managed listener, reached by
+Overview's server-supplied selected-Issue locator. It reads only that exact configured repository
+Issue, preserves unavailable/unsupported sources, exposes no synthesis or command route, and returns
+to a freshly read Overview. Candidate/asset diagnostics and the actual standalone browser matrix
+establish repository behavior. They do not satisfy deployed final-main proof, live source
+qualification, full Dev System health or the owner pilot retained by #5181/#4749/#4741.
+
 The first Focus slice is subject-centred. Its subject is exactly one stable GitHub Issue or one
 capability reference whose owning document gives it a stable identity. Focus does not accept a
 provider session, transcript, worker, PR, free-form search result, or CKM-only capability identity
@@ -765,7 +772,8 @@ Delivered now:
   can project bounded `ready_to_try` evidence for `devui_projection` and otherwise withdraws it;
 - the #5476 / PR #5477 standalone managed DevUI listener and pure typed receipt producers,
   extended by #5520 with admitted BuilderOps API, bounded GitHub REST and immutable candidate-document
-  reads in the managed Overview GET. CKM remains unadmitted; the
+  reads in the managed Overview GET; #5522 adds the independent packaged Overview/Focus/browser
+  journey with its exact managed reuse receipt. CKM remains unadmitted; the
   [runtime owner](BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission) defines source
   configuration, withdrawal and separate live-source qualification; and
 - the BuilderOps API/PostgreSQL control-plane implementation and independent package boot.

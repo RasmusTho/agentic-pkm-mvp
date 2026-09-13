@@ -92,12 +92,17 @@ DevUI configuration fingerprints and a readable receipt directory are mandatory 
 Missing or malformed configuration refuses startup loudly. Candidate markers remain diagnostic
 inputs to the external image/config readback, not attestation proof by themselves.
 
-The admitted application path is exact GET `/api/devui/overview`. Direct callers must have an
-immediate loopback peer and the exact local Host header; forwarded identity, query parameters,
-nonlocal callers and alternate/write routes are rejected before source reads. Only `/version`
-and `/healthz` accompany it. Private authenticated operator access must preserve this direct local
-boundary, for example through the approved SSH tunnel; this declaration does not provision ingress
-or enable Funnel. It is not a general Companion gateway and does not deliver a browser/Focus pilot.
+#5522 extends the prepared listener with the finite
+[managed page/asset/Overview/Focus GET allowlist](README.md#managed-read-journey-admission).
+Direct callers require immediate loopback peer and exact local Host; forwarded identity, unknown
+paths, non-GET methods and malformed/unexpected queries stop before source reads. Only Focus admits
+one typed subject. This is an independent packaged browser journey with actual standalone-server
+proof, not a general Companion gateway or deployment executor. Private operator access must preserve
+this boundary, for example through the separately approved SSH tunnel; no ingress is provisioned.
+The image copies the five assets through the filtered build stage, replacing only the managed CSS
+with its committed source-mapped wrapping variant. Runtime asset/metadata checks and shared candidate
+diagnostics bind served pages and APIs to the addressed package. Historical Companion assets and the
+#4833 inventory remain unchanged; the managed reuse receipt and browser evidence are separate.
 
 The process composes the existing pure Overview functions, the B1 receipt reader and #5520's
 finite managed source adapter. `DEVUI_REPOSITORY` is explicit, with no hub default. Missing source
@@ -132,8 +137,9 @@ An empty/invalid receipt source or missing verification input withdraws deployme
 Even a valid chain is withdrawn when
 its source SHA, DevUI image, or DevUI configuration differs from this listener. Liveness explicitly
 reports `complete_dev_system_health: false`; it cannot satisfy the complete health/owner-pilot
-contract. Live source qualification, managed shell/Focus delivery, browser and pilot gates stay visible
-under #5181 and #4749. ARO-09's
+contract. Local managed shell/Focus and browser delivery do not discharge live source qualification,
+deployed final-main browser proof, complete-system health or the owner-pilot gates under #5181,
+#4749 and parent #4741. ARO-09's
 [managed read journey admission](README.md#managed-read-journey-admission) owns those boundaries.
 #5520 preserves the delivered three-GET process boundary and installs no service.
 

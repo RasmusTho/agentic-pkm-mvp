@@ -52,18 +52,22 @@ acceptance receipt.
 
 ## Managed candidate applicability
 
-The delivered five-node Companion proof and #4836 constrained-reuse provenance remain valid only
-for their exact tested SHA and transport. The [managed read contract](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
-uses the independent Builder entrypoint. Its shell/assets/Focus/source packaging is not delivered
-by an old gateway run. A later managed implementation must add production-path admission and browser
-coverage for that exact entrypoint, origin and source/image/config identity, preserving the five
-existing hostile/accessibility/no-effect obligations. Do not rename, drop or silently substitute
-the authenticated #4833 five-node inventory to make a different runtime pass.
+The delivered five-node Companion proof and #4836 provenance remain valid only for their exact
+SHA and transport. #5522 separately proves the independent managed entrypoint, fixed origin,
+source/image/config and complete asset identity through
+`tests/companion_ui/test_devui_managed_journeys.py`. It covers the real Overview → selected Focus →
+fresh Overview journey, server classifications, source-text escaping, admission, finite transport
+failures, no browser persistence/egress/effects, desktop/narrow/200% zoom, keyboard/screen-reader
+naming/focus order, print and JavaScript-off. The complete managed constrained-reuse envelope binds
+the unchanged source assets and the single source-mapped limitation-wrapping CSS variant.
 
-At each deployed final-main `M`, retain the exact five-node wrapper and separately bind the managed
-route/admission/asset journey evidence in the pilot's production inventory. If the old harness
-cannot prove an affected managed behavior, supply its governed implementation/browser proof before
-the pilot; do not inherit the claim from port equality, a prior SHA or a liveness response.
+The authenticated #4833 five-node inventory, its wrapper and historical candidate checker are
+retained unchanged. Local managed repository/browser proof is additional evidence, not a renamed
+historical run. At each deployed final-main `M`, #4749/#5181 must retain the exact five-node wrapper
+and separately bind the managed route/admission/assets and production source/image/config inventory.
+Changed source, image, configuration, routes or origin invalidate affected evidence. No old gateway
+run, matching port, child merge or liveness response supplies final-main deployment, full-system
+health, actual owner observation or parent #4741 acceptance.
 
 ## What This Task Does
 

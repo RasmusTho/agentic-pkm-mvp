@@ -18,3 +18,10 @@
 **/*.pyc
 **/*.log
 **/*.jsonl
+
+!companion-ui
+!companion-ui/companion-app
+!companion-ui/companion-app/companion_ui
+!companion-ui/companion-app/companion_ui/workspace
+!companion-ui/companion-app/companion_ui/workspace/devui_candidate
+!companion-ui/companion-app/companion_ui/workspace/devui_candidate/*
