@@ -2,17 +2,23 @@ State: Active blocked validation hub #4741; ARO-01 is closed with its withdrawal
 is closed/superseded, ARO-03/#4744 is closed and delivered, ARO-04/#4745 and ARO-06/#4747 are
 closed as superseded by #4836, ARO-05/#4746 is closed after its accepted constrained-reuse receipt,
 ARO-07/#4748 is closed after exact final-main proof, and ARO-08/#4749 remains blocked. Recovery
-children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 defines the managed contract; #5520 delivers source wiring while managed shell/Focus delivery and live source/pilot gates remain open.
+children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 defines
+the managed contract; #5520 delivers source wiring and #5522 delivers the packaged managed
+Overview–Focus–return journey with repository browser proof. Live source qualification, deployed
+final-main proof, complete Dev System health and owner pilot remain separate gates.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
 Owner: Builder System governance
 Temporal class: Active validation contract
 Review cadence: Event-driven
 Source of truth: GitHub owns live child/receipt state; this document owns the acceptance path.
-Last reviewed: 2026-09-13
-Last verified against: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3` and live GitHub
-state for #4741–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857; the delivery
-ledger below records the exact PR heads, merge commits, and proof receipt it cites.
+Last reviewed: 2026-09-13 — bounded managed-journey delivery-status reconciliation
+Last verified against: Bounded #5522 delivery status at PR #5523 merge
+`b473d8a5ac94adf8e0492be815bacd83ecb0c9ed`, reviewed head
+`785dcf451063ea9831d182fff8a68e314712ab3b`, and the 11-child ledger reconciled from live GitHub.
+The prior broader baseline remains `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3` and
+GitHub state for #4741–#4749, #4768, #4833, #4834, #4835, #4836, #4838, #4841, and #4857. The
+ledger preserves the exact historical PR heads, merge commits and proof receipt it cites.
 
 # Parent feature issue — devUI Stage A Read-Only Overview
 
@@ -173,14 +179,17 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 
 | Child | Issue | PR | SHA | CI | Blocker | Next |
 | --- | --- | --- | --- | --- | --- | --- |
-| #4742 ARO-01 | closed / withdrawal recorded | #4751 | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | merged receipt | no current source owns either Overview fact | preserve explicit withdrawals |
-| #4743 ARO-02 | closed / superseded | #4751 withdrawal evidence | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`; merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | no producer delivery | no current source facts to enrich | create a new governed slice only after a source contract exists |
-| #4744 ARO-03 | closed / delivered | #4772; supporting #4789 and #4792 | #4772 head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`; merge `24371d8bf3289dad631c2986f44865794897f32c`. #4789 head `c5f4fab08d58b5efb8d52a457bfa9eaf555824bd`; merge `989a8d73d52b75c3a038ba1d3f93c78e03d98065`. #4792 head `031dbfaa2d6d474bf02e5d778ffb252f0879ae97`; merge `a7f945cb591f24c4f5d85d048187f92a8ed91211` | route delivered; contract/CI-selection and `Via`-admission recoveries merged | none | preserve receipt in parent acceptance |
-| #4745 ARO-04 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged receipt | typed-navigation behavior delivered in the canonical connected shell | preserve the closed predecessor as superseded history |
-| #4746 ARO-05 | closed / accepted constrained reuse | #5157 / #4746 receipt | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | accepted `yggdrasil-constrained-reuse.v1` receipt | design/provenance gate complete | preserve the accepted receipt; #4748 remains a separate final-main proof |
-| #4747 ARO-06 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged shell receipt | shell delivered in the canonical connected path | preserve the closed predecessor as superseded history |
-| #4748 ARO-07 | closed / exact-main proof | #4833 receipt; closure comment on #4748 | final `M=c7c57300f2ec241778061078e7ad585454f0b880`; #4833 run `33304261671` | authenticated exact five-node `devui-stage-a-exact-sha-state-matrix.v1` receipt | browser/accessibility proof complete; no deployment claim | preserve proof-only boundary; #4749 owns production pilot |
-| #4749 ARO-08 | open / separately gated | none | no managed pilot run | not run | Qualified live source access, managed shell/Focus implementation, applicable exact-M browser and VM102 deployment/health/operator evidence | Run the zero-effect pilot only after its named receipts; owner acknowledgement and post-PASS writeback are separate. |
+| #4742 ARO-01 | closed / withdrawal recorded | #4751 merged | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`<br>merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | merged receipt | no current source owns either Overview fact | preserve explicit withdrawals |
+| #4743 ARO-02 | closed / superseded | #4751 merged; withdrawal evidence | head `d8c90761cbf9d32cf10c9471b6092466b91fad5c`<br>merge `bf2f034279c394c03529323a1a1509c756e5a0b3` | no producer delivery | no current source facts to enrich | create a new governed slice only after a source contract exists |
+| #4744 ARO-03 | closed / delivered | #4772 merged; ; supporting #4789 and #4792 | head `7b1f83d4a0b6bdd75071959c41146c70012a29d2`<br>merge `24371d8bf3289dad631c2986f44865794897f32c` | route delivered; contract/CI-selection and `Via`-admission recoveries merged | none | preserve receipt in parent acceptance; supporting historical receipts: #4789 head `c5f4fab08d58b5efb8d52a457bfa9eaf555824bd`; merge `989a8d73d52b75c3a038ba1d3f93c78e03d98065`. #4792 head `031dbfaa2d6d474bf02e5d778ffb252f0879ae97`; merge `a7f945cb591f24c4f5d85d048187f92a8ed91211` |
+| #4745 ARO-04 | closed / superseded | #5157 merged | head `47e56110adbdae30548cd313a66b4e2d26311f7e`<br>merge `b79d8778b8d49233bad22335d393efa12712e040` | merged receipt | typed-navigation behavior delivered in the canonical connected shell | preserve the closed predecessor as superseded history |
+| #4746 ARO-05 | closed / accepted constrained reuse | #5157 merged; / #4746 receipt | head `47e56110adbdae30548cd313a66b4e2d26311f7e`<br>merge `b79d8778b8d49233bad22335d393efa12712e040` | accepted `yggdrasil-constrained-reuse.v1` receipt | design/provenance gate complete | preserve the accepted receipt; #4748 remains a separate final-main proof |
+| #4747 ARO-06 | closed / superseded | #5157 merged | head `47e56110adbdae30548cd313a66b4e2d26311f7e`<br>merge `b79d8778b8d49233bad22335d393efa12712e040` | merged shell receipt | shell delivered in the canonical connected path | preserve the closed predecessor as superseded history |
+| #4748 ARO-07 | closed / exact-main proof | #4833 receipt; closure comment on #4748 | none | authenticated exact five-node `devui-stage-a-exact-sha-state-matrix.v1` receipt | browser/accessibility proof complete; no deployment claim | preserve proof-only boundary; #4749 owns production pilot; exact-main historical receipt: final `M=c7c57300f2ec241778061078e7ad585454f0b880`; #4833 run `33304261671` |
+| #4749 ARO-08 | open / separately gated | none | none | not run | Qualified live sources, applicable deployed exact-M browser and complete VM102 deployment/health/operator evidence | Run the zero-effect pilot only after its named receipts; owner acknowledgement and post-PASS writeback are separate. |
+| #5504 ARO-09 | closed / docs contract delivered | #5519 merged | head `431ef8f8ae1e82f33ddb4e33144c838f20fb1037`<br>merge `6b497f6f2c4c410516bc8d0cdff798c62d33b625` | current-head CI and independent review PASS | no docs blocker; runtime/pilot evidence remains separate | Source wiring delivered by #5520 / PR #5521 and managed journey by #5522 / PR #5523; retain the contract and keep #4749 and parent open |
+| #5520 Managed admitted source readers | closed / delivered | #5521 merged | head `3f0e7e6935849d315d4e4d15edfd9a53b5e52cec`<br>merge `725737c204e3494695fdc464f781967f1d156449` | current-head required CI, independent review and affected local proof PASS | none for this bounded source-wiring delivery | Managed shell/Focus repository journey delivered by #5522 / PR #5523; keep live source qualification, deployed exact-main proof, complete VM102 health and #4749 owner pilot gates separate; #4741 and #5399 remain open |
+| #5522 Managed Overview and typed Focus journey | closed / delivered | #5523 merged | head `785dcf451063ea9831d182fff8a68e314712ab3b`<br>merge `b473d8a5ac94adf8e0492be815bacd83ecb0c9ed` | current-head required CI, three managed plus five historical browser nodes, independent final/reuse review and exact image proof PASS | none for this bounded managed journey delivery | Keep #4741, #5181 and #4749 open for live source qualification, deployed final-main proof, complete Dev System health and owner pilot; no deployment or acceptance claimed |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
@@ -197,7 +206,9 @@ Before #4836 pickup, re-read merged #4841 and bind its current transport regress
 
 The managed extension must preserve those five historical browser obligations and separately
 prove its actual process/origin/admission and asset identity per ARO-07. #5504 repairs the source
-contract only; #4741 remains open for the runtime and owner evidence.
+contract; #5520 and #5522 deliver the bounded source wiring and managed journey. PR #5523 provides
+reviewed-head browser and packaged-image proof; it does not establish deployed final-main proof.
+#4741 remains open for live source qualification, complete runtime/deployment and owner evidence.
 
 ## Validation / Acceptance Path
 
