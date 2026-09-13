@@ -54,8 +54,10 @@ browser and independent deployment receipts may supply those observations.
   entry page `/devui/overview`. This URL is a target contract, not a claim that it is served now.
 - Consume [Managed read journey admission](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
   for the exact entrypoint, direct-loopback admission, shell/assets/typed Focus and finite source
-  transports. The prepared listener has only an Overview API and diagnostics; a separately
-  delivered managed browser/source extension is a strict external prerequisite for this pilot.
+  transports. #5520 delivers the source adapter and #5522 delivers the finite managed shell/assets
+  and typed Focus journey. Qualified live sources, deployment of the selected current-main
+  candidate, complete health evidence and a fresh exact-M browser artifact remain strict external
+  prerequisites for this pilot.
 - Obtain deployed `M`, image/config identity and observed URL from the independent deployment and
   health receipts. Require equality with attested CI/review/release evidence, managed `/version`,
   served shell/assets and applicable #4748 exact-main browser evidence before the journey. Neither
@@ -239,5 +241,6 @@ current-state owner-doc writeback; it supplies no deployment or effectful owner 
 [#4749](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4749) remains the separately gated
 read-only pilot under #4741. ARO-09/#5504 repairs its contract; #5181 owns operational qualification
 and deployment evidence. Historical #4748 proof stays closed at its tested SHA and must be refreshed
-for the exact managed candidate. Source/shell admission and real operator evidence remain external
-prerequisites; the pilot owns the walkthrough and bounded owner acknowledgement.
+for the exact deployed managed candidate. #5520/#5522 supply repository source/journey proof; live
+source qualification, deployed shell identity and real operator evidence remain external
+prerequisites. The pilot owns the walkthrough and bounded owner acknowledgement.
