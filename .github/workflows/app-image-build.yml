@@ -225,6 +225,7 @@ jobs:
           build-args: |
             VCS_REF=${{ github.sha }}
             BUILT_AT=${{ env.BUILT_AT }}
+            SOURCE_REPOSITORY=${{ github.repository }}
 
       - name: Build BuilderOps PostgreSQL candidate image
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')

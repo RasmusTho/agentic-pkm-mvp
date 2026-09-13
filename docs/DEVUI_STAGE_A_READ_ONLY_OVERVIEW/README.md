@@ -3,7 +3,8 @@ its withdrawal recorded, ARO-03 is delivered as the direct-loopback local route,
 ARO-06/#4836 are delivered, ARO-07/#4748 is delivered with exact final-main evidence, and ARO-04 is
 superseded while ARO-08/#4749 remains blocked; Focus-route prerequisite #4768, source-owned Now producer #4834, and
 production transport #4841 are delivered. ARO-09/#5504 defines the managed runtime/pilot contract;
-the managed shell/source extension, deployment and owner pilot remain unproved.
+#5520 delivers finite managed source wiring and local production-GET proof. Managed shell/Focus,
+live source qualification, deployment and owner pilot remain unproved.
 Doc role: Capability specification and source-authorized task decomposition for the remaining read-only devUI Stage A Overview.
 Authority: `docs/DEVUI.md` owns owner experience and Overview semantics; `docs/plans/DEVUI_IMPLEMENTATION.md` owns Stage A order. This directory owns only the bounded delivery contracts and validation path.
 Owner: Builder System governance
@@ -65,6 +66,7 @@ claim; it is never treated as an empty, healthy, or deployed state.
 | Cockpit producer | #4834 maps only trusted, countable `working` items to source-ordered **Now** candidates with stable GitHub identity and separate Cockpit evidence | Owner-question facts remain separately source-owned or honestly withdrawn; `agent:needs-human`, delivery, and readiness are not admitted |
 | Delivery evidence | Delivery, merge, closure, and terminal verification facts exist independently | A source-owned, receipt-backed `ready_to_try` fact, or an honest withdrawal |
 | API | Local-only GET `/api/devui/composition`, delivered direct-loopback Overview/Focus reads, and #4841's production Companion exact two-GET transport; merged #4836 adds only the governed read-only Companion page/asset routes | Typed navigation only after actual local destinations are governed |
+| Managed sources | #5520 connects the actual managed Overview GET to addressed BuilderOps API task/receipt reads, bounded gh REST and image-baked candidate documents while retaining independent VM102 evidence and Cockpit source semantics | Qualified live source access, managed shell/Focus and exact-candidate browser/deployment/pilot evidence remain separate; unavailable/partial/mismatched reads withdraw their claims |
 | Navigation | Composer validates typed root references; merged #4836 owns the bounded typed-navigation contract | No separate navigation delivery slice; remaining acceptance belongs to the owner-pilot and production gates |
 | Visual shell | #4836 delivered the connected read-only shell and exact constrained-reuse manifest; #4748 has an authenticated exact-main receipt at `M`, but the shell is not production-deployed or owner-accepted | #4749 deployment identity, owner pilot, and separate owner-evidence acknowledgement |
 
@@ -115,7 +117,8 @@ authority and genuine acknowledgements.
 [managed origin, source and producer contract](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission)
 and the [ordered implementation/live-evidence stages](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph).
 It repairs ARO-08 without deploying it. Current startup needs readable local configuration; missing
-typed receipts withdraw readiness at read time. The older #5181 stopped-process observation does
+typed receipts withdraw readiness at read time. #5520 adds the finite source wiring and request-scoped
+failure/candidate proof, without asserting live source access or pilot acceptance. The older #5181 stopped-process observation does
 not redefine that code behavior. Complete topology, external SoI/model evidence and #4076's actual
 Heimdal/Platform operation remain separately owned gaps.
 
@@ -143,7 +146,7 @@ Heimdal/Platform operation remain separately owned gaps.
   including its direct-loopback/no-forwarded-identity boundary. Historical #4841 Companion
   admission and #4836 provenance do not install that managed extension or authorize Product access.
 - **ARO-INV-9 — contracts, implementation and live proof differ.** ARO-09 defines the contract;
-  missing shell/source producers remain implementation work, then #5181 supplies operational
+  #5520 delivers source wiring; missing shell/Focus producers remain implementation work, then #5181 supplies operational
   evidence and #4749 supplies a zero-effect pilot. Missing evidence withdraws claims. Effectful
   first-repository acceptance remains separate and cannot widen this pilot.
 

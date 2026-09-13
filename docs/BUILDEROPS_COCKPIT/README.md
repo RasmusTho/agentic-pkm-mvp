@@ -37,8 +37,11 @@ pack is supporting input.
 `docs/DEVUI.md` owns the accepted target Product Owner experience across capability evidence, work
 in motion, delivery decisions, active runs, and receipts. This cockpit remains the delivered
 read-only work register and a source view for that target. Its registry, freshness, chain, and lens
-contracts should be reused by devUI; its no-decision, no-persistence, and no-authority boundaries do
-not move.
+contracts are reused by #5520's managed adapter through the extracted pure `compose_registry` seam;
+the legacy `build_registry` reader and source fact semantics stay unchanged. Managed transport
+admission and typed provenance belong to
+[the Builder runtime owner](../BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission).
+Its no-decision, no-persistence, and no-authority boundaries do not move.
 
 The standalone `/cockpit` route is therefore a current transitional and diagnostic surface, not a
 separate long-term owner product or primary navigation destination. The owner-facing target is one

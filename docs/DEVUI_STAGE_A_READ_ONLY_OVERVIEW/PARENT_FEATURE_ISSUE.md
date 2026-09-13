@@ -2,7 +2,7 @@ State: Active blocked validation hub #4741; ARO-01 is closed with its withdrawal
 is closed/superseded, ARO-03/#4744 is closed and delivered, ARO-04/#4745 and ARO-06/#4747 are
 closed as superseded by #4836, ARO-05/#4746 is closed after its accepted constrained-reuse receipt,
 ARO-07/#4748 is closed after exact final-main proof, and ARO-08/#4749 remains blocked. Recovery
-children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 defines the managed contract; required source/shell delivery and live pilot gates remain open.
+children #4834, #4836, #4838, and #4841 preserve the serial connected-shell path. ARO-09/#5504 defines the managed contract; #5520 delivers source wiring while managed shell/Focus delivery and live source/pilot gates remain open.
 Doc role: Parent feature issue contract
 Authority: The capability README owns stable scope and order. The live GitHub parent owns backlog and validation state after filing.
 Owner: Builder System governance
@@ -180,7 +180,7 @@ Ledger authority: coordination evidence only; live GitHub Issues/PRs/CI win.
 | #4746 ARO-05 | closed / accepted constrained reuse | #5157 / #4746 receipt | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | accepted `yggdrasil-constrained-reuse.v1` receipt | design/provenance gate complete | preserve the accepted receipt; #4748 remains a separate final-main proof |
 | #4747 ARO-06 | closed / superseded | #5157 | candidate head `47e56110adbdae30548cd313a66b4e2d26311f7e`; merge `b79d8778b8d49233bad22335d393efa12712e040` | merged shell receipt | shell delivered in the canonical connected path | preserve the closed predecessor as superseded history |
 | #4748 ARO-07 | closed / exact-main proof | #4833 receipt; closure comment on #4748 | final `M=c7c57300f2ec241778061078e7ad585454f0b880`; #4833 run `33304261671` | authenticated exact five-node `devui-stage-a-exact-sha-state-matrix.v1` receipt | browser/accessibility proof complete; no deployment claim | preserve proof-only boundary; #4749 owns production pilot |
-| #4749 ARO-08 | open / separately gated | none | no managed pilot run | not run | Required managed source/shell implementation, applicable exact-M browser and VM102 deployment/health/operator evidence | Run the zero-effect pilot only after its named receipts; owner acknowledgement and post-PASS writeback are separate. |
+| #4749 ARO-08 | open / separately gated | none | no managed pilot run | not run | Qualified live source access, managed shell/Focus implementation, applicable exact-M browser and VM102 deployment/health/operator evidence | Run the zero-effect pilot only after its named receipts; owner acknowledgement and post-PASS writeback are separate. |
 <!-- /builderops:epic-delivery-ledger -->
 
 ## Verification Path
