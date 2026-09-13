@@ -436,6 +436,9 @@ def _candidate_docs(
     return result, [
         f"https://github.com/{config.repository}/blob/{config.candidate_sha}/{name}#sha256={digest}"
         for name, digest in files.items()
+        # The shell is copied under package aliases, not repository paths.
+        # It remains in the fully checked inventory above, not document provenance.
+        if not name.startswith("assets/")
     ]
 
 

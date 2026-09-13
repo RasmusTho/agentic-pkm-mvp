@@ -813,10 +813,16 @@ def test_managed_source_packaging_and_isolation_contract(managed_sources) -> Non
     assert result.returncode == 0, result.stderr
     assert json.loads((source.root / "manifest.json").read_text()) == source.manifest
     with source.client() as client:
-        assert (
-            _managed_source(client.get("/api/devui/overview").json(), "docs-frontmatter")["state"]
-            == "fresh"
-        )
+        documents = _managed_source(client.get("/api/devui/overview").json(), "docs-frontmatter")
+        assert documents["state"] == "fresh"
+        refs = documents["transport"]["source_refs"]
+        assert refs and not any("/assets/" in ref for ref in refs)
+        assert set(refs) == {
+            f"https://github.com/example/fixture/blob/{'a' * 40}/{name}#sha256={digest}"
+            for name, digest in source.manifest["files"].items()
+            if name.startswith("docs/")
+        }
+        assert all("assets/" + name in source.manifest["files"] for name in MANAGED_ROUTES.values())
     workflow = yaml.safe_load((ROOT / ".github/workflows/app-image-build.yml").read_text())
     steps = [
         step

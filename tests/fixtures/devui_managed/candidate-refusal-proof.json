@@ -1,7 +1,8 @@
 {
   "scope": "Local production create_app/load_configuration and real admitted source boundaries; no deployment or attestation",
-  "recorded_at": "2026-09-13T12:15:35.017143+00:00",
+  "recorded_at": "2026-09-13T12:39:25.938142+00:00",
   "passed_nodeids": [
+    "tests/builderops/test_devui_runtime.py::test_managed_source_packaging_and_isolation_contract",
     "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate"
   ],
   "mutations": [
@@ -20,27 +21,28 @@
   "postconditions": [
     "503 explicit candidate unavailability for each route and mutation",
     "unchanged HTTP/gh source calls after every refusal",
-    "matching served shell/API/version candidate diagnostics before mutations"
+    "matching served shell/API/version candidate diagnostics before mutations",
+    "document source references contain only exact repository document paths/hashes; complete assets/* inventory retained but package aliases are absent from source references"
   ],
   "junit": {
-    "evidence_ref": "5522-candidate-refusal-junit.xml",
-    "sha256": "sha256:bdd336ba5a97960661aa450ba1f21cb4812f08457c60b10213a8652e1ca7c00a",
-    "tests": 1,
+    "evidence_ref": "5522-candidate-refusal2-junit.xml",
+    "sha256": "sha256:4f7dc2d9b46f1eeacf6829f64e23aae40032178fab9ac4eb36209b8fbbfa20d1",
+    "tests": 2,
     "failures": 0,
     "errors": 0,
     "skips": 0
   },
   "log": {
-    "evidence_ref": "5522-candidate-refusal.log",
-    "sha256": "sha256:503d829e31a191cfbe987a82e555bcce22f7b2417e5da0a02aed5a0f7ca30fb1"
+    "evidence_ref": "5522-package-alias-green.log",
+    "sha256": "sha256:1ea47b3fd1092f4c9f9d6c3dbe1eee1180442c9dc771421e7f0178875b7ef463"
   },
   "fixture_code_sha256": {
-    "tests/builderops/test_devui_runtime.py": "sha256:001fdc7f24f8a95fa1632aa7c77b8a0e4a29b0a5bb52c1a7ece7d8e8ca0978eb"
+    "tests/builderops/test_devui_runtime.py": "sha256:5bfe4a0f83f44f118d844f4716dba83142445e61728770b30f5f198bddd20249"
   },
   "production_code_sha256": {
     "app/builderops/devui_runtime.py": "sha256:5db6cee5219854b8fbf1c38e5ccbb2b9dbc6c2cd0813fe7eb008741e82ae85f3",
     "app/builderops/devui_assets.py": "sha256:4d4e6ba2e63b56e56832eea6d05eb0744b227c039fbd8321e4008bdca4ed688b",
-    "app/builderops/devui_sources.py": "sha256:c57a393c457f88501b08297d5fe7407348654afb8d9fba4e3934c009b2a64d0e",
+    "app/builderops/devui_sources.py": "sha256:06786bfa92c43212c6ca30db75310083d85f16132c11b487d28b0cea184ab713",
     "app/builderops/devui_focus_inputs.py": "sha256:820137055d7bf0fb8fb278df8a467f0acb6bde5bb5eafb0df0c97ab990fa81a5",
     "app/builderops/devui_overview_inputs.py": "sha256:8d86d7c9b21b01cbc2defaba8e92c8078dd34e814b7d60ea79a19b2c5ead4cb3"
   },
