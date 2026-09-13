@@ -51,7 +51,7 @@
     <!-- Probe interval in seconds — should match StartInterval above -->
     <key>PROBE_INTERVAL_SECONDS</key>
     <string>60</string>
-    <!-- Notification channel: ntfy | telegram | mail | none -->
+    <!-- Notification channel: ntfy | telegram | mail | none | discord -->
     <key>PROD_PROBE_CHANNEL</key>
     <string>ntfy</string>
     <!-- ntfy topic (used when PROD_PROBE_CHANNEL=ntfy) -->

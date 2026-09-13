@@ -658,8 +658,10 @@ marker (`PROD_BACKUP_PROBE_STATE_FILE`, default
 `/tmp/yggdrasil-prod-backup-probe.state`) is rebuildable; delete it to re-arm manually.
 
 The channel is pluggable via `PROD_BACKUP_PROBE_CHANNEL` (`ntfy` | `telegram` | `mail` |
-`none`) and defaults to the same `NTFY_TOPIC` the prod probe pushes to, so the operator
-watches one topic for both.
+`none` | `discord`) and defaults to the same `NTFY_TOPIC` the prod probe pushes to, so the
+operator watches one topic for both. The host-secret-bound `discord` option is one-way code-path
+support; provider/account/server/channel/webhook enactment remains external Heimdal work tracked by
+#5506 and #4076.
 
 ```bash
 make live-prod-backup-probe                              # live spot-check; exit 1 = backup failed or stale

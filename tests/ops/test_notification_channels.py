@@ -49,6 +49,15 @@ def test_backup_install_copies_shared_channel_module() -> None:
     ) in install_source
 
 
+def test_operator_channel_comments_include_discord() -> None:
+    for plist_name in (
+        "com.yggdrasil.prod-probe.plist",
+        "com.yggdrasil.prod-backup-probe.plist",
+    ):
+        plist_source = (PROBE_MODULE_DIR / plist_name).read_text(encoding="utf-8")
+        assert "ntfy | telegram | mail | none | discord" in plist_source
+
+
 def test_existing_channel_names_are_compatible() -> None:
     for name in ("ntfy", "telegram", "mail", "none"):
         adapter = notification_channels.build_channel(name)

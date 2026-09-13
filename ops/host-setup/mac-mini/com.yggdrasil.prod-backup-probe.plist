@@ -61,7 +61,7 @@
     <!-- Alert state file (rebuildable; delete to re-arm the transition) -->
     <key>PROD_BACKUP_PROBE_STATE_FILE</key>
     <string>/tmp/yggdrasil-prod-backup-probe.state</string>
-    <!-- Notification channel: ntfy | telegram | mail | none -->
+    <!-- Notification channel: ntfy | telegram | mail | none | discord -->
     <key>PROD_BACKUP_PROBE_CHANNEL</key>
     <string>ntfy</string>
     <!-- ntfy topic (used when PROD_BACKUP_PROBE_CHANNEL=ntfy); shares the
