@@ -21,6 +21,7 @@ EXPECTED_PRINCIPLES = {
     "2. Capability-Based Composition": "DP-02",
     "2A. Interaction-First Architecture": "DP-02A",
     "2B. Foundation Before Agency": "DP-02B",
+    "2C. AI and Agentic Substitution With Contract Preservation": "DP-02C",
     "3. Separation of System Layers": "DP-03",
     "4. Explicit Mutation Authority": "DP-04",
     "5. Governance Before Autonomy": "DP-05",
