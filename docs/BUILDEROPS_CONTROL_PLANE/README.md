@@ -184,6 +184,187 @@ deliverables are not prerequisites for its own pickup. By contrast, a downstream
 that production seam requires it to exist. No target transport may be treated as live until its
 existing source/auth owner and qualified runtime admit it.
 
+#### M1 first-read qualification target
+
+**Target contract defined by #5540; not implemented or operationally admitted.** Current validators,
+release/operator admission and the full receipt chain below continue to apply. A later verified
+implementation and separately authorized live observations must exist before this bounded claim
+can be used. The outcome is one owner reading one real Issue from one explicitly configured
+repository through Overview → server-supplied Issue Focus → fresh Overview at the managed local
+origin above. It proves source-linked situation, declared intent, AC/Verify text and source-document
+inspection for that Issue. It does not require a delivery launch, a model, an owner-question fact,
+trial readiness, or typed per-criterion result correlation; absent facts remain withdrawn.
+
+The consumed set is closed:
+
+| Component/provider | Required first-read evidence |
+| --- | --- |
+| `devui_projection` | The existing `builderops-devui` / `devui` listener, all five managed assets and candidate-baked documents, unchanged GET allowlist and `_local_request` / `create_app.admit`; externally observed image/config and served document/asset inventories agree. |
+| `builderops_control_plane` | Existing PostgreSQL authority, migration/readiness, API, worker and epoch/fencing on the dedicated `builderops` engine; source-owned repository grants, `status:read` and `receipts:read`, real Issue-bearing task and any explicitly addressed receipt reads. This does not establish API-only client cutover. |
+| `builderops_cockpit` | The existing pure Cockpit read-time composition inside that same Builder image; no separate Cockpit service is introduced. Its work, GitHub and candidate-document inputs must have admitted provenance. |
+| `github_git_ci_delivery` | Existing bounded gh REST reader, server-side credential custody and addressed repository/Issue/PR/check identity. GitHub remains lifecycle truth; no merge/readiness inference. |
+| `tars_proxmox_control` | Applicable host identity, ownership and operator qualification for bob-1 / VM ID 102 / guest `builder-system`; private access, actual engine/project isolation and approved release execution. |
+
+All twelve rows of the complete component inventory are retained. `dispatcher_signboard`, `ddo`,
+`ckm_kvasir`, `focus_conversation_port`, `soi_evidence` and `model_service` are unconsumed by this
+specific observation and retain their actual gaps; the managed Issue Focus route is not the
+`focus_conversation_port` component. `product_runtime` stays excluded. Existing task-lease facts
+come from the admitted BuilderOps task API, not a separate dispatcher store. An unconsumed provider
+is not newly qualified, zero, healthy or complete. Making one required changes this bounded
+contract first; no selectable profiles or implicit dependency discovery are added.
+
+Before any affected install or read, the existing release operator must have evidence for the
+exact host/guest identity, dedicated engine endpoint/projects and absence of a competing writer;
+independently attested source/images/config; actual schema and migration classification; compatible
+rollback knowledge (`available` with exact previous pins, or honest `no_baseline` with rollback
+refused); and the applicable private ingress, promotion acknowledgement and Linux-probe gates.
+The complete inventory and valid `builderops_vm_rebuild_activation.v1` remain prerequisites for the
+control-plane boundary. No subset can stand in for that activation or for an operator prerequisite.
+A host identity mismatch needs its own authorized reconciliation; this target never renames a host.
+#4076 still belongs to its selected Product TEST target and Heimdal/Platform owners: it is neither
+automatically waived where applicable nor converted into a Builder probe requirement. A required
+Builder probe needs an admitted Builder target/config and its own real evidence.
+
+Source owners must separately qualify the fixed read-only API token-file and gh-directory bindings
+in `docker-compose.devui-sources.yml`, their custody, repository grants, epoch, API/gh reachability
+and actual quota. Absent bindings or an empty/unprojectable task collection cannot pass. The image's
+candidate document manifest and the selected Issue's immutable version/body hash must resolve their
+source refs; unavailable intent/AC/documents are not empty requirements. The first read uses the
+existing bounded source timeouts/caps and independent partial outcomes; it creates no credential,
+network path, source transport or browser state.
+
+#### Initial Issue work source before M2
+
+The selected later producer is one explicit `task-import-issue` operation in the existing
+`app/builderops/control_plane/client_cli.py` owner, with source normalization reused from
+`app/dispatcher/sync_github.py::normalize_github_issue` and its repo-qualified `github_issue_task_id`.
+This is a target operation, not a claim that today's CLI already implements it. It reads one
+explicit repository/Issue through the existing gh REST source, validates the returned repository,
+number, canonical URL, open/ready strict Issue contract, title, source version/body hash and
+observation time, and constructs the native `TaskRecord` fields from those source bytes. It accepts
+no caller-supplied Issue facts or arbitrary payload. A generic initial task creation, fixture,
+model narration or hand-written TaskRecord cannot establish this provenance.
+
+The existing authenticated `BuilderOpsControlPlaneClient.transition_task` → service
+`POST /v1/tasks/transition` → `PostgresBuilderOpsStore.commit_transition` path is the only storage
+writer: initial `ready` creation, no lease/outbox/effect launch, current authority epoch, addressed
+repository and existing `tasks:write` source-owner grant and delivery-manifest routing. The future
+importer must bind the fetched Issue source ref/version/body hash to the stored TaskRecord and
+transaction receipt, then independently read it back with `get_task`. Source drift between fetch
+and readback, foreign identity, stale epoch, missing scope, version/idempotency conflict or an
+existing incompatible record refuses import; it never overwrites a claim or updates an active task.
+An identical retry may reuse only the same verified transaction and exact source binding.
+
+The generic service authenticates the write, not its Issue provenance or which client performed
+it; CLI routing and a self-reported importer marker are not enforcement. For qualification, the
+source owner must independently retrieve the selected Issue through the existing authorized gh
+reader and the addressed TaskRecord through authenticated `get_task`. Separately, the source owner
+must retain the observed authenticated transition request/response from source preparation: exact
+request bytes or digest, repository/task/state, `receipt_sequence`, `recovery_lsn`, `operation_key`
+and `replayed`, with observation identity/time. This is source-owner-observed exchange evidence,
+not the importer's asserted summary and not a later transaction GET. Existing `get_task` does not
+expose transaction/idempotency metadata and the receipt API does not expose task-transition
+receipts; neither endpoint is extended. Retained source packets bind the separate exchange and
+fresh readback observations. The bounded validator compares native task fields, canonical
+repository/Issue identity and source version/body hash against the independent GitHub bytes and
+retained request, and checks the response's repository/task/state binding. A missing observed
+response cannot be reconstructed from the task row. Missing independent evidence or disagreement
+refuses qualification; the row, response identifiers or importer's own assertions alone can never pass. This proves
+the real Issue binding, not a server-attested importer identity, and requires no new write scope or
+service enforcement point.
+
+This producer is a separately authorized source preparation write, outside the GET-only journey.
+It neither claims the Issue in GitHub nor launches M2, and does not move labels, acquire task leases,
+start a provider session or emit an outbox action. No `PullSyncAdapter`/local SQLite import,
+legacy reconciliation or generic task-creation fallback is allowed. Until this bounded producer is
+implemented, admitted and has supplied a real record, the first useful read stays unqualified.
+M2 is not needed to seed M1; later task claim/heartbeat/completion remain with their existing owners.
+
+#### First-read candidate and observation boundary
+
+The existing Builder release authority explicitly selects immutable merged candidate `M` from
+`main`, eligible under the governed startup/promotion contract with current required delivery
+checks and an authenticated candidate-pair receipt. A PR head, mutable branch name or self-reported
+`/version` is never the selection authority. The deployment host re-verifies the exact attestation
+immediately before an authorized deployment; an earlier runner result is not transferable.
+
+The bounded claim binds repository, `M`, image digests, DevUI config fingerprint, the complete
+asset/document inventories, inventory/activation evidence, exact served origin/routes, admitted
+source repository/epoch/grants, selected Issue/version and each evidence observation/digest. Fresh
+applicable managed-browser proof must address that same `M` and origin; historical Companion proof
+alone is insufficient. An unrelated later `main` commit does not by itself invalidate this selected
+candidate's bounded observation. The release owner must explicitly record that selection remains
+eligible: a relevant security, admission, source, package, schema, config, design or contract change,
+withdrawn approval, selected replacement, changed source/epoch/grants, stale evidence or changed
+served identity withdraws the affected claim and requires new proof. Old observations remain history;
+no receipt migrates to another candidate. #4749 retains its separate exact-current-main rule.
+
+Exactly one new bounded record is specified: `devui_first_read_observation.v1`, owned by the existing
+pure producer/validator in `app/ops/devui_vm102_runtime_receipts.py`. It consumes redacted operator
+source packets and the existing inventory/activation validators; it does no host/network action or
+persistence. A future closed schema records the candidate and source bindings above, preserved full
+inventory gaps, source-preparation transaction/readback refs, independent browser and live journey
+artifact manifests/digests, prerequisite observation times, zero-effect checks, owner acknowledgement,
+and explicit `pass|refused` plus reasons. Host/source/installed/read observations must be timezone-aware,
+no more than 24 hours old, not future-dated, and ordered after their applicable prerequisites; a new
+envelope timestamp cannot refresh old observations. Historical immutable attestation/browser
+artifacts retain exact candidate/applicability checks, and historical rollback pins additionally need
+fresh compatibility evidence. Owner acknowledgement is a result after the read, not admission to
+start it or a trial/acceptance fact. No synthetic normal/review/blocked/completed states are required
+or created for this one-Issue observation.
+
+Its only consumers are (1) the managed runtime through a separately named bounded read in
+`app/builderops/devui_receipts.py`, revalidating retained input and listener/source identity per GET,
+and (2) the first-read operator/owner observation procedure reporting M1 evidence on #5399. Retain
+inputs in the existing read-only receipt source; do not create another store or generalized receipt
+router. The existing full-system provider remains independent and unavailable without its complete
+chain. The new record may establish only “this candidate supported this source-backed, zero-effect
+read journey at this time.” It cannot feed full qualification/deploy/health/rollback producers,
+`Ready to try`, #4749's pilot ledger, #5181 closure, M2 approval/effects, #4741/#5399 acceptance,
+second-consumer proof or Kanban retirement. A summary/link on a parent is evidence, never acceptance.
+
+Missing/malformed/secret-bearing packets, partial file replacement, stale/revoked sources, mismatched
+candidate/origin/assets/documents, unproven TaskRecord lineage, rate-limited/incomplete required
+reads, an inaccessible selected Issue or any observed write/refused boundary produce a typed
+refusal and withdraw the first-read claim. Healthy independent evidence may remain visible with
+its own provenance; no refusal is rendered as a successful empty view or complete-system health.
+
+#### Minimum later first-read implementation
+
+After this source definition merges, extract one bounded implementation slice from the three
+preceding stable anchors. Its closed production surface is the selected initial Issue importer in
+`control_plane/client_cli.py` (reusing the existing gh reader, normalizer and authenticated client),
+the bounded record kind/closed schema in `app/ops/devui_vm102_runtime_receipts.py` and
+`config/platform/devui_first_read_observation.v1.schema.json`, and its distinct consumer in
+`app/builderops/devui_receipts.py` wired through `app/builderops/devui_runtime.py`. Candidate packaging
+in `Dockerfile.builderops`, `Dockerfile.builderops.dockerignore` and `requirements-builderops.txt`
+must retain that exact neutral dependency closure. The filtered build inputs must include the new
+schema and the importer's existing `scripts/validate_issue_readiness.py` dependency used by the
+reused normalizer. No new service, store, API route, visual
+surface, profile engine or workflow executor belongs to the slice. Existing control-plane service,
+store, auth/epoch and source grants are reused unchanged; a need to change those contracts requires
+re-decomposition before coding, not expansion of this slice.
+
+The slice must name concrete behavioral `Verify:` tests at extraction. Its finite test surfaces are
+`tests/builderops/control_plane/test_client_cli.py` and `test_api_clients.py` for real-source
+normalization → authenticated initial transaction → addressed TaskRecord readback and replay/refusal;
+`tests/builderops/control_plane/test_postgres_transaction_kernel.py` for the existing production
+transaction/lease/no-outbox invariants; `tests/ops/test_devui_vm102_runtime_receipts.py` for exact
+closed evidence, freshness, identity and rejection by every full-chain kind;
+`tests/builderops/test_devui_receipts.py` and `test_devui_runtime.py` for retained-input rereads,
+source withdrawal, admission and unchanged full-system/ready-to-try behavior; and
+`tests/companion_ui/test_devui_managed_journeys.py` for the real standalone GET journey, exact
+candidate and zero effects. Dependency packaging proof must exercise importer imports and schema
+loading through the actual filtered Builder image input, not a Product-rich test environment.
+Reuse these suites; don't replace them with a new harness.
+
+Repository implementation can merge without live credentials, a deployment, full #5181/#4749 or M2.
+It does not produce live evidence. Subsequent source-owner preparation and operator qualification/
+release observations must use their existing authority, followed by the actual owner walkthrough and
+bounded record. A missing live prerequisite blocks that observation, not its own producer's pickup.
+Full-system qualification/pilot and M4 acceptance continue separately. This source task creates no
+later implementation Issue and collects no live evidence.
+
 ### Liveness, candidate and operational evidence
 
 `load_configuration` checks image-baked source equality, nonzero image/config fingerprints,
@@ -220,8 +401,16 @@ gaps visible on #5181/#4076; never fabricate their observations with a repositor
 
 ### Normative receipt dependency order
 
-The required successful-deployment path is ordered by evidence dependency, not merely by receipt
-appearance:
+The full-system successful-deployment path is ordered by evidence dependency, not merely by receipt
+appearance. It remains unchanged by the target
+[M1 first-read boundary](#m1-first-read-qualification-target): the complete inventory and existing
+activation feed that bounded evidence path, while its later `devui_first_read_observation.v1`
+record is never an input to any step below. Full `qualification`, `deploy`, `health` and `rollback`
+validators retain their closed receipt types and complete component requirements; missing providers
+continue to block their claims. The first-read producer/consumer set is closed under
+[First-read candidate and observation boundary](#first-read-candidate-and-observation-boundary).
+Neither path's schema consistency substitutes for actual operator evidence or authorization:
+
 
 1. `devsystem_vm102_component_inventory.v1` records the complete topology and every unresolved gap.
 2. `builderops_vm_rebuild_activation.v1` and `devui_vm102_runtime_qualification.v1` each depend on

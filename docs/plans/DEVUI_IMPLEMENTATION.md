@@ -121,13 +121,15 @@ those stages; they do not replace any source, action, design, deployment or acce
 | Milestone | Owner outcome | Evidence boundary |
 | --- | --- | --- |
 | M0 — executable contracts | The first action, owner outcome and managed pilot have coherent owning contracts | The three bounded contract repairs #5502/#5503/#5504 define the accepted implementation direction; source publication supplies no runtime admission or owner evidence |
-| M1 — useful read journey | Real sources support Overview → Focus, including feature intent and architecture requirements | #5527 delivers bounded source-declared Issue Context/Scope, Acceptance Criteria/Verify, Source Anchors, and Source Docs text through the existing Focus fields with Issue version/body-hash binding; admitted sources, served exact candidate, matching browser proof, document/applicability and per-criterion result evidence, and the separate read-only #4749 pilot remain required |
+| M1 — useful read journey | One real Issue supports Overview → Focus → fresh Overview, including its declared intent, AC/Verify and source documents | #5527 supplies source text with Issue version/body-hash binding. The [first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target) requires a separately implemented source producer, admitted live sources, an eligible immutable merged candidate, matching managed-browser/live read proof and owner acknowledgement. Typed requirement/result correlation and full #4749 acceptance remain separate, unfulfilled claims |
 | M2 — first-repository owner loop | The owner directs one real feature delivery and judges its result | Exact action approval, selected existing workflow, result/readback, actual candidate trial and explicit accept/reject; [FCA milestone](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone) |
 | M3 — broader owner control | Separate Builder System Control and named Product/Runtime SoI lenses become useful | Real bounded sources, governed design, independent root identity and previews to existing workflows |
 | M4 — qualified standalone platform | Builder operates with independent authority and an addressed second consumer | Full VM102/component/authority evidence, #5405 second-consumer proof and all #5399 platform criteria |
 | M5 — qualified workflow autonomy | The selected workflow carries more responsibility with proven recovery | Workflow-specific interruption, recovery, permission and demotion evidence; no universal unattended authority |
 
-M1 is useful before M2. Infrastructure and authority work may run earlier wherever the selected
+M1 is useful before M2. Its definition is source-only until the bounded implementation and actual
+first-read observations exist; #4749 remains the complete Stage A parent-validation pilot.
+Infrastructure and authority work may run earlier wherever the selected
 operation requires it; later milestone placement never waives a prerequisite. M2 uses a separately
 authorized Issue-delivery operation. Start Model Inquiry is an earlier integration exercise and
 retains its no-code/no-GitHub-effect boundary. Full DDO completion is not a universal first-loop gate.
@@ -350,11 +352,13 @@ defines the exact topology, candidate, source and operational boundaries.
 | Stage | Required external input | Work/evidence owned here | Next gate and retained obligation |
 | --- | --- | --- | --- |
 | M0 contract foundation | Accepted owner sources | #5502 action, #5503 outcome, #5504 runtime/pilot reconciliation | Bounded implementation can be extracted from the merged contracts; no runtime activation. |
-| Managed read/source repository delivery | ARO-09 finite transport/asset contract and complete current constrained-reuse evidence | #5520 source adapters and #5522 independent packaged shell/typed Focus, production admission/withdrawal/identity and local browser proof are delivered | #4833 historical five-node proof remains separate. #5181 live source/final-main deployment/complete health and #4749 owner pilot remain required; no parent acceptance is inferred. |
+| Managed read/source repository delivery | ARO-09 finite transport/asset contract and complete current constrained-reuse evidence | #5520 source adapters and #5522 independent packaged shell/typed Focus, production admission/withdrawal/identity and local browser proof are delivered | The [minimum later first-read implementation](../BUILDEROPS_CONTROL_PLANE/README.md#minimum-later-first-read-implementation) adds only the bounded Issue-source producer and closed observation/consumer path. Full #5181/#4749 and historical #4833 proof remain separate. |
+| First-read implementation and source preparation | Merged #5540 source definition; existing authenticated initial-task API and source owners | One later source-anchored slice with the closed producer/consumer/test set; then separately authorized real GitHub Issue import and source-binding/readback evidence | No M2 launch seeds the work source. Implementation has no live credential/owner-observation prerequisite; generic task creation is insufficient provenance. |
+| M1 first useful read observation | Eligible immutable merged candidate, complete visible inventory, valid control-plane activation and all applicable host/source/operator gates, exact managed-browser proof | One admitted real Issue: Overview → Focus → fresh Overview, zero effects and explicit owner acknowledgement in the bounded first-read record | No full qualification/deploy/health or #4749/#5181/#5399 closure claim. Unconsumed gaps remain visible; [candidate supersession](../BUILDEROPS_CONTROL_PLANE/README.md#first-read-candidate-and-observation-boundary) differs from #4749's exact-current-main rule. |
 | Repository action/outcome implementation | FCA-08/FCA-09 contracts and each selected external destination's support | #4697 first inquiry adapter and #5404 four producers/atomic outcome transport implemented; separately admitted Issue-delivery operation remains pending | Inquiry cannot perform a feature delivery. Runtime source admission, human grant and real owner observations remain separate. |
 | Pre-merge #5405 / #5406 | Delivered consumed production seams; #5406 also consumes FCA-05 outcomes and applicable synthesis/design | Conformance/composed harness, validators and explicit pilot plans; finite missing/stale/unknown-effect tests | No live #5181/#4749 or second-consumer/owner observation needed before child merge. Missing consumed seams remain explicit pickup blockers. |
-| Candidate and deployment | Current-head CI/review, applicable exact-candidate browser proof, operator/promotion acknowledgement, qualified host/source boundaries | #5181 inventory → activation + prepared qualification → immutable deployment → complete health/read smoke; source-owned external SoI/model evidence | Repository producers and component liveness cannot fabricate these observations. #4076 remains its actual selected TEST-channel Heimdal/Platform operation; a Builder probe is not implicitly authorized. |
-| M1 read-only owner pilot | Admitted managed shell/sources, fresh applicable #4748 proof at deployed final-main `M`, exact source/image/config and complete deploy/health chain | #4749 Overview → server-supplied Focus → fresh Overview, independent browser/production digests and zero-effect owner acknowledgement | Deployment authorization, pilot acknowledgement and later owner trial/acceptance are distinct. #4741 closes only on its own complete evidence. |
+| Complete candidate and deployment | Current-head CI/review, applicable exact-candidate browser proof, operator/promotion acknowledgement, qualified host/source boundaries | #5181 inventory → activation + prepared qualification → immutable deployment → complete health/read smoke; source-owned external SoI/model evidence | Repository producers and component liveness cannot fabricate these observations. #4076 remains its actual selected TEST-channel Heimdal/Platform operation; a Builder probe is not implicitly authorized. |
+| Full Stage A owner pilot (#4749) | Admitted managed shell/sources, fresh applicable #4748 proof at deployed final-main `M`, exact source/image/config and complete deploy/health chain | #4749 Overview → server-supplied Focus → fresh Overview, independent browser/production digests and zero-effect owner acknowledgement | Deployment authorization, pilot acknowledgement and later owner trial/acceptance are distinct. #4741 closes only on its own complete evidence. |
 | M2 first-repository feature loop | Separately approved Issue-delivery operation with actual destination/readback/recovery; source-linked intent/ACs and candidate profile | One real feature through planning, approved action, implementation, tests, PR/CI/review/merge, candidate trial and explicit accept/reject | Intermediate #5399 milestone. Neither an inquiry nor a read-only pilot proves it. |
 | M3 broader lenses | Each required source/design/operation admitted | BSC and Product/Runtime SoI views retain independent roots | Optional missing context remains unavailable; no Product authority transfer. |
 | M4 standalone platform | Complete VM102 and API-only/no-fallback authority qualification, second consumer's explicit repo/branch/effects and credentials | Real second-consumer result/readback using #5405 procedure plus all #5399 platform/owner acceptance evidence using #5406 | First-repository MLP never closes #5399; all second-consumer, independence, health, stop/recovery and owner criteria remain. |
@@ -366,20 +370,26 @@ flowchart TD
   M0 --> A["Selected action and outcome implementation"]
   R --> H["Pre-merge #5405/#5406 harnesses and procedures"]
   A --> H
-  R --> D["#5181 · exact candidate qualification/deploy/health"]
-  D --> P["M1 · #4749 zero-effect read pilot"]
+  R --> B["Bounded first-read producer and evidence implementation"]
+  B --> S["Admitted real Issue source, candidate and operator evidence"]
+  S --> P["M1 · one-Issue zero-effect read observation"]
+  R --> D["#5181 · complete qualification/deploy/health"]
+  D --> V["#4749 · full Stage A owner pilot"]
   P --> F["M2 · real first-repository feature and owner outcome"]
   A --> F
   H --> Q["M4 · full #5399 acceptance and real second consumer"]
   F --> Q
   D --> Q
+  V --> Q
   F --> L["M3 · separately admitted broader lenses"]
   Q --> U["M5 · workflow-specific autonomy"]
 ```
 
 There is no #5405/#5406 → live evidence → same child pickup cycle. There is also no waiver of
 complete-system health or owner acceptance: an incomplete live plan stays incomplete on its parent.
-The read-only pilot never launches actions or writes trial/acceptance facts. Each independently
+The bounded first-read observation and full read-only pilot never launch actions or write
+trial/acceptance facts. M1 source preparation has no M2 dependency; full-system/second-consumer
+acceptance is not moved into the M1 critical path. Each independently
 governed action and deployment keeps its own operator/owner acknowledgement and effect boundary.
 
 ## Definition of done

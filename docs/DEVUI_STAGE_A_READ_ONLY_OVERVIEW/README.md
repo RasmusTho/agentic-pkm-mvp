@@ -57,9 +57,16 @@ gaps are owned by [`docs/BUILDEROPS_CONTROL_PLANE/README.md :: Complete Dev Syst
 contract`](../BUILDEROPS_CONTROL_PLANE/README.md).
 
 Stage A cannot replace BuilderOps, GitHub/CI/review/merge/closure, Product Runtime, or TARS/Proxmox
-authority. Its browser and owner-pilot evidence is valid only when bound to the complete-system
+authority. Its full #4749 browser and owner-pilot acceptance evidence is valid only when bound to the complete-system
 deployment receipts and exact deployed/final-main SHA `M`. A missing component or receipt withdraws the affected
 claim; it is never treated as an empty, healthy, or deployed state.
+
+The earlier [M1 first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target)
+is a separately bounded, not-yet-implemented observation of one real Issue through the delivered
+managed shell. Its exact consumed sources, initial Issue producer, candidate supersession, operator
+prerequisites and closed evidence consumers are owned there. It permits no partial full-system
+receipt, deployment authorization or #4749/#4741 acceptance; the complete pilot contract remains
+unchanged. Missing owner-question/readiness/requirement-result facts remain unavailable.
 
 ## Current-to-target truth
 
