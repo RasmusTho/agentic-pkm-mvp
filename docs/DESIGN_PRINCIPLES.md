@@ -2,7 +2,7 @@ State: SoT v5.5 baseline locked with the forward line clarifying v6 design direc
 Doc role: Core SoT
 Authority: Canonical design principles for how architecture and roadmap changes should be framed. This document owns the stable principles for modularity, flexibility, authority boundaries, and documentation layering. It does not override current runtime behavior defined in `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
 Owner: Architecture / SoT coordination
-Last reviewed: 2026-07-28
+Last reviewed: 2026-09-14
 
 # Design Principles
 
@@ -36,6 +36,8 @@ It exists to keep high-level design work systematic:
 - `docs/ROADMAP.md` — migration sequencing and adoption gates.
 - `docs/STATUS.md` — present-tense operational posture.
 - `docs/AGENTS.md` — current runtime agent architecture.
+- `docs/CAPABILITY_CONTRACT_MODEL.md` — capability contracts and authority classes.
+- `docs/LLM_ROUTING.md` — deterministic model/provider route selection and identity guards.
 - `docs/plans/V60_ARCHITECTURE_TARGET.md` — wanted-state context for larger target-state moves.
 - `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md` — governed external-design handoff for
   Companion UI.
@@ -83,6 +85,17 @@ It exists to keep high-level design work systematic:
 - Ingestion, indexing, retrieval, and memory maintenance are foundational cognitive-system capabilities, not secondary plumbing.
 - Advanced agency is a core requirement of the system, but the foundation should be strong before the most ambitious agent behavior is rolled out broadly.
 - Foundation work should therefore be treated as enabling core capability, not as a detour away from the agentic goal.
+
+### 2C. AI and Agentic Substitution With Contract Preservation
+
+**Routing metadata:** ID `DP-02C`; applicability `cognition-or-implementation-substitution`; owner `docs/DESIGN_PRINCIPLES.md :: 2C. AI and Agentic Substitution With Contract Preservation`; required reading `docs/CAPABILITY_CONTRACT_MODEL.md :: Standard capability contract shape`; enforcement `manual-review`.
+
+- AI models and agents may replace a deterministic implementation when they improve the usable human outcome; determinism is not an acceptance criterion by itself.
+- The substitution is valid only when the owning contract remains explicit and verifiable: inputs and outputs, authority class, provenance, verification/evaluation, failure or withdrawal behavior, idempotency/recovery, and the applicable human or agent acceptance boundary.
+- AI and agentic execution may own explanation, synthesis, planning, and bounded workflow execution when the owning surface admits those responsibilities. Model reasoning and proposals must remain distinguishable from source-owned facts.
+- AI must not replace source-owned authority, authorization or admission, effect identity, receipts/readback, safety invariants, or recovery decisions. Cognition may propose or select an allowed path; it does not create permission or evidence by itself.
+- Where exact reproducibility is part of the contract, use a deterministic implementation or deterministic test double/fallback. Otherwise model unavailability must remain an explicit degraded or withdrawn state rather than silently becoming a fabricated deterministic result.
+- This principle permits AI-assisted Builder/DevUI overview, explanation, synthesis, and bounded agent workflows while preserving the authority and evidence boundaries defined by `docs/ARCHITECTURE.md`, `docs/CAPABILITY_CONTRACT_MODEL.md`, and the relevant owner contract.
 
 ### 3. Separation of System Layers
 
