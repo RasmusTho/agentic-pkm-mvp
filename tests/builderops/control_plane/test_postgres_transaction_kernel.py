@@ -364,10 +364,10 @@ def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(
     from app.builderops.control_plane.client import ClientConfig
     with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
         request = first["transition_request"]
-        from app.builderops.control_plane.client import ControlPlaneConflictError
-        with pytest.raises(ControlPlaneConflictError):
+        from app.builderops.control_plane.client import StaleLeaseError
+        with pytest.raises(StaleLeaseError, match="LeaseRequired"):
             client.transition_task(**{**request, "idempotency_key": "foreign-write"})
-        with pytest.raises(ControlPlaneConflictError):
+        with pytest.raises(StaleLeaseError, match="LeaseRequired"):
             client.transition_task(**{**request, "outbox": {"effect_type": "github.comment", "payload": {}}})
         assert store.authority_counts("rasmustho/agentic-pkm-mvp") == counts
         client.claim_task(envelope=request["envelope"], task_id=request["task_id"], idempotency_key="separate-authorized-claim")
