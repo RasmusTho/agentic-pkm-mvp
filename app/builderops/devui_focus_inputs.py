@@ -22,7 +22,9 @@ from app.builderops.control_plane.models import EnvelopeValidationError, canonic
 
 _ISSUE_SUBJECT = re.compile(r"github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)\Z")
 _HEADING = re.compile(r"^(?P<marks>#{1,6})[ \t]+(?P<title>.*?)[ \t]*#*[ \t]*$")
-_FENCE = re.compile(r"^[ \t]{0,3}(?P<marker>`{3,}|~{3,})")
+_FENCE = re.compile(
+    r"^[ \t]{0,3}(?P<marker>`{3,}|~{3,})(?P<suffix>[^\r\n]*)"
+)
 _LIST_ITEM = re.compile(r"^(?P<indent>[ \t]*)(?:[-*+]|[0-9]+[.)])[ \t]+(?P<text>.*)$")
 _DECLARED_SECTIONS = {
     "context": "Context",
@@ -75,7 +77,11 @@ def _read_issue_sections(body: str) -> dict[str, list[_SectionBlock]]:
     for raw_line in body.splitlines(keepends=True):
         fence_match = _FENCE.match(raw_line)
         if fence_marker is not None:
-            if fence_match is not None and fence_match.group("marker")[0] == fence_marker[0]:
+            if (
+                fence_match is not None
+                and not fence_match.group("suffix").strip()
+                and fence_match.group("marker")[0] == fence_marker[0]
+            ):
                 marker = fence_match.group("marker")
                 if len(marker) >= len(fence_marker):
                     fence_marker = None
@@ -91,8 +97,16 @@ def _read_issue_sections(body: str) -> dict[str, list[_SectionBlock]]:
         heading_match = _HEADING.match(raw_line.rstrip("\r\n"))
         if heading_match is not None:
             level = len(heading_match.group("marks"))
-            if current is not None and level <= current.level:
-                current = None
+            if current is not None:
+                if level <= current.level or _section_key(heading_match.group("title")) is not None:
+                    current = None
+                else:
+                    if current.retained_chars + len(raw_line) > _MAX_SECTION_CHARS:
+                        current.oversized = True
+                    else:
+                        current.lines.append(raw_line)
+                        current.retained_chars += len(raw_line)
+                    continue
             if current is None:
                 key = _section_key(heading_match.group("title"))
                 if key is not None:
@@ -133,6 +147,7 @@ def _section_items(block: _SectionBlock) -> tuple[list[str], bool]:
     items: list[list[str]] = []
     base_indent: int | None = None
     malformed = False
+    dropped_item = False
     for raw_line in block.lines:
         line = raw_line.rstrip("\r\n")
         match = _LIST_ITEM.match(line)
@@ -144,10 +159,14 @@ def _section_items(block: _SectionBlock) -> tuple[list[str], bool]:
                 base_indent = indent_width
             if len(items) >= _MAX_DECLARATION_CLAIMS:
                 malformed = True
+                dropped_item = True
                 continue
+            dropped_item = False
             items.append([line.strip()[:_MAX_ITEM_CHARS]])
             if len(line.strip()) > _MAX_ITEM_CHARS:
                 malformed = True
+            continue
+        if dropped_item:
             continue
         if not line.strip():
             if items:

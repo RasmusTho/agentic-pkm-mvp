@@ -170,6 +170,50 @@ Readable context survives hostile sections.
     assert any(item["kind"] == "issue_section_partial" for item in oversized["limitations"])  # type: ignore[index]
 
 
+def test_issue_parser_keeps_nested_headings_and_discards_overflow_continuations() -> None:
+    criteria = "\n".join(
+        [
+            "## Context",
+            "",
+            "### Assumptions",
+            "Nested heading text remains source content.",
+            "",
+            "## Acceptance Criteria",
+            *[f"- [ ] Criterion {index}" for index in range(40)],
+            "  - Verify: this continuation belongs to the omitted 41st item",
+            "",
+            "## Source Docs",
+            "",
+            "```markdown extra",
+            "- `docs/fenced.md`",
+            "```still-fenced",
+            "- `docs/still-fenced.md`",
+            "```",
+            "- `docs/DEVUI.md`",
+        ]
+    )
+    result = _read(criteria)
+
+    assert "### Assumptions" in result["owner_intent"]["summary"]  # type: ignore[index]
+    evidence_claims = [
+        item["claim"] for item in result["evidence"] if isinstance(item.get("claim"), str)  # type: ignore[index]
+    ]
+    assert not any("omitted 41st item" in claim for claim in evidence_claims)
+    assert any("Criterion 38" in claim for claim in evidence_claims)
+    assert not any(
+        "omitted 41st item" in item["claim"]
+        for item in result["evidence"]  # type: ignore[index]
+    )
+    source_claims = [
+        item["claim"]
+        for item in result["governing_sources"]  # type: ignore[index]
+        if isinstance(item.get("claim"), str)
+    ]
+    assert any("docs/DEVUI.md" in claim for claim in source_claims)
+    assert not any("fenced.md" in claim or "still-fenced.md" in claim for claim in source_claims)
+    assert any(item["kind"] == "issue_declarations_truncated" for item in result["limitations"])  # type: ignore[index]
+
+
 def test_focus_inputs_require_exact_configured_repository_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
