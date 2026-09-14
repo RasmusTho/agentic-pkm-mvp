@@ -177,7 +177,8 @@ Stable source anchor: **FCA-ID-01**. Target contract `fca-issue-delivery.v1`, op
 [M2](#first-repository-milestone), defined by #5531; it is not implemented or activated by this
 document. It delivers exactly one bounded, open, strictly valid `agent:ready` Issue in
 `RasmusTho/agentic-pkm-mvp` through one fresh Codex Issue session at one explicitly admitted
-execution destination. It selects no sibling or parent work. Project Status is not a pickup gate.
+execution destination. It selects no sibling or parent delivery. A required parent evidence write
+is a separately bound effect below. Project Status is not a pickup gate.
 
 **Selected reuse.** Source inspected at `1a1bde5add17cf59d371216e175446929e735158`:
 `app/builderops/cli.py::dispatch_sessions` loads a frozen plan and constructs
@@ -203,6 +204,12 @@ within its existing owner. Before Start, it must bind all of these values withou
 
 - `repository`, numeric Issue identity and node identity, current Issue body/AC hashes, bounded
   source revisions, proposal/context-pack hash, and the frozen dispatch-plan hash;
+- parent evidence destination: explicit `none`, or one exact parent repository/number/node,
+  source-authenticated relationship to the selected Issue, current parent contract hash/version,
+  and permission for PR-specific receipt comments and this child's generated-ledger writeback.
+  If the selected workflow requires parent writeback, an absent binding refuses launch; it cannot
+  infer a parent later. This evidence destination grants no parent delivery, contract or acceptance
+  change, closure, or sibling mutation;
 - operation type/version, `approval_id`, one `operation_key`, owner principal, approval receipt,
   expiry and current repository/operation grant, revocation version and authority epoch;
 - one destination identity: authenticated executor principal, host/system identity, channel,
@@ -233,13 +240,14 @@ branch and PR transitions are evidence of this workflow, not an Issue-body/AC ch
 | Issue claim and active lifecycle | `scripts/issue_pickup_claim.sh` through `issue-to-code`: worker self-claims this exact Issue, with dispatcher coordination when available and the skill's authenticated label-only fallback otherwise. Lease/label evidence is not owner approval. |
 | Publication | `publish-pr`: bounded commits, non-force push and one exact linked PR; record/read back the PR identity. Repairs remain within the approved Issue and current publication gates. |
 | Review and merge | `verification-and-closure`: current-head AC/CI/review proof and the selected light/full route. Full-path neutralization, fixed merge message, authenticated closing set and any required `host_fenced_executor` remain binding; approval does not supply an executor credential or waive a gate. |
-| Closure and delivery reconciliation | `verification-and-closure`, `post-merge-owner-doc` and `klart`: close only this authenticated delivered Issue, remove its active labels, reconcile its lease/worktree and post PR-specific evidence on it and the named open parent. Parent closure, unrelated Issue mutation and new backlog extraction are excluded. |
+| Closure and delivery reconciliation | `verification-and-closure`, `post-merge-owner-doc` and `klart`: close only this authenticated delivered Issue, remove its active labels, reconcile its lease/worktree and post PR-specific evidence on it. On the exact approved open parent evidence destination, permit only those receipt comments and this child's generated-ledger writeback, preserving the parent contract and other child entries. Re-read parent identity, open state, relationship and contract at this write boundary; drift withdraws the effect and requires reconciliation, never target substitution. Parent closure, unrelated Issue mutation and new backlog extraction are excluded. |
 
 All five effect groups must be explicitly approved for this first operation. A partial grant refuses
 the full-chain launcher; it does not reinterpret it as inquiry or edit-only. Model calls and a
 required bounded read-only reviewer are confined to the approved profile and owning skill budget.
 Deployment, release/stable movement, credential provisioning/rotation, host setup, destructive
-database/vault operations, other repositories/Issues, owner confirmation and universal unattended
+database/vault operations, other repository/Issue effects beyond the exact parent evidence grant,
+owner confirmation and universal unattended
 execution are explicit non-effects. A newly required effect pauses at its owning gate; consent to
 this operation cannot widen the selected Issue or convert a technical receipt into owner acceptance.
 
@@ -319,6 +327,13 @@ slices. These are extraction-ready source obligations, not created Issues or imp
 Create implementation Issues only after this authority merges; each Issue must bind its exact
 production surface and inline `Verify:` targets. The named test pointers below are required future
 production-path tests, not claims that tests exist or pass today.
+
+The same three slices cover parent evidence without another operation: A must prove exact or
+explicitly absent parent admission and reject missing/foreign targets when writeback is required;
+B must prove bounded receipt/child-ledger effects, preservation of the parent contract and other
+child entries, and withdrawal for a closed, changed or substituted parent; C must independently
+read back the approved target and permitted evidence. No parent effect is inferred from a child
+merge or from a worker's proposed target.
 
 | Order / stable source anchor | Bounded change and production callers | Resolvable verification obligation |
 | --- | --- | --- |
