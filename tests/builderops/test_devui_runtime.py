@@ -661,7 +661,8 @@ def test_managed_source_default_quota_withdrawal(
         source.tasks.append(row)
     with source.client() as client:
         payload = client.get("/api/devui/overview").json()
-    assert len(source.http_calls) == 3 + task_count
+    assert len(source.http_calls) == 4 + task_count
+    assert source.http_calls[-1] == ("GET", "/v1/receipts/owner-facts/current")
     assert bool(payload["now"]) is available
     work = _managed_source(payload, "dispatcher-store")
     assert work["state"] == ("fresh" if available else "unavailable")
@@ -980,7 +981,8 @@ def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed
         assert payload["receipts"] == payload["execution_observations"] == []
         assert payload["next_legal_step"]["legality"] == "unavailable"
         assert payload["conversation_port"]["availability"] == "unsupported"
-        assert source.http_calls == []
+        assert source.http_calls == [("GET", "/v1/receipts/owner-facts/current")]
+        assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
         calls = source.gh_calls.read_text().splitlines()
         assert len(calls) == 1
         assert json.loads(calls[0])[:2] == ["api", "repos/example/fixture/issues/501"]
@@ -999,7 +1001,8 @@ def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed
             assert disabled.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT}).status_code == 404
         assert source.gh_calls.read_text() == before
 
-    assert source.http_calls == []
+    assert source.http_calls == [("GET", "/v1/receipts/owner-facts/current")]
+    assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
 
 
 def test_managed_focus_projects_issue_declarations_through_existing_fields(managed_sources) -> None:
@@ -1024,7 +1027,8 @@ def test_managed_focus_projects_issue_declarations_through_existing_fields(manag
         for item in payload["evidence"][1:] + payload["governing_sources"][1:]
     )
     assert any(item["kind"] == "criterion_results_unassessed" for item in payload["limitations"])
-    assert source.http_calls == []
+    assert source.http_calls == [("GET", "/v1/receipts/owner-facts/current")]
+    assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
     calls = [json.loads(line) for line in source.gh_calls.read_text().splitlines()]
     assert calls == [["api", "repos/example/fixture/issues/501"]]
 
@@ -1041,7 +1045,8 @@ def test_managed_focus_preserves_canonical_repository_case(managed_sources, subj
     payload = response.json()
     assert payload["subject"]["stable_id"] == subject
     assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
-    assert source.http_calls == []
+    assert source.http_calls == [("GET", "/v1/receipts/owner-facts/current")]
+    assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
 
 
 def test_managed_journey_admission_and_typed_query_failure_matrix(managed_sources) -> None:
