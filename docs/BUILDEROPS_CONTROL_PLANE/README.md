@@ -258,12 +258,18 @@ An identical retry may reuse only the same verified transaction and exact source
 The generic service authenticates the write, not its Issue provenance or which client performed
 it; CLI routing and a self-reported importer marker are not enforcement. For qualification, the
 source owner must independently retrieve the selected Issue through the existing authorized gh
-reader and the addressed TaskRecord/transaction through the existing authenticated API reader.
-Retained source packets must bind those observed responses, their identities/times and exact bytes
-or digests. The bounded observation validator must compare the native task fields, canonical
-repository/Issue identity, source version/body hash and stored transaction binding against those
-independent GitHub bytes. Missing independent evidence or disagreement refuses qualification;
-the stored row, transaction receipt or importer's own assertions alone can never pass. This proves
+reader and the addressed TaskRecord through authenticated `get_task`. Separately, the source owner
+must retain the observed authenticated transition request/response from source preparation: exact
+request bytes or digest, repository/task/state, `receipt_sequence`, `recovery_lsn`, `operation_key`
+and `replayed`, with observation identity/time. This is source-owner-observed exchange evidence,
+not the importer's asserted summary and not a later transaction GET. Existing `get_task` does not
+expose transaction/idempotency metadata and the receipt API does not expose task-transition
+receipts; neither endpoint is extended. Retained source packets bind the separate exchange and
+fresh readback observations. The bounded validator compares native task fields, canonical
+repository/Issue identity and source version/body hash against the independent GitHub bytes and
+retained request, and checks the response's repository/task/state binding. A missing observed
+response cannot be reconstructed from the task row. Missing independent evidence or disagreement
+refuses qualification; the row, response identifiers or importer's own assertions alone can never pass. This proves
 the real Issue binding, not a server-attested importer identity, and requires no new write scope or
 service enforcement point.
 
