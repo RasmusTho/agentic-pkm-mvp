@@ -519,10 +519,15 @@ same exact head back to the ordinary verified-merge sequence below.
    result as merge authority
 4. use `scripts/build_verified_issue_set_merge_phase.py` to post an authenticated
    `verified_issue_set_merge_phase.v1` `prepared` receipt bound to the durable authority receipt and
-   exact convergence receipt plus the fresh final projection snapshot through
+   exact convergence receipt plus its embedded `final_projection_observation` through
    `--projection-convergence-json`, `--final-projection-observation-json`, and the complete bounded
    PR comment readback through `--comments-json`; `prepared` refuses
-   missing, forged, stale, cross-head, cross-run, or body-mismatched convergence proof. For the
+   missing, forged, stale, cross-head, cross-run, or body-mismatched convergence proof. Supply the
+   exact final observation embedded in the authenticated convergence receipt; even a later empty
+   observation with otherwise identical identity is rejected before receipt emission. This producer
+   check does not authorize recovery of rejected phase history; the separate
+   [Rejected Prepared-History Recovery Contract](../../../docs/development/REJECTED_PREPARED_HISTORY_RECOVERY_CONTRACT.md)
+   still applies. For the
    pre-#4010 legacy exception, also pass the complete trusted
    authority comment through `--authority-comment-json`; the receipt payload alone does not prove
    cutoff provenance. Require a single continuous prepared/merged/reconciled/restored

@@ -1367,6 +1367,12 @@ fails closed. Failure restores only the authority-authenticated canonical body w
 it also performs no post-merge effect. Repeated reads do not replace the unchanged
 post-merge event enumeration and exact closure-attribution reconciliation.
 
+Prepared construction consumes the exact `final_projection_observation` embedded in that
+authenticated convergence receipt. The production CLI and builder reject a later empty observation
+with otherwise identical identity before emitting a phase receipt or output file. This producer
+binding preserves the independent resolver's exact digest requirement and does not authorize
+recovery of rejected phase history; the separate recovery boundary below still applies.
+
 After a repaired head, preserve earlier authority, convergence, and phase comments and the repair
 accounting. The shared convergence classifier authenticates each prior candidate against its own
 unique trusted same-repository/PR authority and complete frozen convergence proof before treating

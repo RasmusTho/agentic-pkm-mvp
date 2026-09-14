@@ -68,7 +68,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--final-projection-observation-json",
         type=Path,
-        help="fresh same-snapshot empty closing projection; required for prepared",
+        help=(
+            "exact final_projection_observation embedded in the authenticated "
+            "convergence receipt, not a later snapshot; required for prepared"
+        ),
     )
     parser.add_argument(
         "--phase",

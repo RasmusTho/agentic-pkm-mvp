@@ -677,6 +677,65 @@ def _authority_comment(authority: Mapping[str, object]) -> dict[str, object]:
     )
 
 
+def _phase_cli_inputs(
+    tmp_path: Path, *, later_observation: bool = False,
+) -> tuple[list[str], Path, dict[str, object], dict[str, object], dict[str, object]]:
+    authority, neutralized_body, _, convergence = _projection_fixture()
+    pr = _canonical_pr(neutralized_body)
+    final_observation = copy.deepcopy(convergence["final_projection_observation"])
+    assert isinstance(final_observation, dict)
+    if later_observation:
+        final_observation["observed_at"] = "2026-08-12T05:00:08Z"
+    inputs = {
+        "authority-json": authority,
+        "comments-json": [
+            _authority_comment(authority), _trusted_convergence_comment(convergence),
+        ],
+        "projection-convergence-json": convergence,
+        "final-projection-observation-json": final_observation,
+        "pr-json": pr,
+    }
+    argv = ["--phase", "prepared"]
+    for option, payload in inputs.items():
+        path = tmp_path / f"{option}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        argv.extend([f"--{option}", str(path)])
+    output_path = tmp_path / "new-output" / "prepared.json"
+    argv.extend(["--output-json", str(output_path)])
+    return argv, output_path, authority, pr, convergence
+
+
+def test_phase_cli_rejects_nonembedded_final_observation(tmp_path: Path) -> None:
+    argv, output_path, _, _, _ = _phase_cli_inputs(
+        tmp_path, later_observation=True,
+    )
+
+    with pytest.raises(ValueError, match="projection convergence"):
+        build_phase.main(argv)
+
+    assert not output_path.exists()
+    assert not output_path.parent.exists()
+
+
+def test_phase_cli_canonical_final_observation_roundtrips(tmp_path: Path) -> None:
+    argv, output_path, authority, pr, convergence = _phase_cli_inputs(tmp_path)
+
+    assert build_phase.main(argv) == 0
+    prepared = json.loads(output_path.read_text(encoding="utf-8"))
+    comments = [
+        _authority_comment(authority),
+        _trusted_convergence_comment(convergence),
+        _trusted_comment(prepared["phase_receipt_comment"]),
+    ]
+    assert verified_merge.resolve_verified_merge_projection_convergence_receipt(
+        comments, authority_receipt=authority,
+    ) == convergence
+    assert verified_merge.resolve_verified_merge_phase(
+        comments, authority_receipt=authority, pr=pr,
+    ) == prepared["phase_receipt"]
+    assert prepared["phase_receipt"]["phase"] == "prepared"
+
+
 def _prior_candidate_history() -> list[dict[str, object]]:
     context = {**_context(), "head_sha": "d" * 40, "run_id": "prior-candidate"}
     prior_pr = {**_canonical_pr(), "head": {"sha": context["head_sha"]}}
