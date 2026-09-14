@@ -358,6 +358,8 @@ source packets are `selection`, `operator`, `source`, `github`, `task`, `exchang
 The exchange packet retains the exact UTF-8 HTTP `request_body`, its SHA-256, its decoded `request`
 and observed `response`. The validator compares those bytes and decoded fields with preserved JSON types; it never
 guesses a client's JSON serialization or reconstructs the response from a task row.
+Every Source Docs entry, whether a plain path, backticked path or relative Markdown link, must
+resolve to a candidate manifest document inspected during the journey; malformed entries refuse.
 The closed schema fixes the output shape. The existing read-only receipt mount retains
 `first-read/inputs.json` and `first-read/observation.json`. The separately named reader re-derives
 that observation and checks actual candidate assets/documents and live Issue/task/epoch/grants on

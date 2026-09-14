@@ -729,7 +729,7 @@ def test_control_plane_project_must_match_activation() -> None:
             validate_receipt(broken, prerequisites)
 
 
-def _first_read_inputs():
+def _first_read_inputs(source_docs=None):
     import httpx
     from app.builderops.control_plane.client_cli import issue_source_task
     from tests.builderops.control_plane.test_client_cli import _import_source
@@ -742,6 +742,8 @@ def _first_read_inputs():
     repo = "example/fixture"
     issue = _import_source(repo)
     issue["body"] = issue["body"].replace(".codex/skills/_shared/ISSUE_CONTRACT.md", "docs/AGENT_ISSUE_DISPATCHER.md").replace(".github/workflows/issue-pr-governance.yml", "docs/AGENT_ISSUE_DISPATCHER.md")
+    if source_docs is not None:
+        issue["body"] = issue["body"].split("## Source Docs\n")[0] + "## Source Docs\n" + source_docs + "\n"
     now = datetime.now(timezone.utc).isoformat()
     epoch = prereqs["activation"]["migration"]["authority_epoch"]
     task = issue_source_task(issue, repository=repo, number=501, observed_at=now, authority_epoch=epoch)
@@ -790,10 +792,15 @@ def _first_read_inputs():
     return {"evidence": evidence, "prerequisites": prereqs}
 
 
-def test_first_read_observation_validates_independent_source_evidence():
+@pytest.mark.parametrize("source_docs", [
+    "- `docs/AGENT_ISSUE_DISPATCHER.md`",
+    "- docs/AGENT_ISSUE_DISPATCHER.md",
+    "- [Dispatcher](docs/AGENT_ISSUE_DISPATCHER.md)",
+])
+def test_first_read_observation_validates_independent_source_evidence(source_docs):
     from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
 
-    inputs = _first_read_inputs()
+    inputs = _first_read_inputs(source_docs)
     receipt = build_first_read_observation(**inputs)
     assert receipt["verdict"] == "pass", receipt
     validate_first_read_observation(receipt, **inputs)
@@ -823,7 +830,7 @@ def test_first_read_observation_validates_independent_source_evidence():
     assert build_first_read_observation(**inputs)["verdict"] == "refused"
 
 
-@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins"])
+@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "plain_document_missing", "plain_document_uninspected", "document_malformed", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins"])
 def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
     from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
 
@@ -835,6 +842,11 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
             build_receipt(kind, good, inputs["prerequisites"])
     with pytest.raises(ReceiptValidationError):
         validate_receipt(good, inputs["prerequisites"])
+    if failure in {"plain_document_missing", "plain_document_uninspected", "document_malformed"}:
+        target = "[invalid](docs/AGENT_ISSUE_DISPATCHER.md" if failure == "document_malformed" else "docs/required.md"
+        inputs = _first_read_inputs("- `docs/AGENT_ISSUE_DISPATCHER.md`\n- " + target)
+        if failure == "plain_document_uninspected":
+            inputs["evidence"]["installed"]["documents"][target] = "d" * 64
     evidence = inputs["evidence"]
     if failure == "response":
         del evidence["exchange"]["response"]
@@ -877,6 +889,8 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         evidence["installed"]["assets"] = {}
     elif failure == "documents":
         evidence["installed"]["documents"] = {}
+    elif failure in {"plain_document_missing", "plain_document_uninspected", "document_malformed"}:
+        pass  # The independently bound Issue now requires every listed document.
     elif failure == "secret":
         evidence["source"]["password"] = "sentinel-never-export"
     elif failure == "partial":

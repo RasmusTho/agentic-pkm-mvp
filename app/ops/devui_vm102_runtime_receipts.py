@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
@@ -485,6 +485,27 @@ def _first_manifest(value: Any) -> None:
         )
 
 
+def _first_source_documents(section: str) -> set[str]:
+    documents = set()
+    for raw in section.splitlines():
+        if not raw.strip():
+            continue
+        entry = re.sub(r"^[-*+]\s+", "", raw.strip())
+        wrapped = re.fullmatch(r"`([^`]+)`|\[[^\]\n]+\]\(([^()\n]+)\)", entry)
+        target = (wrapped.group(1) or wrapped.group(2)) if wrapped else entry
+        path = target.partition("#")[0]
+        _first_require(
+            bool(path) and not any(char in target for char in "`[]()\\:")
+            and not PurePosixPath(path).is_absolute()
+            and ".." not in PurePosixPath(path).parts
+            and PurePosixPath(path).as_posix() == path and path != ".",
+            "selected Issue document reference is invalid",
+        )
+        documents.add(path)
+    _first_require(bool(documents), "selected Issue documents are missing")
+    return documents
+
+
 def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, Any], captured: datetime) -> dict[str, Any]:
     # Imports stay on this bounded path: starting the independent listener does
     # not load the dispatcher/normalizer, nor create any local dispatcher store.
@@ -573,9 +594,9 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
     _first_require(installed["candidate_identity"] == candidate and installed["assets"] == ASSET_SHA256,
                    "installed candidate or managed assets differ")
     _first_manifest(installed["documents"])
-    required_docs = re.findall(r"`([^`]+)`", extract_sections(issue["body"])["source docs"])
-    _first_require(bool(required_docs) and set(required_docs).issubset(installed["documents"])
-                   and set(required_docs).issubset(journey["inspected_documents"]), "selected Issue documents are unavailable or uninspected")
+    required_docs = _first_source_documents(extract_sections(issue["body"])["source docs"])
+    _first_require(required_docs.issubset(installed["documents"])
+                   and required_docs.issubset(journey["inspected_documents"]), "selected Issue documents are unavailable or uninspected")
     _first_require(installed["origin"] in {"http://127.0.0.1:8113", "http://localhost:8113"}
                    and browser["origin"] == journey["origin"] == installed["origin"]
                    and browser["candidate_sha"] == journey["candidate_sha"] == candidate["source_sha"], "journey origin or candidate differs")
