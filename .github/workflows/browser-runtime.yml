@@ -152,6 +152,7 @@ jobs:
               "test_standalone_overview_focus_return_preserves_subject_and_candidate",
               "test_managed_journey_hostile_accessibility_and_no_effect_matrix",
               "test_managed_journey_preserves_focus_failures_and_fresh_return",
+              "test_first_read_issue_journey_precedes_observation_without_effects",
           }
           assert len(cases) == len(expected)
           assert {case.get("name") for case in cases} == expected

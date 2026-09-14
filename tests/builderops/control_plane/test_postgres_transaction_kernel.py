@@ -326,3 +326,52 @@ def test_transaction_result_binds_receipt_sequence_and_recovery_lsn(
     assert stored["task_id"] == result.task_id
     assert stored["recovery_lsn"] == result.recovery_lsn
     assert stored["idempotency_key"] == "request-1"
+def test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries(control_plane_store, tmp_path, monkeypatch, capsys):
+    import copy
+    import json
+    from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client import BuilderOpsControlPlaneClient
+    from app.builderops.control_plane.client_cli import main
+    from app.builderops.control_plane.service import create_app
+    from fastapi.testclient import TestClient
+    from tests.builderops.control_plane.test_client_cli import _import_source, _manifest_dir
+    from tests.builderops.control_plane.test_api_clients import _registry
+
+    store = control_plane_store
+    source = _import_source()
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
+    monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
+    monkeypatch.delenv("BUILDEROPS_API_TOKEN_FILE", raising=False)
+    service = create_app(store=store, credentials=_registry(tmp_path))
+    def factory(config):
+        return BuilderOpsControlPlaneClient(config, http_client=TestClient(service), max_retries=0)
+    command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation", "task-import-issue",
+        "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:501", "--stack", "builderops-control-plane", "--issue", "501"]
+    assert main(command, client_factory=factory) == 0
+    first = json.loads(capsys.readouterr().out)
+    counts = store.authority_counts("rasmustho/agentic-pkm-mvp")
+    assert counts["tasks"] == counts["receipts"] == counts["idempotency"] == 1
+    assert counts["outbox"] == counts["attempts"] == 0
+    with store._connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM builderops_leases").fetchone()["n"] == 0
+    assert first["task"]["lease"] is None and first["task"]["version"] == 1
+    assert main(command, client_factory=factory) == 0
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["transition_request"] == first["transition_request"]
+    assert replay["transition_response"]["result"]["replayed"] is True
+    assert store.authority_counts("rasmustho/agentic-pkm-mvp") == counts
+    from app.builderops.control_plane.client import ClientConfig
+    with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
+        request = first["transition_request"]
+        from app.builderops.control_plane.client import ControlPlaneConflictError, StaleLeaseError
+        with pytest.raises(StaleLeaseError, match="LeaseRequired"):
+            client.transition_task(**{**request, "idempotency_key": "foreign-write"})
+        with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
+            client.transition_task(**{**request, "outbox": {"effect_type": "github.comment", "payload": {}}})
+        assert store.authority_counts("rasmustho/agentic-pkm-mvp") == counts
+        client.claim_task(envelope=request["envelope"], task_id=request["task_id"], idempotency_key="separate-authorized-claim")
+    claimed_counts = store.authority_counts("rasmustho/agentic-pkm-mvp")
+    assert main(command, client_factory=factory) != 0
+    assert store.authority_counts("rasmustho/agentic-pkm-mvp") == claimed_counts
+    assert store.get_task("rasmustho/agentic-pkm-mvp", request["task_id"])["state"] == "claimed"

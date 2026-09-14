@@ -13,7 +13,10 @@ Run as ``python -m app.builderops.control_plane.client <command> ...``.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
+import re
 import sys
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -22,6 +25,7 @@ from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ClientConfig,
     ControlPlaneClientError,
+    ControlPlaneNotFoundError,
 )
 from app.builderops.control_plane.routing import (
     DeliveryManifestRegistry,
@@ -44,6 +48,7 @@ _CONFIG_EXIT = 2
 _MUTATING_COMMANDS = frozenset(
     {
         "record",
+        "task-import-issue",
         "inquiry",
         "task-claim",
         "task-heartbeat",
@@ -131,6 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="Read the current authority epoch and schema version.")
+
+    importer = sub.add_parser("task-import-issue", help="Import one strict Ready GitHub Issue, without claiming or launching it.")
+    importer.add_argument("--repository", required=True)
+    importer.add_argument("--scope", required=True)
+    importer.add_argument("--stack", required=True)
+    importer.add_argument("--issue", type=int, required=True)
 
     record = sub.add_parser("record", help="Commit a record authority object.")
     _add_envelope_arguments(record)
@@ -228,6 +239,8 @@ def _dispatch(
     command = args.command
     if command == "status":
         return client.status()
+    if command == "task-import-issue":
+        return _import_issue(args, client)
     if command == "record":
         return client.commit_record(
             envelope=_envelope(args),
@@ -299,6 +312,179 @@ def _dispatch(
             task_id=args.task_id,
         )
     raise ValueError(f"unknown command: {command}")
+
+
+def _source_contract_ready(body: str) -> bool:
+    """Reuse strict content predicates without a checkout-dependent file test.
+
+    Source owners and candidate document evidence own file availability. A
+    pure retained-source check cannot infer it from this process's checkout.
+    """
+    from scripts import validate_issue_readiness as readiness
+
+    sections = readiness.extract_sections(body)
+    present = [name for name in readiness.REQUIRED_SECTIONS
+               if readiness._section_content(sections, name) is not None]
+    items = readiness._extract_acceptance_items(readiness._section_content(sections, "Acceptance Criteria"))
+    targets = [tuple(readiness._declared_verify_targets(item)) for item in items]
+    return (
+        len(present) == len(readiness.REQUIRED_SECTIONS)
+        and not readiness._unknown_body(body, [readiness._normalize_heading(name) for name in present])
+        and bool(readiness._non_placeholder_lines(readiness._section_content(sections, "Source Docs")))
+        and bool(items)
+        and all(group and len(set(group)) == len(group)
+                and all(readiness.is_resolvable_verify_target(target) for target in group) for group in targets)
+        and readiness._parent_reference_problem(body) is None
+        and readiness.admission_contract_problem(body) is None
+        and not readiness._contains_any(
+            (*readiness.NOT_AGENTABLE_PATTERNS, *readiness.AUTHORITY_RISK_PATTERNS, *readiness.AMBIGUOUS_PATTERNS), body)
+    )
+
+
+def issue_source_task(
+    issue: Any, *, repository: str, number: int, observed_at: str, authority_epoch: int
+) -> dict[str, Any]:
+    """Pure source binding, also checked against independently collected evidence.
+
+    Only the explicit CLI fetch below may use this to prepare a write. Neither
+    this deterministic mapping nor its output authenticates an importer.
+    """
+    from app.dispatcher.sync_github import normalize_github_issue
+    from app.ops.builderops_vm_rebuild_activation import _contains_secret
+
+    try:
+        repo = RepoRef.parse(repository).canonical
+        observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        if observed.tzinfo is None or type(authority_epoch) is not int or authority_epoch < 1:
+            raise ValueError()
+        if not isinstance(issue, dict) or _contains_secret(issue) or {"createdAt", "updatedAt"} & issue.keys():
+            raise ValueError()
+        labels = [item["name"] for item in issue["labels"]]
+        url = f"https://github.com/{repo}/issues/{number}"
+        if (
+            type(number) is not int or number < 1 or type(issue["number"]) is not int
+            or issue["number"] != number or "pull_request" in issue
+            or issue["state"] != "open" or not isinstance(issue["title"], str)
+            or not issue["title"].strip() or not isinstance(issue["body"], str)
+            or {label for label in labels if label.startswith("agent:")} != {"agent:ready"}
+            or issue["html_url"].lower() != url
+            or issue["url"].lower() != f"https://api.github.com/repos/{repo}/issues/{number}"
+            or issue["repository_url"].lower() != f"https://api.github.com/repos/{repo}"
+            or not _source_contract_ready(issue["body"])
+        ):
+            raise ValueError()
+        created, updated = (
+            datetime.fromisoformat(issue[key].replace("Z", "+00:00"))
+            for key in ("created_at", "updated_at")
+        )
+        if created.tzinfo is None or updated.tzinfo is None or not created <= updated <= observed:
+            raise ValueError()
+        payload = normalize_github_issue(issue, repo, now=observed_at).to_dict()
+        payload["source_anchor_refs"] = [url]
+        payload["sync_state"].update(
+            body_sha256=hashlib.sha256(issue["body"].encode()).hexdigest(),
+            authority_epoch=authority_epoch,
+        )
+        return payload
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("Issue source identity, readiness or observation is invalid") from exc
+
+
+def same_json_value(left: Any, right: Any) -> bool:
+    """Compare source values without Python's bool/int/float equality coercion."""
+    options: dict[str, Any] = {"sort_keys": True, "separators": (",", ":"), "allow_nan": False}
+    return json.dumps(left, **options) == json.dumps(right, **options)
+
+
+def validate_import_readback(row: Any, request: dict[str, Any]) -> None:
+    """A native Ready row is necessary, but is never transaction evidence."""
+    from app.builderops.cockpit_chain import parse_timestamp
+
+    envelope = request["envelope"]
+    if (
+        not isinstance(row, dict) or row.get("repository") != envelope["repository"]
+        or row.get("task_id") != request["task_id"] or row.get("state") != "ready"
+        or type(row.get("version")) is not int or row["version"] != 1
+        or not isinstance(row.get("updated_at"), str) or parse_timestamp(row["updated_at"]) is None
+        or "lease" not in row or row["lease"] is not None
+        or not same_json_value(row.get("payload"), request["request"])
+        or not isinstance(row.get("authority_envelope"), dict)
+        or not isinstance(row["authority_envelope"].get("actor"), str)
+        or not row["authority_envelope"]["actor"].strip()
+        or type(row["authority_envelope"].get("schema_version")) is not int
+        or row["authority_envelope"]["schema_version"] != 1
+        or any(row["authority_envelope"].get(key) != value for key, value in envelope.items())
+    ):
+        raise ValueError("Issue TaskRecord readback is incompatible or changed")
+
+
+def validate_import_response(response: Any, request: dict[str, Any]) -> None:
+    result = response.get("result") if isinstance(response, dict) else None
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"repository", "task_id", "state", "receipt_sequence", "recovery_lsn", "operation_key", "replayed"}
+        or result["repository"] != request["envelope"]["repository"]
+        or result["task_id"] != request["task_id"] or result["state"] != "ready"
+        or type(result["receipt_sequence"]) is not int or result["receipt_sequence"] < 1
+        or not isinstance(result["recovery_lsn"], str)
+        or re.fullmatch(r"[0-9A-F]+/[0-9A-F]+", result["recovery_lsn"]) is None
+        or result["recovery_lsn"] == "0/0" or result["operation_key"] is not None
+        or type(result["replayed"]) is not bool
+    ):
+        raise ValueError("Observed initial transition response is invalid")
+
+
+def _import_issue(args: argparse.Namespace, client: BuilderOpsControlPlaneClient) -> dict[str, Any]:
+    from app.builderops import cockpit_github_plane
+    from app.dispatcher.sync_github import github_issue_task_id
+
+    repository = RepoRef.parse(args.repository).canonical
+    if args.issue < 1 or args.scope != f"issue:{args.issue}" or not args.stack.strip():
+        raise ValueError("Issue import requires its exact Issue scope and stack")
+    address = ["api", f"repos/{repository}/issues/{args.issue}"]
+    try:
+        issue = cockpit_github_plane._run_gh(address)
+        observed_at = datetime.now(timezone.utc).isoformat()
+        epoch = client.authority_epoch
+        payload = issue_source_task(issue, repository=repository, number=args.issue,
+                                    observed_at=observed_at, authority_epoch=epoch)
+        task_id = github_issue_task_id(repository, args.issue)
+        try:
+            previous = client.get_task(repository=repository, task_id=task_id)
+        except ControlPlaneNotFoundError:
+            previous = None
+        if previous is not None:
+            # Preserve the first source observation only after comparing every
+            # other native source field; never rewrite an existing task.
+            if not isinstance(previous.get("payload"), dict) or not isinstance(previous["payload"].get("sync_state"), dict):
+                raise ValueError("Existing task has no Issue source binding")
+            original_time = previous["payload"]["sync_state"].get("last_pull_at")
+            payload = issue_source_task(issue, repository=repository, number=args.issue,
+                                        observed_at=original_time, authority_epoch=epoch)
+        envelope = {"repository": repository, "scope": args.scope, "stack": args.stack,
+                    "source_refs": payload["source_anchor_refs"]}
+        identity = {"envelope": envelope, "task_id": task_id, "source_version": issue["updated_at"],
+                    "body_sha256": payload["sync_state"]["body_sha256"], "authority_epoch": epoch}
+        key = "issue-import:" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        request: dict[str, Any] = {"envelope": envelope, "task_id": task_id, "to_state": "ready", "idempotency_key": key,
+                   "request": payload, "outbox": None, "lease": None, "expected_states": None,
+                   "expected_version": None}
+        if previous is not None:
+            validate_import_readback(previous, request)
+        response = client.transition_task(**request)
+        validate_import_response(response, request)
+        row = client.get_task(repository=repository, task_id=task_id)
+        validate_import_readback(row, request)
+        fresh = cockpit_github_plane._run_gh(address)
+        if not same_json_value(issue_source_task(fresh, repository=repository, number=args.issue,
+                             observed_at=payload["sync_state"]["last_pull_at"], authority_epoch=epoch), payload):
+            raise ValueError("Issue source changed during import")
+        if client.status().get("authority_epoch") != epoch:
+            raise ValueError("Issue import authority epoch changed")
+        return {"observed_at": observed_at, "authority_epoch": epoch, "transition_request": request,
+                "transition_response": response, "task": row}
+    except cockpit_github_plane.GithubReadError as exc:
+        raise ControlPlaneClientError("Issue source unavailable") from exc
 
 
 def _resolve_route(args: argparse.Namespace) -> RoutePolicy | None:

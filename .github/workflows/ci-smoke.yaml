@@ -1207,6 +1207,7 @@ jobs:
             tests/migrations/test_heimdal_raw_liveness_migration.py \
             tests/builderops/test_owner_fact_producers.py \
             tests/api/test_devui_owner_facts.py \
+            tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries \
             --tb=short \
             | tee pytest-index-pg.log
 

@@ -727,3 +727,261 @@ def test_control_plane_project_must_match_activation() -> None:
         _refingerprint(broken)
         with pytest.raises(ReceiptValidationError, match="control-plane project"):
             validate_receipt(broken, prerequisites)
+
+
+def _first_read_inputs(source_docs=None):
+    import httpx
+    from app.builderops.control_plane.client_cli import issue_source_task
+    from tests.builderops.control_plane.test_client_cli import _import_source
+    from app.builderops.devui_assets import ASSET_SHA256
+
+    bundle = _bundle()
+    prereqs = {key: bundle["prerequisites"][key] for key in ("inventory", "activation")}
+    now = datetime.now(timezone.utc).isoformat()
+    candidate = bundle["evidence"]["candidate_identity"]
+    repo = "example/fixture"
+    issue = _import_source(repo)
+    issue["body"] = issue["body"].replace(".codex/skills/_shared/ISSUE_CONTRACT.md", "docs/AGENT_ISSUE_DISPATCHER.md").replace(".github/workflows/issue-pr-governance.yml", "docs/AGENT_ISSUE_DISPATCHER.md")
+    if source_docs is not None:
+        issue["body"] = issue["body"].split("## Source Docs\n")[0] + "## Source Docs\n" + source_docs + "\n"
+    now = datetime.now(timezone.utc).isoformat()
+    epoch = prereqs["activation"]["migration"]["authority_epoch"]
+    task = issue_source_task(issue, repository=repo, number=501, observed_at=now, authority_epoch=epoch)
+    envelope = {"repository": repo, "scope": "issue:501", "stack": "builderops-control-plane", "source_refs": task["source_anchor_refs"]}
+    request = {"envelope": envelope, "task_id": task["task_id"], "to_state": "ready", "idempotency_key": "retained-initial-write",
+               "request": task, "outbox": None, "lease": None, "expected_states": None, "expected_version": None}
+    request_body = httpx.Request("POST", "http://builderops/v1/tasks/transition", json=request).content.decode()
+    row = {"repository": repo, "task_id": task["task_id"], "state": "ready", "version": 1,
+           "lease": None, "payload": task, "updated_at": now,
+           "authority_envelope": {**envelope, "actor": "source-owner", "schema_version": 1}}
+    result = {"result": {"repository": repo, "task_id": task["task_id"], "state": "ready", "receipt_sequence": 1,
+                        "recovery_lsn": "0/1", "operation_key": None, "replayed": False}}
+
+    def packet(name, **fields):
+        return {"observer": "owner:" + name, "observed_at": now, "source_ref": "artifact:" + name, **fields}
+
+    artifacts = {"trace.zip": "a" * 64, "screen.png": "b" * 64, "junit.xml": "c" * 64}
+    evidence = {
+        "selection": packet("release", repository=repo, candidate_identity=candidate,
+            merged_main_sha=candidate["source_sha"], eligible=True, required_checks="passed",
+            relevant_change=False, replacement_sha=None, withdrawn=False,
+            attestation_sha256="d" * 64, attestation_verified_at=now),
+        "operator": packet("operator", activation_sha256=canonical_digest(prereqs["activation"]),
+            private_ingress=True, promotion_acknowledged=True,
+            linux_probe={"applicability": "not_applicable", "source_ref": "operator:builder-target-applicability", "result": "not_applicable"},
+            rollback={"state": "no_baseline", "previous_identity": None, "compatibility": "rollback_refused", "observed_at": now, "source_ref": "operator:no-baseline"}),
+        "source": packet("source", repository=repo, authority_epoch=epoch,
+            grants=["receipts:read", "status:read"], custody_ref="owner:fixed-read-source-bindings",
+            reachable=True, quota_complete=True),
+        "github": packet("github-read", payload=issue),
+        "task": packet("task-read", payload=row),
+        "exchange": packet("exchange", authority_epoch=epoch, request=request, request_body=request_body, response=result,
+            request_sha256=__import__("hashlib").sha256(request_body.encode()).hexdigest()),
+        "installed": packet("installed", candidate_identity=candidate, origin="http://127.0.0.1:8113",
+            assets=ASSET_SHA256, documents={"docs/AGENT_ISSUE_DISPATCHER.md": "c" * 64},
+            runtime=bundle["evidence"]["runtime"]),
+        "browser": packet("browser", candidate_sha=candidate["source_sha"], origin="http://127.0.0.1:8113",
+            applicability_observed_at=now, artifacts=artifacts, artifact_sha256=canonical_digest(artifacts), passed=True),
+        "journey": packet("journey", started_at=now, candidate_sha=candidate["source_sha"], origin="http://127.0.0.1:8113",
+            task_id=task["task_id"], issue_version=issue["updated_at"], body_sha256=task["sync_state"]["body_sha256"],
+            subject="github:example/fixture#501", routes=["/devui/overview", "/devui/focus", "/devui/overview"],
+            inspected_documents=["docs/AGENT_ISSUE_DISPATCHER.md"], artifacts=artifacts, artifact_sha256=canonical_digest(artifacts),
+            effects={name: 0 for name in ("github_writes", "task_mutations", "leases", "provider_sessions", "outbox", "browser_storage", "refused_requests")}),
+    }
+    evidence["owner"] = packet("owner", journey_sha256=canonical_digest(evidence["journey"]), acknowledged=True, meaning="read_observed")
+    return {"evidence": evidence, "prerequisites": prereqs}
+
+
+_FIRST_READ_INVALID_NESTED_FIELDS = {
+    **{
+        ".".join(path) + ":" + label: (path, value)
+        for path in (
+            ("source", "custody_ref"),
+            ("operator", "linux_probe", "source_ref"),
+            ("operator", "rollback", "source_ref"),
+            ("exchange", "request", "envelope", "stack"),
+            ("task", "payload", "authority_envelope", "actor"),
+        )
+        for label, value in (("bool", True), ("number", 1), ("array", ["ref"]),
+                             ("object", {"ref": "x"}), ("blank", " \t"))
+    },
+    **{
+        ".".join(path) + ":" + label: (path, value)
+        for path in (("exchange", "authority_epoch"),
+                     ("task", "payload", "authority_envelope", "schema_version"))
+        for label, value in (("bool", True), ("float", 1.0), ("string", "1"), ("zero", 0), ("mismatch", 2))
+    },
+    **{
+        "journey.inspected_documents:" + label: (("journey", "inspected_documents"), value)
+        for label, value in (
+            ("object", {"docs/AGENT_ISSUE_DISPATCHER.md": True}),
+            ("mixed", ["docs/AGENT_ISSUE_DISPATCHER.md", True]),
+            ("blank", ["docs/AGENT_ISSUE_DISPATCHER.md", "  "]),
+        )
+    },
+    **{
+        "task.updated_at:" + label: (("task", "payload", "updated_at"), value)
+        for label, value in (("bool", True), ("blank", "  "), ("invalid", "not-a-time"))
+    },
+}
+
+
+def _first_read_nested_mutation(inputs, path, value):
+    """Keep independent byte/digest bindings intact when testing field semantics."""
+    evidence = inputs["evidence"]
+    target = evidence
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = copy.deepcopy(value)
+    if path[:3] == ("exchange", "request", "envelope"):
+        evidence["task"]["payload"]["authority_envelope"][path[-1]] = copy.deepcopy(value)
+    if path[:2] == ("exchange", "request"):
+        exchange = evidence["exchange"]
+        exchange["request_body"] = json.dumps(exchange["request"])
+        exchange["request_sha256"] = __import__("hashlib").sha256(exchange["request_body"].encode()).hexdigest()
+    if path[0] == "journey":
+        evidence["owner"]["journey_sha256"] = canonical_digest(evidence["journey"])
+
+
+def _first_read_rebind_retained_hashes(receipt, inputs):
+    # All nine malformed field classes are retained only in these input hashes.
+    # A consistent digest must not substitute for validating their actual types.
+    receipt["input_sha256"] = canonical_digest(inputs)
+    for name, packet in inputs["evidence"].items():
+        receipt["observations"][name]["sha256"] = canonical_digest(packet)
+    receipt["evidence_fingerprint"] = canonical_digest({
+        key: value for key, value in receipt.items() if key != "evidence_fingerprint"
+    })
+
+
+@pytest.mark.parametrize("source_docs", [
+    "- `docs/AGENT_ISSUE_DISPATCHER.md`",
+    "- docs/AGENT_ISSUE_DISPATCHER.md",
+    "- [Dispatcher](docs/AGENT_ISSUE_DISPATCHER.md)",
+])
+def test_first_read_observation_validates_independent_source_evidence(source_docs):
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
+
+    inputs = _first_read_inputs(source_docs)
+    receipt = build_first_read_observation(**inputs)
+    assert receipt["verdict"] == "pass", receipt
+    validate_first_read_observation(receipt, **inputs)
+    assert len(receipt["components"]) == 12
+    assert receipt["gaps"] == inputs["prerequisites"]["inventory"]["gaps"]
+    assert len(receipt["consumed_components"]) == 5
+    assert receipt["claim"] == "source_backed_zero_effect_read_only"
+    # Later unrelated main is deliberately not a validator input.
+    assert "current_main_sha" not in receipt
+    assert "github" in receipt["observations"] and "exchange" in receipt["observations"]
+    # Source owners retain actual HTTP bytes, including whitespace/escaping;
+    # a validator must never guess the transport library's serialization.
+    import httpx
+    exchange = inputs["evidence"]["exchange"]
+    for body in (
+        httpx.Request("POST", "http://builderops/v1/tasks/transition", json=exchange["request"]).content,
+        json.dumps(exchange["request"], ensure_ascii=True, indent=2).encode(),
+    ):
+        exchange["request_body"] = body.decode()
+        exchange["request_sha256"] = __import__("hashlib").sha256(body).hexdigest()
+        assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    # Existing TaskTransitionRequest/store accept any nonempty string key.
+    _first_read_nested_mutation(inputs, ("exchange", "request", "idempotency_key"), "  ")
+    assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    rollback = inputs["evidence"]["operator"]["rollback"]
+    rollback.update(state="available", previous_identity=copy.deepcopy(receipt["candidate_identity"]),
+                    compatibility="verified_no_data_rewind")
+    assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    rollback["previous_identity"] = dict.fromkeys(rollback["previous_identity"], "garbage")
+    assert build_first_read_observation(**inputs)["verdict"] == "refused"
+
+
+@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "plain_document_missing", "plain_document_uninspected", "document_malformed", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins", *_FIRST_READ_INVALID_NESTED_FIELDS])
+def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
+
+    inputs = _first_read_inputs()
+    good = build_first_read_observation(**inputs)
+    assert good["verdict"] == "pass"
+    for kind in TYPES:
+        with pytest.raises(ReceiptValidationError):
+            build_receipt(kind, good, inputs["prerequisites"])
+    with pytest.raises(ReceiptValidationError):
+        validate_receipt(good, inputs["prerequisites"])
+    if failure in {"plain_document_missing", "plain_document_uninspected", "document_malformed"}:
+        target = "[invalid](docs/AGENT_ISSUE_DISPATCHER.md" if failure == "document_malformed" else "docs/required.md"
+        inputs = _first_read_inputs("- `docs/AGENT_ISSUE_DISPATCHER.md`\n- " + target)
+        if failure == "plain_document_uninspected":
+            inputs["evidence"]["installed"]["documents"][target] = "d" * 64
+    evidence = inputs["evidence"]
+    if failure in _FIRST_READ_INVALID_NESTED_FIELDS:
+        _first_read_nested_mutation(inputs, *_FIRST_READ_INVALID_NESTED_FIELDS[failure])
+        _first_read_rebind_retained_hashes(good, inputs)
+    elif failure == "response":
+        del evidence["exchange"]["response"]
+    elif failure == "request":
+        evidence["exchange"]["request"]["outbox"] = {}
+    elif failure == "wire":
+        evidence["exchange"]["request_body"] = evidence["exchange"]["request_body"].replace("Import one source Issue", "invented")
+        evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(evidence["exchange"]["request_body"].encode()).hexdigest()
+    elif failure == "wire_digest":
+        evidence["exchange"]["request_sha256"] = "f" * 64
+    elif failure in {"wire_number_type", "source_number_type"}:
+        wire = json.loads(evidence["exchange"]["request_body"])
+        wire["request"]["issue_number"] = 501.0
+        body = json.dumps(wire)
+        evidence["exchange"]["request_body"] = body
+        evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(body.encode()).hexdigest()
+        if failure == "source_number_type":
+            evidence["exchange"]["request"] = wire
+            evidence["task"]["payload"]["payload"] = copy.deepcopy(wire["request"])
+    elif failure in {"native_number_type", "native_epoch_type"}:
+        native = copy.deepcopy(evidence["task"]["payload"]["payload"])
+        evidence["task"]["payload"]["payload"] = native
+        if failure == "native_number_type":
+            native["issue_number"] = 501.0
+        else:
+            native["sync_state"]["authority_epoch"] = float(native["sync_state"]["authority_epoch"])
+    elif failure == "source":
+        evidence["github"]["payload"]["body"] += "changed"
+    elif failure == "native":
+        evidence["task"]["payload"]["payload"]["title"] = "invented"
+    elif failure == "epoch":
+        evidence["source"]["authority_epoch"] += 1
+    elif failure == "grant":
+        evidence["source"]["grants"] = []
+    elif failure in {"stale", "future", "order"}:
+        evidence["journey"]["started_at"] = (datetime.now(timezone.utc) + timedelta(hours=1 if failure == "future" else -25 if failure == "stale" else -1)).isoformat()
+    elif failure == "candidate":
+        evidence["installed"]["candidate_identity"] = {**evidence["installed"]["candidate_identity"], "source_sha": "f" * 40}
+    elif failure == "assets":
+        evidence["installed"]["assets"] = {}
+    elif failure == "documents":
+        evidence["installed"]["documents"] = {}
+    elif failure in {"plain_document_missing", "plain_document_uninspected", "document_malformed"}:
+        pass  # The independently bound Issue now requires every listed document.
+    elif failure == "secret":
+        evidence["source"]["password"] = "sentinel-never-export"
+    elif failure == "partial":
+        del evidence["task"]
+    elif failure == "effects":
+        evidence["journey"]["effects"]["leases"] = 1
+    elif failure == "owner":
+        evidence["owner"]["meaning"] = "accepted"
+    elif failure == "superseded":
+        evidence["selection"]["relevant_change"] = True
+    elif failure == "activation":
+        del inputs["prerequisites"]["activation"]
+    elif failure == "inventory":
+        inputs["prerequisites"]["inventory"]["components"].pop()
+    elif failure == "browser":
+        evidence["browser"]["artifact_sha256"] = "f" * 64
+    elif failure == "rollback_pins":
+        evidence["operator"]["rollback"].update(state="available", compatibility="verified_no_data_rewind",
+            previous_identity=dict.fromkeys(evidence["selection"]["candidate_identity"], "garbage"))
+    else:
+        evidence["operator"]["rollback"]["state"] = "available"
+    refused = build_first_read_observation(**inputs)
+    assert refused["verdict"] == "refused"
+    assert "sentinel-never-export" not in json.dumps(refused)
+    with pytest.raises(ReceiptValidationError):
+        validate_first_read_observation(good, **inputs)

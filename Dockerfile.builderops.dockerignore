@@ -5,6 +5,12 @@
 !requirements-builderops.txt
 !app
 !app/**
+!scripts
+!scripts/validate_issue_readiness.py
+!tests/
+!tests/fixtures/
+!tests/fixtures/issue_readiness/
+!tests/fixtures/issue_readiness/valid_ready_candidate.md
 !.codex
 !.codex/skills
 !.codex/skills/start-model-inquiry
@@ -18,6 +24,7 @@
 !config/platform/devui_vm102_runtime_qualification.v1.schema.json
 !config/platform/devsystem_vm102_deploy.v1.schema.json
 !config/platform/devsystem_vm102_health.v1.schema.json
+!config/platform/devui_first_read_observation.v1.schema.json
 **/__pycache__
 **/*.pyc
 **/*.log

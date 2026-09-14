@@ -3,6 +3,7 @@ COPY companion-ui/companion-app/companion_ui/workspace/devui_candidate /devui-ca
 COPY app/builderops/devui_managed.css /devui-candidate/assets/devui.css
 COPY docs /devui-candidate/docs
 COPY app/builderops/ckm/seed/capabilities.yaml /devui-candidate/app/builderops/ckm/seed/capabilities.yaml
+COPY tests/fixtures/issue_readiness/valid_ready_candidate.md /ready-issue.md
 
 FROM python:3.12-slim
 
@@ -32,12 +33,40 @@ RUN pip install --no-cache-dir -r requirements-builderops.txt
 
 COPY pyproject.toml ./
 COPY app ./app
+COPY scripts/validate_issue_readiness.py ./scripts/validate_issue_readiness.py
 COPY .codex/skills/start-model-inquiry/SKILL.md ./.codex/skills/start-model-inquiry/SKILL.md
 COPY --from=devui-source-inputs /devui-candidate ./devui-candidate
 RUN python -m app.builderops.devui_sources --root /app/devui-candidate \
     --repository "$SOURCE_REPOSITORY" --source-sha "$VCS_REF" \
     --capabilities app/builderops/ckm/seed/capabilities.yaml --matrix docs/architecture/traceability-matrix.md
-COPY config/platform/builderops_vm_rebuild_activation.v1.schema.json config/platform/devsystem_vm102_component_inventory.v1.schema.json config/platform/devui_vm102_runtime_qualification.v1.schema.json config/platform/devsystem_vm102_deploy.v1.schema.json config/platform/devsystem_vm102_health.v1.schema.json ./config/platform/
+COPY config/platform/builderops_vm_rebuild_activation.v1.schema.json config/platform/devsystem_vm102_component_inventory.v1.schema.json config/platform/devui_vm102_runtime_qualification.v1.schema.json config/platform/devsystem_vm102_deploy.v1.schema.json config/platform/devsystem_vm102_health.v1.schema.json config/platform/devui_first_read_observation.v1.schema.json ./config/platform/
+RUN --mount=type=bind,from=devui-source-inputs,source=/ready-issue.md,target=/tmp/ready-issue.md python - <<'PY'
+from datetime import datetime, timezone
+from pathlib import Path
+from app.builderops.control_plane.client_cli import build_parser, issue_source_task
+from app.ops.devui_vm102_runtime_receipts import first_read_schema
+from jsonschema import Draft202012Validator
+
+assert "task-import-issue" in build_parser().format_help()
+Draft202012Validator.check_schema(first_read_schema())
+body = Path("/tmp/ready-issue.md").read_text().replace(
+    "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+    "doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Initial Issue work source before M2`",
+).replace(
+    "`tests/governance/test_issue_pr_governance.py::test_issue_readiness_workflow_is_strict_for_agent_ready_only`",
+    "diff of `Dockerfile.builderops` neutral dependency closure\n  - Verify: `.github/workflows/app-image-build.yml :: build-builderops-images`",
+)
+stamp = datetime.now(timezone.utc).isoformat()
+issue = {"number": 1, "title": "Filtered image source validation", "body": body,
+         "state": "open", "labels": [{"name": "agent:ready"}],
+         "created_at": stamp, "updated_at": stamp,
+         "html_url": "https://github.com/example/fixture/issues/1",
+         "url": "https://api.github.com/repos/example/fixture/issues/1",
+         "repository_url": "https://api.github.com/repos/example/fixture"}
+task = issue_source_task(issue, repository="example/fixture", number=1,
+                         observed_at=stamp, authority_epoch=1)
+assert task["task_id"] == "github-example--fixture-issue-1" and task["status"] == "ready"
+PY
 RUN pip install --no-cache-dir --no-deps . \
     && addgroup --system builderops \
     && adduser --system --ingroup builderops --home /nonexistent builderops

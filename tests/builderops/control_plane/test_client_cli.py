@@ -567,3 +567,134 @@ def test_routing_not_engaged_for_read_only_commands(tmp_path: Path, factory) -> 
     assert exit_code == 0
     [client] = factory.created
     assert client.calls == [("status", {})]
+
+
+def _import_source(repository="rasmustho/agentic-pkm-mvp", number=501):
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    return {
+        "number": number, "title": "Import one source Issue", "state": "open",
+        "url": f"https://api.github.com/repos/{repository}/issues/{number}",
+        "repository_url": f"https://api.github.com/repos/{repository}",
+        "html_url": f"https://github.com/{repository}/issues/{number}",
+        "created_at": stamp, "updated_at": stamp,
+        "labels": [{"name": "agent:ready"}, {"name": "type:task"}],
+        "body": (Path(__file__).resolve().parents[3] / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text(),
+    }
+
+
+def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys):
+    import copy
+    from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client import ControlPlaneNotFoundError
+
+    source = _import_source()
+    reads, writes = [], []
+    row = None
+
+    def gh(args):
+        reads.append(args)
+        return copy.deepcopy(source)
+
+    class ImportClient(_RecordingClient):
+        authority_epoch = 1
+        def get_task(self, **address):
+            assert address == {"repository": "rasmustho/agentic-pkm-mvp", "task_id": "github-rasmustho--agentic-pkm-mvp-issue-501"}
+            if row is None:
+                raise ControlPlaneNotFoundError("absent")
+            return copy.deepcopy(row)
+
+        def transition_task(self, **request):
+            nonlocal row
+            replayed = bool(writes)
+            if writes:
+                assert request == writes[0]
+            writes.append(copy.deepcopy(request))
+            row = {
+                "repository": request["envelope"]["repository"], "task_id": request["task_id"],
+                "state": "ready", "version": 1, "lease": None, "payload": request["request"],
+                "authority_envelope": {**request["envelope"], "actor": "source-owner", "schema_version": 1},
+                "updated_at": source["updated_at"],
+            }
+            return {"result": {"repository": row["repository"], "task_id": row["task_id"],
+                "state": "ready", "receipt_sequence": 1, "recovery_lsn": "0/1",
+                "operation_key": None, "replayed": replayed}}
+
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", gh)
+    command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation",
+        "task-import-issue", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:501",
+        "--stack", "builderops-control-plane", "--issue", "501"]
+    for replayed in (False, True):
+        assert main(command, client_factory=ImportClient) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["transition_response"]["result"]["replayed"] is replayed
+        assert result["task"]["payload"]["issue_number"] == 501
+        assert result["task"]["payload"]["title"] == source["title"]
+        assert result["task"]["payload"]["sync_state"]["source_version"] == source["updated_at"]
+        assert result["transition_request"]["outbox"] is None
+        assert result["transition_request"]["lease"] is None
+    assert reads == [["api", "repos/rasmustho/agentic-pkm-mvp/issues/501"]] * 4
+    for key, value in (("title", "changed"), ("state", "closed"), ("labels", []),
+                       ("body", "missing scope"), ("number", 502),
+                       ("html_url", "https://github.com/foreign/repo/issues/501")):
+        original = source[key]
+        source[key] = value
+        assert main(command, client_factory=ImportClient) != 0
+        capsys.readouterr()
+        source[key] = original
+        assert len(writes) == 2
+    for target, field, bad in (
+        (row, "updated_at", True), (row, "updated_at", "not-a-time"),
+        (row["authority_envelope"], "actor", True), (row["authority_envelope"], "actor", "  "),
+        (row["authority_envelope"], "schema_version", True),
+        (row["authority_envelope"], "schema_version", 1.0),
+        (row["authority_envelope"], "schema_version", 2),
+    ):
+        original = target[field]
+        target[field] = bad
+        assert main(command, client_factory=ImportClient) != 0
+        capsys.readouterr()
+        assert len(writes) == 2
+        target[field] = original
+    original_payload = row["payload"]
+    row["payload"] = {**original_payload, "issue_number": 501.0}
+    assert main(command, client_factory=ImportClient) != 0
+    capsys.readouterr()
+    assert len(writes) == 2
+    row["payload"] = original_payload
+    row["state"] = "claimed"
+    assert main(command, client_factory=ImportClient) != 0
+    assert len(writes) == 2
+    row = None
+    writes.clear()
+    source["updatedAt"] = source["created_at"]
+    assert main(command, client_factory=ImportClient) != 0
+    assert writes == []
+    del source["updatedAt"]
+    reads.clear()
+    def drifting_gh(args):
+        value = gh(args)
+        if len(reads) == 2:
+            value["title"] = "changed after the initial write"
+        return value
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", drifting_gh)
+    assert main(command, client_factory=ImportClient) != 0
+    assert len(writes) == 1
+    assert row["payload"]["title"] == source["title"]
+    assert row["lease"] is None
+    from app.builderops.control_plane.client_cli import issue_source_task
+    from scripts import validate_issue_readiness as readiness
+    source["body"] = source["body"].replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        "doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Initial Issue work source before M2`",
+    ).replace(
+        "`tests/governance/test_issue_pr_governance.py::test_issue_readiness_workflow_is_strict_for_agent_ready_only`",
+        "diff of `Dockerfile.builderops` neutral dependency closure\n  - Verify: `.github/workflows/app-image-build.yml :: build-builderops-images`",
+    )
+    def unexpected_file_read(*args):
+        raise AssertionError("pure source binding consulted checkout files")
+    monkeypatch.setattr(readiness, "_target_has_missing_file_path", unexpected_file_read)
+    monkeypatch.setattr(readiness, "_target_has_existing_file_path", unexpected_file_read)
+    assert issue_source_task(source, repository="rasmustho/agentic-pkm-mvp", number=501,
+                             observed_at=source["updated_at"], authority_epoch=1)["title"] == source["title"]

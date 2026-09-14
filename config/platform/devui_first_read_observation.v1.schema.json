@@ -1,0 +1,1099 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devui_first_read_observation.v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_type",
+        "receipt_version",
+        "observed_at",
+        "verdict",
+        "refusals",
+        "secret_material",
+        "claim",
+        "repository",
+        "candidate_identity",
+        "origin",
+        "runtime",
+        "issue_binding",
+        "source",
+        "assets",
+        "documents",
+        "consumed_components",
+        "components",
+        "gaps",
+        "input_sha256",
+        "observations",
+        "evidence_fingerprint"
+      ],
+      "properties": {
+        "receipt_type": {
+          "const": "devui_first_read_observation.v1"
+        },
+        "receipt_version": {
+          "const": 1
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verdict": {
+          "const": "pass"
+        },
+        "refusals": {
+          "const": []
+        },
+        "secret_material": {
+          "const": "absent"
+        },
+        "claim": {
+          "const": "source_backed_zero_effect_read_only"
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[a-z0-9_.-]+/[a-z0-9_.-]+$"
+        },
+        "candidate_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_sha",
+            "control_plane_image_digest",
+            "postgres_image_digest",
+            "config_fingerprint",
+            "devui_image_digest",
+            "devui_config_fingerprint"
+          ],
+          "properties": {
+            "source_sha": {
+              "type": "string",
+              "pattern": "^(?!0{40}$)[a-f0-9]{40}$"
+            },
+            "control_plane_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "postgres_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "config_fingerprint": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "devui_image_digest": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            },
+            "devui_config_fingerprint": {
+              "type": "string",
+              "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$"
+            }
+          }
+        },
+        "origin": {
+          "enum": [
+            "http://127.0.0.1:8113",
+            "http://localhost:8113"
+          ]
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "project",
+            "service",
+            "engine_id",
+            "engine_context",
+            "engine_socket",
+            "process_owner",
+            "bind_host",
+            "port",
+            "overview_path",
+            "managed",
+            "product_runtime_started",
+            "no_dual_writer",
+            "private_authenticated_ingress",
+            "funnel",
+            "migration",
+            "rollback_owner"
+          ],
+          "properties": {
+            "project": {
+              "const": "builderops-devui"
+            },
+            "service": {
+              "const": "devui"
+            },
+            "engine_id": {
+              "type": "string",
+              "pattern": "^(?!00000000-0000-0000-0000-000000000000$)[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+            },
+            "engine_context": {
+              "const": "builderops"
+            },
+            "engine_socket": {
+              "const": "unix:///run/docker-builderops.sock"
+            },
+            "process_owner": {
+              "const": "builderops"
+            },
+            "bind_host": {
+              "const": "127.0.0.1"
+            },
+            "port": {
+              "const": 8113
+            },
+            "overview_path": {
+              "const": "/api/devui/overview"
+            },
+            "managed": {
+              "const": true
+            },
+            "product_runtime_started": {
+              "const": false
+            },
+            "no_dual_writer": {
+              "const": true
+            },
+            "private_authenticated_ingress": {
+              "const": true
+            },
+            "funnel": {
+              "const": false
+            },
+            "migration": {
+              "const": "none"
+            },
+            "rollback_owner": {
+              "const": "builder-system-release-operator"
+            }
+          }
+        },
+        "issue_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "number",
+            "version",
+            "body_sha256",
+            "task_id"
+          ],
+          "properties": {
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "version": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "body_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "task_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "authority_epoch",
+            "grants"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "grants": {
+              "const": [
+                "receipts:read",
+                "status:read"
+              ]
+            }
+          }
+        },
+        "assets": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "documents": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "consumed_components": {
+          "const": [
+            "builderops_cockpit",
+            "builderops_control_plane",
+            "devui_projection",
+            "github_git_ci_delivery",
+            "tars_proxmox_control"
+          ]
+        },
+        "components": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "devui_projection"
+                },
+                "owner": {
+                  "const": "owner:dev_ui"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "builderops_control_plane"
+                },
+                "owner": {
+                  "const": "owner:builderops"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "builderops_cockpit"
+                },
+                "owner": {
+                  "const": "owner:builderops_cockpit"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "dispatcher_signboard"
+                },
+                "owner": {
+                  "const": "owner:dispatcher_signboard"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "ddo"
+                },
+                "owner": {
+                  "const": "owner:ddo"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "ckm_kvasir"
+                },
+                "owner": {
+                  "const": "owner:ckm_kvasir"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/vm102_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "focus_conversation_port"
+                },
+                "owner": {
+                  "const": "owner:focus_conversation_port"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/external_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "soi_evidence"
+                },
+                "owner": {
+                  "const": "owner:product_runtime"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/external_component",
+              "properties": {
+                "component_id": {
+                  "const": "github_git_ci_delivery"
+                },
+                "owner": {
+                  "const": "owner:github_git_ci"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/external_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "model_service"
+                },
+                "owner": {
+                  "const": "owner:model_access_substrate"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/external_gap_component",
+              "properties": {
+                "component_id": {
+                  "const": "tars_proxmox_control"
+                },
+                "owner": {
+                  "const": "owner:tars_proxmox"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/excluded_component",
+              "properties": {
+                "component_id": {
+                  "const": "product_runtime"
+                },
+                "owner": {
+                  "const": "owner:product_runtime"
+                }
+              }
+            }
+          ],
+          "items": false
+        },
+        "gaps": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/gap"
+          }
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "observations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "selection",
+            "operator",
+            "source",
+            "github",
+            "task",
+            "exchange",
+            "installed",
+            "browser",
+            "journey",
+            "owner"
+          ],
+          "properties": {
+            "selection": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "operator": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "github": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "task": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "exchange": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "installed": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "browser": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "journey": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            },
+            "owner": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "observer",
+                "observed_at",
+                "source_ref",
+                "sha256"
+              ],
+              "properties": {
+                "observer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              }
+            }
+          }
+        },
+        "evidence_fingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_type",
+        "receipt_version",
+        "observed_at",
+        "verdict",
+        "refusals",
+        "secret_material"
+      ],
+      "properties": {
+        "receipt_type": {
+          "const": "devui_first_read_observation.v1"
+        },
+        "receipt_version": {
+          "const": 1
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "verdict": {
+          "const": "refused"
+        },
+        "refusals": {
+          "const": [
+            "first_read_evidence_invalid_or_unavailable"
+          ]
+        },
+        "secret_material": {
+          "const": "absent"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source_ref": {
+      "type": "string",
+      "anyOf": [
+        {
+          "const": "repo:docs/BUILDEROPS_CONTROL_PLANE/README.md#complete-dev-system-vm-102-topology-contract"
+        },
+        {
+          "const": "github:issue:5194"
+        },
+        {
+          "pattern": "^github:pr:[1-9][0-9]*$"
+        },
+        {
+          "pattern": "^github:commit:[a-f0-9]{40,64}$"
+        },
+        {
+          "pattern": "^receipt:(devsystem_vm102_component_inventory\\.v1|builderops_vm_rebuild_activation\\.v1|devui_vm102_runtime_qualification\\.v1|devsystem_vm102_deploy\\.v1|devsystem_vm102_health\\.v1|devui-stage-a-read-only-owner-pilot\\.v1|devsystem_vm102_rollback\\.v1|tars_host_qualification\\.v1):[a-f0-9]{64}$"
+        },
+        {
+          "pattern": "^operator:sha256:[a-f0-9]{64}$"
+        }
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_id",
+        "placement_class",
+        "owner",
+        "service_or_project",
+        "source_identity",
+        "ingress_auth",
+        "health_version",
+        "deployment_lifecycle",
+        "migration_rollback",
+        "reconciliation_state",
+        "evidence_refs"
+      ],
+      "properties": {
+        "component_id": {
+          "type": "string"
+        },
+        "placement_class": {
+          "enum": [
+            "vm102_resident_target",
+            "external_dependency",
+            "intentionally_non_runtime"
+          ]
+        },
+        "owner": {
+          "enum": [
+            "owner:dev_ui",
+            "owner:builderops",
+            "owner:builderops_cockpit",
+            "owner:dispatcher_signboard",
+            "owner:ddo",
+            "owner:ckm_kvasir",
+            "owner:focus_conversation_port",
+            "owner:product_runtime",
+            "owner:github_git_ci",
+            "owner:model_access_substrate",
+            "owner:tars_proxmox"
+          ]
+        },
+        "service_or_project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "source_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "ingress_auth": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "health_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "deployment_lifecycle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "migration_rollback": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "reconciliation_state": {
+          "enum": [
+            "gap",
+            "unknown",
+            "external",
+            "excluded"
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/source_ref"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reconciliation_state": {
+                "const": "gap"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "service_or_project": {
+                "const": "gap:service_or_project_not_proven"
+              },
+              "source_identity": {
+                "const": "gap:source_identity_not_proven"
+              },
+              "ingress_auth": {
+                "const": "gap:ingress_auth_not_proven"
+              },
+              "health_version": {
+                "const": "gap:health_version_not_proven"
+              },
+              "deployment_lifecycle": {
+                "const": "gap:deployment_lifecycle_not_proven"
+              },
+              "migration_rollback": {
+                "const": "gap:migration_rollback_not_proven"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reconciliation_state": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "service_or_project": {
+                "const": "unknown:service_or_project_not_proven"
+              },
+              "source_identity": {
+                "const": "unknown:source_identity_not_proven"
+              },
+              "ingress_auth": {
+                "const": "unknown:ingress_auth_not_proven"
+              },
+              "health_version": {
+                "const": "unknown:health_version_not_proven"
+              },
+              "deployment_lifecycle": {
+                "const": "unknown:deployment_lifecycle_not_proven"
+              },
+              "migration_rollback": {
+                "const": "unknown:migration_rollback_not_proven"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reconciliation_state": {
+                "const": "external"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "service_or_project": {
+                "const": "external:service_or_project_external_dependency"
+              },
+              "source_identity": {
+                "const": "external:source_identity_external_dependency"
+              },
+              "ingress_auth": {
+                "const": "external:ingress_auth_external_dependency"
+              },
+              "health_version": {
+                "const": "external:health_version_external_dependency"
+              },
+              "deployment_lifecycle": {
+                "const": "external:deployment_lifecycle_external_dependency"
+              },
+              "migration_rollback": {
+                "const": "external:migration_rollback_external_dependency"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reconciliation_state": {
+                "const": "excluded"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "service_or_project": {
+                "const": "excluded:service_or_project_not_applicable"
+              },
+              "source_identity": {
+                "const": "excluded:source_identity_not_applicable"
+              },
+              "ingress_auth": {
+                "const": "excluded:ingress_auth_not_applicable"
+              },
+              "health_version": {
+                "const": "excluded:health_version_not_applicable"
+              },
+              "deployment_lifecycle": {
+                "const": "excluded:deployment_lifecycle_not_applicable"
+              },
+              "migration_rollback": {
+                "const": "excluded:migration_rollback_not_applicable"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "vm102_gap_component": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/component"
+        },
+        {
+          "properties": {
+            "placement_class": {
+              "const": "vm102_resident_target"
+            },
+            "reconciliation_state": {
+              "enum": [
+                "gap",
+                "unknown"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "external_gap_component": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/component"
+        },
+        {
+          "properties": {
+            "placement_class": {
+              "const": "external_dependency"
+            },
+            "reconciliation_state": {
+              "enum": [
+                "gap",
+                "unknown"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "external_component": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/component"
+        },
+        {
+          "properties": {
+            "placement_class": {
+              "const": "external_dependency"
+            },
+            "reconciliation_state": {
+              "const": "external"
+            }
+          }
+        }
+      ]
+    },
+    "excluded_component": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/component"
+        },
+        {
+          "properties": {
+            "placement_class": {
+              "const": "intentionally_non_runtime"
+            },
+            "reconciliation_state": {
+              "const": "excluded"
+            }
+          }
+        }
+      ]
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_id",
+        "code",
+        "detail"
+      ],
+      "properties": {
+        "component_id": {
+          "enum": [
+            "devui_projection",
+            "builderops_control_plane",
+            "builderops_cockpit",
+            "dispatcher_signboard",
+            "ddo",
+            "ckm_kvasir",
+            "focus_conversation_port",
+            "soi_evidence",
+            "github_git_ci_delivery",
+            "model_service",
+            "tars_proxmox_control",
+            "product_runtime"
+          ]
+        },
+        "code": {
+          "enum": [
+            "runtime_evidence_missing",
+            "runtime_evidence_unknown"
+          ]
+        },
+        "detail": {
+          "const": "runtime evidence is not supplied by this inventory"
+        }
+      }
+    }
+  }
+}

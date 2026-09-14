@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -344,6 +344,63 @@ def read_vm102_receipt_provider(
         },
         "payload": evidence,
     }
+
+
+def read_first_read_observation_provider(
+    receipt_dir: Path | str,
+    *,
+    listener_identity: Mapping[str, Any] | Callable[[], Mapping[str, Any]],
+    source_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Revalidate one bounded observation, independently of full-system evidence.
+
+    The two retained files live below the existing read-only receipt directory
+    so a malformed first-read packet never poisons the root full-chain scan.
+    Missing completed observation is a withdrawn claim, not read admission.
+    """
+    provider = {"provider": "devui_first_read_observation", "authority": "source_owner_observed_read_only"}
+    try:
+        from app.ops.devui_vm102_runtime_receipts import validate_first_read_observation
+        from app.builderops.control_plane.client_cli import issue_source_task, same_json_value, validate_import_readback
+
+        captured = now or _utc_now()
+        root = Path(receipt_dir) / "first-read"
+        paths = [root / name for name in ("observation.json", "inputs.json")]
+        def read(path: Path) -> bytes:
+            if any(parent.is_symlink() for parent in (path, *path.parents)) or not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+                raise Vm102ReceiptError("first-read retained input is unavailable")
+            return path.read_bytes()
+
+        raw = [read(path) for path in paths]
+        receipt, inputs = [json.loads(value) for value in raw]
+        if not isinstance(inputs, dict) or set(inputs) != {"evidence", "prerequisites"}:
+            raise Vm102ReceiptError("first-read retained fields are invalid")
+        validate_first_read_observation(receipt, **inputs, now=captured)
+        identity = listener_identity() if callable(listener_identity) else listener_identity
+        if set(identity) != {"candidate_identity", "origin", "repository", "source", "assets", "documents"} or any(not same_json_value(receipt[key], value) for key, value in identity.items()):
+            raise Vm102ReceiptError("first-read listener or source identity changed")
+        current = source_reader(receipt["issue_binding"])
+        evidence = inputs["evidence"]
+        request = evidence["exchange"]["request"]
+        if current["authority_epoch"] != receipt["source"]["authority_epoch"]:
+            raise Vm102ReceiptError("first-read source epoch changed")
+        expected = issue_source_task(current["issue"], repository=receipt["repository"],
+            number=receipt["issue_binding"]["number"], observed_at=request["request"]["sync_state"]["last_pull_at"],
+            authority_epoch=current["authority_epoch"])
+        if not same_json_value(expected, request["request"]):
+            raise Vm102ReceiptError("first-read selected Issue changed")
+        validate_import_readback(current["task"], request)
+        if raw != [read(path) for path in paths]:
+            raise Vm102ReceiptError("first-read retained inputs were replaced during read")
+        return {**provider, "status": "available", "captured_at": captured.isoformat(),
+            "snapshot": {"claim": receipt["claim"], "source_sha": receipt["candidate_identity"]["source_sha"],
+                         "issue": receipt["issue_binding"], "observed_at": receipt["observed_at"]},
+            "completeness": {"scope": "one_issue_read_observation", "full_system_authority": False,
+                             "consumed_components": receipt["consumed_components"], "gaps": receipt["gaps"]}}
+    except Exception:
+        return {**provider, "status": "refused", "captured_at": None, "snapshot": None, "completeness": None,
+            "refusal": {"code": "first_read_evidence_invalid_or_unavailable", "message": "First-read observation is unavailable or invalid", "details": {}}}
 
 
 __all__ = [

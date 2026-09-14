@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.ops.test_devui_vm102_runtime_receipts import _FIRST_READ_INVALID_NESTED_FIELDS
+
 from app.builderops.devui_receipts import (
     REQUIRED_RECEIPT_TYPES,
     Vm102ReceiptError,
@@ -199,3 +201,78 @@ def test_withdraws_first_deployment_with_previous_identity(tmp_path: Path) -> No
     deploy_path.write_text(json.dumps(deploy), encoding="utf-8")
 
     assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"
+@pytest.mark.parametrize("nested_failure", [None, "valid_api_key", "receipt_epoch", "receipt_version", "listener_epoch", *_FIRST_READ_INVALID_NESTED_FIELDS])
+def test_first_read_reader_revalidates_retained_inputs(tmp_path, nested_failure):
+    import copy
+    import json
+    from app.builderops.devui_receipts import read_first_read_observation_provider
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation
+    from tests.ops.test_devui_vm102_runtime_receipts import _first_read_inputs, _first_read_nested_mutation, _first_read_rebind_retained_hashes
+
+    inputs = _first_read_inputs()
+    receipt = build_first_read_observation(**inputs)
+    folder = tmp_path / "first-read"
+    folder.mkdir()
+    (folder / "inputs.json").write_text(json.dumps(inputs))
+    path = folder / "observation.json"
+    path.write_text(json.dumps(receipt))
+    identity = copy.deepcopy({"candidate_identity": receipt["candidate_identity"], "origin": receipt["origin"],
+                "repository": receipt["repository"], "source": receipt["source"],
+                "assets": receipt["assets"], "documents": receipt["documents"]})
+    reads = []
+    def source_read(binding):
+        reads.append(binding)
+        return {"issue": inputs["evidence"]["github"]["payload"], "task": inputs["evidence"]["task"]["payload"],
+                "authority_epoch": inputs["evidence"]["source"]["authority_epoch"]}
+
+    def read():
+        return read_first_read_observation_provider(tmp_path, listener_identity=identity, source_reader=source_read)
+
+    assert read()["status"] == "available"
+    assert read()["status"] == "available" and len(reads) == 2
+    if nested_failure in {"receipt_epoch", "receipt_version", "listener_epoch"}:
+        good_receipt, good_identity = copy.deepcopy(receipt), copy.deepcopy(identity)
+        if nested_failure == "receipt_epoch":
+            receipt["source"]["authority_epoch"] = float(receipt["source"]["authority_epoch"])
+        elif nested_failure == "receipt_version":
+            receipt["receipt_version"] = float(receipt["receipt_version"])
+        else:
+            identity["source"]["authority_epoch"] = True
+        path.write_text(json.dumps(receipt))
+        assert read()["status"] == "refused"
+        receipt, identity = good_receipt, good_identity
+        path.write_text(json.dumps(receipt))
+        assert read()["status"] == "available"
+        return
+    if nested_failure is not None:
+        good_inputs, good_receipt = copy.deepcopy(inputs), copy.deepcopy(receipt)
+        change = (("exchange", "request", "idempotency_key"), "  ") if nested_failure == "valid_api_key" else _FIRST_READ_INVALID_NESTED_FIELDS[nested_failure]
+        _first_read_nested_mutation(inputs, *change)
+        _first_read_rebind_retained_hashes(receipt, inputs)
+        (folder / "inputs.json").write_text(json.dumps(inputs))
+        path.write_text(json.dumps(receipt))
+        assert read()["status"] == ("available" if nested_failure == "valid_api_key" else "refused")
+        inputs, receipt = good_inputs, good_receipt
+        (folder / "inputs.json").write_text(json.dumps(inputs))
+        path.write_text(json.dumps(receipt))
+        assert read()["status"] == "available"
+        return
+    row = inputs["evidence"]["task"]["payload"]
+    original_payload = row["payload"]
+    row["payload"] = {**original_payload, "issue_number": 501.0}
+    assert read()["status"] == "refused"
+    row["payload"] = original_payload
+    assert read()["status"] == "available"
+    path.unlink()
+    assert read()["status"] == "refused"
+    path.write_text(json.dumps(receipt))
+    broken = copy.deepcopy(inputs)
+    broken["evidence"]["source"]["authority_epoch"] += 1
+    (folder / "inputs.json").write_text(json.dumps(broken))
+    assert read()["status"] == "refused"
+    (folder / "inputs.json").write_text(json.dumps(inputs))
+    identity["origin"] = "http://localhost:8113"
+    assert read()["status"] == "refused"
+    identity["origin"] = receipt["origin"]
+    inputs["evidence"]["github"]["payload"]["body"] += "source drift"
+    assert read()["status"] == "refused"

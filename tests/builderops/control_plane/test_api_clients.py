@@ -315,3 +315,110 @@ def test_malformed_409_body_raises_instead_of_silently_downgrading(tmp_path: Pat
     )
     with pytest.raises(ControlPlaneProtocolError):
         client.status()
+def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_path, monkeypatch, capsys):
+    import copy
+    import hashlib
+    from datetime import datetime, timezone
+    from dataclasses import replace
+    from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client_cli import main
+    from tests.builderops.control_plane.test_client_cli import _import_source, _manifest_dir
+    from tests.ops.test_devui_vm102_runtime_receipts import _first_read_inputs
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, canonical_digest
+
+    class SourceStore(InMemoryStore):
+        def get_task(self, repository, task_id):
+            self.calls.append(("get_task", repository, task_id))
+            if not hasattr(self, "row"):
+                raise KeyError(task_id)
+            return copy.deepcopy(self.row)
+
+        def commit_transition(self, **kw):
+            self.calls.append("commit_transition")
+            assert kw["outbox"] is kw["lease"] is kw["expected_states"] is kw["expected_version"] is None
+            assert kw["to_state"] == "ready"
+            if hasattr(self, "row"):
+                assert self.request == kw
+                return replace(self.result, replayed=True)
+            self.request = kw
+            self.row = {"repository": kw["envelope"].repository, "task_id": kw["task_id"],
+                "state": "ready", "version": 1, "updated_at": source["updated_at"],
+                "lease": None, "payload": kw["request"], "authority_envelope": kw["envelope"].as_json()}
+            self.result = TransactionResult(kw["envelope"].repository, kw["task_id"], "ready", self._next(), "0/1", None)
+            return self.result
+
+    inputs = _first_read_inputs()
+    source, store = _import_source(), SourceStore()
+    source["body"] = source["body"].replace(".codex/skills/_shared/ISSUE_CONTRACT.md", "docs/AGENT_ISSUE_DISPATCHER.md").replace(".github/workflows/issue-pr-governance.yml", "docs/AGENT_ISSUE_DISPATCHER.md")
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
+    monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
+    monkeypatch.delenv("BUILDEROPS_API_TOKEN_FILE", raising=False)
+    registry = _registry(tmp_path)
+    command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation",
+        "task-import-issue", "--repository", REPO, "--scope", "issue:501", "--stack", "builderops-control-plane", "--issue", "501"]
+    observed = []
+    service = create_app(store=store, credentials=registry)
+    @service.middleware("http")
+    async def observe(request, call_next):
+        observed.append((request.method, request.url.path, dict(request.query_params), request.headers.get("x-builderops-authority-epoch")))
+        return await call_next(request)
+    exchanges = []
+    def capture_response(response):
+        if response.request.method == "POST":
+            response.read()
+            exchanges.append((response.request.content, response.json()))
+    def factory(config):
+        transport = TestClient(service)
+        transport.event_hooks = {"request": [], "response": [capture_response]}
+        return BuilderOpsControlPlaneClient(config, http_client=transport, max_retries=0)
+
+    for replayed in (False, True):
+        assert main(command, client_factory=factory) == 0
+        assert json.loads(capsys.readouterr().out)["transition_response"]["result"]["replayed"] is replayed
+    writes = [item for item in observed if item[0] == "POST"]
+    assert writes == [("POST", "/v1/tasks/transition", {}, "1")] * 2
+    assert all(query == {"repository": CANON} for method, path, query, _ in observed if "/tasks/" in path and method == "GET")
+    # Independently observe the real service exchange instead of reproducing
+    # the importer's summary or a guessed HTTPX serialization formula.
+    body, response = exchanges[0]
+    request = json.loads(body)
+    evidence = inputs["evidence"]
+    evidence["source"]["repository"] = evidence["selection"]["repository"] = CANON
+    stamp = datetime.now(timezone.utc).isoformat()
+    for name in ("exchange", "github", "task", "journey", "owner"):
+        evidence[name]["observed_at"] = stamp
+    evidence["exchange"].update(request=request, request_body=body.decode(), response=response,
+                                request_sha256=hashlib.sha256(body).hexdigest())
+    evidence["github"]["payload"] = copy.deepcopy(source)
+    evidence["task"]["payload"] = copy.deepcopy(store.row)
+    evidence["journey"].update(started_at=stamp, subject=f"github:{CANON}#501", task_id=request["task_id"],
+        issue_version=source["updated_at"], body_sha256=request["request"]["sync_state"]["body_sha256"])
+    evidence["owner"]["journey_sha256"] = canonical_digest(evidence["journey"])
+    assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    from app.builderops.control_plane.client import ControlPlaneConflictError
+    before_calls = list(store.calls)
+    with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
+        with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
+            client.transition_task(**{**request, "outbox": {"effect_type": "github.comment", "payload": {}}})
+    assert store.calls == before_calls
+    before = store._seq
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "wrong")
+    assert main(command, client_factory=factory) == 3
+    assert store._seq == before
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
+    manifest = tmp_path / "credentials.json"
+    credentials = json.loads(manifest.read_text())
+    credentials["credentials"][0]["scopes"].remove("tasks:write")
+    manifest.write_text(json.dumps(credentials))
+    assert main(command, client_factory=factory) == 3
+    assert store._seq == before
+    credentials["credentials"][0]["scopes"].append("tasks:write")
+    manifest.write_text(json.dumps(credentials))
+    def stale_factory(config):
+        client = factory(config)
+        assert client.authority_epoch == 1
+        store.epoch = 2
+        return client
+    assert main(command, client_factory=stale_factory) == 3
+    assert store._seq == before

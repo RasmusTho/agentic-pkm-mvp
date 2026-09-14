@@ -124,8 +124,8 @@ journey, identity mismatch, effect, error, storage use, or unauthorized write is
 owning blocked contract and blocks the pilot.
 
 The separate [M1 first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target)
-defines an earlier one-Issue read observation only. It is source-definition, pending its own bounded
-implementation and live observation. Its `devui_first_read_observation.v1` record cannot be consumed
+defines an earlier one-Issue read observation only. #5543 implements its bounded producer and
+consumer; separate source preparation, operator qualification and live owner observation remain pending. Its `devui_first_read_observation.v1` record cannot be consumed
 by this full #4749 pilot or replace any inventory, qualification, deployment, health, hostile-state,
 exact-current-main or owner-evidence requirement below. This task remains the complete Stage A
 parent-validation gate for #4741; a first-read acknowledgement neither closes it nor weakens its

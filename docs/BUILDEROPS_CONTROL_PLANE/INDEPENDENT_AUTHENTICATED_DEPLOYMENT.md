@@ -69,11 +69,11 @@ secret-bearing evidence, unqualified hosts, missing component gaps, and rollback
 compatible runnable baseline; the repository-side candidate qualification remains insufficient for
 live qualification.
 
-The [M1 first-read target](README.md#m1-first-read-qualification-target) defines a separate, pending
+The [M1 first-read target](README.md#m1-first-read-qualification-target) has the bounded #5543 producer/consumer implementation for
 qualification/observation for the finite managed read journey. It preserves this deployment boundary,
 the full inventory and actual operator/host/source prerequisites; it neither supplies a deploy
-command nor makes the current full validators accept partial evidence. After a separately verified
-implementation, its single bounded record may report only the observed read journey. It is never
+command nor makes the full validators accept partial evidence. Live qualification is still unproven;
+its single bounded record may report only a separately authorized and observed read journey. It is never
 a `devsystem_vm102_*` receipt or an input authorizing broader component installation, health,
 rollback, authority cutover or full owner-pilot acceptance. Existing release/attestation and private
 origin controls still govern each actual install or candidate change.
