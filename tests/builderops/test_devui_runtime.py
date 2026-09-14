@@ -1158,3 +1158,86 @@ def test_managed_shell_api_and_asset_inventory_bind_one_candidate(managed_source
             (source.root / "assets/extra.js").unlink(missing_ok=True)
             _package_managed_shell(source.root) if mutation != "missing" else None
             (source.root / "manifest.json").write_text(json.dumps(original))
+def _install_first_read_observation(source, monkeypatch, *, retain=True):
+    import copy
+    from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client_cli import issue_source_task
+    from app.ops.builderops_vm_rebuild_activation import build_activation_receipt
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, canonical_digest
+    from tests.ops.test_devui_vm102_runtime_receipts import _first_read_inputs
+
+    inputs = _first_read_inputs()
+    evidence, prerequisites = inputs["evidence"], inputs["prerequisites"]
+    candidate = evidence["selection"]["candidate_identity"]
+    candidate.update(source_sha=source.environment["DEVUI_SOURCE_SHA"],
+                     control_plane_image_digest=source.environment["DEVUI_IMAGE_DIGEST"],
+                     devui_image_digest=source.environment["DEVUI_IMAGE_DIGEST"],
+                     devui_config_fingerprint=source.environment["DEVUI_CONFIG_FINGERPRINT"])
+    activation = prerequisites["activation"]
+    activation["candidate_identity"] = {key: candidate[key] for key in activation["candidate_identity"]}
+    activation["migration"]["authority_epoch"] = source.epoch
+    prerequisites["activation"] = build_activation_receipt({key: value for key, value in activation.items() if key != "evidence_fingerprint"})
+    evidence["operator"]["activation_sha256"] = canonical_digest(prerequisites["activation"])
+    evidence["selection"]["merged_main_sha"] = candidate["source_sha"]
+    evidence["installed"]["candidate_identity"] = copy.deepcopy(candidate)
+    evidence["installed"]["documents"] = {key: value for key, value in json.loads((source.root / "manifest.json").read_text())["files"].items() if not key.startswith("assets/")}
+    issue = evidence["github"]["payload"]
+    # Existing managed fixture documents are candidate-baked and exercised by
+    # the real source reader; adapt only the external Issue bytes to those refs.
+    doc = next(key for key in evidence["installed"]["documents"] if key.startswith("docs/") and key.endswith(".md"))
+    issue["body"] = issue["body"].replace("docs/AGENT_ISSUE_DISPATCHER.md", doc)
+    evidence["journey"]["inspected_documents"] = [doc]
+    task = issue_source_task(issue, repository="example/fixture", number=501,
+                            observed_at=evidence["exchange"]["observed_at"], authority_epoch=source.epoch)
+    evidence["source"]["authority_epoch"] = evidence["exchange"]["authority_epoch"] = source.epoch
+    request = evidence["exchange"]["request"]
+    request["request"] = task
+    evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    row = evidence["task"]["payload"]
+    row["payload"] = copy.deepcopy(task)
+    source.tasks = [copy.deepcopy(row)]
+    for name in ("browser", "journey"):
+        evidence[name]["candidate_sha"] = candidate["source_sha"]
+    evidence["journey"]["body_sha256"] = task["sync_state"]["body_sha256"]
+    evidence["owner"]["journey_sha256"] = canonical_digest(evidence["journey"])
+    original_gh = cockpit_github_plane._run_gh
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(issue)
+        if args == ["api", "repos/example/fixture/issues/501"] else original_gh(args))
+    folder = Path(source.environment["DEVUI_VM102_RECEIPT_DIR"]) / "first-read"
+    if not retain:
+        return inputs, folder
+    receipt = build_first_read_observation(**inputs)
+    assert receipt["verdict"] == "pass", receipt
+    folder.mkdir()
+    (folder / "inputs.json").write_text(json.dumps(inputs))
+    (folder / "observation.json").write_text(json.dumps(receipt))
+    return inputs, folder
+
+
+def test_first_read_observation_preserves_admission_and_authority_boundaries(managed_sources, monkeypatch):
+    source = managed_sources
+    _package_managed_shell(source.root)
+    with source.client() as client:
+        before = client.get("/api/devui/overview")
+        assert before.status_code == 200
+        assert before.headers["x-devui-first-read-observation"] == "refused"
+        inputs, folder = _install_first_read_observation(source, monkeypatch)
+        response = client.get("/api/devui/overview")
+        assert response.status_code == 200
+        assert response.headers["x-devui-first-read-observation"] == "available"
+        providers = {item["role"]: item for item in response.json()["trust_frame"]["provider_states"]}
+        assert providers["first_read_observation"]["status"] == "available"
+        assert providers["vm102_evidence"]["status"] == "refused"
+        assert client.get("/healthz").json()["complete_dev_system_health"] is False
+        assert client.post("/api/devui/overview").status_code == 405
+        assert client.get("/api/devui/overview", headers={"X-Forwarded-For": "127.0.0.1"}).status_code == 403
+        (folder / "inputs.json").write_text("{partial")
+        response = client.get("/api/devui/overview")
+        assert response.status_code == 200
+        assert response.headers["x-devui-first-read-observation"] == "refused"
+        assert "github:example/fixture#501" in response.text
+        (folder / "inputs.json").write_text(json.dumps(inputs))
+        source.credential["scopes"] = ["status:read"]
+        source.auth.write_text(json.dumps({"credentials": [source.credential]}))
+        assert client.get("/api/devui/overview").headers["x-devui-first-read-observation"] == "refused"
+        assert all(method == "GET" for method, _ in source.http_calls)

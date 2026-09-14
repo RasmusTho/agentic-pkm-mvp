@@ -727,3 +727,134 @@ def test_control_plane_project_must_match_activation() -> None:
         _refingerprint(broken)
         with pytest.raises(ReceiptValidationError, match="control-plane project"):
             validate_receipt(broken, prerequisites)
+
+
+def _first_read_inputs():
+    from app.builderops.control_plane.client_cli import issue_source_task
+    from tests.builderops.control_plane.test_client_cli import _import_source
+    from app.builderops.devui_assets import ASSET_SHA256
+
+    bundle = _bundle()
+    prereqs = {key: bundle["prerequisites"][key] for key in ("inventory", "activation")}
+    now = datetime.now(timezone.utc).isoformat()
+    candidate = bundle["evidence"]["candidate_identity"]
+    repo = "example/fixture"
+    issue = _import_source(repo)
+    issue["body"] = issue["body"].replace(".codex/skills/_shared/ISSUE_CONTRACT.md", "docs/AGENT_ISSUE_DISPATCHER.md").replace(".github/workflows/issue-pr-governance.yml", "docs/AGENT_ISSUE_DISPATCHER.md")
+    now = datetime.now(timezone.utc).isoformat()
+    epoch = prereqs["activation"]["migration"]["authority_epoch"]
+    task = issue_source_task(issue, repository=repo, number=501, observed_at=now, authority_epoch=epoch)
+    envelope = {"repository": repo, "scope": "issue:501", "stack": "builderops-control-plane", "source_refs": task["source_anchor_refs"]}
+    request = {"envelope": envelope, "task_id": task["task_id"], "to_state": "ready", "idempotency_key": "retained-initial-write",
+               "request": task, "outbox": None, "lease": None, "expected_states": None, "expected_version": None}
+    row = {"repository": repo, "task_id": task["task_id"], "state": "ready", "version": 1,
+           "lease": None, "payload": task, "updated_at": now,
+           "authority_envelope": {**envelope, "actor": "source-owner", "schema_version": 1}}
+    result = {"result": {"repository": repo, "task_id": task["task_id"], "state": "ready", "receipt_sequence": 1,
+                        "recovery_lsn": "0/1", "operation_key": None, "replayed": False}}
+
+    def packet(name, **fields):
+        return {"observer": "owner:" + name, "observed_at": now, "source_ref": "artifact:" + name, **fields}
+
+    artifacts = {"trace.zip": "a" * 64, "screen.png": "b" * 64, "junit.xml": "c" * 64}
+    evidence = {
+        "selection": packet("release", repository=repo, candidate_identity=candidate,
+            merged_main_sha=candidate["source_sha"], eligible=True, required_checks="passed",
+            relevant_change=False, replacement_sha=None, withdrawn=False,
+            attestation_sha256="d" * 64, attestation_verified_at=now),
+        "operator": packet("operator", activation_sha256=canonical_digest(prereqs["activation"]),
+            private_ingress=True, promotion_acknowledged=True,
+            linux_probe={"applicability": "not_applicable", "source_ref": "operator:builder-target-applicability", "result": "not_applicable"},
+            rollback={"state": "no_baseline", "previous_identity": None, "compatibility": "rollback_refused", "observed_at": now, "source_ref": "operator:no-baseline"}),
+        "source": packet("source", repository=repo, authority_epoch=epoch,
+            grants=["receipts:read", "status:read"], custody_ref="owner:fixed-read-source-bindings",
+            reachable=True, quota_complete=True),
+        "github": packet("github-read", payload=issue),
+        "task": packet("task-read", payload=row),
+        "exchange": packet("exchange", authority_epoch=epoch, request=request, response=result,
+            request_sha256=__import__("hashlib").sha256(json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()).hexdigest()),
+        "installed": packet("installed", candidate_identity=candidate, origin="http://127.0.0.1:8113",
+            assets=ASSET_SHA256, documents={"docs/AGENT_ISSUE_DISPATCHER.md": "c" * 64},
+            runtime=bundle["evidence"]["runtime"]),
+        "browser": packet("browser", candidate_sha=candidate["source_sha"], origin="http://127.0.0.1:8113",
+            applicability_observed_at=now, artifacts=artifacts, artifact_sha256=canonical_digest(artifacts), passed=True),
+        "journey": packet("journey", started_at=now, candidate_sha=candidate["source_sha"], origin="http://127.0.0.1:8113",
+            task_id=task["task_id"], issue_version=issue["updated_at"], body_sha256=task["sync_state"]["body_sha256"],
+            subject="github:example/fixture#501", routes=["/devui/overview", "/devui/focus", "/devui/overview"],
+            inspected_documents=["docs/AGENT_ISSUE_DISPATCHER.md"], artifacts=artifacts, artifact_sha256=canonical_digest(artifacts),
+            effects={name: 0 for name in ("github_writes", "task_mutations", "leases", "provider_sessions", "outbox", "browser_storage", "refused_requests")}),
+    }
+    evidence["owner"] = packet("owner", journey_sha256=canonical_digest(evidence["journey"]), acknowledged=True, meaning="read_observed")
+    return {"evidence": evidence, "prerequisites": prereqs}
+
+
+def test_first_read_observation_validates_independent_source_evidence():
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
+
+    inputs = _first_read_inputs()
+    receipt = build_first_read_observation(**inputs)
+    assert receipt["verdict"] == "pass", receipt
+    validate_first_read_observation(receipt, **inputs)
+    assert len(receipt["components"]) == 12
+    assert receipt["gaps"] == inputs["prerequisites"]["inventory"]["gaps"]
+    assert len(receipt["consumed_components"]) == 5
+    assert receipt["claim"] == "source_backed_zero_effect_read_only"
+    # Later unrelated main is deliberately not a validator input.
+    assert "current_main_sha" not in receipt
+    assert "github" in receipt["observations"] and "exchange" in receipt["observations"]
+
+
+@pytest.mark.parametrize("failure", ["response", "request", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback"])
+def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
+
+    inputs = _first_read_inputs()
+    good = build_first_read_observation(**inputs)
+    assert good["verdict"] == "pass"
+    for kind in TYPES:
+        with pytest.raises(ReceiptValidationError):
+            build_receipt(kind, good, inputs["prerequisites"])
+    with pytest.raises(ReceiptValidationError):
+        validate_receipt(good, inputs["prerequisites"])
+    evidence = inputs["evidence"]
+    if failure == "response":
+        del evidence["exchange"]["response"]
+    elif failure == "request":
+        evidence["exchange"]["request"]["outbox"] = {}
+    elif failure == "source":
+        evidence["github"]["payload"]["body"] += "changed"
+    elif failure == "native":
+        evidence["task"]["payload"]["payload"]["title"] = "invented"
+    elif failure == "epoch":
+        evidence["source"]["authority_epoch"] += 1
+    elif failure == "grant":
+        evidence["source"]["grants"] = []
+    elif failure in {"stale", "future", "order"}:
+        evidence["journey"]["started_at"] = (datetime.now(timezone.utc) + timedelta(hours=1 if failure == "future" else -25 if failure == "stale" else -1)).isoformat()
+    elif failure == "candidate":
+        evidence["installed"]["candidate_identity"] = {**evidence["installed"]["candidate_identity"], "source_sha": "f" * 40}
+    elif failure == "assets":
+        evidence["installed"]["assets"] = {}
+    elif failure == "secret":
+        evidence["source"]["password"] = "sentinel-never-export"
+    elif failure == "partial":
+        del evidence["task"]
+    elif failure == "effects":
+        evidence["journey"]["effects"]["leases"] = 1
+    elif failure == "owner":
+        evidence["owner"]["meaning"] = "accepted"
+    elif failure == "superseded":
+        evidence["selection"]["relevant_change"] = True
+    elif failure == "activation":
+        del inputs["prerequisites"]["activation"]
+    elif failure == "inventory":
+        inputs["prerequisites"]["inventory"]["components"].pop()
+    elif failure == "browser":
+        evidence["browser"]["artifact_sha256"] = "f" * 64
+    else:
+        evidence["operator"]["rollback"]["state"] = "available"
+    refused = build_first_read_observation(**inputs)
+    assert refused["verdict"] == "refused"
+    assert "sentinel-never-export" not in json.dumps(refused)
+    with pytest.raises(ReceiptValidationError):
+        validate_first_read_observation(good, **inputs)

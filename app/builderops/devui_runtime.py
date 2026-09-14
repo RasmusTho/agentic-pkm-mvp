@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
+import json
 import os
 from pathlib import Path
 import re
@@ -32,7 +33,7 @@ from app.builderops.devui_focus import FocusContractError, compose_focus_view
 from app.builderops.devui_focus_inputs import FocusInputError
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs, bind_visual_focus_targets
-from app.builderops.devui_receipts import read_vm102_receipt_provider
+from app.builderops.devui_receipts import read_first_read_observation_provider, read_vm102_receipt_provider
 from app.builderops.devui_owner_facts import owner_fact_trust, read_owner_fact_transport
 from app.builderops.devui_sources import (
     SourceConfiguration,
@@ -40,6 +41,7 @@ from app.builderops.devui_sources import (
     load_source_configuration,
     read_managed_cockpit,
     read_managed_focus,
+    read_managed_issue,
 )
 
 CANDIDATE_ROOT = Path(__file__).resolve().parents[2] / "devui-candidate"
@@ -136,6 +138,48 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
     """Create only the narrow Builder listener, without Product routers/lifespan."""
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None, redirect_slashes=False)
 
+    def first_read_provider(request: Request) -> dict[str, Any]:
+        def identity() -> dict[str, Any]:
+            from app.builderops.devui_assets import ASSET_SHA256
+            from app.builderops.devui_sources import _candidate_docs
+
+            config = configuration.sources
+            manifest_path = config.candidate_root / "manifest.json"
+            raw = manifest_path.read_bytes()
+            manifest = json.loads(raw)
+            validate_packaged_assets(config.candidate_root, source_sha=configuration.source_sha, repository=config.repository)
+            _candidate_docs(config)
+            if raw != manifest_path.read_bytes():
+                raise ValueError("candidate manifest changed")
+            # The retained full candidate includes activation-owned PostgreSQL
+            # pins. This listener checks only the identity it actually serves.
+            observation = json.loads((configuration.receipt_dir / "first-read/observation.json").read_bytes())
+            candidate = dict(observation["candidate_identity"])
+            candidate.update(source_sha=configuration.source_sha, devui_image_digest=configuration.image_digest,
+                             control_plane_image_digest=configuration.image_digest,
+                             devui_config_fingerprint=configuration.config_fingerprint)
+            return {"candidate_identity": candidate, "origin": str(request.base_url).rstrip("/"),
+                    "repository": config.repository, "assets": ASSET_SHA256,
+                    "documents": {name: digest for name, digest in manifest["files"].items() if not name.startswith("assets/")},
+                    "source": {"repository": config.repository, "authority_epoch": config.authority_epoch,
+                               "grants": ["receipts:read", "status:read"]}}
+
+        def source_read(binding: Mapping[str, Any]) -> Mapping[str, Any]:
+            from app.builderops.control_plane.client import BuilderOpsControlPlaneClient, ClientConfig
+
+            config = configuration.sources
+            if not config.repository or not config.authority_epoch:
+                raise ValueError("source is not configured")
+            with BuilderOpsControlPlaneClient(ClientConfig.from_env(config.api_environment), max_retries=0) as client:
+                if client.status().get("authority_epoch") != config.authority_epoch:
+                    raise ValueError("source epoch changed")
+                task = client.get_task(repository=config.repository, task_id=binding["task_id"])
+                issue = read_managed_issue(config, config.repository, str(binding["number"]))
+                epoch = client.status().get("authority_epoch")
+                return {"issue": issue, "task": task, "authority_epoch": epoch}
+
+        return read_first_read_observation_provider(configuration.receipt_dir, listener_identity=identity, source_reader=source_read)
+
     def receipt_provider() -> dict[str, Any]:
         provider = read_vm102_receipt_provider(
             configuration.receipt_dir, require_typed_runtime=True
@@ -217,7 +261,12 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
                             source_sha=configuration.source_sha,
                             repository=configuration.sources.repository,
                         )
+                    # Completed evidence follows the first read. Its absence or
+                    # withdrawal never changes the existing local admission.
+                    from starlette.concurrency import run_in_threadpool
+                    request.state.first_read = await run_in_threadpool(first_read_provider, request)
                     response = await call_next(request)
+                    response.headers["X-DevUI-First-Read-Observation"] = request.state.first_read["status"]
                 except CandidateAssetError:
                     response = JSONResponse(
                         {"detail": "Managed DevUI candidate assets or metadata are unavailable"},
@@ -256,7 +305,7 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
             )
 
     @app.get("/api/devui/overview")
-    def overview() -> dict[str, Any]:
+    def overview(request: Request) -> dict[str, Any]:
         snapshot = compose_owner_snapshot(
             cockpit_reader=lambda: read_managed_cockpit(configuration.sources),
             ckm_reader=_unavailable_provider,
@@ -265,6 +314,7 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
         owner_facts = read_owner_fact_transport(repository=configuration.sources.repository,
             environment=configuration.sources.api_environment, authority_epoch=configuration.sources.authority_epoch)
         snapshot["providers"]["owner_facts"] = owner_fact_trust(owner_facts, snapshot["captured_at"])
+        snapshot["providers"]["first_read_observation"] = request.state.first_read
         inputs = derive_overview_inputs(
             work_provider=snapshot["providers"]["work"],
             receipt_provider=snapshot["providers"]["vm102_evidence"],

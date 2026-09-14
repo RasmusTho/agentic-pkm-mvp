@@ -62,8 +62,8 @@ deployment receipts and exact deployed/final-main SHA `M`. A missing component o
 claim; it is never treated as an empty, healthy, or deployed state.
 
 The earlier [M1 first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target)
-is a separately bounded, not-yet-implemented observation of one real Issue through the delivered
-managed shell. Its exact consumed sources, initial Issue producer, candidate supersession, operator
+has a separately bounded implementation in #5543 for observing one real Issue through the delivered
+managed shell; live qualification and owner observation remain unproven. Its exact consumed sources, initial Issue producer, candidate supersession, operator
 prerequisites and closed evidence consumers are owned there. It permits no partial full-system
 receipt, deployment authorization or #4749/#4741 acceptance; the complete pilot contract remains
 unchanged. Missing owner-question/readiness/requirement-result facts remain unavailable.

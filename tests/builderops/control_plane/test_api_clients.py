@@ -315,3 +315,74 @@ def test_malformed_409_body_raises_instead_of_silently_downgrading(tmp_path: Pat
     )
     with pytest.raises(ControlPlaneProtocolError):
         client.status()
+def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_path, monkeypatch, capsys):
+    import copy
+    from dataclasses import replace
+    from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client_cli import main
+    from tests.builderops.control_plane.test_client_cli import _import_source, _manifest_dir
+
+    class SourceStore(InMemoryStore):
+        def get_task(self, repository, task_id):
+            self.calls.append(("get_task", repository, task_id))
+            if not hasattr(self, "row"):
+                raise KeyError(task_id)
+            return copy.deepcopy(self.row)
+
+        def commit_transition(self, **kw):
+            self.calls.append("commit_transition")
+            assert kw["outbox"] is kw["lease"] is kw["expected_states"] is kw["expected_version"] is None
+            assert kw["to_state"] == "ready"
+            if hasattr(self, "row"):
+                assert self.request == kw
+                return replace(self.result, replayed=True)
+            self.request = kw
+            self.row = {"repository": kw["envelope"].repository, "task_id": kw["task_id"],
+                "state": "ready", "version": 1, "updated_at": source["updated_at"],
+                "lease": None, "payload": kw["request"], "authority_envelope": kw["envelope"].as_json()}
+            self.result = TransactionResult(kw["envelope"].repository, kw["task_id"], "ready", self._next(), "0/1", None)
+            return self.result
+
+    source, store = _import_source(), SourceStore()
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
+    monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
+    monkeypatch.delenv("BUILDEROPS_API_TOKEN_FILE", raising=False)
+    registry = _registry(tmp_path)
+    command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation",
+        "task-import-issue", "--repository", REPO, "--scope", "issue:501", "--stack", "builderops-control-plane", "--issue", "501"]
+    observed = []
+    service = create_app(store=store, credentials=registry)
+    @service.middleware("http")
+    async def observe(request, call_next):
+        observed.append((request.method, request.url.path, dict(request.query_params), request.headers.get("x-builderops-authority-epoch")))
+        return await call_next(request)
+    def factory(config):
+        return BuilderOpsControlPlaneClient(config, http_client=TestClient(service), max_retries=0)
+
+    for replayed in (False, True):
+        assert main(command, client_factory=factory) == 0
+        assert json.loads(capsys.readouterr().out)["transition_response"]["result"]["replayed"] is replayed
+    writes = [item for item in observed if item[0] == "POST"]
+    assert writes == [("POST", "/v1/tasks/transition", {}, "1")] * 2
+    assert all(query == {"repository": CANON} for method, path, query, _ in observed if "/tasks/" in path and method == "GET")
+    before = store._seq
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "wrong")
+    assert main(command, client_factory=factory) == 3
+    assert store._seq == before
+    monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
+    manifest = tmp_path / "credentials.json"
+    credentials = json.loads(manifest.read_text())
+    credentials["credentials"][0]["scopes"].remove("tasks:write")
+    manifest.write_text(json.dumps(credentials))
+    assert main(command, client_factory=factory) == 3
+    assert store._seq == before
+    credentials["credentials"][0]["scopes"].append("tasks:write")
+    manifest.write_text(json.dumps(credentials))
+    def stale_factory(config):
+        client = factory(config)
+        assert client.authority_epoch == 1
+        store.epoch = 2
+        return client
+    assert main(command, client_factory=stale_factory) == 3
+    assert store._seq == before

@@ -314,3 +314,35 @@ def test_managed_journey_preserves_focus_failures_and_fresh_return(managed_sourc
         states = response.value.json()["trust_frame"]["provider_states"]
         assert "refused" in json.dumps(states)
         assert "refused" in page.locator('[data-testid="overview-trust-frame"]').inner_text()
+def test_first_read_issue_journey_precedes_observation_without_effects(managed_sources, monkeypatch):  # noqa: F811 - imported pytest fixture
+    from tests.builderops.test_devui_runtime import _install_first_read_observation
+
+    source = managed_sources
+    folder = Path(source.environment["DEVUI_VM102_RECEIPT_DIR"]) / "first-read"
+    assert not folder.exists()
+    with _server(source, monkeypatch), _browser() as (page, context, _, external, requests, errors, console):
+        _install_first_read_observation(source, monkeypatch, retain=False)
+        with page.expect_response(ORIGIN + "/api/devui/overview") as first:
+            page.goto(ORIGIN + "/devui/overview")
+        _loaded(page, "overview")
+        assert first.value.headers["x-devui-first-read-observation"] == "refused"
+        reads = len(source.calls)
+        assert page.get_by_role("link", name="Open Focus").get_attribute("href") == FOCUS
+        with page.expect_response(lambda r: "/api/devui/focus?" in r.url) as focus:
+            page.get_by_role("link", name="Open Focus").click()
+        _loaded(page, "focus")
+        assert focus.value.json()["subject"]["stable_id"] == MANAGED_SUBJECT
+        assert focus.value.headers["x-pkm-runtime-git-sha"] == first.value.headers["x-pkm-runtime-git-sha"]
+        assert focus.value.headers["x-devui-first-read-observation"] == "refused"
+        _capture(page, "first-read-before-observation")
+        with page.expect_response(ORIGIN + "/api/devui/overview") as returned:
+            page.get_by_role("link", name="Return to Overview").click()
+        _loaded(page, "overview")
+        assert len(source.calls) > reads
+        providers = {item["role"]: item for item in returned.value.json()["trust_frame"]["provider_states"]}
+        assert providers["first_read_observation"]["status"] == providers["vm102_evidence"]["status"] == "refused"
+        assert not folder.exists()
+        assert not external and not errors and not console
+        assert all(method == "GET" for method, _ in requests + source.http_calls)
+        assert sum(url == ORIGIN + "/api/devui/overview" for _, url in requests) == 2
+        _no_persistence(page, context)

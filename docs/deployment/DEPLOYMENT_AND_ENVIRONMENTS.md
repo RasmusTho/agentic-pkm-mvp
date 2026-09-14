@@ -54,14 +54,15 @@ rollback boundary. An unknown or unavailable component remains an explicit gap a
 it cannot be silently omitted or inferred from a guest check.
 
 The separate [M1 first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target)
-is a source-defined, not-yet-implemented qualification/observation boundary for one real Issue read.
+has the bounded #5543 qualification/observation implementation for one real Issue read; live
+qualification remains unproven.
 It preserves the complete inventory and applicable host/engine, naming, no-dual-writer, source-grant,
-private-ingress, operator/Linux-probe, migration and rollback prerequisites. Its later bounded record
+private-ingress, operator/Linux-probe, migration and rollback prerequisites. Its bounded record
 can attest only the exact selected candidate's observed journey; it cannot authorize deployment,
 substitute for any full receipt below, erase an unconsumed component gap, close #5181 or establish
 #5399 platform acceptance. The [minimum later implementation](../BUILDEROPS_CONTROL_PLANE/README.md#minimum-later-first-read-implementation)
 keeps repository producer/consumer verification separate from source preparation, operator release
-and live owner observation. This definition changes no current validator or operator permission.
+and live owner observation. The bounded reader changes no full-system validator or operator permission.
 
 ### VM-102 deployment receipts
 
