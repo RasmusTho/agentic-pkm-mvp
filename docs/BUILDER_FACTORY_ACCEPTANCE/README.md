@@ -50,6 +50,7 @@ breakdown follows their accepted results.
 | #5502 [FCA-08 — Define bounded action admission](DEFINE_BOUNDED_ACTION_ADMISSION.md) | Contract defined below for the existing control plane and destination owners | Runtime admission, destination reservation/readback and activation remain separate work |
 | #5503 [FCA-09 — Define owner outcome authority](DEFINE_OWNER_OUTCOME_AUTHORITY.md) | Separate candidate-bound trial/acceptance contract defined in the existing object/receipt owner | FCA-05 implements producer/readback; runtime admission and owner observations remain separate |
 | #5504 [ARO-09 — Reconcile managed owner pilot](../DEVUI_STAGE_A_READ_ONLY_OVERVIEW/RECONCILE_MANAGED_OWNER_PILOT.md) | Managed runtime/source and pre-merge versus live evidence contract defined | Owned by Stage A / #4741; runtime, read-only pilot and full-platform acceptance remain separate. |
+| #5531 [First approved Issue-delivery operation](#first-approved-issue-delivery-operation) | Finite M2 operation contract defined under FCA-08 | The implementation slices below, destination activation and actual owner evidence remain separate. |
 
 #### FCA-08 — Bounded action contract repair
 
@@ -114,7 +115,7 @@ operations that use DDO.
 | Store an inquiry authority record | `POST /v1/inquiries` → `commit_inquiry` → `store.commit_record`; client `BuilderOpsControlPlaneClient.create_inquiry` | Accepts a caller-supplied `inquiry_id` and record idempotency key. It stores a `ModelInquiry` record; it does not invoke the sanctioned launcher or reserve an operation key against a future inquiry. Its commit receipt proves that record write only. |
 | Launch the first inquiry | [Start Model Inquiry](../../.codex/skills/start-model-inquiry/SKILL.md), through the fixed `Tailscale_macmini` host alias and sanctioned `$HOME/.local/bin/yggdrasil-model-inquiry` launcher on the bound host | The existing skill owns route proof, lock, staging, single invocation and cleanup. Neither the service adapter nor DevUI may reproduce those internals. FCP-04 supplies the concrete facade/protocol, reservation, authenticated readback and reserved-ID propagation. Runtime Start requires the operator-owned wrapper to advertise that exact protocol and current scoped permissions; manual-only wrappers refuse. |
 | Produce inquiry execution/readback evidence | The configured launcher's existing artifact-first Model Inquiry service/runner: `ModelInquiryService.start`, `trace`, `commit_run_terminal_receipt`, `write_human_readable_report`, and `ModelInquiryRunner._finalize_terminal` | FCP-04 adds immutable approval/key-to-inquiry reservation, pre-invocation attempt and atomic entry in these existing artifacts, plus exact authenticated terminal/readback evidence. An inquiry start artifact records artifact creation; a terminal artifact records the workflow outcome, not an externally requested process stop. |
-| Execute one separately approved Issue workflow | Existing `issue-to-code` → `publish-pr` → `verification-and-closure` workflow owners; when DDO is selected, #4169's request/compiler/initiation bridge plus reducer and BuilderOps outbox/effect adapters | This is a separately gated extension, unavailable through inquiry approval. Its exact workflow entrypoint/version, effects, producer/readback contract and implementation must be accepted before command admission. Existing merge/executor and deployment fences remain binding. |
+| Execute one separately approved Issue workflow | Existing `CodexIssueSessionLauncher` and `issue-to-code` → `publish-pr` → `verification-and-closure` owners | The [first Issue operation](#first-approved-issue-delivery-operation) defines the finite extension; its admission/destination/readback adapters remain unimplemented. Inquiry approval grants none of its effects. Existing merge/executor and deployment fences remain binding. |
 | Render preview, progress and result | DevUI's separately authenticated action region, including #4697's bounded inquiry adapter | A derived projection of the above sources. Browser state, model text, a generated fixture and an HTTP acknowledgement never supply admission, launch, terminality or owner acceptance. |
 
 ### Immutable approval manifest and operation permissions
@@ -168,6 +169,187 @@ lock-release or cleanup operation. If a later selected workflow explicitly suppo
 request and destination acknowledgement separately from observed termination. A supported request
 can be refused, late or still pending; acknowledgement alone never proves termination or rollback.
 For DDO, typed lifecycle commands and their lawful outcomes remain in #4169's reducer/effect owners.
+
+### First approved Issue-delivery operation
+
+Stable source anchor: **FCA-ID-01**. Target contract `fca-issue-delivery.v1`, operation type
+`deliver_ready_issue`. This is the first separately approved Issue operation for
+[M2](#first-repository-milestone), defined by #5531; it is not implemented or activated by this
+document. It delivers exactly one bounded, open, strictly valid `agent:ready` Issue in
+`RasmusTho/agentic-pkm-mvp` through one fresh Codex Issue session at one explicitly admitted
+execution destination. It selects no sibling or parent delivery. A required parent evidence write
+is a separately bound effect below. Project Status is not a pickup gate.
+
+**Selected reuse.** Source inspected at `1a1bde5add17cf59d371216e175446929e735158`:
+`app/builderops/cli.py::dispatch_sessions` loads a frozen plan and constructs
+`app/builderops/epic_dispatch.py::CodexIssueSessionLauncher`; `dispatch_issue_sessions` calls its
+`launch` method. The launcher invokes `codex exec --json --sandbox workspace-write`, resolves
+the configured execution target and loads `.codex/agents/slice-implementer.toml` instructions.
+Those instructions require the worker to self-claim and perform `issue-to-code`, `publish-pr`,
+`verification-and-closure`, owner-doc reconciliation and closeout. This is a full delivery worker,
+not an edit-only worker. Agent reasoning and bounded execution remain permitted under DP-02C;
+neither deterministic orchestration nor full DDO is a universal M2 prerequisite.
+
+The admitted adapter must reuse that call chain with a frozen plan containing exactly one selected
+Issue/context pack, no canary/fallback route and an independently retained `expected_plan_hash`.
+`dispatch_issue_sessions` currently accepts broader plans, and its plan hash is optional without
+routing evidence. The adapter must enforce this narrower operation. The current CLI has no owner
+authentication; `launch` uses blocking `subprocess.run` and parses the session ID and worker message
+after the process returns. Its dispatch receipt and local `epic_run_state.py` JSON are coordination
+evidence only. They neither reserve an owner operation nor authenticate delivery. Missing production
+support is assigned below; a prompt asking the model to obey a manifest is insufficient enforcement.
+
+**Exact approval.** Extend the [FCA-08 manifest](#immutable-approval-manifest-and-operation-permissions)
+within its existing owner. Before Start, it must bind all of these values without defaults:
+
+- `repository`, numeric Issue identity and node identity, current Issue body/AC hashes, bounded
+  source revisions, proposal/context-pack hash, and the frozen dispatch-plan hash;
+- parent evidence destination: explicit `none`, or one exact parent repository/number/node,
+  source-authenticated relationship to the selected Issue, current parent contract hash/version,
+  and permission for PR-specific receipt comments and this child's generated-ledger writeback.
+  If the selected workflow requires parent writeback, an absent binding refuses launch; it cannot
+  infer a parent later. This evidence destination grants no parent delivery, contract or acceptance
+  change, closure, or sibling mutation;
+- operation type/version, `approval_id`, one `operation_key`, owner principal, approval receipt,
+  expiry and current repository/operation grant, revocation version and authority epoch;
+- one destination identity: authenticated executor principal, host/system identity, channel,
+  canonical repository checkout, dedicated worktree/branch, target base ref and observed base SHA,
+  plus one proposed run identity allocated without effects for the preview. Start approves that
+  exact identity; only after approval commits may the destination durably reserve it. A Codex
+  session ID is attached only when observed;
+- exact entrypoint `app/builderops/epic_dispatch.py::dispatch_issue_sessions` with
+  `CodexIssueSessionLauncher.launch`, workflow contract `fca-issue-delivery.v1`, immutable source
+  commit and a content-hashed artifact manifest for the CLI/launcher, role adapter and selected
+  owning skills/shared gates. `workflow_hash` is SHA-256 of that manifest's canonical JSON (sorted
+  keys, compact separators, UTF-8); every artifact entry binds path and SHA-256 of its exact bytes.
+  The source commit pins their repository dependencies. A live request must contain resolved
+  hashes, never a moving `main`, an example revision or a version label alone;
+- the effective provider-census/configuration digest, selection intent and resolved capability,
+  model, reasoning and carrier profile; the exact verification/acceptance profile and required
+  criterion hashes; and the complete effects below. An unavailable target withdraws launch.
+
+The target destination may be bob-1 only after its separately authorized runtime qualification and
+activation. This source contract chooses no live host, credential or deployment. Workflow/profile,
+base, source or Issue contract drift requires revalidation and a new exact approval before another
+effect; it never silently changes the immutable manifest. The operation's own expected label,
+branch and PR transitions are evidence of this workflow, not an Issue-body/AC change.
+
+| Closed permitted effect | Owning boundary and limit |
+| --- | --- |
+| Repository/worktree preparation and edits | `issue-to-code` and `publish-pr`: one registered isolated worktree/branch, Issue-scoped code/tests/owner docs and required validation. No shared-root edits, unrelated path mutation or history rewrite. |
+| Issue claim and active lifecycle | `scripts/issue_pickup_claim.sh` through `issue-to-code`: worker self-claims this exact Issue, with dispatcher coordination when available and the skill's authenticated label-only fallback otherwise. Lease/label evidence is not owner approval. |
+| Publication | `publish-pr`: bounded commits, non-force push and one exact linked PR; record/read back the PR identity. Repairs remain within the approved Issue and current publication gates. |
+| Review and merge | `verification-and-closure`: current-head AC/CI/review proof and the selected light/full route. Full-path neutralization, fixed merge message, authenticated closing set and any required `host_fenced_executor` remain binding; approval does not supply an executor credential or waive a gate. |
+| Closure and delivery reconciliation | `verification-and-closure`, `post-merge-owner-doc` and `klart`: close only this authenticated delivered Issue, remove its active labels, reconcile its lease/worktree and post PR-specific evidence on it. On the exact approved open parent evidence destination, permit only those receipt comments and this child's generated-ledger writeback, preserving the parent contract and other child entries. Re-read parent identity, open state, relationship and contract at this write boundary; drift withdraws the effect and requires reconciliation, never target substitution. Parent closure, unrelated Issue mutation and new backlog extraction are excluded. |
+
+All five effect groups must be explicitly approved for this first operation. A partial grant refuses
+the full-chain launcher; it does not reinterpret it as inquiry or edit-only. Model calls and a
+required bounded read-only reviewer are confined to the approved profile and owning skill budget.
+Deployment, release/stable movement, credential provisioning/rotation, host setup, destructive
+database/vault operations, other repository/Issue effects beyond the exact parent evidence grant,
+owner confirmation and universal unattended
+execution are explicit non-effects. A newly required effect pauses at its owning gate; consent to
+this operation cannot widen the selected Issue or convert a technical receipt into owner acceptance.
+
+### Issue-delivery admission and readback
+
+Stable source anchor: **FCA-ID-02**. These are responsibilities of existing owners, with the Issue
+adapter support below still missing. No second service, queue, store or authority registry is needed.
+
+| Boundary | Existing owner and required adapter responsibility |
+| --- | --- |
+| Preview, Hold, immutable Start approval and invalidation | `app/builderops/control_plane/service.py::create_app`, `CredentialRegistry` and the existing record/receipt API. Add a finite Issue-command subtype with an explicit repository-scoped owner approval grant and separate destination execute/read grants; generic record write or inquiry scopes cannot satisfy them. Match the authenticated human owner to the addressed profile. Hold produces no reservation or invocation. Persist exact approval through `PostgresBuilderOpsStore.commit_record` and its transaction receipt before dispatch. Reserve this subtype against generic-record bypass. |
+| Durable reservation and attempt | The destination adapter surrounding `CodexIssueSessionLauncher`, writing through the same authenticated service and PostgreSQL transaction/receipt/outbox owner in `control_plane/store.py`. Use existing `BuilderOpsReceipt` record envelopes, with destination-owned reservation/attempt payloads; do not use local run-state as authority. Atomically bind both the full repository/destination/workflow/type/key identity and approval identity to one manifest/run, rejecting competing or changed bindings. The existing record idempotency primitive alone does not enforce both bindings; that finite guarded operation must be added. An unresolved operation for the same Issue/destination prevents another admitted launch. |
+| Attempt and actual entry | Persist reservation, then a unique attempt receipt before calling the existing launcher; the destination must durably observe that same attempt's actual process entry/session binding separately. Existing outbox intent/claim/reconcile remains the delivery mechanism where needed; an outbox retry performs exact lookup before dispatch and cannot create a second attempt. The current buffered subprocess/session output is insufficient for crash-safe entry evidence. |
+| Continuing effects | The authenticated service supplies fresh permission/revocation/epoch, expiry and source/profile readback to the destination's pre-launch check and each owning claim/publication/merge/closure boundary. Implement the manifest/run linkage at those real gates, not only in worker instructions. Local files and skills retain their present ownership; no new workflow engine drives them. If a gate cannot enforce the binding, this operation stays unavailable. |
+| Independent result reconciliation | Extend the existing authenticated control-plane readback with a bounded Issue source adapter. Reuse GitHub REST evidence acquisition from `cockpit_github_plane.py::default_github_reader` and the applicable read methods of `verification_github.py::GitHubProtectedRepositoryAuthority`; neither the overview summary nor a worker-supplied receipt suffices. Persist source references/hashes, observation time, epoch, exact identities and missing/contradictory evidence through the existing receipt owner. Read credentials remain separately scoped; reads confer no merge authority. |
+| Owner projection and outcome | Existing DevUI Overview/Focus/action projection renders that readback and source links. Existing FCA-05 producer/service and the [FCA-09 outcome owner](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09) retain exact candidate/profile/trial/acceptance authority. The loopback GET listener, worker text, dispatcher and browser supply no approval or owner fact. |
+
+The addressed Issue must also reach the existing BuilderOps-owned task envelope consumed by
+`devui_sources.py::_task`. Its admitted payload needs the native `TaskRecord` Issue identity
+(`repo`, `task_id`, `issue_number`, `title`), source/version references and matching service-owned
+repository/state/version/lease envelope. The bounded adapter must use the existing authenticated
+`/v1/tasks/transition`/task lifecycle API and `PostgresBuilderOpsStore.commit_transition`, then
+re-read that envelope through the existing task GET path; current source/body hashes remain bound
+to the approved Issue. Generic CLI tasks, verification documents and a legacy local dispatcher
+claim do not supply this projection. FCA-ID-C owns this exact one-Issue producer/read-path proof;
+enabling a source overlay alone cannot populate Overview. This is an extension of the existing
+task owner, not a second task store or general import engine.
+
+Authenticated readback carries the complete FCA-08 approval/key/manifest/workflow/destination/run
+binding, the independently observed Codex session when available, reservation/attempt/entry
+receipt refs, state and stop support. It also carries these finite source-owned evidence groups:
+
+| Projection claim | Required independent source evidence |
+| --- | --- |
+| Claimed or locally changed | Fresh GitHub Issue identity/state/labels and contract hashes; destination registry/lease ownership, branch/worktree and Git HEAD/diff observations. A lease proves coordination only; an edit proves neither publication nor delivery. |
+| PR published | Exact repository and PR number/node, head repository/ref/SHA, base ref/SHA, current body and governing/closing identities from GitHub; matching destination commit. Missing, multiple or conflicting PRs remain unresolved. |
+| Verified on a candidate | Check-run/status identities and latest conclusions on that exact head, required-check configuration digest, and the selected workflow's authenticated current-head review evidence and disposition of actionable findings. A green summary or model's AC verdict cannot replace the governing `Verify:` evidence. Later head/body/Issue/check-policy drift supersedes affected evidence under the existing closure contract. |
+| Merged and closed | GitHub merge timestamp/commit, target-base reachability and exact Issue state/closure attribution; the selected closure path's source-authenticated reconciliation evidence, including full-path restored-body/phase receipts when applicable. Require the PR-specific owner-doc receipt and final active-label/lease/worktree reconciliation. An open PR, process exit or `final_state` message never proves this outcome. |
+| Ready for owner trial | The candidate owner's exact source commit, deployed image/config/environment/readiness refs, acceptance profile and per-criterion results/limits, joined to the operation and delivered merge. FCA-05 currently admits only its specified VM102 `devui_projection` source/profile chain. Another artifact/candidate owner needs a separately accepted source contract; a GitHub merge cannot manufacture a qualifying candidate. |
+
+The worker's `subagent_handoff_receipt` is a pointer to evidence and a diagnostic proposal. Signing
+or transporting it authentically proves authorship, not its delivery claims. Reconciliation reads
+the bounded sources independently, including when the worker reports failure, handoff or success.
+`terminal` records the observed operation outcome, including failed/partial delivery; `delivered`
+is projected only when the applicable repository evidence agrees. Missing source groups withdraw
+their claims without deleting intact historical evidence. Owner trial and acceptance remain separate
+FCA-09 writes by the authenticated human against the exact candidate/profile; Start, technical
+success and document publication record no human consent to the result.
+
+### Issue-delivery interruption and reconciliation
+
+Stable source anchor: **FCA-ID-03**. Reuse FCA-08 operation states; stop status remains separate.
+The table binds the service admission owner, destination adapter and source readers above. There
+is no assumption that GitHub/worktree effects roll back atomically with a service transaction.
+
+| Event / observed state | Lawful next action | Required evidence and unsupported behavior |
+| --- | --- | --- |
+| Hold before invocation | `held`; perform no claim, reservation or launch | Exact Hold/preview binding. Absence of Start is not a terminal execution receipt. |
+| Approval committed; crash or replay before reservation | Preserve the immutable approval and pre-reservation state; after fresh checks, perform only the first reservation of its proposed run ID | Complete service approval receipt and authoritative absence of reservation/attempt/entry under the destination guard. Unavailable or contradictory lookup stays unresolved; do not allocate a new run ID or re-confirm/mutate the original approval. |
+| Same-key replay, refresh, competing submit or service restart | Return the existing reservation/active/terminal observation; reconcile before any effect | Unique key + approval + manifest + run readback from the destination-owned service records. No second session, attempt or synthetic success. |
+| Same key with changed manifest, or new key reusing approval | `refused`; preserve original operation | Atomic key and approval binding conflict. No overwrite, key rotation or approval reuse; a genuinely new operation needs fresh approval and a resolved predecessor. |
+| Permission revoked/expired, epoch changed, or authority unavailable before launch | `invalidated` or `refused`; no invocation | Fresh service grant/epoch/time readback against the immutable approval. Cached permission and inquiry consent are insufficient. |
+| Issue closed/claimed by another worker, changed body/AC/source/base, or changed workflow/profile | Before effect, invalidate/refuse and obtain a new exact preview/approval; after a possible effect, preserve observed state and withdraw further permission | Fresh Issue/claim/branch and content/profile hashes, plus source-owned prior effect readback. Do not treat the operation's own expected claim as foreign drift, rebase under old approval, substitute a model or continue closure against a changed contract. |
+| Crash after reservation but before any attempt | Keep `reserved`; only the first attempt may proceed after fresh checks | Transactionally complete destination reservation and authoritative negative attempt/entry evidence under the same guard. An empty API result, missing local file or timeout is not negative proof. |
+| Crash after attempt but before confirmed entry, or after entry with lost response | `launch_unknown`; reconcile the same binding and inspect existing effects | Durable attempt and entry/session observations plus GitHub/worktree readback. An attempt without entry proof remains ambiguous; no retry, new session, new key or cleanup to hide uncertainty. |
+| Worker ends or disappears, with missing/contradictory source readback | Preserve uncertainty or the proved partial/terminal outcome; repair source access/readback first | Exact destination observation plus independent PR/head/CI/review/merge/closure evidence. Exit zero, nonzero exit, process absence and worker text do not decide delivery or authorize a rerun. |
+| Revocation/expiry/source drift after launch, including queued later effects | Preserve completed effects; refuse subsequent effects at their owning gates and reconcile | Current service invalidation and destination/source receipts. No retroactive cancellation, automatic rollback or replacement launch while unresolved; readback remains available under its own read grant. |
+| Owner client disconnects or render fails | Continue only already admitted effects whose fresh gates still pass; rebuild the view by authenticated readback | Service/destination receipts survive the client. Disconnect is neither Hold, revocation, stop nor failure; reconnect never starts another worker. |
+| Stop requested after an attempt | Report `stop_support: unsupported`; retain observed operation state | The selected `CodexIssueSessionLauncher` has no stop/control API, process handle contract or stop acknowledgement. Do not invent kill/cancel/lock deletion, termination proof or rollback. Revoking future effect permission is separate from stopping an in-flight process. |
+| Exact merge exists but closure/reconciliation is incomplete | Read and finish only the missing steps through `verification-and-closure`, with current authorization | Authenticated exact-head merge/closure state and, on the full path, the existing continuous authority/phase ledger. Do not launch a replacement delivery worker or repeat merge. An expired/revoked grant requires the owning recovery/approval route, not implied permission. |
+| All required source readback agrees | Record the actual `terminal` outcome, project repository delivery when proved, and leave owner outcome separate | Original approval/run plus all applicable source groups above. A trial still requires its own ready candidate and explicit FCA-09 confirmation. |
+
+### Issue-delivery implementation slices
+
+Stable source anchor: **FCA-ID-04**. The smallest bounded sequence is three serial repository
+slices. These are extraction-ready source obligations, not created Issues or implemented support.
+Create implementation Issues only after this authority merges; each Issue must bind its exact
+production surface and inline `Verify:` targets. The named test pointers below are required future
+production-path tests, not claims that tests exist or pass today.
+
+The same three slices cover parent evidence without another operation: A must prove exact or
+explicitly absent parent admission and reject missing/foreign targets when writeback is required;
+B must prove bounded receipt/child-ledger effects, preservation of the parent contract and other
+child entries, and withdrawal for a closed, changed or substituted parent; C must independently
+read back the approved target and permitted evidence. No parent effect is inferred from a child
+merge or from a worker's proposed target.
+
+| Order / stable source anchor | Bounded change and production callers | Resolvable verification obligation |
+| --- | --- | --- |
+| 1 — **FCA-ID-A** | Existing `service.py::create_app` and record/receipt API, `CredentialRegistry`, existing client and `PostgresBuilderOpsStore.commit_record`: exact one-Issue preview/Hold/approval/read grant and immutable manifest, generic-write bypass refusal and source/profile invalidation. No launcher invocation. | `tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission` must call the real service/credential/store path and cover owner vs inquiry/generic grants, exact hashes, Hold, replay, revocation/expiry and immutable approval. `::test_issue_approval_transaction_recovery` must prove committed approval/readback vs pre-commit rollback. |
+| 2 — **FCA-ID-B**, after A | Authenticated destination adapter at `cli.py::dispatch_sessions` → `epic_dispatch.py::dispatch_issue_sessions` → `CodexIssueSessionLauncher.launch`, backed by the same service transaction/receipt/outbox owner; bind unique reservation/attempt/entry and current authority into real claim/publication/merge/closure gates. No raw CLI or prompt-only admission bypass. | `tests/builderops/test_issue_delivery_operation.py::test_production_dispatch_reservation_and_crash_matrix` must enter the real adapter and exercise competing keys/approvals, crashes before/after attempt and lost entry response. `::test_delivery_effect_boundaries_recheck_authority` must reach the owning effect gates, refuse changed/revoked authority before the next effect and prove no second launch. `::test_selected_launcher_reports_stop_unsupported` covers truthful stop. Substitute only external effect transports; a stubbed gate verdict is insufficient. |
+| 3 — **FCA-ID-C**, after B | Existing authenticated task lifecycle API and `devui_sources.py::_task` admit/read the one Issue-bearing task envelope; service readback, GitHub source readers and DevUI projection compose exact Issue/PR/head/CI/review/merge/closure evidence with the admitted candidate/profile source. Reuse FCA-05 for owner outcomes; implement the first operation's consumed seams for the FCA-06/07 harnesses without claiming their live evidence. | `tests/builderops/test_issue_delivery_readback.py::test_production_issue_task_envelope_reaches_overview` must cover native Issue creation/version readback and withdrawal for absent/generic/mismatched tasks. `::test_production_readback_uses_independent_github_evidence` must exercise real source parsing/composition for forged worker success, missing/contradictory sources, late-head drift, partial merge/closure and reconnect. `::test_issue_delivery_candidate_profile_linkage` must prove exact FCA-09 candidate/profile binding and withdrawal on unsupported/mismatched candidates; docs writeback at this section and `docs/plans/DEVUI_IMPLEMENTATION.md :: Delivery milestones` records repository support only. |
+
+After these pre-merge adapters/proofs, separately authorized host activation and deployment must
+prove the exact service/destination/source/profile/epoch and scoped credentials before any live
+Start. M1's admitted read journey and #4749 pilot remain a separate predecessor. M2 then needs one
+real authorized Issue delivery, independently read back, followed by actual owner trial and
+accept/reject under FCA-09. Supervised operation and visible manual handoffs are allowed; neither
+source publication nor a composed fixture qualifies the live journey. FCA-06/07 pickup still needs
+the particular implemented seams they consume. Full #5399/M4 platform and second-consumer criteria
+remain unchanged. This operation consumes no DDO bridge/reducer; selecting DDO later retains
+#4169/#4170 and their effect owners rather than borrowing their authority here.
 
 ## Cross-Task Invariants / Interaction Safety
 
