@@ -170,6 +170,7 @@ request and destination acknowledgement separately from observed termination. A 
 can be refused, late or still pending; acknowledgement alone never proves termination or rollback.
 For DDO, typed lifecycle commands and their lawful outcomes remain in #4169's reducer/effect owners.
 
+<!-- anchor: FCA-ID-01 -->
 ### First approved Issue-delivery operation
 
 Stable source anchor: **FCA-ID-01**. Target contract `fca-issue-delivery.v1`, operation type
@@ -251,6 +252,7 @@ owner confirmation and universal unattended
 execution are explicit non-effects. A newly required effect pauses at its owning gate; consent to
 this operation cannot widen the selected Issue or convert a technical receipt into owner acceptance.
 
+<!-- anchor: FCA-ID-02 -->
 ### Issue-delivery admission and readback
 
 Stable source anchor: **FCA-ID-02**. These are responsibilities of existing owners, with the Issue
@@ -297,6 +299,7 @@ their claims without deleting intact historical evidence. Owner trial and accept
 FCA-09 writes by the authenticated human against the exact candidate/profile; Start, technical
 success and document publication record no human consent to the result.
 
+<!-- anchor: FCA-ID-03 -->
 ### Issue-delivery interruption and reconciliation
 
 Stable source anchor: **FCA-ID-03**. Reuse FCA-08 operation states; stop status remains separate.
@@ -320,6 +323,7 @@ is no assumption that GitHub/worktree effects roll back atomically with a servic
 | Exact merge exists but closure/reconciliation is incomplete | Read and finish only the missing steps through `verification-and-closure`, with current authorization | Authenticated exact-head merge/closure state and, on the full path, the existing continuous authority/phase ledger. Do not launch a replacement delivery worker or repeat merge. An expired/revoked grant requires the owning recovery/approval route, not implied permission. |
 | All required source readback agrees | Record the actual `terminal` outcome, project repository delivery when proved, and leave owner outcome separate | Original approval/run plus all applicable source groups above. A trial still requires its own ready candidate and explicit FCA-09 confirmation. |
 
+<!-- anchor: FCA-ID-04 -->
 ### Issue-delivery implementation slices
 
 Stable source anchor: **FCA-ID-04**. The smallest bounded sequence is three serial repository
@@ -334,6 +338,12 @@ B must prove bounded receipt/child-ledger effects, preservation of the parent co
 child entries, and withdrawal for a closed, changed or substituted parent; C must independently
 read back the approved target and permitted evidence. No parent effect is inferred from a child
 merge or from a worker's proposed target.
+
+Stable implementation-slice anchors:
+
+- `FCA-ID-A`
+- `FCA-ID-B`
+- `FCA-ID-C`
 
 | Order / stable source anchor | Bounded change and production callers | Resolvable verification obligation |
 | --- | --- | --- |
