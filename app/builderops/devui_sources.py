@@ -575,7 +575,10 @@ def read_managed_issue(config: SourceConfiguration, repository: str, number: str
 
 def read_managed_focus(config: SourceConfiguration, subject: str) -> dict[str, Any]:
     """Read only the addressed Issue via the same admitted gh REST owner."""
-    return read_focus_inputs(subject, repository=config.repository, issue_reader=lambda repository, number: read_managed_issue(config, repository, number))
+    from app.builderops.devui_owner_facts import read_owner_fact_transport
+
+    return read_focus_inputs(subject, repository=config.repository, issue_reader=lambda repository, number: read_managed_issue(config, repository, number),
+        owner_fact_reader=lambda: read_owner_fact_transport(repository=config.repository, environment=config.api_environment, authority_epoch=config.authority_epoch))
 
 
 def revalidate_inquiry_sources(config: SourceConfiguration, *, repository: str, context_pack: dict[str, Any]) -> dict[str, Any]:

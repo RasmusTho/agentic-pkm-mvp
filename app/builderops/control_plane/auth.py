@@ -31,6 +31,7 @@ class Credential:
     token_length: int
     repositories: frozenset[str] = frozenset()
     all_repositories: bool = False
+    principal_kind: str = "agent"
 
     def may_address(self, repository: str) -> bool:
         """Return whether this credential is granted authority for ``repository``.
@@ -149,6 +150,11 @@ class CredentialRegistry:
                     "explicit repositories list; the combination is ambiguous"
                 )
             revoked = raw.get("revoked", False)
+            principal_kind = raw.get("principal_kind", "agent")
+            if not isinstance(principal_kind, str) or principal_kind not in {"human", "agent", "service"}:
+                raise CredentialConfigurationError("invalid principal kind")
+            if "owner_outcomes:confirm" in scopes and principal_kind != "human":
+                raise CredentialConfigurationError("owner confirmation is a human-only grant")
             if type(revoked) is not bool:
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
             if revoked:
@@ -208,6 +214,7 @@ class CredentialRegistry:
                         token_length=token_length,
                         repositories=repositories,
                         all_repositories=all_repositories_raw,
+                        principal_kind=principal_kind,
                     ),
                     verifier,
                 )

@@ -6,11 +6,14 @@ import hashlib
 import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+
+if TYPE_CHECKING:
+    from app.builderops.owner_fact_producers import OwnerOutcomeAdmission
 
 from app.builderops.control_plane.migrations import AUTHORITY_EPOCH, MIGRATIONS, SCHEMA_VERSION
 from app.builderops.control_plane.models import (
@@ -951,7 +954,16 @@ class PostgresBuilderOpsStore:
         lease: Lease | None = None,
         expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
+        owner_outcome: OwnerOutcomeAdmission | None = None,
     ) -> AuthorityObjectResult:
+        from app.builderops.control_plane.owner_outcomes import commit_owner_outcome, is_owner_outcome
+        from app.builderops.owner_fact_producers import OwnerFactRefusal
+
+        if owner_outcome is not None:
+            return commit_owner_outcome(self, envelope=envelope, admission=owner_outcome,
+                                        idempotency_key=idempotency_key, fault_at=fault_at)
+        if is_owner_outcome(record_id, payload):
+            raise OwnerFactRefusal("owner_confirmation_required", 403)
         return self._commit_authority_object(
             envelope=envelope,
             object_kind="record",
@@ -965,6 +977,25 @@ class PostgresBuilderOpsStore:
             expected_states=expected_states,
             fault_at=fault_at,
         )
+
+    def get_owner_outcomes(
+        self, repository: str, subject_ref: str, *, idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        from app.builderops.control_plane.owner_outcomes import read_owner_outcomes
+
+        return read_owner_outcomes(self, repository, subject_ref, idempotency_key=idempotency_key)
+
+    def get_owner_asks(self, repository: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload, authority_envelope FROM builderops_records WHERE repository=%s "
+                "AND record_type='BuilderOpsReceipt' AND record_id LIKE 'owner-ask:%%' "
+                "AND (payload->'receipt_body'->'proposal'->'freshness'->>'expires_at')::timestamptz > clock_timestamp() LIMIT 65",
+                (canonical_repository(repository),),
+            ).fetchall()
+        if len(rows) > 64:
+            raise StateConflict("owner ask source collection is partial")
+        return rows
 
     def commit_attempt(
         self,

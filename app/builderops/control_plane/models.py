@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from app.builderops.owner_fact_producers import OwnerOutcomeAdmission
 
 
 class ControlPlaneError(RuntimeError):
@@ -300,7 +303,14 @@ class StorePort(Protocol):
         lease: Lease | None = None,
         expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
+        owner_outcome: OwnerOutcomeAdmission | None = None,
     ) -> AuthorityObjectResult: ...
+
+    def get_owner_outcomes(
+        self, repository: str, subject_ref: str, *, idempotency_key: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def get_owner_asks(self, repository: str) -> list[dict[str, Any]]: ...
 
     def commit_attempt(
         self,

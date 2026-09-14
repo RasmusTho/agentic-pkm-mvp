@@ -17,6 +17,7 @@ from app.builderops.devui_focus import (
     compose_focus_view,
 )
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
+from app.builderops.devui_owner_facts import read_owner_fact_transport
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import (
     derive_overview_inputs,
@@ -147,6 +148,7 @@ async def overview() -> dict[str, Any]:
         derive_overview_inputs(
             work_provider=work_provider,
             receipt_provider=receipt_provider,
+            owner_fact_provider=read_owner_fact_transport(),
         )
     )
     return compose_overview_view(composition=composition, candidates=candidates)

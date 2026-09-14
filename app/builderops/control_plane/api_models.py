@@ -49,6 +49,23 @@ class RecordCommitRequest(BaseModel):
     idempotency_key: str
 
 
+class OwnerOutcomeCommitRequest(BaseModel):
+    """Confirm-and-commit subtype on the existing record route."""
+
+    model_config = ConfigDict(extra="forbid")
+    record_type: Literal["BuilderOpsReceipt"]
+    owner_outcome: dict[str, Any]
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class OwnerAskCommitRequest(BaseModel):
+    """Publish a source-validated existing proposal, without starting it."""
+
+    model_config = ConfigDict(extra="forbid")
+    record_type: Literal["BuilderOpsReceipt"]
+    owner_ask: dict[str, Any]
+
+
 class InquiryCommitRequest(BaseModel):
     """Model-inquiry authority object; a specialization of a record commit."""
 

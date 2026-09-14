@@ -10,7 +10,7 @@ depends_on: [DEFINE_OWNER_FACT_AND_ACTION_CONTRACT.md, DEFINE_BOUNDED_ACTION_ADM
 can_parallelize_with: []
 ---
 
-State: Target-state task specification; not implemented or runtime acceptance.
+State: Implemented repository slice #5404; live source admission and owner acceptance remain separate.
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -30,8 +30,9 @@ not require this task's four producers, outcome validation/atomic write, or read
 already exist: those are its owned implementation. Runtime projection/activation additionally
 requires that delivered writer, source authority/deployment and actual candidate/readiness/profile
 readback. Missing external evidence remains blocked; no full DDO portfolio is imposed on inquiry.
-The retained P1 on #5404 remains unresolved until this task proves the repaired production path;
-#5503's specification delivery alone does not resolve its source review thread.
+The retained P1 on #5404 is repaired by this production path and the named transaction/API proofs;
+its original review thread still requires the fixing merge readback at closure. #5503's
+specification delivery alone did not resolve that thread.
 
 ## Concretely
 
@@ -43,22 +44,25 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The production writer in the existing BuilderOps service authenticates the directly submitting profile-designated human principal with the dedicated outcome-confirm grant, repository/subject and finite FCA-09 payload, checks current permission/epoch and source versions, and commits guarded receipt selection, idempotency result and projection intent atomically. The existing service issues/verifies inline confirmation in that same outcome transaction; no separate confirmation source is inferred. Generic agent write permission, a mismatched owner principal, caller-supplied human identity/confirmation metadata and absent explicit confirmation refuse without an outcome. An owner request confirmed at T1 retains the same request hash when the server commits at T2; recorded time and confirmation/receipt metadata are outside that immutable request, and replay returns the original receipt.
+- [x] The production writer in the existing BuilderOps service authenticates the directly submitting profile-designated human principal with the dedicated outcome-confirm grant, repository/subject and finite FCA-09 payload, checks current permission/epoch and source versions, and commits guarded receipt selection, idempotency result and projection intent atomically. The existing service issues/verifies inline confirmation in that same outcome transaction; no separate confirmation source is inferred. Generic agent write permission, a mismatched owner principal, caller-supplied human identity/confirmation metadata and absent explicit confirmation refuse without an outcome. An owner request confirmed at T1 retains the same request hash when the server commits at T2; recorded time and confirmation/receipt metadata are outside that immutable request, and replay returns the original receipt.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_production_writer_is_authorized_version_bound_and_idempotent`
-- [ ] Equal-key/equal-payload replay returns the original receipt; changed payload under the same key returns `idempotency_conflict`. Two different-key initial submissions (`accepted` versus `rejected`, or equal outcomes) against the same predecessor yield one commit and one `current_receipt_conflict`, never two current decisions. A correction requires new explicit owner confirmation of the current predecessor. Trial and acceptance share the binding guard: trial correction first makes a concurrent old-trial acceptance refuse; acceptance first is withdrawn by the later trial correction, and a delayed projection cannot restore it.
+- [x] Equal-key/equal-payload replay returns the original receipt; changed payload under the same key returns `idempotency_conflict`. Two different-key initial submissions (`accepted` versus `rejected`, or equal outcomes) against the same predecessor yield one commit and one `current_receipt_conflict`, never two current decisions. A correction requires new explicit owner confirmation of the current predecessor. Trial and acceptance share the binding guard: trial correction first makes a concurrent old-trial acceptance refuse; acceptance first is withdrawn by the later trial correction, and a delayed projection cannot restore it.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_conflicting_submissions_require_explicit_correction`
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_acceptance_and_trial_correction_share_serialization`
-- [ ] Deployed candidate, verification, ready-to-try, trial and acceptance stay distinct. C/P1's trial and decision remain historical when C2, environment E2, profile/AC P2, readiness binding or material limits change; the new binding has neither trial nor acceptance. Correcting the referenced trial withdraws its acceptance. A rejected decision without a trial creates no trial, and `unable_to_try` cannot support acceptance.
+- [x] Deployed candidate, verification, ready-to-try, trial and acceptance stay distinct. C/P1's trial and decision remain historical when C2, environment E2, profile/AC P2, readiness binding or material limits change; the new binding has neither trial nor acceptance. Correcting the referenced trial withdraws its acceptance. A rejected decision without a trial creates no trial, and `unable_to_try` cannot support acceptance.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_changed_candidate_cannot_inherit_trial_or_acceptance`
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_changed_profile_and_trial_correction_withdraw_acceptance`
-- [ ] Overview/Focus production composition reads exact source receipt lineage and current bindings, distinguishes canonical asks, technical waits and LLM suggestions, and withdraws stale/unavailable/incompatible/conflicting claims. An unavailable or unadmitted writer returns a typed unavailable/refusal with no new outcome; it cannot fabricate rejection, trial, acceptance or an empty successful result. An unavailable read never proves no prior commit.
+- [x] Overview/Focus production composition reads exact source receipt lineage and current bindings, distinguishes canonical asks, technical waits and LLM suggestions, and withdraws stale/unavailable/incompatible/conflicting claims. An unavailable or unadmitted writer returns a typed unavailable/refusal with no new outcome; it cannot fabricate rejection, trial, acceptance or an empty successful result. An unavailable read never proves no prior commit.
   - Verify: `tests/api/test_devui_owner_facts.py::test_production_reads_use_source_facts_without_label_or_model_inference`
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_unavailable_writer_does_not_create_owner_outcome`
-- [ ] A pre-commit interruption exposes no confirmation, receipt or projection intent. A lost response after commit is reconciled by the same key/payload; post-write projection failure preserves the exact committed outcome and returns unavailable projection evidence until source readback rebuilds it. Restart cannot issue a duplicate outcome or infer consent when authority history is missing.
+- [x] A pre-commit interruption exposes no confirmation, receipt or projection intent. A lost response after commit is reconciled by the same key/payload; post-write projection failure preserves the exact committed outcome and returns unavailable projection evidence until source readback rebuilds it. Restart cannot issue a duplicate outcome or infer consent when authority history is missing.
   - Verify: `tests/builderops/test_owner_fact_producers.py::test_restart_reconciles_written_fact_before_projection`
 
-These are FCA-05's future production-path proofs. FCA-09 verifies this finite expected-outcome
-matrix as a document target; it does not claim that these tests or the production writer exist.
+These targets now execute the authenticated production writer and actual PostgreSQL transaction
+kernel, including controlled concurrent requests and interruption/restart. The API target also
+executes source-validated ask publication and the production managed Focus/Overview transport.
+Host source files, credentials and inquiry host/provider I/O are finite isolated test inputs;
+the tests make no live deployment, inquiry or owner-acceptance claim.
 
 ## How to Verify (Pre-Merge)
 

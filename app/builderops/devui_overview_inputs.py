@@ -266,7 +266,7 @@ def _receipt_candidate(receipt_provider: Any) -> dict[str, Any] | None:
 
 
 def derive_overview_inputs(
-    *, work_provider: Any, receipt_provider: Any = None
+    *, work_provider: Any, receipt_provider: Any = None, owner_fact_provider: Any = None
 ) -> dict[str, list[dict[str, Any]]]:
     """Derive only trusted source-ordered ``Now`` candidates from one contribution.
 
@@ -289,6 +289,11 @@ def derive_overview_inputs(
     receipt_candidate = _receipt_candidate(receipt_provider)
     if receipt_candidate is not None:
         result["ready_to_try"] = [receipt_candidate]
+    if owner_fact_provider is not None:
+        from app.builderops.devui_owner_facts import owner_fact_candidates
+
+        for zone, items in owner_fact_candidates(owner_fact_provider).items():
+            result.setdefault(zone, []).extend(items)
     return copy.deepcopy(result)
 
 
