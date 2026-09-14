@@ -396,6 +396,12 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
         issue_version=source["updated_at"], body_sha256=request["request"]["sync_state"]["body_sha256"])
     evidence["owner"]["journey_sha256"] = canonical_digest(evidence["journey"])
     assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    from app.builderops.control_plane.client import ControlPlaneConflictError
+    before_calls = list(store.calls)
+    with factory(ClientConfig(base_url="http://builderops", token="client-token")) as client:
+        with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
+            client.transition_task(**{**request, "outbox": {"effect_type": "github.comment", "payload": {}}})
+    assert store.calls == before_calls
     before = store._seq
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "wrong")
     assert main(command, client_factory=factory) == 3
