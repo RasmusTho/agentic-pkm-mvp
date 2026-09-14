@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-14
 
 # Builder System Process Map
 
@@ -1381,6 +1381,13 @@ from current selection. Provenance-qualified legacy terminal-LF authority remain
 its own convergence and final observation; the no-history compatibility path stays unchanged.
 Earlier proof cannot grant current merge or closure authority, and no recovery step deletes or
 rewrites the audit trail.
+
+When a current-schema `prepared` marker is rejected by the independent resolver before any merge
+request is accepted, apply the [Rejected Prepared-History Recovery Contract](REJECTED_PREPARED_HISTORY_RECOVERY_CONTRACT.md).
+The v1 route is `supersede_and_restart`: freeze the old attempt, verify the producer-prevention fix,
+create a fresh attempt from current `main`, and supersede the old PR only after fresh authority and
+current-head gates exist. In-place resume, phase quarantine, Issue closure, or receipt rewriting is
+not authorized by the existing contract.
 
 Same-head deployed-v1 recovery preserves historical attempts and repair budget only when the fresh
 v2 artifact retains the exact legacy supporting set and its authenticated closing set stays within
