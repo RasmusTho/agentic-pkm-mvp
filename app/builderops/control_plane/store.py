@@ -958,6 +958,8 @@ class PostgresBuilderOpsStore:
     ) -> AuthorityObjectResult:
         from app.builderops.owner_fact_producers import OwnerFactRefusal
 
+        if record_type == "IssueDeliveryApproval" and envelope.scope != "issue-delivery-approval":
+            raise StateConflict("Issue-delivery approvals require exact owner admission")
         if owner_outcome is not None:
             return _commit_owner_outcome(self, envelope=envelope, admission=owner_outcome,
                                         idempotency_key=idempotency_key, fault_at=fault_at)
@@ -1440,6 +1442,29 @@ class PostgresBuilderOpsStore:
         if row is None:
             raise KeyError(record_id)
         return dict(row)
+
+    def get_issue_delivery_by_operation_key(
+        self, repository: str, operation_key: str
+    ) -> Mapping[str, Any] | None:
+        """Read the unique FCA-ID-A approval bound to ``operation_key``.
+
+        This lookup is deliberately a narrow projection over the existing
+        record owner.  It prevents a fresh approval id from reusing an
+        already admitted operation key without adding another authority table.
+        """
+
+        repository = canonical_repository(repository)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT record_id, record_type, state, payload, authority_envelope "
+                "FROM builderops_records WHERE repository = %s "
+                "AND record_type = 'IssueDeliveryApproval' "
+                "AND payload->>'operation_key' = %s LIMIT 2",
+                (repository, operation_key),
+            ).fetchall()
+        if len(rows) > 1:
+            raise StateConflict("Issue-delivery operation key is not unique")
+        return dict(rows[0]) if rows else None
 
     def get_attempt(self, repository: str, task_id: str, attempt_id: str) -> Mapping[str, Any]:
         repository = canonical_repository(repository)

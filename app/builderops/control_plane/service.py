@@ -20,6 +20,9 @@ from app.builderops.control_plane.api_models import (
     InquiryCommandPreviewRequest,
     InquiryCommandStartRequest,
     InquiryCommandAuthorityRequest,
+    IssueDeliveryAuthorityRequest,
+    IssueDeliveryPreviewRequest,
+    IssueDeliveryStartRequest,
     LeaseClaimRequest,
     LeaseInput,
     OutboxClaimRequest,
@@ -71,6 +74,16 @@ from app.builderops.owner_fact_producers import (
     read_owner_profiles, strict_json, validate_current_binding, validate_outcome_request,
 )
 from app.builderops.models import normalize_record
+from app.builderops.control_plane.issue_delivery import (
+    CONTRACT_VERSION as ISSUE_DELIVERY_CONTRACT,
+    IssueDeliveryContractError,
+    OPERATION_TYPE as ISSUE_DELIVERY_OPERATION,
+    RECORD_TYPE as ISSUE_DELIVERY_RECORD_TYPE,
+    idempotency_key as issue_delivery_idempotency_key,
+    manifest_hash as issue_delivery_manifest_hash,
+    normalize_manifest as normalize_issue_delivery_manifest,
+    record_id as issue_delivery_record_id,
+)
 
 bearer = HTTPBearer(auto_error=False)
 INQUIRY_CANDIDATE_ROOT = Path(__file__).resolve().parents[3] / "devui-candidate"
@@ -620,6 +633,13 @@ def create_app(
     inquiry_approve = _credential_dependency(credentials, rate_limiter, "inquiries:approve")
     inquiry_read = _credential_dependency(credentials, rate_limiter, "inquiries:read")
     inquiry_control = _credential_dependency(credentials, rate_limiter)
+    issue_delivery_owner = _credential_dependency(
+        credentials, rate_limiter, "issue_delivery:approve"
+    )
+    issue_delivery_read_scope = _credential_dependency(
+        credentials, rate_limiter, "issue_delivery:read"
+    )
+    issue_delivery_control = _credential_dependency(credentials, rate_limiter)
     # The actual production constructor has this complete concrete path. No
     # caller-supplied executor or no-op production port is accepted.
     inquiry_workflow = SanctionedModelInquiryWorkflow()
@@ -661,6 +681,169 @@ def create_app(
         if row["record_type"] != "ModelInquiryApproval" or row["state"] != "approved" or approval["proposal"]["repository"] != repository or approval["approval_id"] != approval_id or envelope["actor"] != approval["owner_principal"] or envelope["scope"] != "model-inquiry-approval":
             raise ValueError("exact service-owned inquiry approval required")
         return approval
+
+    def issue_delivery_permission(credential: Credential, repository: str) -> dict[str, Any]:
+        """Resolve the current, repository-scoped Issue approval grant."""
+
+        if credential.principal_kind != "human" or not credentials.has_issue_delivery_approval_grant(
+            repository, credential.principal
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="exact Issue-delivery owner grant required",
+            )
+        return {
+            "grant": "issue_delivery:approve",
+            "credential_id": credential.credential_id,
+            "principal": credential.principal,
+            "rotation_generation": credential.rotation_generation,
+            "fingerprint": credential.fingerprint,
+            "scopes": sorted(credential.scopes),
+            "repositories": sorted(credential.repositories),
+            "all_repositories": credential.all_repositories,
+        }
+
+    def issue_delivery_manifest(
+        manifest_input: Mapping[str, Any], credential: Credential
+    ) -> dict[str, Any]:
+        """Build one exact preview and bind only service-owned authority fields."""
+
+        if any(
+            field in manifest_input
+            for field in (
+                "owner_principal",
+                "permission",
+                "authority_epoch",
+                "approval_manifest_hash",
+                "approval_receipt_ref",
+                "approved_at",
+                "state",
+            )
+        ):
+            raise IssueDeliveryContractError("preview cannot supply service authority fields")
+        normalized = normalize_issue_delivery_manifest(manifest_input)
+        repository = normalized["repository"]
+        _enforce_repo_scope(credential, repository)
+        permission = issue_delivery_permission(credential, repository)
+        owner_profile = normalized.get("owner_profile")
+        if isinstance(owner_profile, Mapping):
+            profile_principal = owner_profile.get("principal", owner_profile.get("owner_principal"))
+            if profile_principal is not None and profile_principal != credential.principal:
+                raise HTTPException(status_code=403, detail="owner profile does not match authenticated owner")
+        normalized.update(
+            {
+                "owner_principal": credential.principal,
+                "permission": permission,
+                "authority_epoch": int(store.readiness()["authority_epoch"]),
+                "approval_receipt_ref": (
+                    "builderops:record:" + repository + ":" + issue_delivery_record_id(normalized["approval_id"])
+                ),
+                "previewed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        normalized["approval_manifest_hash"] = issue_delivery_manifest_hash(normalized)
+        return normalized
+
+    def validate_issue_delivery_approval(
+        manifest_input: Mapping[str, Any], credential: Credential
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Validate an immutable preview and fresh current authority."""
+
+        supplied_hash = manifest_input.get("approval_manifest_hash")
+        if not isinstance(supplied_hash, str) or supplied_hash != issue_delivery_manifest_hash(manifest_input):
+            raise StateConflict("Issue-delivery approval manifest changed")
+        manifest = normalize_issue_delivery_manifest(manifest_input)
+        if manifest.get("owner_principal") != credential.principal:
+            raise HTTPException(status_code=403, detail="Issue-delivery approval owner mismatch")
+        repository = manifest["repository"]
+        _enforce_repo_scope(credential, repository)
+        permission = issue_delivery_permission(credential, repository)
+        if manifest.get("permission") != permission:
+            raise StateConflict("Issue-delivery approval permission was revoked or rotated")
+        readiness = store.readiness()
+        if manifest.get("authority_epoch") != readiness.get("authority_epoch"):
+            raise StateConflict("Issue-delivery approval authority epoch is stale")
+        try:
+            expiry = datetime.fromisoformat(str(manifest["expires_at"]))
+        except (TypeError, ValueError) as exc:
+            raise StateConflict("Issue-delivery approval expiry is invalid") from exc
+        if expiry <= datetime.now(timezone.utc):
+            raise StateConflict("Issue-delivery approval has expired")
+        return manifest, permission
+
+    def issue_delivery_existing_by_operation(
+        repository: str, operation_key: str
+    ) -> Mapping[str, Any] | None:
+        getter = getattr(store, "get_issue_delivery_by_operation_key", None)
+        if callable(getter):
+            return getter(repository, operation_key)
+        return None
+
+    def issue_delivery_approval_payload(
+        manifest: Mapping[str, Any], *, approved_at: str
+    ) -> dict[str, Any]:
+        return {
+            **dict(manifest),
+            "contract": ISSUE_DELIVERY_CONTRACT,
+            "state": "approved",
+            "approved_at": approved_at,
+            "approval_receipt_ref": manifest["approval_receipt_ref"],
+        }
+
+    def issue_delivery_readback(repository: str, approval_id: str) -> dict[str, Any]:
+        canonical = canonical_repository(repository)
+        row = store.get_record(canonical, issue_delivery_record_id(approval_id))
+        if row.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE:
+            raise StateConflict("record is not an Issue-delivery approval")
+        if row.get("state") != "approved":
+            raise StateConflict("Issue-delivery approval is not approved")
+        payload = dict(row["payload"])
+        if payload.get("approval_manifest_hash") != issue_delivery_manifest_hash(payload):
+            raise StateConflict("Issue-delivery approval manifest is corrupt")
+        operation_key = payload.get("operation_key")
+        if not isinstance(operation_key, str):
+            raise StateConflict("Issue-delivery approval operation key is missing")
+        state = "approved"
+        reason: str | None = None
+        try:
+            permission = payload.get("permission")
+            credential_id = permission.get("credential_id") if isinstance(permission, Mapping) else None
+            current = credentials.current_credential(credential_id) if isinstance(credential_id, str) else None
+            if current is None or current.principal != payload.get("owner_principal") or not credentials.has_issue_delivery_approval_grant(canonical, payload.get("owner_principal", "")):
+                state, reason = "invalidated", "permission_revoked_or_unavailable"
+            else:
+                expiry = datetime.fromisoformat(str(payload["expires_at"]))
+                if expiry <= datetime.now(timezone.utc):
+                    state, reason = "invalidated", "expired"
+                elif payload.get("authority_epoch") != store.readiness().get("authority_epoch"):
+                    state, reason = "invalidated", "authority_epoch_changed"
+        except Exception:
+            state, reason = "invalidated", "current_authority_unavailable"
+        replay = store.replay(canonical, issue_delivery_idempotency_key(operation_key))
+        return {
+            "contract_version": ISSUE_DELIVERY_CONTRACT,
+            "operation_type": ISSUE_DELIVERY_OPERATION,
+            "approval_id": payload.get("approval_id", approval_id),
+            "state": state,
+            "invalidation_reason": reason,
+            "manifest": payload,
+            "approval": payload,
+            "operation": {
+                "operation_key": operation_key,
+                "repository": canonical,
+                "issue_number": payload.get("issue", {}).get("number") if isinstance(payload.get("issue"), Mapping) else None,
+                "workflow": payload.get("workflow"),
+                "destination": payload.get("destination"),
+            },
+            "receipt": {
+                "id": payload.get("approval_receipt_ref"),
+                "receipt_sequence": getattr(replay, "receipt_sequence", None),
+                "approval_manifest_hash": payload.get("approval_manifest_hash"),
+            },
+            "replayed": bool(getattr(replay, "replayed", False)),
+            "stop_support": "unsupported",
+            "effects": [],
+        }
 
     def command_preview(request: InquiryCommandPreviewRequest, credential: Credential) -> dict[str, Any]:
         _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
@@ -812,6 +995,167 @@ def create_app(
         except Exception as exc:
             raise _control_plane_error(exc) from exc
 
+    def issue_delivery_start_sync(
+        request: IssueDeliveryStartRequest, credential: Credential
+    ) -> dict[str, Any]:
+        manifest, _permission = validate_issue_delivery_approval(request.manifest, credential)
+        if request.decision == "hold":
+            return {
+                "contract_version": ISSUE_DELIVERY_CONTRACT,
+                "operation_type": ISSUE_DELIVERY_OPERATION,
+                "approval_id": manifest["approval_id"],
+                "state": "held",
+                "effects": [],
+                "replayed": False,
+            }
+        repository = manifest["repository"]
+        approval_id = manifest["approval_id"]
+        key = issue_delivery_idempotency_key(manifest["operation_key"])
+        record = issue_delivery_record_id(approval_id)
+        try:
+            existing = store.get_record(repository, record)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            existing_payload = existing.get("payload", {})
+            if (
+                existing.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
+                or existing_payload.get("approval_manifest_hash") != manifest["approval_manifest_hash"]
+                or existing_payload.get("operation_key") != manifest["operation_key"]
+            ):
+                raise StateConflict("Issue-delivery approval is immutable")
+            replay = store.replay(repository, key)
+            if replay is None:
+                raise ControlPlaneError("Issue-delivery approval replay is unavailable")
+            payload = dict(existing_payload)
+            return {
+                "contract_version": ISSUE_DELIVERY_CONTRACT,
+                "operation_type": ISSUE_DELIVERY_OPERATION,
+                "approval_id": approval_id,
+                "state": "approved",
+                "approval": payload,
+                "receipt": {
+                    "id": payload.get("approval_receipt_ref"),
+                    "receipt_sequence": replay.receipt_sequence,
+                    "approval_manifest_hash": payload.get("approval_manifest_hash"),
+                },
+                "replayed": True,
+                "effects": [],
+            }
+        by_operation = issue_delivery_existing_by_operation(repository, manifest["operation_key"])
+        if by_operation is not None:
+            raise IdempotencyConflict("Issue-delivery operation key is already approved")
+        approved_at = datetime.now(timezone.utc).isoformat()
+        payload = issue_delivery_approval_payload(manifest, approved_at=approved_at)
+        _assert_durable_payload_safe(payload, credentials)
+        envelope = AuthorityEnvelope(
+            repository=repository,
+            scope="issue-delivery-approval",
+            stack="builderops-control-plane",
+            actor=credential.principal,
+            source_refs=(
+                f"github:issue:{manifest['issue']['number']}",
+                f"source:{manifest['source']['revision']}",
+                f"manifest:{manifest['approval_manifest_hash']}",
+            ),
+        )
+        result = store.commit_record(
+            envelope=envelope,
+            record_id=record,
+            record_type=ISSUE_DELIVERY_RECORD_TYPE,
+            state="approved",
+            payload=payload,
+            idempotency_key=key,
+        )
+        return {
+            "contract_version": ISSUE_DELIVERY_CONTRACT,
+            "operation_type": ISSUE_DELIVERY_OPERATION,
+            "approval_id": approval_id,
+            "state": "approved",
+            "approval": payload,
+            "receipt": {
+                "id": payload["approval_receipt_ref"],
+                "receipt_sequence": result.receipt_sequence,
+                "recovery_lsn": result.recovery_lsn,
+                "approval_manifest_hash": payload["approval_manifest_hash"],
+            },
+            "replayed": result.replayed,
+            "effects": [],
+        }
+
+    @application.post("/v1/issue-delivery/preview")
+    @application.post("/v1/issues/command/preview")
+    async def issue_delivery_preview(
+        request: IssueDeliveryPreviewRequest,
+        credential: Credential = Depends(issue_delivery_owner),
+    ) -> dict[str, Any]:
+        try:
+            manifest = await run_in_threadpool(issue_delivery_manifest, request.manifest, credential)
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return {
+            "contract_version": ISSUE_DELIVERY_CONTRACT,
+            "operation_type": ISSUE_DELIVERY_OPERATION,
+            "approval_id": manifest["approval_id"],
+            "state": "previewed",
+            "manifest": manifest,
+            "choices": ["start", "hold"],
+            "effects": [],
+        }
+
+    @application.post("/v1/issue-delivery/start")
+    @application.post("/v1/issues/command/start")
+    async def issue_delivery_start(
+        request: IssueDeliveryStartRequest,
+        credential: Credential = Depends(issue_delivery_owner),
+    ) -> dict[str, Any]:
+        try:
+            return await run_in_threadpool(issue_delivery_start_sync, request, credential)
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.post("/v1/issue-delivery/authority")
+    @application.post("/v1/issues/command/authority")
+    async def issue_delivery_authority(
+        request: IssueDeliveryAuthorityRequest,
+        credential: Credential = Depends(issue_delivery_control),
+    ) -> dict[str, Any]:
+        try:
+            supplied = request.manifest
+            if supplied.get("approval_manifest_hash") != issue_delivery_manifest_hash(supplied):
+                raise StateConflict("Issue-delivery approval manifest changed")
+            normalized = normalize_issue_delivery_manifest(supplied)
+            repository = normalized["repository"]
+            _enforce_repo_scope(credential, repository)
+            if request.purpose == "execute":
+                if not credentials.has_issue_delivery_execute_grant(repository, credential.principal):
+                    raise HTTPException(status_code=403, detail="Issue-delivery execute grant required")
+            elif not credentials.has_issue_delivery_read_grant(repository, credential.principal):
+                raise HTTPException(status_code=403, detail="Issue-delivery read grant required")
+            return {
+                "approval": supplied,
+                "purpose": request.purpose,
+                "operation_key": normalized["operation_key"],
+                "authority_epoch": store.readiness()["authority_epoch"],
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.get("/v1/issue-delivery/{approval_id}")
+    @application.get("/v1/issues/command/{approval_id}")
+    async def issue_delivery_read(
+        approval_id: str,
+        repository: str,
+        _credential: Credential = Depends(issue_delivery_read_scope),
+    ) -> dict[str, Any]:
+        try:
+            return await run_in_threadpool(issue_delivery_readback, repository, approval_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Issue-delivery approval not found") from exc
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
     async def require_authority_epoch(
         x_builderops_authority_epoch: str | None = Header(default=None),
     ) -> None:
@@ -945,6 +1289,16 @@ def create_app(
             raise HTTPException(status_code=403, detail="owner asks require source admission")
         if request.record_type == "ModelInquiryApproval" or request.record_id.startswith("inquiry-approval:"):
             raise HTTPException(status_code=403, detail="inquiry approvals require owner command admission")
+        if (
+            request.record_type == ISSUE_DELIVERY_RECORD_TYPE
+            or request.record_id.startswith("issue-delivery-approval:")
+            or request.payload.get("contract") == ISSUE_DELIVERY_CONTRACT
+            or request.payload.get("operation_type") == ISSUE_DELIVERY_OPERATION
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Issue-delivery approvals require exact owner admission",
+            )
         try:
             _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
             result = await run_in_threadpool(

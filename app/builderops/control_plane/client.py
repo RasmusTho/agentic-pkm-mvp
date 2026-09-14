@@ -179,6 +179,64 @@ class BuilderOpsControlPlaneClient:
         """Read exact current approval authority; never admit or launch a command."""
         return self._request("POST", "/v1/inquiries/command/authority", json_body={"approval": approval, "purpose": purpose}, pin_epoch=False)
 
+    def issue_delivery_preview(
+        self, *, manifest: Mapping[str, Any], path: str = "/v1/issue-delivery/preview"
+    ) -> dict[str, Any]:
+        """Preview one exact Issue-delivery operation; performs no persistence."""
+
+        return self._request(
+            "POST", path, json_body={"manifest": dict(manifest)}, pin_epoch=False
+        )
+
+    def issue_delivery_start(
+        self,
+        *,
+        decision: str,
+        manifest: Mapping[str, Any],
+        path: str = "/v1/issue-delivery/start",
+    ) -> dict[str, Any]:
+        """Submit the authenticated Hold/Start decision for one preview."""
+
+        return self._request(
+            "POST",
+            path,
+            json_body={"decision": decision, "manifest": dict(manifest)},
+        )
+
+    def issue_delivery_readback(
+        self, *, repository: str, approval_id: str, path: str = "/v1/issue-delivery"
+    ) -> dict[str, Any]:
+        """Read one approved operation through a separate read grant."""
+
+        return self._request(
+            "GET",
+            f"{path}/{approval_id}",
+            params={"repository": repository},
+            pin_epoch=False,
+        )
+
+    def issue_delivery_authority(
+        self,
+        *,
+        manifest: Mapping[str, Any],
+        purpose: str,
+        path: str = "/v1/issue-delivery/authority",
+    ) -> dict[str, Any]:
+        """Read the destination's separately scoped execute/read grant."""
+
+        return self._request(
+            "POST",
+            path,
+            json_body={"manifest": dict(manifest), "purpose": purpose},
+            pin_epoch=False,
+        )
+
+    # Friendly aliases retain the existing client's verb-first naming style
+    # for callers that use ``preview_issue_delivery``/``start_issue_delivery``.
+    preview_issue_delivery = issue_delivery_preview
+    start_issue_delivery = issue_delivery_start
+    read_issue_delivery = issue_delivery_readback
+
     def status(self) -> dict[str, Any]:
         return self._request("GET", f"/{API_VERSION}/status", pin_epoch=False)
 

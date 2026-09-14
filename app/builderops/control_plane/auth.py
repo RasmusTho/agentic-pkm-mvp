@@ -249,6 +249,41 @@ class CredentialRegistry:
                    and {"records:write", "receipts:read", "owner_outcomes:confirm"}.issubset(credential.scopes)
                    for credential, _ in self._entries())
 
+    def has_issue_delivery_approval_grant(self, repository: str, principal: str) -> bool:
+        """Return whether the current human credential may approve one Issue.
+
+        Issue delivery is intentionally a distinct grant.  Inquiry approval,
+        generic record writes, and dispatcher/task scopes never satisfy it.
+        """
+
+        return any(
+            credential.principal == principal
+            and credential.principal_kind == "human"
+            and credential.may_address(repository)
+            and "issue_delivery:approve" in credential.scopes
+            for credential, _ in self._entries()
+        )
+
+    def has_issue_delivery_execute_grant(self, repository: str, principal: str) -> bool:
+        """Return whether a destination has the separate execute grant."""
+
+        return any(
+            credential.principal == principal
+            and credential.may_address(repository)
+            and "issue_delivery:execute" in credential.scopes
+            for credential, _ in self._entries()
+        )
+
+    def has_issue_delivery_read_grant(self, repository: str, principal: str) -> bool:
+        """Return whether a destination has the separate readback grant."""
+
+        return any(
+            credential.principal == principal
+            and credential.may_address(repository)
+            and "issue_delivery:read" in credential.scopes
+            for credential, _ in self._entries()
+        )
+
     def is_registered_secret(self, value: str) -> bool:
         """Check a candidate without retaining or returning raw credential material."""
         fingerprint = self._fingerprint(value)

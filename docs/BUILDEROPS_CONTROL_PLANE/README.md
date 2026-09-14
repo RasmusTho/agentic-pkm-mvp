@@ -737,8 +737,10 @@ through that same service authority. No local epic run-state file or dispatcher 
 approval or execution ledger. The existing launcher requests claim, edits, publication, governed
 merge and closure; it does not yet enforce an owner manifest at those boundaries or support stop.
 
-The Issue subtype, atomic approval/key reservation, crash-safe entry observation, continuing
-permission checks and independently sourced GitHub outcome readback are still missing production
+FCA-ID-A, delivered by #5550, now supplies the repository-only Issue subtype with atomic immutable
+approval/readback admission, exact operation-key binding, fresh permission/epoch/expiry checks and
+separate destination read/execute grants. Destination reservation/attempt/entry, continuing
+effect-gate checks and independently sourced GitHub outcome readback remain missing production
 support, assigned to the [three source-anchored slices](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices).
 The existing GitHub readers and closure owners supply PR/head/CI/review/merge/closure evidence;
 authenticated worker text and process exit supply no delivery verdict. FCA-09 separately owns
