@@ -2237,6 +2237,15 @@ def build_verified_merge_phase(
         final_projection_observation_sha256 = _canonical_digest(
             cast(Mapping[str, object], final_projection_observation)
         )
+        if final_projection_observation_sha256 != _canonical_digest(
+            cast(Mapping[str, object], cast(
+                Mapping[str, object], projection_convergence_receipt
+            )["final_projection_observation"])
+        ):
+            raise ValueError(
+                "verified merge prepared phase projection convergence requires "
+                "the exact embedded final observation"
+            )
     else:
         if not _projection_convergence_matches_authority(
             projection_convergence_receipt,
