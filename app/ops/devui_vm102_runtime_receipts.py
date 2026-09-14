@@ -488,7 +488,7 @@ def _first_manifest(value: Any) -> None:
 def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, Any], captured: datetime) -> dict[str, Any]:
     # Imports stay on this bounded path: starting the independent listener does
     # not load the dispatcher/normalizer, nor create any local dispatcher store.
-    from app.builderops.control_plane.client_cli import issue_source_task, validate_import_readback, validate_import_response
+    from app.builderops.control_plane.client_cli import issue_source_task, same_json_value, validate_import_readback, validate_import_response
     from app.builderops.devui_assets import ASSET_SHA256
     from scripts.validate_issue_readiness import extract_sections
 
@@ -556,12 +556,12 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
                    and isinstance(request["idempotency_key"], str) and bool(request["idempotency_key"])
                    and exchange["authority_epoch"] == source["authority_epoch"], "initial transition authority is invalid")
     body = exchange["request_body"]
-    _first_require(isinstance(body, str) and json.loads(body) == request, "observed request bytes differ from decoded request")
+    _first_require(isinstance(body, str) and same_json_value(json.loads(body), request), "observed request bytes differ from decoded request")
     _first_require(exchange["request_sha256"] == hashlib.sha256(body.encode("utf-8")).hexdigest(), "observed request digest differs")
     issue = evidence["github"]["payload"]
     original_time = request["request"]["sync_state"]["last_pull_at"]
     expected_task = issue_source_task(issue, repository=source["repository"], number=issue["number"], observed_at=original_time, authority_epoch=source["authority_epoch"])
-    _first_require(_time(original_time, captured) <= times["exchange"] and request["request"] == expected_task
+    _first_require(_time(original_time, captured) <= times["exchange"] and same_json_value(request["request"], expected_task)
                    and request["task_id"] == expected_task["task_id"],
                    "independent Issue bytes do not match the retained native task")
     _first_require(set(request["envelope"]) == {"repository", "scope", "stack", "source_refs"}

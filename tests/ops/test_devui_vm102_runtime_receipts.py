@@ -823,7 +823,7 @@ def test_first_read_observation_validates_independent_source_evidence():
     assert build_first_read_observation(**inputs)["verdict"] == "refused"
 
 
-@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins"])
+@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins"])
 def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
     from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
 
@@ -845,6 +845,22 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(evidence["exchange"]["request_body"].encode()).hexdigest()
     elif failure == "wire_digest":
         evidence["exchange"]["request_sha256"] = "f" * 64
+    elif failure in {"wire_number_type", "source_number_type"}:
+        wire = json.loads(evidence["exchange"]["request_body"])
+        wire["request"]["issue_number"] = 501.0
+        body = json.dumps(wire)
+        evidence["exchange"]["request_body"] = body
+        evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(body.encode()).hexdigest()
+        if failure == "source_number_type":
+            evidence["exchange"]["request"] = wire
+            evidence["task"]["payload"]["payload"] = copy.deepcopy(wire["request"])
+    elif failure in {"native_number_type", "native_epoch_type"}:
+        native = copy.deepcopy(evidence["task"]["payload"]["payload"])
+        evidence["task"]["payload"]["payload"] = native
+        if failure == "native_number_type":
+            native["issue_number"] = 501.0
+        else:
+            native["sync_state"]["authority_epoch"] = float(native["sync_state"]["authority_epoch"])
     elif failure == "source":
         evidence["github"]["payload"]["body"] += "changed"
     elif failure == "native":

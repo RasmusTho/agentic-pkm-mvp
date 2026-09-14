@@ -356,12 +356,13 @@ The pure producer accepts `--kind first-read` with `evidence` and `prerequisites
 source packets are `selection`, `operator`, `source`, `github`, `task`, `exchange`, `installed`,
 `browser`, `journey` and `owner`; prerequisites are the full `inventory` and `activation` records.
 The exchange packet retains the exact UTF-8 HTTP `request_body`, its SHA-256, its decoded `request`
-and observed `response`. The validator compares those bytes and decoded fields directly; it never
+and observed `response`. The validator compares those bytes and decoded fields with preserved JSON types; it never
 guesses a client's JSON serialization or reconstructs the response from a task row.
 The closed schema fixes the output shape. The existing read-only receipt mount retains
 `first-read/inputs.json` and `first-read/observation.json`. The separately named reader re-derives
 that observation and checks actual candidate assets/documents and live Issue/task/epoch/grants on
-every admitted GET. Missing evidence leaves the initial journey accessible and its observation
+every admitted managed-read GET. Diagnostic `/healthz` and `/version` responses do not consult
+observation sources or assert a first-read observation. Missing evidence leaves the initial journey accessible and its observation
 refused. Owner acknowledgement and retention follow that journey.
 
 The governing Issue names concrete behavioral `Verify:` tests. Its finite test surfaces are

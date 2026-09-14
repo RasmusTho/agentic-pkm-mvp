@@ -390,6 +390,12 @@ def issue_source_task(
         raise ValueError("Issue source identity, readiness or observation is invalid") from exc
 
 
+def same_json_value(left: Any, right: Any) -> bool:
+    """Compare source values without Python's bool/int/float equality coercion."""
+    options: dict[str, Any] = {"sort_keys": True, "separators": (",", ":"), "allow_nan": False}
+    return json.dumps(left, **options) == json.dumps(right, **options)
+
+
 def validate_import_readback(row: Any, request: dict[str, Any]) -> None:
     """A native Ready row is necessary, but is never transaction evidence."""
     envelope = request["envelope"]
@@ -397,7 +403,8 @@ def validate_import_readback(row: Any, request: dict[str, Any]) -> None:
         not isinstance(row, dict) or row.get("repository") != envelope["repository"]
         or row.get("task_id") != request["task_id"] or row.get("state") != "ready"
         or type(row.get("version")) is not int or row["version"] != 1
-        or "lease" not in row or row["lease"] is not None or row.get("payload") != request["request"]
+        or "lease" not in row or row["lease"] is not None
+        or not same_json_value(row.get("payload"), request["request"])
         or not isinstance(row.get("authority_envelope"), dict)
         or any(row["authority_envelope"].get(key) != value for key, value in envelope.items())
     ):
@@ -462,8 +469,8 @@ def _import_issue(args: argparse.Namespace, client: BuilderOpsControlPlaneClient
         row = client.get_task(repository=repository, task_id=task_id)
         validate_import_readback(row, request)
         fresh = cockpit_github_plane._run_gh(address)
-        if issue_source_task(fresh, repository=repository, number=args.issue,
-                             observed_at=payload["sync_state"]["last_pull_at"], authority_epoch=epoch) != payload:
+        if not same_json_value(issue_source_task(fresh, repository=repository, number=args.issue,
+                             observed_at=payload["sync_state"]["last_pull_at"], authority_epoch=epoch), payload):
             raise ValueError("Issue source changed during import")
         if client.status().get("authority_epoch") != epoch:
             raise ValueError("Issue import authority epoch changed")

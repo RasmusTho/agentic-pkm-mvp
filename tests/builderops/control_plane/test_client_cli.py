@@ -644,6 +644,12 @@ def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys
         capsys.readouterr()
         source[key] = original
         assert len(writes) == 2
+    original_payload = row["payload"]
+    row["payload"] = {**original_payload, "issue_number": 501.0}
+    assert main(command, client_factory=ImportClient) != 0
+    capsys.readouterr()
+    assert len(writes) == 2
+    row["payload"] = original_payload
     row["state"] = "claimed"
     assert main(command, client_factory=ImportClient) != 0
     assert len(writes) == 2

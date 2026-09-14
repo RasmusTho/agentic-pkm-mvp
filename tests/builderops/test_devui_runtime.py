@@ -1232,6 +1232,25 @@ def test_first_read_observation_preserves_admission_and_authority_boundaries(man
         assert providers["first_read_observation"]["status"] == "available"
         assert providers["vm102_evidence"]["status"] == "refused"
         assert client.get("/healthz").json()["complete_dev_system_health"] is False
+        source.tasks[0]["payload"]["issue_number"] = 501.0
+        response = client.get("/api/devui/overview")
+        assert response.headers["x-devui-first-read-observation"] == "refused"
+        assert _managed_source(response.json(), "dispatcher-store")["state"] == "unavailable"
+        assert _managed_source(response.json(), "github-live")["state"] == "fresh"
+        source.tasks[0]["payload"]["issue_number"] = 501
+        from app.builderops import cockpit_github_plane
+        source_calls = []
+        def stalled_source(args):
+            source_calls.append(args)
+            raise cockpit_github_plane.GithubReadError("source read timed out")
+        calls_before = list(source.http_calls)
+        with monkeypatch.context() as stalled:
+            stalled.setattr(cockpit_github_plane, "_run_gh", stalled_source)
+            for route in ("/healthz", "/version"):
+                diagnostic = client.get(route)
+                assert diagnostic.status_code == 200
+                assert "x-devui-first-read-observation" not in diagnostic.headers
+            assert source_calls == [] and source.http_calls == calls_before
         assert client.post("/api/devui/overview").status_code == 405
         assert client.get("/api/devui/overview", headers={"X-Forwarded-For": "127.0.0.1"}).status_code == 403
         (folder / "inputs.json").write_text("{partial")

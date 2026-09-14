@@ -227,6 +227,12 @@ def test_first_read_reader_revalidates_retained_inputs(tmp_path):
 
     assert read()["status"] == "available"
     assert read()["status"] == "available" and len(reads) == 2
+    row = inputs["evidence"]["task"]["payload"]
+    original_payload = row["payload"]
+    row["payload"] = {**original_payload, "issue_number": 501.0}
+    assert read()["status"] == "refused"
+    row["payload"] = original_payload
+    assert read()["status"] == "available"
     path.unlink()
     assert read()["status"] == "refused"
     path.write_text(json.dumps(receipt))

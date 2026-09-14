@@ -362,7 +362,7 @@ def read_first_read_observation_provider(
     provider = {"provider": "devui_first_read_observation", "authority": "source_owner_observed_read_only"}
     try:
         from app.ops.devui_vm102_runtime_receipts import validate_first_read_observation
-        from app.builderops.control_plane.client_cli import issue_source_task, validate_import_readback
+        from app.builderops.control_plane.client_cli import issue_source_task, same_json_value, validate_import_readback
 
         captured = now or _utc_now()
         root = Path(receipt_dir) / "first-read"
@@ -388,7 +388,7 @@ def read_first_read_observation_provider(
         expected = issue_source_task(current["issue"], repository=receipt["repository"],
             number=receipt["issue_binding"]["number"], observed_at=request["request"]["sync_state"]["last_pull_at"],
             authority_epoch=current["authority_epoch"])
-        if expected != request["request"]:
+        if not same_json_value(expected, request["request"]):
             raise Vm102ReceiptError("first-read selected Issue changed")
         validate_import_readback(current["task"], request)
         if raw != [read(path) for path in paths]:

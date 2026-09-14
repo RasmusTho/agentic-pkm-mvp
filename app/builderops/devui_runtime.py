@@ -261,12 +261,13 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
                             source_sha=configuration.source_sha,
                             repository=configuration.sources.repository,
                         )
-                    # Completed evidence follows the first read. Its absence or
-                    # withdrawal never changes the existing local admission.
-                    from starlette.concurrency import run_in_threadpool
-                    request.state.first_read = await run_in_threadpool(first_read_provider, request)
+                        # Completed evidence follows the managed read. Diagnostic
+                        # liveness/version never depend on observation transports.
+                        from starlette.concurrency import run_in_threadpool
+                        request.state.first_read = await run_in_threadpool(first_read_provider, request)
                     response = await call_next(request)
-                    response.headers["X-DevUI-First-Read-Observation"] = request.state.first_read["status"]
+                    if request.url.path not in {"/version", "/healthz"}:
+                        response.headers["X-DevUI-First-Read-Observation"] = request.state.first_read["status"]
                 except CandidateAssetError:
                     response = JSONResponse(
                         {"detail": "Managed DevUI candidate assets or metadata are unavailable"},
