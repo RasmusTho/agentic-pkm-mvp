@@ -609,6 +609,12 @@ phase receipts untouched, and perform no merge, Issue, dispatcher, lifecycle, or
 Once restored, a later attempt on the unchanged head must reuse the one valid trusted authority receipt and
 restart at the post-edit `pr-contract`/convergence gate; it must never post a second receipt.
 
+If a current-schema `prepared` phase is rejected by the independent resolver after it was posted,
+ordinary same-head resume does not apply. Use the [Rejected Prepared-History Recovery Contract](../../../docs/development/REJECTED_PREPARED_HISTORY_RECOVERY_CONTRACT.md): v1 permits only
+`supersede_and_restart` after the prevention fix and fresh authority/current-head evidence. Do not
+quarantine, rewrite, replace, merge, close, relabel, or reuse the rejected phase history from this
+skill alone.
+
 Whenever a new head is observed on a PR whose body is still neutralized — a repair commit, a rebase,
 a base-branch update, an abandoned attempt, or a resumed session — restore the canonical body before
 any further repair, verification, or re-merge work. Leaving it neutralized fails `pr-contract`
