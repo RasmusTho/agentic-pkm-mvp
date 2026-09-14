@@ -153,6 +153,16 @@ def test_production_writer_is_authorized_version_bound_and_idempotent(owner_writ
     generic["idempotency_key"] = "owner-outcome:reserved"
     assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"}).status_code == 403
     assert w.read("first").json()["receipt"] == receipt
+    w.credentials[1]["scopes"].append("leases:write")
+    w.write_credentials()
+    lease = w.client.post("/v1/leases/claim", json={"envelope": generic["envelope"],
+        "resource_id": receipt["id"], "idempotency_key": "ordinary-lease"},
+        headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"})
+    assert lease.status_code == 200, lease.text
+    readback = w.read("first")
+    assert readback.status_code == 200, readback.text
+    assert readback.json()["receipt"] == receipt
+    assert w.submit(request).json()["receipt"] == receipt
     accepted = w.submit(w.request("owner_acceptance", "accepted", trial_receipt_ref=receipt["id"]), "accepted").json()["receipt"]
     w.credentials[0]["scopes"].remove("owner_outcomes:confirm")
     w.write_credentials()

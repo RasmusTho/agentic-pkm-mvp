@@ -81,6 +81,16 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     managed = devui_sources.read_managed_focus(config, SUBJECT)
     assert any("Canonical owner ask" in row["claim"] for row in managed["evidence"])
     assert any(accepted["hash"] == row["source_ref"]["version"] for row in managed["evidence"])
+    profile_path = w.root / "devui-runtime-prerequisites.json"
+    profile_bytes = profile_path.read_bytes()
+    profile_path.unlink()
+    partial = TestClient(app).get("/api/devui/overview")
+    assert len(partial.json()["needs_you"]) == 1, partial.text
+    assert "owner_outcomes_source_unavailable" in partial.text
+    assert '"outcome":"accepted"' not in partial.text
+    partial_focus = devui_sources.read_managed_focus(config, SUBJECT)
+    assert any(row["kind"] == "owner_facts_unavailable" for row in partial_focus["limitations"])
+    profile_path.write_bytes(profile_bytes)
     issue["updated_at"] = datetime.now(timezone.utc).isoformat()
     stale_ask = TestClient(app).get("/api/devui/overview")
     assert stale_ask.json()["needs_you"] == []

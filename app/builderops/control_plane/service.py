@@ -1332,12 +1332,14 @@ def create_app(
                 return await run_in_threadpool(store.get_owner_outcomes, canonical, subject_ref, idempotency_key=idempotency_key, grant_reader=credentials.has_owner_outcome_grant)
             if object_kind == "owner-facts" and object_id == "current":
                 asks = await run_in_threadpool(current_owner_asks, canonical)
+                outcome_source_status = "available"
                 try:
                     profiles = await run_in_threadpool(read_owner_profiles)
                 except OwnerFactRefusal:
                     if not any(ask["status"] == "current" for ask in asks):
                         raise
                     profiles = []
+                    outcome_source_status = "unavailable"
                 subjects = [p["subject_ref"] for p in profiles if p["repository"] == canonical]
                 if not subjects and not asks:
                     raise OwnerFactRefusal("owner_source_unavailable", 503)
@@ -1347,7 +1349,7 @@ def create_app(
                         items.append(await run_in_threadpool(store.get_owner_outcomes, canonical, subject, grant_reader=credentials.has_owner_outcome_grant))
                     except Exception as exc:
                         items.append({"subject_ref": subject, "status": "unavailable", "reason": type(exc).__name__})
-                return {"contract": "builder_owner_fact_collection.v1", "repository": canonical, "subjects": items, "owner_asks": asks}
+                return {"contract": "builder_owner_fact_collection.v1", "repository": canonical, "subjects": items, "owner_asks": asks, "owner_outcomes_status": outcome_source_status}
             if object_kind == "records":
                 receipt = await run_in_threadpool(store.get_record, canonical, object_id)
             elif object_kind == "promotions":

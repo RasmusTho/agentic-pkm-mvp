@@ -882,7 +882,9 @@ For `owner_ask`, the same record route accepts `{record_type: BuilderOpsReceipt,
 and records its exact pending Start/Hold ask as `builder_owner_ask.v1` in `BuilderOpsReceipt`.
 This publication performs no Start operation. Source, permission, expiry or actual approval
 withdraws the pending ask. `owner-facts/current` returns these asks and the bounded admitted
-outcome subjects for Overview/Focus. Missing profiles do not manufacture outcomes. These
+outcome subjects for Overview/Focus. When an independently valid ask remains but profiles are
+unavailable, the collection preserves that outcome-source failure and Overview reports partial
+coverage; an empty subject list is not proof of no earlier outcome. Missing profiles do not manufacture outcomes. These
 repository seams do not provision credentials, activate a host, perform an inquiry or authorize
 the separately gated Issue-delivery operation.
 

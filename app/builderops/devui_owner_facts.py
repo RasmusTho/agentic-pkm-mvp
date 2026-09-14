@@ -20,7 +20,7 @@ def read_owner_fact_transport(
 ) -> dict[str, Any]:
     source = os.environ if environment is None else environment
     try:
-        repo = canonical_repository(repository or source.get("DEVUI_REPOSITORY", ""))
+        repo = canonical_repository(repository or source.get("DEVUI_REPOSITORY") or "")
         epoch = authority_epoch or int(source.get("DEVUI_BUILDEROPS_AUTHORITY_EPOCH", ""))
         if epoch <= 0:
             raise ValueError
@@ -62,7 +62,10 @@ def read_owner_fact_transport(
                 asks.append({**ask, "repository": repo})
             except Exception:
                 continue
-        return {"status": "available", "repository": repo, "subjects": items, "owner_asks": asks}
+        outcome_source_status = value.get("owner_outcomes_status")
+        if outcome_source_status not in {"available", "unavailable"}:
+            raise ValueError
+        return {"status": "available", "repository": repo, "subjects": items, "owner_asks": asks, "owner_outcomes_status": outcome_source_status}
     except Exception:
         return {"status": "unavailable", "reason": "owner_facts_source_unavailable"}
 
@@ -81,8 +84,11 @@ def owner_fact_trust(provider: Mapping[str, Any], captured_at: str) -> dict[str,
         return {**result, "status": "refused", "refusal": {"code": "owner_facts_source_unavailable"}}
     unavailable = [row["subject_ref"] for row in provider["subjects"] if row.get("status") == "unavailable"
                    or row.get("binding", {}).get("owner_grant_status") != "available"]
+    source_unavailable = provider.get("owner_outcomes_status") == "unavailable"
     return {**result, "status": "available", "captured_at": captured_at,
-            "completeness": {"state": "partial" if unavailable else "complete", "unavailable_owner_subjects": unavailable}}
+            "completeness": {"state": "partial" if unavailable or source_unavailable else "complete",
+                "unavailable_owner_subjects": unavailable,
+                "limitation": "owner_outcomes_source_unavailable" if source_unavailable else None}}
 
 
 def _claims(item: Mapping[str, Any]) -> list[tuple[str, str, dict[str, str], str | None]]:

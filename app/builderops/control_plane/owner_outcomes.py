@@ -75,6 +75,9 @@ def _history(conn: Any, repository: str, subject: str) -> list[dict[str, Any]]:
         "SELECT record.record_id, record.payload, record.authority_envelope, receipt.receipt_sequence "
         "FROM builderops_records AS record LEFT JOIN builderops_receipts AS receipt "
         "ON receipt.repository = record.repository AND receipt.task_id = record.record_id "
+        "AND receipt.receipt_sequence::text = record.payload->>'receipt_sequence' "
+        "AND receipt.authority_envelope->>'scope' = 'owner-outcome' "
+        "AND receipt.event_type IN ('owner_outcome_recorded','owner_outcome_corrected') "
         "WHERE record.repository = %s AND record.record_type = 'BuilderOpsReceipt' "
         "AND record.payload->'receipt_body'->>'contract' = %s "
         "AND record.payload->'receipt_body'->'request'->>'subject_ref' = %s",
