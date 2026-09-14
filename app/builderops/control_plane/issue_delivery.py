@@ -21,10 +21,49 @@ OPERATION_TYPE = "deliver_ready_issue"
 RECORD_TYPE = "IssueDeliveryApproval"
 RECORD_PREFIX = "issue-delivery-approval:"
 IDEMPOTENCY_PREFIX = "issue-delivery:"
+WORKFLOW_ENTRYPOINT = "app/builderops/epic_dispatch.py::dispatch_issue_sessions"
+WORKFLOW_LAUNCHER = "app/builderops/epic_dispatch.py::CodexIssueSessionLauncher.launch"
+REQUIRED_WORKFLOW_ARTIFACTS = frozenset(
+    {
+        "app/builderops/cli.py",
+        "app/builderops/epic_dispatch.py",
+        ".codex/agents/slice-implementer.toml",
+        ".codex/skills/issue-to-code/SKILL.md",
+        ".codex/skills/publish-pr/SKILL.md",
+        ".codex/skills/verification-and-closure/SKILL.md",
+    }
+)
+
+# FCA-ID-A admits the complete repository delivery chain as a named set.  The
+# destination slices decide whether an individual effect is currently
+# available; admission never turns an arbitrary caller-provided string into
+# owner authority.
+PERMITTED_EFFECTS = frozenset(
+    {
+        "repository_worktree",
+        "issue_claim",
+        "publication",
+        "review_merge",
+        "closure_reconciliation",
+    }
+)
+REQUIRED_NON_EFFECTS = frozenset(
+    {"deployment", "credential_provisioning", "owner_acceptance"}
+)
+OPTIONAL_NON_EFFECTS = frozenset(
+    {
+        "release_stable_movement",
+        "host_setup",
+        "destructive_database_vault_operations",
+        "other_repository_issue_effects",
+        "universal_unattended_execution",
+    }
+)
+NON_EFFECTS = REQUIRED_NON_EFFECTS | OPTIONAL_NON_EFFECTS
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _NODE_ID = re.compile(r"^[A-Za-z0-9_:-]{1,256}$")
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,255}$")
+_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$")
 _SERVER_FIELDS = frozenset(
     {
         "owner_principal",
@@ -185,6 +224,143 @@ def _hash_binding(value: Any, name: str) -> dict[str, Any]:
     return result
 
 
+def _workflow_fields(value: Any) -> dict[str, Any]:
+    workflow = _mapping(value, "workflow")
+    version = _text(
+        workflow.get("version", workflow.get("contract_version")),
+        "workflow version",
+    )
+    if version != CONTRACT_VERSION:
+        raise IssueDeliveryContractError("workflow version is not approved")
+    declared_hashes = [
+        workflow[key]
+        for key in ("content_hash", "workflow_hash")
+        if key in workflow
+    ]
+    if not declared_hashes:
+        raise IssueDeliveryContractError("workflow hash is required")
+    workflow_hash = _sha(declared_hashes[0], "workflow hash")
+    if len(declared_hashes) > 1 and _sha(declared_hashes[1], "workflow hash") != workflow_hash:
+        raise IssueDeliveryContractError("workflow hash bindings disagree")
+    entrypoint = _text(workflow.get("entrypoint"), "workflow entrypoint", limit=1024)
+    if entrypoint != WORKFLOW_ENTRYPOINT:
+        raise IssueDeliveryContractError("workflow entrypoint is not approved")
+    launcher = _text(workflow.get("launcher"), "workflow launcher", limit=1024)
+    if launcher != WORKFLOW_LAUNCHER:
+        raise IssueDeliveryContractError("workflow launcher is not approved")
+    artifacts_raw = workflow.get("artifacts", workflow.get("artifact_manifest"))
+    if not isinstance(artifacts_raw, (list, tuple)) or not artifacts_raw:
+        raise IssueDeliveryContractError("workflow artifact manifest is required")
+    artifacts: list[dict[str, Any]] = []
+    paths: set[str] = set()
+    for artifact_raw in artifacts_raw:
+        artifact = _mapping(artifact_raw, "workflow artifact")
+        path = _text(artifact.get("path"), "workflow artifact path", limit=512)
+        digest = _sha(
+            artifact.get("sha256", artifact.get("hash")),
+            "workflow artifact hash",
+        )
+        if path in paths:
+            raise IssueDeliveryContractError("workflow artifacts must be unique")
+        paths.add(path)
+        artifacts.append({**artifact, "path": path, "sha256": digest})
+    if paths != REQUIRED_WORKFLOW_ARTIFACTS:
+        raise IssueDeliveryContractError("workflow artifact manifest is incomplete or unrelated")
+    return {
+        **workflow,
+        "version": version,
+        "content_hash": workflow_hash,
+        "entrypoint": entrypoint,
+        "launcher": launcher,
+        "artifacts": artifacts,
+    }
+
+
+def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
+    parent = _mapping(value, "parent evidence binding")
+    parent_kind = _text(parent.get("kind"), "parent evidence kind", limit=32)
+    if parent_kind == "none":
+        if set(parent) != {"kind"}:
+            raise IssueDeliveryContractError("absent parent evidence must be explicit")
+        return {"kind": "none"}
+    if parent_kind != "issue":
+        raise IssueDeliveryContractError("parent evidence kind is unsupported")
+
+    repository = canonical_repository(
+        _text(parent.get("repository", parent.get("parent_repository")), "parent repository", limit=256)
+    )
+    number = parent.get("number", parent.get("parent_issue_number"))
+    if type(number) is not int or number < 1:
+        raise IssueDeliveryContractError("exact parent Issue number is required")
+    node_id = _text(
+        parent.get("node_id", parent.get("parent_node_id")),
+        "parent Issue node identity",
+    )
+    if _NODE_ID.fullmatch(node_id) is None:
+        raise IssueDeliveryContractError("parent Issue node identity is malformed")
+
+    relationship = parent.get("relationship")
+    if isinstance(relationship, Mapping):
+        relationship = dict(relationship)
+        relation_kind = _text(
+            relationship.get("kind", relationship.get("type")),
+            "parent Issue relationship",
+            limit=64,
+        )
+        related_issue_number = relationship.get(
+            "child_issue_number", relationship.get("issue_number")
+        )
+        authenticated = relationship.get("authenticated")
+    else:
+        relation_kind = _text(relationship, "parent Issue relationship", limit=64)
+        related_issue_number = parent.get("child_issue_number", parent.get("issue_number"))
+        authenticated = parent.get("relationship_authenticated", parent.get("authenticated"))
+    if relation_kind not in {"parent", "parent-child", "child-of"}:
+        raise IssueDeliveryContractError("parent Issue relationship is unsupported")
+    if related_issue_number != issue_number or authenticated is not True:
+        raise IssueDeliveryContractError("parent Issue relationship is not source-authenticated")
+
+    contract_version = _text(
+        parent.get("contract_version", parent.get("version")),
+        "parent contract version",
+    )
+    contract_hash = _sha(
+        parent.get("contract_hash", parent.get("content_hash")),
+        "parent contract hash",
+    )
+    write_permission = _mapping(
+        parent.get("write_permission", parent.get("permission")),
+        "parent write permission",
+    )
+    permission_scope = _text(
+        write_permission.get("scope", write_permission.get("grant")),
+        "parent write permission scope",
+    )
+    writes = write_permission.get(
+        "effects", write_permission.get("writes", write_permission.get("targets"))
+    )
+    if not isinstance(writes, (list, tuple)) or not writes:
+        raise IssueDeliveryContractError("parent write permission targets are required")
+    writes = _list_of_text(writes, "parent write permission targets")
+    required_writes = {"pr_receipt_comments", "child_generated_ledger_writeback"}
+    if set(writes) != required_writes or permission_scope != "parent_evidence:write":
+        raise IssueDeliveryContractError("parent write permission is not exact")
+    return {
+        "kind": "issue",
+        "repository": repository,
+        "number": number,
+        "node_id": node_id,
+        "relationship": {
+            "kind": relation_kind,
+            "child_issue_number": issue_number,
+            "authenticated": True,
+        },
+        "contract_version": contract_version,
+        "contract_hash": contract_hash,
+        "write_permission": {**write_permission, "scope": permission_scope, "effects": writes},
+    }
+
+
 def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and normalize the caller-controlled portion of a manifest."""
 
@@ -211,11 +387,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raw.get("context", raw.get("context_pack", raw.get("context_pack_ref"))),
             "context",
         )
-        workflow = _mapping(raw.get("workflow"), "workflow")
-        workflow_version = _text(workflow.get("version", workflow.get("contract_version")), "workflow version")
-        workflow_hash = _sha(workflow.get("content_hash", workflow.get("workflow_hash")), "workflow hash")
-        entrypoint = _text(workflow.get("entrypoint"), "workflow entrypoint", limit=1024)
-        workflow = {**workflow, "version": workflow_version, "content_hash": workflow_hash, "entrypoint": entrypoint}
+        workflow = _workflow_fields(raw.get("workflow"))
         destination = _mapping(raw.get("destination"), "destination")
         destination_identity = _text(destination.get("identity"), "destination identity", limit=256)
         run_id = _text(destination.get("run_id", destination.get("proposed_run_id")), "proposed run identity", limit=256)
@@ -225,10 +397,11 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         non_effects = _list_of_text(raw.get("explicit_non_effects"), "explicit non-effects")
         if set(effects) & set(non_effects):
             raise IssueDeliveryContractError("permitted and non-effect sets must be disjoint")
-        parent = _mapping(raw.get("parent_evidence"), "parent evidence binding")
-        parent_kind = _text(parent.get("kind"), "parent evidence kind", limit=32)
-        if parent_kind not in {"none", "issue"}:
-            raise IssueDeliveryContractError("parent evidence kind is unsupported")
+        if set(effects) != PERMITTED_EFFECTS:
+            raise IssueDeliveryContractError("permitted effects do not match the closed delivery set")
+        if not REQUIRED_NON_EFFECTS.issubset(non_effects) or not set(non_effects).issubset(NON_EFFECTS):
+            raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
+        parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"])
         owner_profile = raw.get("owner_profile")
         if owner_profile is not None:
             owner_profile = _mapping(owner_profile, "owner profile")
@@ -279,9 +452,15 @@ __all__ = [
     "CONTRACT_VERSION",
     "IDEMPOTENCY_PREFIX",
     "IssueDeliveryContractError",
+    "NON_EFFECTS",
     "OPERATION_TYPE",
+    "PERMITTED_EFFECTS",
     "RECORD_PREFIX",
     "RECORD_TYPE",
+    "REQUIRED_NON_EFFECTS",
+    "REQUIRED_WORKFLOW_ARTIFACTS",
+    "WORKFLOW_ENTRYPOINT",
+    "WORKFLOW_LAUNCHER",
     "canonical_hash",
     "idempotency_key",
     "manifest_hash",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -19,6 +20,7 @@ from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ClientConfig,
     ControlPlaneConflictError,
+    ControlPlaneProtocolError,
     ControlPlaneScopeError,
     ControlPlaneUnavailableError,
 )
@@ -75,6 +77,20 @@ def registry(tmp_path: Path) -> CredentialRegistry:
             "human",
         ),
         ("reader", "destination:reader", "reader-token", ["issue_delivery:read"], "agent"),
+        (
+            "executor-low",
+            "destination:shared",
+            "executor-low-token",
+            ["issue_delivery:read"],
+            "agent",
+        ),
+        (
+            "executor-high",
+            "destination:shared",
+            "executor-high-token",
+            ["issue_delivery:execute"],
+            "agent",
+        ),
         ("inquiry", "inquiry:agent", "inquiry-token", ["inquiries:approve"], "agent"),
         ("generic", "generic:agent", "generic-token", ["records:write"], "agent"),
     ):
@@ -122,6 +138,18 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "version": "fca-issue-delivery.v1",
             "content_hash": "d" * 64,
             "entrypoint": "app/builderops/epic_dispatch.py::dispatch_issue_sessions",
+            "launcher": "app/builderops/epic_dispatch.py::CodexIssueSessionLauncher.launch",
+            "artifacts": [
+                {"path": "app/builderops/cli.py", "sha256": "1" * 64},
+                {"path": "app/builderops/epic_dispatch.py", "sha256": "1" * 64},
+                {"path": ".codex/agents/slice-implementer.toml", "sha256": "1" * 64},
+                {"path": ".codex/skills/issue-to-code/SKILL.md", "sha256": "1" * 64},
+                {"path": ".codex/skills/publish-pr/SKILL.md", "sha256": "1" * 64},
+                {
+                    "path": ".codex/skills/verification-and-closure/SKILL.md",
+                    "sha256": "1" * 64,
+                },
+            ],
         },
         "destination": {
             "identity": "executor:local",
@@ -165,6 +193,8 @@ def _client(store: PostgresBuilderOpsStore, registry: CredentialRegistry, token:
 def test_issue_approval_production_admission(store, registry) -> None:
     owner = _client(store, registry, "owner-token")
     reader = _client(store, registry, "reader-token")
+    executor_low = _client(store, registry, "executor-low-token")
+    executor_high = _client(store, registry, "executor-high-token")
     inquiry = _client(store, registry, "inquiry-token")
     generic = _client(store, registry, "generic-token")
     manifest = _manifest()
@@ -194,6 +224,40 @@ def test_issue_approval_production_admission(store, registry) -> None:
     assert readback["state"] == "approved"
     assert readback["manifest"]["operation_key"] == "operation-5550"
     assert readback["operation"]["operation_key"] == "operation-5550"
+
+    # A principal-wide grant lookup must not let a read-only credential borrow
+    # its sibling's execute grant.  The high-privilege credential is allowed
+    # only because the presented credential itself carries that scope.
+    with pytest.raises(ControlPlaneScopeError):
+        executor_low.issue_delivery_authority(manifest=started["approval"], purpose="execute")
+    authority = executor_high.issue_delivery_authority(
+        manifest=started["approval"], purpose="execute"
+    )
+    assert authority["purpose"] == "execute"
+
+    for field, replacement in (
+        ("version", "fca-issue-delivery.v0"),
+        ("entrypoint", "app/builderops/cli.py::dispatch_sessions"),
+        ("launcher", "app/builderops/epic_dispatch.py::launch"),
+    ):
+        invalid_workflow = deepcopy(manifest)
+        invalid_workflow["workflow"][field] = replacement  # type: ignore[index]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=invalid_workflow)
+    invalid_artifacts = deepcopy(manifest)
+    invalid_artifacts["workflow"]["artifacts"][0]["path"] = "app/other_launcher.py"  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_artifacts)
+
+    incomplete_parent = deepcopy(manifest)
+    incomplete_parent["parent_evidence"] = {"kind": "issue"}
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=incomplete_parent)
+
+    slash_bound_id = deepcopy(manifest)
+    slash_bound_id["approval_id"] = "team/approval-1"
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=slash_bound_id)
 
     for client in (inquiry, generic):
         with pytest.raises(ControlPlaneScopeError):

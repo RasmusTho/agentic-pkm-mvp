@@ -809,7 +809,13 @@ def create_app(
             permission = payload.get("permission")
             credential_id = permission.get("credential_id") if isinstance(permission, Mapping) else None
             current = credentials.current_credential(credential_id) if isinstance(credential_id, str) else None
-            if current is None or current.principal != payload.get("owner_principal") or not credentials.has_issue_delivery_approval_grant(canonical, payload.get("owner_principal", "")):
+            current_permission = issue_delivery_permission(current, canonical) if current is not None else None
+            if (
+                current is None
+                or current.principal != payload.get("owner_principal")
+                or current_permission != permission
+                or not credentials.has_issue_delivery_approval_grant(canonical, payload.get("owner_principal", ""))
+            ):
                 state, reason = "invalidated", "permission_revoked_or_unavailable"
             else:
                 expiry = datetime.fromisoformat(str(payload["expires_at"]))
@@ -1127,13 +1133,49 @@ def create_app(
             normalized = normalize_issue_delivery_manifest(supplied)
             repository = normalized["repository"]
             _enforce_repo_scope(credential, repository)
-            if request.purpose == "execute":
-                if not credentials.has_issue_delivery_execute_grant(repository, credential.principal):
-                    raise HTTPException(status_code=403, detail="Issue-delivery execute grant required")
-            elif not credentials.has_issue_delivery_read_grant(repository, credential.principal):
-                raise HTTPException(status_code=403, detail="Issue-delivery read grant required")
+            try:
+                row = store.get_record(repository, issue_delivery_record_id(normalized["approval_id"]))
+            except KeyError as exc:
+                raise StateConflict("Issue-delivery approval is not durably admitted") from exc
+            approved = dict(row.get("payload", {}))
+            if (
+                row.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
+                or row.get("state") != "approved"
+                or approved.get("approval_id") != normalized["approval_id"]
+                or approved.get("operation_key") != normalized["operation_key"]
+                or approved.get("approval_manifest_hash") != supplied.get("approval_manifest_hash")
+                or approved.get("approval_manifest_hash") != issue_delivery_manifest_hash(approved)
+            ):
+                raise StateConflict("Issue-delivery approval does not match durable admission")
+            owner_permission = approved.get("permission")
+            owner_credential_id = (
+                owner_permission.get("credential_id")
+                if isinstance(owner_permission, Mapping)
+                else None
+            )
+            owner = (
+                credentials.current_credential(owner_credential_id)
+                if isinstance(owner_credential_id, str)
+                else None
+            )
+            if owner is None:
+                raise StateConflict("Issue-delivery approval owner is unavailable")
+            validate_issue_delivery_approval(approved, owner)
+            required_scope = (
+                "issue_delivery:execute"
+                if request.purpose == "execute"
+                else "issue_delivery:read"
+            )
+            # Scope is checked on the authenticated credential itself.  A
+            # principal-wide lookup would let a lower-privilege credential
+            # borrow a sibling credential's grant when both share a principal.
+            if required_scope not in credential.scopes:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"{required_scope} grant required",
+                )
             return {
-                "approval": supplied,
+                "approval": approved,
                 "purpose": request.purpose,
                 "operation_key": normalized["operation_key"],
                 "authority_epoch": store.readiness()["authority_epoch"],
@@ -1147,9 +1189,10 @@ def create_app(
     async def issue_delivery_read(
         approval_id: str,
         repository: str,
-        _credential: Credential = Depends(issue_delivery_read_scope),
+        credential: Credential = Depends(issue_delivery_read_scope),
     ) -> dict[str, Any]:
         try:
+            _enforce_repo_scope(credential, repository)
             return await run_in_threadpool(issue_delivery_readback, repository, approval_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Issue-delivery approval not found") from exc
