@@ -122,7 +122,7 @@ those stages; they do not replace any source, action, design, deployment or acce
 | --- | --- | --- |
 | M0 — executable contracts | The first action, owner outcome and managed pilot have coherent owning contracts | The three bounded contract repairs #5502/#5503/#5504 define the accepted implementation direction; source publication supplies no runtime admission or owner evidence |
 | M1 — useful read journey | Real sources support Overview → Focus, including feature intent and architecture requirements | #5527 delivers bounded source-declared Issue Context/Scope, Acceptance Criteria/Verify, Source Anchors, and Source Docs text through the existing Focus fields with Issue version/body-hash binding; admitted sources, served exact candidate, matching browser proof, document/applicability and per-criterion result evidence, and the separate read-only #4749 pilot remain required |
-| M2 — first-repository owner loop | The owner directs one real feature delivery and judges its result | Exact action approval, selected existing workflow, result/readback, actual candidate trial and explicit accept/reject; [FCA milestone](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone) |
+| M2 — first-repository owner loop | The owner directs one real feature delivery and judges its result | #5531 defines the [first approved Issue-delivery operation](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-approved-issue-delivery-operation); its three bounded adapters/proofs, separate live activation/deployment, independent result readback, actual candidate trial and explicit accept/reject remain required; [FCA milestone](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone) |
 | M3 — broader owner control | Separate Builder System Control and named Product/Runtime SoI lenses become useful | Real bounded sources, governed design, independent root identity and previews to existing workflows |
 | M4 — qualified standalone platform | Builder operates with independent authority and an addressed second consumer | Full VM102/component/authority evidence, #5405 second-consumer proof and all #5399 platform criteria |
 | M5 — qualified workflow autonomy | The selected workflow carries more responsibility with proven recovery | Workflow-specific interruption, recovery, permission and demotion evidence; no universal unattended authority |
@@ -131,6 +131,15 @@ M1 is useful before M2. Infrastructure and authority work may run earlier wherev
 operation requires it; later milestone placement never waives a prerequisite. M2 uses a separately
 authorized Issue-delivery operation. Start Model Inquiry is an earlier integration exercise and
 retains its no-code/no-GitHub-effect boundary. Full DDO completion is not a universal first-loop gate.
+
+The Issue operation reuses the existing single-Issue Codex launcher and owning delivery skills.
+Its [implementation sequence](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices)
+is authenticated admission → destination reservation/launch and effect gates → independent
+source readback and candidate/profile composition. These are pre-merge repository slices; create
+their Issues only after #5531's source authority merges. The destination's live activation,
+exact deployment and the M1 read-only pilot are separate evidence boundaries. Supervised M2
+execution and visible manual handoffs are allowed; repository delivery is not actual FCA-09 owner
+trial/acceptance. The selected FCA-06/07 consumed seams and all #5399/M4 obligations remain intact.
 
 The first contract tasks are [bounded action admission](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_BOUNDED_ACTION_ADMISSION.md),
 [owner outcome authority](../BUILDER_FACTORY_ACCEPTANCE/DEFINE_OWNER_OUTCOME_AUTHORITY.md), and
