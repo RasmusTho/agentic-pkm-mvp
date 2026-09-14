@@ -39,7 +39,7 @@ The kernel is the structural commitment surface. Changes here are architecture-l
 
 Canonical routing and enforcement metadata are owned by
 `docs/DESIGN_PRINCIPLES.md :: System Design Principles`. This architecture summary references
-`DP-01`, `DP-02`, `DP-02A`, `DP-02B`, `DP-03`, `DP-04`, `DP-05`, `DP-06`, `DP-07`, `DP-08`,
+`DP-01`, `DP-02`, `DP-02A`, `DP-02B`, `DP-02C`, `DP-03`, `DP-04`, `DP-05`, `DP-06`, `DP-07`, `DP-08`,
 `DP-09`, `DP-10`, and `DP-11` as a projection only; it is not a second principle registry.
 
 - **Human-first authority.** The human is the durable author and the final authority over meaning. Agents propose; the human (or a human-authorized rule) decides. Authority lives with the human and with explicit governance, not with whichever runtime component happened to write a value.
