@@ -1,6 +1,7 @@
 State: Target-state implementation plan; current/target boundary reviewed 2026-09-13. Read-only
 composers, local Overview/Focus routes, the connected Companion repository shell, LLM-assisted
-synthesis, and the bounded managed DevUI listener/receipt producers and #5520 source readers plus #5522 managed browser/Focus journey are
+synthesis, and the bounded managed DevUI listener/receipt producers, #5520 source readers, #5522 managed browser/Focus journey,
+and #5527 bounded Issue source-text projection are
 delivered. Qualified live source access,
 managed DevUI deployment, richer Focus/conversation/actions, whole BSC lens and actual owner
 acceptance remain targets. The active BuilderOps control plane does not establish those outcomes.
@@ -11,7 +12,8 @@ Owner: Builder System governance
 Temporal class: planning
 Review cadence: event-driven after each phase or dependency change
 Source of truth: `docs/DEVUI.md` owns the accepted owner functions; accepted ADRs, linked capability specs, and live GitHub remain binding for mechanisms and delivery truth
-Last reviewed: 2026-09-13 for #5520 source wiring and #5522 managed journey delivery; broader baseline 2026-09-12.
+Last reviewed: 2026-09-14 for #5520 source wiring, #5522 managed journey delivery, and #5527 bounded
+Issue source-text projection; broader baseline 2026-09-12.
 
 # devUI implementation plan
 
@@ -119,7 +121,7 @@ those stages; they do not replace any source, action, design, deployment or acce
 | Milestone | Owner outcome | Evidence boundary |
 | --- | --- | --- |
 | M0 — executable contracts | The first action, owner outcome and managed pilot have coherent owning contracts | The three bounded contract repairs #5502/#5503/#5504 define the accepted implementation direction; source publication supplies no runtime admission or owner evidence |
-| M1 — useful read journey | Real sources support Overview → Focus, including feature intent and architecture requirements | Admitted sources, served exact candidate, matching browser proof and the separate read-only #4749 pilot |
+| M1 — useful read journey | Real sources support Overview → Focus, including feature intent and architecture requirements | #5527 delivers bounded source-declared Issue Context/Scope, Acceptance Criteria/Verify, Source Anchors, and Source Docs text through the existing Focus fields with Issue version/body-hash binding; admitted sources, served exact candidate, matching browser proof, document/applicability and per-criterion result evidence, and the separate read-only #4749 pilot remain required |
 | M2 — first-repository owner loop | The owner directs one real feature delivery and judges its result | Exact action approval, selected existing workflow, result/readback, actual candidate trial and explicit accept/reject; [FCA milestone](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone) |
 | M3 — broader owner control | Separate Builder System Control and named Product/Runtime SoI lenses become useful | Real bounded sources, governed design, independent root identity and previews to existing workflows |
 | M4 — qualified standalone platform | Builder operates with independent authority and an addressed second consumer | Full VM102/component/authority evidence, #5405 second-consumer proof and all #5399 platform criteria |

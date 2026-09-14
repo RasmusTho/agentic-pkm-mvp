@@ -289,6 +289,7 @@ if mode == 'unavailable' or (mode == 'partial' and args[1].endswith('/status')):
 endpoint = args[1]
 if endpoint.endswith('/issues/501'):
     result = {'number': 501, 'title': '<img src=x onerror=alert(1)> Managed work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501', 'updated_at': '2026-09-13T10:00:00Z'}
+    result['body'] = chr(10).join(['## Context', '', 'Fixture owner intent.', '', '## Scope', '', 'Fixture source scope.', '', '## Acceptance Criteria', '', '- [ ] Preserve fixture declarations.', '  - Verify: `tests/fixture.py::test_declaration`', '', '## Source Anchors', '', '- `docs/DEVUI.md :: Intent and evidence continuity`', '', '## Source Docs', '', '- `docs/DEVUI.md`', ''])
     if mode == 'identity_mismatch':
         result['html_url'] = 'https://github.com/foreign/repo/issues/501'
     if mode == 'canonical_case':
@@ -999,6 +1000,33 @@ def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed
         assert source.gh_calls.read_text() == before
 
     assert source.http_calls == []
+
+
+def test_managed_focus_projects_issue_declarations_through_existing_fields(managed_sources) -> None:
+    source = managed_sources
+    _package_managed_shell(source.root)
+    with source.client() as client:
+        response = client.get("/api/devui/focus", params={"subject": MANAGED_SUBJECT})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert "Fixture owner intent." in payload["owner_intent"]["summary"]
+    assert "Fixture source scope." in payload["owner_intent"]["summary"]
+    assert any(
+        "Verify: `tests/fixture.py::test_declaration`" in item["claim"]
+        for item in payload["evidence"]
+    )
+    source_ref = payload["subject"]["authority_ref"]
+    assert source_ref["version"] == "2026-09-13T10:00:00Z"
+    assert len(source_ref["content_hash"]) == 64
+    assert all(
+        item["coverage"] == "partial"
+        for item in payload["evidence"][1:] + payload["governing_sources"][1:]
+    )
+    assert any(item["kind"] == "criterion_results_unassessed" for item in payload["limitations"])
+    assert source.http_calls == []
+    calls = [json.loads(line) for line in source.gh_calls.read_text().splitlines()]
+    assert calls == [["api", "repos/example/fixture/issues/501"]]
 
 
 @pytest.mark.parametrize("subject", ["github:example/fixture#501", "github:Example/Fixture#501"])
