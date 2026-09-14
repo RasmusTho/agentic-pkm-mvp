@@ -12,7 +12,8 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-09-13 for #5520 source wiring and #5522 managed read-journey writeback.
+Last reviewed: 2026-09-14 for #5520 source wiring, #5522 managed read-journey writeback, and #5527
+bounded Issue source-text projection.
 Prior broader current-state and milestone review: 2026-09-12 at `main`
 `c7a4da3a80a1108b269bd8e88c4535a17499290a`, #5399 delivery ledger and #5181's cited operational receipts.
 Earlier Stage A verification baseline: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub state
@@ -750,6 +751,11 @@ Delivered now:
   without source I/O, a local registry, UI, or promotion action, delivered by #4985;
 - `FocusView.v1` / `focus-view.v1`, a pure subject-centred projection with explicit correlation,
   delivered by #4694 / PR #4703;
+- the addressed Issue Focus read now projects bounded source-declared Context/Scope, Acceptance
+  Criteria and Verify text, Source Anchors, and Source Docs through those existing fields, with the
+  Issue update version and body hash retained in each source reference, delivered by #5527. These
+  declarations do not establish document reads, architecture applicability, per-criterion results,
+  visual/pilot acceptance, or the M2 owner action/trial loop;
 - admitted local GET `/api/devui/focus` for one stable governed GitHub Issue, rebuilding the
   delivered `focus-view.v1` projection per request without a root-payload join, persistence,
   command, cache, session, or browser UI, implemented by #4768 / PR #4771;

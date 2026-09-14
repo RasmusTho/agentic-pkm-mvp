@@ -13,7 +13,7 @@ Temporal class: Strategic target state with an explicit delivered-input ledger
 Review cadence: Event-driven
 Source of truth: Owner documents and accepted specifications own intended behavior; live source
 artifacts and receipts own observations; GitHub and repository evidence own delivery truth.
-Last reviewed: 2026-09-13
+Last reviewed: 2026-09-14 for bounded Issue source-text projection #5527.
 
 # devUI Focus + Conversation Port
 
@@ -41,7 +41,7 @@ Focus flow.
 | Builder System process map | Governs pre-Issue routes, `PromotionIntent`, delivery correlation, and session provenance | Source for next-legal-step and limitation rendering |
 | Model Inquiry | Durable artifact-first launcher and terminal receipt contract | Nonvisual exact preview and authenticated confirmation through the one skill-owned facade |
 | Codex/Claude conversations | External provider interactions with no global authoritative session source | Export/open of one hash-bound context pack; no session inventory |
-| `focus-view.v1` composer | Delivered by PR #4703 as a pure read-only subject projection | Input to the future Focus UI; no route, UI, store, or effect implied |
+| `focus-view.v1` composer | Delivered by PR #4703 as a pure read-only subject projection; #5527 enriches the addressed Issue read with bounded Context/Scope, Acceptance Criteria/Verify, Source Anchors, and Source Docs text in the existing fields, bound to the Issue update version and body hash | Input to the future Focus UI; declared text remains source-only, with document applicability, per-criterion result mapping, visual/pilot acceptance, and the M2 owner action/trial loop incomplete |
 | Conversation pack/export composer | Delivered by PR #4704 with strict source freshness and non-authoritative dispositions | Nonvisual fixtures and adapter boundary; no embedded conversation runtime or command admission |
 | Focus UI | Not delivered | Subject-centred read view and external Conversation Port |
 | Builder System Control | Not delivered | Separate future read-oriented governance lens |
