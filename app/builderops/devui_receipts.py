@@ -378,7 +378,7 @@ def read_first_read_observation_provider(
             raise Vm102ReceiptError("first-read retained fields are invalid")
         validate_first_read_observation(receipt, **inputs, now=captured)
         identity = listener_identity() if callable(listener_identity) else listener_identity
-        if set(identity) != {"candidate_identity", "origin", "repository", "source", "assets", "documents"} or any(receipt[key] != value for key, value in identity.items()):
+        if set(identity) != {"candidate_identity", "origin", "repository", "source", "assets", "documents"} or any(not same_json_value(receipt[key], value) for key, value in identity.items()):
             raise Vm102ReceiptError("first-read listener or source identity changed")
         current = source_reader(receipt["issue_binding"])
         evidence = inputs["evidence"]

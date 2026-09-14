@@ -644,6 +644,19 @@ def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys
         capsys.readouterr()
         source[key] = original
         assert len(writes) == 2
+    for target, field, bad in (
+        (row, "updated_at", True), (row, "updated_at", "not-a-time"),
+        (row["authority_envelope"], "actor", True), (row["authority_envelope"], "actor", "  "),
+        (row["authority_envelope"], "schema_version", True),
+        (row["authority_envelope"], "schema_version", 1.0),
+        (row["authority_envelope"], "schema_version", 2),
+    ):
+        original = target[field]
+        target[field] = bad
+        assert main(command, client_factory=ImportClient) != 0
+        capsys.readouterr()
+        assert len(writes) == 2
+        target[field] = original
     original_payload = row["payload"]
     row["payload"] = {**original_payload, "issue_number": 501.0}
     assert main(command, client_factory=ImportClient) != 0

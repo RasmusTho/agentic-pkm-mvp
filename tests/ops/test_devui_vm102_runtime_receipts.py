@@ -792,6 +792,68 @@ def _first_read_inputs(source_docs=None):
     return {"evidence": evidence, "prerequisites": prereqs}
 
 
+_FIRST_READ_INVALID_NESTED_FIELDS = {
+    **{
+        ".".join(path) + ":" + label: (path, value)
+        for path in (
+            ("source", "custody_ref"),
+            ("operator", "linux_probe", "source_ref"),
+            ("operator", "rollback", "source_ref"),
+            ("exchange", "request", "envelope", "stack"),
+            ("task", "payload", "authority_envelope", "actor"),
+        )
+        for label, value in (("bool", True), ("number", 1), ("array", ["ref"]),
+                             ("object", {"ref": "x"}), ("blank", " \t"))
+    },
+    **{
+        ".".join(path) + ":" + label: (path, value)
+        for path in (("exchange", "authority_epoch"),
+                     ("task", "payload", "authority_envelope", "schema_version"))
+        for label, value in (("bool", True), ("float", 1.0), ("string", "1"), ("zero", 0), ("mismatch", 2))
+    },
+    **{
+        "journey.inspected_documents:" + label: (("journey", "inspected_documents"), value)
+        for label, value in (
+            ("object", {"docs/AGENT_ISSUE_DISPATCHER.md": True}),
+            ("mixed", ["docs/AGENT_ISSUE_DISPATCHER.md", True]),
+            ("blank", ["docs/AGENT_ISSUE_DISPATCHER.md", "  "]),
+        )
+    },
+    **{
+        "task.updated_at:" + label: (("task", "payload", "updated_at"), value)
+        for label, value in (("bool", True), ("blank", "  "), ("invalid", "not-a-time"))
+    },
+}
+
+
+def _first_read_nested_mutation(inputs, path, value):
+    """Keep independent byte/digest bindings intact when testing field semantics."""
+    evidence = inputs["evidence"]
+    target = evidence
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = copy.deepcopy(value)
+    if path[:3] == ("exchange", "request", "envelope"):
+        evidence["task"]["payload"]["authority_envelope"][path[-1]] = copy.deepcopy(value)
+    if path[:2] == ("exchange", "request"):
+        exchange = evidence["exchange"]
+        exchange["request_body"] = json.dumps(exchange["request"])
+        exchange["request_sha256"] = __import__("hashlib").sha256(exchange["request_body"].encode()).hexdigest()
+    if path[0] == "journey":
+        evidence["owner"]["journey_sha256"] = canonical_digest(evidence["journey"])
+
+
+def _first_read_rebind_retained_hashes(receipt, inputs):
+    # All nine malformed field classes are retained only in these input hashes.
+    # A consistent digest must not substitute for validating their actual types.
+    receipt["input_sha256"] = canonical_digest(inputs)
+    for name, packet in inputs["evidence"].items():
+        receipt["observations"][name]["sha256"] = canonical_digest(packet)
+    receipt["evidence_fingerprint"] = canonical_digest({
+        key: value for key, value in receipt.items() if key != "evidence_fingerprint"
+    })
+
+
 @pytest.mark.parametrize("source_docs", [
     "- `docs/AGENT_ISSUE_DISPATCHER.md`",
     "- docs/AGENT_ISSUE_DISPATCHER.md",
@@ -822,6 +884,9 @@ def test_first_read_observation_validates_independent_source_evidence(source_doc
         exchange["request_body"] = body.decode()
         exchange["request_sha256"] = __import__("hashlib").sha256(body).hexdigest()
         assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    # Existing TaskTransitionRequest/store accept any nonempty string key.
+    _first_read_nested_mutation(inputs, ("exchange", "request", "idempotency_key"), "  ")
+    assert build_first_read_observation(**inputs)["verdict"] == "pass"
     rollback = inputs["evidence"]["operator"]["rollback"]
     rollback.update(state="available", previous_identity=copy.deepcopy(receipt["candidate_identity"]),
                     compatibility="verified_no_data_rewind")
@@ -830,7 +895,7 @@ def test_first_read_observation_validates_independent_source_evidence(source_doc
     assert build_first_read_observation(**inputs)["verdict"] == "refused"
 
 
-@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "plain_document_missing", "plain_document_uninspected", "document_malformed", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins"])
+@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "plain_document_missing", "plain_document_uninspected", "document_malformed", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins", *_FIRST_READ_INVALID_NESTED_FIELDS])
 def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
     from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
 
@@ -848,7 +913,10 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         if failure == "plain_document_uninspected":
             inputs["evidence"]["installed"]["documents"][target] = "d" * 64
     evidence = inputs["evidence"]
-    if failure == "response":
+    if failure in _FIRST_READ_INVALID_NESTED_FIELDS:
+        _first_read_nested_mutation(inputs, *_FIRST_READ_INVALID_NESTED_FIELDS[failure])
+        _first_read_rebind_retained_hashes(good, inputs)
+    elif failure == "response":
         del evidence["exchange"]["response"]
     elif failure == "request":
         evidence["exchange"]["request"]["outbox"] = {}

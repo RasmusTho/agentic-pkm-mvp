@@ -358,6 +358,10 @@ source packets are `selection`, `operator`, `source`, `github`, `task`, `exchang
 The exchange packet retains the exact UTF-8 HTTP `request_body`, its SHA-256, its decoded `request`
 and observed `response`. The validator compares those bytes and decoded fields with preserved JSON types; it never
 guesses a client's JSON serialization or reconstructs the response from a task row.
+Nested evidence retains those type checks: epochs and the initial native envelope version are exact
+integers; custody/probe/rollback references, stack and actor are nonblank strings; inspected documents
+are a list of nonblank references. Native task timestamps must parse under the existing DevUI task
+reader semantics. Hashing a packet does not validate its fields.
 Every Source Docs entry, whether a plain path, backticked path or relative Markdown link, must
 resolve to a candidate manifest document inspected during the journey; malformed entries refuse.
 The closed schema fixes the output shape. The existing read-only receipt mount retains

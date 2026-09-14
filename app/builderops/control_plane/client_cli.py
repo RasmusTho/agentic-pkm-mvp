@@ -398,14 +398,21 @@ def same_json_value(left: Any, right: Any) -> bool:
 
 def validate_import_readback(row: Any, request: dict[str, Any]) -> None:
     """A native Ready row is necessary, but is never transaction evidence."""
+    from app.builderops.cockpit_chain import parse_timestamp
+
     envelope = request["envelope"]
     if (
         not isinstance(row, dict) or row.get("repository") != envelope["repository"]
         or row.get("task_id") != request["task_id"] or row.get("state") != "ready"
         or type(row.get("version")) is not int or row["version"] != 1
+        or not isinstance(row.get("updated_at"), str) or parse_timestamp(row["updated_at"]) is None
         or "lease" not in row or row["lease"] is not None
         or not same_json_value(row.get("payload"), request["request"])
         or not isinstance(row.get("authority_envelope"), dict)
+        or not isinstance(row["authority_envelope"].get("actor"), str)
+        or not row["authority_envelope"]["actor"].strip()
+        or type(row["authority_envelope"].get("schema_version")) is not int
+        or row["authority_envelope"]["schema_version"] != 1
         or any(row["authority_envelope"].get(key) != value for key, value in envelope.items())
     ):
         raise ValueError("Issue TaskRecord readback is incompatible or changed")

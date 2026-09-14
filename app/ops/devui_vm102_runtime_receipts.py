@@ -475,6 +475,10 @@ def _first_require(condition: bool, reason: str) -> None:
         raise ReceiptValidationError(reason)
 
 
+def _first_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _first_manifest(value: Any) -> None:
     _first_require(isinstance(value, dict) and bool(value), "artifact inventory is missing")
     for name, digest in value.items():
@@ -525,7 +529,7 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
     for name, fields in _FIRST_FIELDS.items():
         packet = evidence[name]
         _first_require(isinstance(packet, dict) and set(packet) == fields | {"observer", "observed_at", "source_ref"}, "first-read packet fields are invalid")
-        _first_require(all(isinstance(packet[key], str) and packet[key].strip() for key in ("observer", "source_ref")), "observation identity is missing")
+        _first_require(all(_first_text(packet[key]) for key in ("observer", "source_ref")), "observation identity is missing")
         if name == "browser":
             stamp = datetime.fromisoformat(packet["observed_at"].replace("Z", "+00:00"))
             _first_require(stamp.tzinfo is not None and stamp <= captured, "browser artifact time is invalid")
@@ -554,10 +558,10 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
         "operator prerequisites are invalid",
     )
     probe = operator["linux_probe"]
-    _first_require(set(probe) == {"applicability", "source_ref", "result"} and bool(probe["source_ref"])
+    _first_require(isinstance(probe, dict) and set(probe) == {"applicability", "source_ref", "result"} and _first_text(probe["source_ref"])
                    and (probe["applicability"], probe["result"]) in {("required", "passed"), ("not_applicable", "not_applicable")}, "applicable Linux probe is unproven")
     rollback = operator["rollback"]
-    _first_require(set(rollback) == {"state", "previous_identity", "compatibility", "observed_at", "source_ref"} and bool(rollback["source_ref"]), "rollback evidence is invalid")
+    _first_require(isinstance(rollback, dict) and set(rollback) == {"state", "previous_identity", "compatibility", "observed_at", "source_ref"} and _first_text(rollback["source_ref"]), "rollback evidence is invalid")
     _first_require(activation_time <= _time(rollback["observed_at"], captured) <= times["operator"], "rollback compatibility time is invalid")
     if rollback["state"] == "no_baseline":
         _first_require(rollback["previous_identity"] is None and rollback["compatibility"] == "rollback_refused", "absent rollback baseline cannot authorize rollback")
@@ -567,7 +571,7 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
         _candidate(rollback["previous_identity"])
         candidate_validator.validate(rollback["previous_identity"])
     _first_require(source["repository"] == selection["repository"] and source["grants"] == ["receipts:read", "status:read"]
-                   and source["reachable"] is True and source["quota_complete"] is True and bool(source["custody_ref"])
+                   and source["reachable"] is True and source["quota_complete"] is True and _first_text(source["custody_ref"])
                    and type(source["authority_epoch"]) is int
                    and source["authority_epoch"] == activation["migration"]["authority_epoch"], "source admission or epoch is invalid")
     exchange = evidence["exchange"]
@@ -575,6 +579,7 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
     _first_require(set(request) == {"envelope", "task_id", "to_state", "idempotency_key", "request", "outbox", "lease", "expected_states", "expected_version"}, "initial transition request is invalid")
     _first_require(request["to_state"] == "ready" and all(request[key] is None for key in ("outbox", "lease", "expected_states", "expected_version"))
                    and isinstance(request["idempotency_key"], str) and bool(request["idempotency_key"])
+                   and type(exchange["authority_epoch"]) is int and exchange["authority_epoch"] > 0
                    and exchange["authority_epoch"] == source["authority_epoch"], "initial transition authority is invalid")
     body = exchange["request_body"]
     _first_require(isinstance(body, str) and same_json_value(json.loads(body), request), "observed request bytes differ from decoded request")
@@ -587,7 +592,7 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
                    "independent Issue bytes do not match the retained native task")
     _first_require(set(request["envelope"]) == {"repository", "scope", "stack", "source_refs"}
                    and request["envelope"]["scope"] == f"issue:{issue['number']}" and request["envelope"]["source_refs"] == expected_task["source_anchor_refs"]
-                   and request["envelope"]["repository"] == source["repository"] and bool(request["envelope"]["stack"]), "initial source envelope is invalid")
+                   and request["envelope"]["repository"] == source["repository"] and _first_text(request["envelope"]["stack"]), "initial source envelope is invalid")
     validate_import_response(exchange["response"], request)
     validate_import_readback(evidence["task"]["payload"], request)
     _first_require(evidence["github"]["source_ref"] != exchange["source_ref"] and evidence["task"]["source_ref"] != exchange["source_ref"], "independent observation references are required")
@@ -595,6 +600,9 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
                    "installed candidate or managed assets differ")
     _first_manifest(installed["documents"])
     required_docs = _first_source_documents(extract_sections(issue["body"])["source docs"])
+    inspected = journey["inspected_documents"]
+    _first_require(isinstance(inspected, list) and bool(inspected) and all(_first_text(path) for path in inspected),
+                   "inspected document references are invalid")
     _first_require(required_docs.issubset(installed["documents"])
                    and required_docs.issubset(journey["inspected_documents"]), "selected Issue documents are unavailable or uninspected")
     _first_require(installed["origin"] in {"http://127.0.0.1:8113", "http://localhost:8113"}
@@ -657,6 +665,8 @@ def build_first_read_observation(evidence: Mapping[str, Any], prerequisites: Map
 
 
 def validate_first_read_observation(receipt: Mapping[str, Any], evidence: Mapping[str, Any], prerequisites: Mapping[str, Any], *, now: datetime | None = None) -> None:
+    from app.builderops.control_plane.client_cli import same_json_value
+
     try:
         captured = now or datetime.now(timezone.utc)
         _time(receipt["observed_at"], captured)
@@ -665,7 +675,7 @@ def validate_first_read_observation(receipt: Mapping[str, Any], evidence: Mappin
         _first_require(_time(receipt["observed_at"], captured) >= _time(evidence["owner"]["observed_at"], captured), "receipt predates owner observation")
         expected["evidence_fingerprint"] = canonical_digest(expected)
         Draft202012Validator(first_read_schema(), format_checker=FormatChecker()).validate(receipt)
-        _first_require(receipt == expected, "first-read receipt differs from retained inputs")
+        _first_require(same_json_value(receipt, expected), "first-read receipt differs from retained inputs")
     except ReceiptValidationError:
         raise
     except Exception as exc:
