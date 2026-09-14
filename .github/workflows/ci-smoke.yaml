@@ -1149,11 +1149,13 @@ jobs:
         if: steps.changes.outputs.index_pg == 'true'
         run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
-      - name: Run exact index, YouTube quota, entity-review journal, and durable table ownership PG surface
+      - name: Run exact index, BuilderOps, YouTube quota, entity-review journal, and durable table ownership PG surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
         run: |
           set -o pipefail
+          # FCA-ID-A (#5550): the two Issue-delivery Verify nodes require
+          # the explicit scratch PostgreSQL service in this lane.
           pytest -q -m "pg" \
             tests/index/test_provenance_stamp.py \
             tests/index/test_identity_migration.py \
@@ -1207,6 +1209,8 @@ jobs:
             tests/migrations/test_heimdal_raw_liveness_migration.py \
             tests/builderops/test_owner_fact_producers.py \
             tests/api/test_devui_owner_facts.py \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_transaction_recovery \
             tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries \
             --tb=short \
             | tee pytest-index-pg.log
