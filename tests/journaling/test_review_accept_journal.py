@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 from datetime import date, datetime, timezone
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -722,12 +723,131 @@ def test_candidate_retirement_recovers_after_crash_before_inert_archive(
     assert len(_outbox(outbox)) == 1
 
 
+@pytest.mark.parametrize("addendum", [False, True], ids=["primary", "addendum"])
+def test_read_only_access_time_change_does_not_block_acceptance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, addendum: bool
+) -> None:
+    outcomes = []
+    snapshots: list[os.stat_result] = []
+    real_fstat = os.fstat
+    for scenario in ("baseline", "access-time-change"):
+        root = tmp_path / scenario
+        root.mkdir()
+        outbox = root / "outbox.jsonl"
+        guard = WriteGuard(lambda: {"state": "healthy"})
+        if addendum:
+            _stage_candidate(root, body="The original owned entry.\n", accept_checked=True)
+            process_journal_review(
+                vault_context=_context(root), for_date=DAY, outbox_path=outbox,
+                write_guard=guard, now=NOW,
+            )
+        candidate = _stage_candidate(
+            root, addendum=addendum, body="The owner's approved reflection.\n",
+            accept_checked=True,
+        )
+        approved = candidate.read_bytes()
+        identity = candidate.stat()
+
+        def reading_advances_access_time(descriptor: int) -> os.stat_result:
+            observed = real_fstat(descriptor)
+            if (observed.st_dev, observed.st_ino) != (identity.st_dev, identity.st_ino):
+                return observed
+            # Model a filesystem updating atime on each read, without depending on
+            # its mount policy or using utime (which would also change ctime).
+            fields = list(observed)
+            fields[7] = 1_000_000 + len(snapshots)
+            changed = os.stat_result(fields, {
+                "st_atime_ns": int(fields[7]) * 1_000_000_000,
+                "st_mtime_ns": observed.st_mtime_ns,
+                "st_ctime_ns": observed.st_ctime_ns,
+            })
+            snapshots.append(changed)
+            return changed
+
+        with monkeypatch.context() as patched:
+            if scenario == "access-time-change":
+                patched.setattr(review_module.os, "fstat", reading_advances_access_time)
+            result = process_journal_review(
+                vault_context=_context(root), for_date=DAY, outbox_path=outbox,
+                write_guard=guard, now=NOW,
+            )
+        assert result.state is JournalReviewState.FULLY_MATERIALIZED
+        assert not candidate.exists()
+        archived = candidate.with_name(
+            f".{candidate.name}.journal-retired-{result.receipt_id}"
+        )
+        assert archived.read_bytes() == approved
+        outcomes.append((result, (root / result.canonical_path).read_bytes(), _outbox(outbox)))
+    assert len(snapshots) >= 4  # Initial read and the real pre-publication reread.
+    assert snapshots[0].st_atime_ns != snapshots[1].st_atime_ns
+    assert snapshots[0][:7] == snapshots[1][:7]
+    assert snapshots[0].st_mtime_ns == snapshots[1].st_mtime_ns
+    assert snapshots[0].st_ctime_ns == snapshots[1].st_ctime_ns
+    assert outcomes[0] == outcomes[1]  # Exact body, receipt, timestamp and decision token.
+
+
+@pytest.mark.parametrize("addendum", [False, True], ids=["primary", "addendum"])
+@pytest.mark.parametrize("mutation", ["content", "acceptance", "identity"])
+def test_candidate_mutation_still_refuses_journal_acceptance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, addendum: bool, mutation: str
+) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    guard = WriteGuard(lambda: {"state": "healthy"})
+    canonical = root / "1_Calendar/Daily/2026-07-15.md"
+    if addendum:
+        _stage_candidate(root, accept_checked=True)
+        process_journal_review(
+            vault_context=_context(root), for_date=DAY, outbox_path=outbox,
+            write_guard=guard, now=NOW,
+        )
+    previous_canonical = canonical.read_bytes() if canonical.exists() else None
+    previous_events = _outbox(outbox)
+    candidate = _stage_candidate(
+        root, addendum=addendum, body="The owner's approved reflection.\n",
+        accept_checked=True,
+    )
+    approved = candidate.read_bytes()
+    original_identity = candidate.stat()
+    replacement = {
+        "content": approved.replace(b"approved", b"modified"),
+        "acceptance": approved.replace(b"- [x] Accept", b"- [ ] Accept"),
+        "identity": approved,
+    }[mutation]
+    real_append = review_module.append_note_relative
+
+    def mutate_before_transform(*args: object, **kwargs: object) -> object:
+        if mutation == "identity":
+            other = candidate.with_suffix(".replacement")
+            other.write_bytes(replacement)
+            os.utime(other, ns=(original_identity.st_atime_ns, original_identity.st_mtime_ns))
+            os.replace(other, candidate)
+            assert candidate.stat().st_ino != original_identity.st_ino
+        else:
+            candidate.write_bytes(replacement)
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(review_module, "append_note_relative", mutate_before_transform)
+    with pytest.raises(JournalReviewConflictError, match="changed before canonical acceptance"):
+        process_journal_review(
+            vault_context=_context(root), for_date=DAY, outbox_path=outbox,
+            write_guard=guard, now=NOW,
+        )
+    assert candidate.read_bytes() == replacement
+    assert (canonical.read_bytes() if canonical.exists() else None) == previous_canonical
+    assert _outbox(outbox) == previous_events
+
+
+@pytest.mark.parametrize("replacement_kind", ["content", "identity"])
 def test_candidate_replacement_during_retirement_is_preserved(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, replacement_kind: str
 ) -> None:
     root = tmp_path / "vault"
     root.mkdir()
     candidate = _stage_candidate(root, accept_checked=True)
+    approved = candidate.read_bytes()
+    replacement = b"external replacement\n" if replacement_kind == "content" else approved
     outbox = tmp_path / "outbox.jsonl"
     real_noreplace = review_module._atomic_rename_noreplace_at
     replaced = False
@@ -744,7 +864,15 @@ def test_candidate_replacement_during_retirement_is_preserved(
             and ".journal-retire-" in destination_name
             and not replaced
         ):
-            candidate.write_text("external replacement\n", encoding="utf-8")
+            if replacement_kind == "identity":
+                original = candidate.stat()
+                other = candidate.with_suffix(".replacement")
+                other.write_bytes(replacement)
+                os.utime(other, ns=(original.st_atime_ns, original.st_mtime_ns))
+                os.replace(other, candidate)
+                assert candidate.stat().st_ino != original.st_ino
+            else:
+                candidate.write_bytes(replacement)
             replaced = True
         real_noreplace(
             source_dir_fd,
@@ -765,7 +893,9 @@ def test_candidate_replacement_during_retirement_is_preserved(
             now=NOW,
         )
 
-    assert candidate.read_text(encoding="utf-8") == "external replacement\n"
+    assert candidate.read_bytes() == replacement
+    assert len(_outbox(outbox)) == 1
+    assert (root / "1_Calendar/Daily/2026-07-15.md").exists()
 
 
 def test_candidate_replacement_before_canonical_write_is_not_materialized(

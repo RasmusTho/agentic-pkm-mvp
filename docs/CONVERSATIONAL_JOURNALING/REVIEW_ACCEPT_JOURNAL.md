@@ -92,6 +92,14 @@ Assembling day context (JRNL-01), leading the conversation (JRNL-02), and genera
 
 ## Restart / Durability Posture
 
+Before primary publication or addendum append, acceptance rereads the checked candidate and
+requires identical bytes and mutation-relevant file metadata: mode, inode/device identity, link
+count, ownership, size, and nanosecond modification/change timestamps. Access-time changes caused
+by reading do not invalidate unchanged acceptance intent. Receipt-bound retirement likewise
+ignores access time while preserving its existing identity/content checks and replacement recovery;
+its own rename may change the file's change timestamp. These checks preserve the owner's edited
+text and checkbox authority without granting overwrite permission or changing receipt semantics.
+
 The staged draft, the checked/unchecked state of its acceptance checkbox, and any already-accepted journal note are all vault-durable — a restart at any point (before, during, or after a tap) loses none of this. JRNL-03 and JRNL-04 share one per-day lifecycle lock across the primary candidate, addendum candidate, canonical transition, and receipt-bound candidate retirement, so draft regeneration cannot erase checked intent or stage an addendum while primary acceptance is still reconciling. Canonical publication is atomic-or-absent; deterministic canonical/addendum evidence reconciles a receipt interrupted after publication; the receipt is atomically replaced, fsynced, reread, and proven before the candidate is conditionally moved from its visible queue name to a receipt-bound, scanner-inert archive. The archive is retained as recovery evidence instead of being unlinked through a replacement race. A restart therefore resumes from the checked or receipt-bound queue item and never requires a second owner action.
 
 ## Related Docs
