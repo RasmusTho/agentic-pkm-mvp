@@ -17,6 +17,7 @@ from app.builderops.devui_focus import (
     compose_focus_view,
 )
 from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
+from app.builderops.devui_owner_facts import owner_fact_trust, read_owner_fact_transport
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import (
     derive_overview_inputs,
@@ -143,10 +144,13 @@ async def overview() -> dict[str, Any]:
     )
     work_provider = composition.get("providers", {}).get("work")
     receipt_provider = composition.get("providers", {}).get("vm102_evidence")
+    owner_facts = read_owner_fact_transport()
+    composition["providers"]["owner_facts"] = owner_fact_trust(owner_facts, composition["captured_at"])
     candidates = _bind_visual_focus_targets(
         derive_overview_inputs(
             work_provider=work_provider,
             receipt_provider=receipt_provider,
+            owner_fact_provider=owner_facts,
         )
     )
     return compose_overview_view(composition=composition, candidates=candidates)

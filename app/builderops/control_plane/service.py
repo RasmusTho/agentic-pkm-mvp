@@ -10,7 +10,7 @@ from collections.abc import Callable
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
@@ -28,6 +28,8 @@ from app.builderops.control_plane.api_models import (
     OutboxUnknownRequest,
     PromotionCommitRequest,
     RecordCommitRequest,
+    OwnerOutcomeCommitRequest,
+    OwnerAskCommitRequest,
     TaskClaimRequest,
     TaskCompleteRequest,
     TaskHeartbeatRequest,
@@ -63,6 +65,12 @@ from app.builderops.devui_conversation_port import canonical_context_pack_bytes,
 from app.builderops.devui_model_inquiry_command import approval_manifest, build_command_proposal, canonical_hash, validate_approval_identity, validate_command_proposal
 from app.builderops.devui_sources import load_source_configuration, revalidate_inquiry_sources
 from app.builderops.model_inquiry_workflow import SanctionedModelInquiryWorkflow, WorkflowUnavailable
+from app.builderops.owner_fact_producers import (
+    CONTRACT as OWNER_OUTCOME_CONTRACT, OwnerFactRefusal,
+    OwnerOutcomeAdmission, outcome_record_id, outcome_request_hash, read_owner_binding,
+    read_owner_profiles, strict_json, validate_current_binding, validate_outcome_request,
+)
+from app.builderops.models import normalize_record
 
 bearer = HTTPBearer(auto_error=False)
 INQUIRY_CANDIDATE_ROOT = Path(__file__).resolve().parents[3] / "devui-candidate"
@@ -278,6 +286,8 @@ def _assert_secret_metadata_shape(key: str, value: Any) -> None:
 
 
 def _envelope(request: Any, credential: Credential) -> AuthorityEnvelope:
+    if request.scope in {"owner-outcome", "owner-ask"}:
+        raise OwnerFactRefusal("owner_fact_scope_requires_source_admission", 403)
     return AuthorityEnvelope(
         repository=request.repository,
         scope=request.scope,
@@ -336,6 +346,10 @@ def _assert_durable_payload_safe(
     _remaining_nodes: list[int] | None = None,
 ) -> None:
     """Reject credential-shaped material before it can enter PostgreSQL/WAL/backups."""
+    if not _path and not key and isinstance(value, Mapping):
+        operation_key = value.get("idempotency_key")
+        if isinstance(operation_key, str) and operation_key.startswith(("owner-outcome:", "owner-ask:")):
+            raise OwnerFactRefusal("owner_fact_key_requires_source_admission", 403)
     remaining_chars = (
         [_MAX_DURABLE_TEXT_SCAN_CHARS]
         if _remaining_chars is None
@@ -437,6 +451,8 @@ def _assert_durable_payload_safe(
 
 
 def _control_plane_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, OwnerFactRefusal):
+        return HTTPException(status_code=exc.status, detail=exc.code)
     if isinstance(exc, WorkflowUnavailable):
         return HTTPException(status_code=503, detail="workflow_unavailable")
     if isinstance(exc, HTTPException):
@@ -599,7 +615,7 @@ def create_app(
     status_read = _credential_dependency(credentials, rate_limiter, "status:read")
     metrics_read = _credential_dependency(credentials, rate_limiter, "metrics:read")
     lease_write = _credential_dependency(credentials, rate_limiter, "leases:write")
-    record_write = _credential_dependency(credentials, rate_limiter, "records:write")
+    record_access = _credential_dependency(credentials, rate_limiter)
     inquiry_write = _credential_dependency(credentials, rate_limiter, "inquiries:write")
     inquiry_approve = _credential_dependency(credentials, rate_limiter, "inquiries:approve")
     inquiry_read = _credential_dependency(credentials, rate_limiter, "inquiries:read")
@@ -653,6 +669,65 @@ def create_app(
         proposal = build_command_proposal(approval_id=request.approval_id, material=material, **permission(credential), now=datetime.now(timezone.utc), expires_at=request.expires_at)
         approval_manifest(proposal, material, approved_at=datetime.now(timezone.utc))
         return {"proposal": proposal, "material": material, "choices": ["start", "hold"], "state": "preview"}
+
+    def publish_owner_ask(request: OwnerAskCommitRequest, credential: Credential) -> dict[str, Any]:
+        if not {"records:write", "inquiries:approve"}.issubset(credential.scopes):
+            raise OwnerFactRefusal("owner_ask_not_authorized", 403)
+        supplied = request.owner_ask
+        if set(supplied) != {"proposal", "material"}:
+            raise OwnerFactRefusal("invalid_owner_ask")
+        _assert_durable_payload_safe(supplied, credentials)
+        proposal, material = supplied["proposal"], supplied["material"]
+        repo = canonical_repository(proposal["repository"])
+        _enforce_repo_scope(credential, repo)
+        exact = validate_command_proposal(proposal, current_material=current_material(material, check_workflow=True), **permission(credential), now=datetime.now(timezone.utc))
+        record_id = "owner-ask:" + exact["proposal_hash"]
+        body = {"contract": "builder_owner_ask.v1", "proposal": exact, "material": material, "choices": ["start", "hold"], "authority_class": "bounded_action_confirmation"}
+        try:
+            existing = store.get_record(repo, record_id)
+        except KeyError:
+            stamp = datetime.now(timezone.utc).isoformat()
+            payload = normalize_record({"id": record_id, "object_type": "BuilderOpsReceipt", "lifecycle_state": "active",
+                "authority_class": "receipt", "promotion_status": "not_promotable", "created_at": stamp, "updated_at": stamp,
+                "created_by": {"actor_type": "service", "id": "builderops-control-plane"},
+                "actor": {"actor_type": "service", "id": credential.principal}, "occurred_at": stamp,
+                "source_refs": [{"ref_type": "proposal", "ref": exact["proposal_hash"], "authority_surface": "builderops"}],
+                "target_refs": [{"ref_type": "subject", "ref": exact["subject_ref"]["stable_id"], "authority_surface": "github"}],
+                "summary": "Exact owner action proposal published", "event_type": "owner_ask_published", "action": "publish_owner_ask",
+                "receipt_body": body, "idempotency_key": record_id, "outcome": "succeeded"})
+            try:
+                store.commit_record(envelope=AuthorityEnvelope(repository=repo, scope="owner-ask", stack="builderops-control-plane", actor=credential.principal, source_refs=(exact["proposal_hash"],)), record_id=record_id, record_type="BuilderOpsReceipt", state="active", payload=payload, idempotency_key=record_id)
+            except (IdempotencyConflict, StateConflict, LeaseRequired):
+                pass
+            existing = store.get_record(repo, record_id)
+        if existing["payload"]["receipt_body"] != body or existing["authority_envelope"]["actor"] != credential.principal:
+            raise OwnerFactRefusal("owner_ask_conflict", 409)
+        return {"receipt": existing["payload"], "state": "published", "action_effects": []}
+
+    def current_owner_asks(repository: str) -> list[dict[str, Any]]:
+        asks = []
+        for row in store.get_owner_asks(repository):
+            payload = row["payload"]
+            body = payload["receipt_body"]
+            proposal, material = body["proposal"], body["material"]
+            result = {"subject_ref": proposal["subject_ref"]["stable_id"], "receipt_id": payload["id"], "proposal_hash": proposal["proposal_hash"], "status": "withdrawn"}
+            try:
+                permission_ref = proposal["approval_rule"]["permission_ref"]
+                if not permission_ref.startswith("credential:"):
+                    raise ValueError
+                owner = credentials.current_credential(permission_ref.removeprefix("credential:"))
+                if owner is None or not {"records:write", "inquiries:approve"}.issubset(owner.scopes) or not owner.may_address(repository) or row["authority_envelope"]["scope"] != "owner-ask" or row["authority_envelope"]["actor"] != owner.principal:
+                    raise ValueError
+                validate_command_proposal(proposal, current_material=current_material(material, check_workflow=True), **permission(owner), now=datetime.now(timezone.utc))
+                try:
+                    exact_approval(repository, proposal["proposal_id"])
+                except KeyError:
+                    result.update(status="current", choices=body["choices"], authority_class=body["authority_class"],
+                        proposal=proposal, observed_at=datetime.now(timezone.utc).isoformat())
+            except Exception:
+                result["reason"] = "source_or_permission_changed_or_unavailable"
+            asks.append(result)
+        return asks
 
     def command_start(request: InquiryCommandStartRequest, credential: Credential) -> dict[str, Any]:
         if request.decision == "hold":
@@ -843,11 +918,31 @@ def create_app(
 
     @application.post("/v1/records")
     async def commit_record(
-        request: RecordCommitRequest,
-        credential: Credential = Depends(record_write),
+        request: RecordCommitRequest | OwnerOutcomeCommitRequest | OwnerAskCommitRequest,
+        raw_request: Request,
+        credential: Credential = Depends(record_access),
         _epoch: None = Depends(require_authority_epoch),
     ) -> dict[str, Any]:
+        if isinstance(request, OwnerAskCommitRequest):
+            try:
+                strict_json(await raw_request.body())
+                return await run_in_threadpool(publish_owner_ask, request, credential)
+            except Exception as exc:
+                raise _control_plane_error(exc) from exc
+        if isinstance(request, OwnerOutcomeCommitRequest):
+            try:
+                # FastAPI's JSON parsing does not reject duplicate keys. Check
+                # the actual bytes before any confirmation or durable effect.
+                strict_json(await raw_request.body())
+                return await run_in_threadpool(commit_owner_confirmation, request, credential)
+            except Exception as exc:
+                raise _control_plane_error(exc) from exc
+        if "records:write" not in credential.scopes:
+            raise HTTPException(status_code=403, detail="insufficient BuilderOps credential scope")
         _enforce_repo_scope(credential, request.envelope.repository)
+        receipt_body = request.payload.get("receipt_body")
+        if request.record_id.startswith("owner-ask:") or isinstance(receipt_body, Mapping) and receipt_body.get("contract") == "builder_owner_ask.v1":
+            raise HTTPException(status_code=403, detail="owner asks require source admission")
         if request.record_type == "ModelInquiryApproval" or request.record_id.startswith("inquiry-approval:"):
             raise HTTPException(status_code=403, detail="inquiry approvals require owner command admission")
         try:
@@ -864,6 +959,54 @@ def create_app(
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return _authority_object_response(result)
+
+    def commit_owner_confirmation(request: OwnerOutcomeCommitRequest, credential: Credential) -> dict[str, Any]:
+        supplied = request.owner_outcome
+        if set(supplied) != {"contract", "request", "request_sha256", "confirm"} or supplied.get("contract") != OWNER_OUTCOME_CONTRACT or supplied.get("confirm") != "confirm":
+            raise OwnerFactRefusal("owner_confirmation_required")
+        confirmed_at = datetime.now(timezone.utc).isoformat()
+        immutable = validate_outcome_request(supplied["request"], confirmed_at=confirmed_at)
+        # The finite policy reference is source metadata. Scan its values and
+        # every other request value with the existing durable-secret guard;
+        # do not extend generic ingestion's forbidden-field exemptions.
+        scan = dict(immutable)
+        scan["policy_reference"] = scan.pop("authorization_ref")
+        _assert_durable_payload_safe({"request": scan, "request_key": request.idempotency_key}, credentials)
+        request_hash = outcome_request_hash(immutable)
+        if supplied["request_sha256"] != request_hash:
+            raise OwnerFactRefusal("owner_request_hash_mismatch")
+        repo, subject = immutable["repository"], immutable["subject_ref"]
+        _enforce_repo_scope(credential, repo)
+        if "receipts:read" not in credential.scopes or credential.principal_kind != "human" or not isinstance(immutable["owner_actor"], Mapping) or credential.principal != immutable["owner_actor"].get("id"):
+            raise OwnerFactRefusal("owner_principal_mismatch", 403)
+
+        def revalidate(epoch: int) -> dict[str, Any]:
+            current = credentials.current_credential(credential.credential_id)
+            if current != credential or current is None or not {"records:write", "owner_outcomes:confirm"}.issubset(current.scopes) or not current.may_address(repo) or current.principal_kind != "human":
+                raise OwnerFactRefusal("owner_confirmation_not_authorized", 403)
+            binding = read_owner_binding(repo, subject, authority_epoch=epoch,
+                allow_withdrawn_readiness=immutable["outcome"] == "unable_to_try")
+            if binding["owner_actor"] != immutable["owner_actor"] or binding["owner_actor"]["id"] != current.principal:
+                raise OwnerFactRefusal("owner_principal_mismatch", 403)
+            validate_current_binding(immutable, binding)
+            return binding
+
+        admission = OwnerOutcomeAdmission(immutable, request_hash, confirmed_at, revalidate)
+        refs = [subject, "git:" + immutable["source_revision"], immutable["readiness_receipt_ref"]["id"],
+                immutable["acceptance_profile_ref"]["id"] + ":" + immutable["acceptance_profile_ref"]["sha256"],
+                immutable["authorization_ref"]["ref"] + ":" + immutable["authorization_ref"]["version"],
+                immutable["retention_policy_ref"]["ref"] + ":" + immutable["retention_policy_ref"]["version"]]
+        refs.extend(item["id"] + ":" + item["sha256"] for item in immutable["criterion_refs"] + immutable["limitation_refs"])
+        refs.extend(ref for ref in (immutable["trial_receipt_ref"], immutable["supersedes_receipt_id"]) if ref is not None)
+        envelope = AuthorityEnvelope(repository=repo, scope="owner-outcome", stack="builderops-control-plane", actor=credential.principal, source_refs=tuple(refs))
+        result = store.commit_record(envelope=envelope, record_id=outcome_record_id(repo, request.idempotency_key), record_type="BuilderOpsReceipt", state="active", payload={}, idempotency_key=request.idempotency_key, owner_outcome=admission)
+        receipt = dict(store.get_record(repo, result.object_id))["payload"]
+        try:
+            readback = store.get_owner_outcomes(repo, subject, idempotency_key=request.idempotency_key, grant_reader=credentials.has_owner_outcome_grant)
+            projection = readback["projection"]
+        except Exception:
+            projection = {"status": "unavailable", "reason": "source_readback_required"}
+        return {**_authority_object_response(result), "receipt": receipt, "projection": projection}
 
     @application.post("/v1/inquiries")
     async def commit_inquiry(
@@ -1176,11 +1319,37 @@ def create_app(
         object_id: str,
         repository: str,
         task_id: str | None = None,
+        subject_ref: str | None = None,
+        idempotency_key: str | None = None,
         credential: Credential = Depends(receipt_read),
     ) -> dict[str, Any]:
         _enforce_repo_scope(credential, repository)
         canonical = canonical_repository(repository)
         try:
+            if object_kind == "owner-outcomes" and object_id == "current":
+                if subject_ref is None:
+                    raise OwnerFactRefusal("owner_subject_required")
+                return await run_in_threadpool(store.get_owner_outcomes, canonical, subject_ref, idempotency_key=idempotency_key, grant_reader=credentials.has_owner_outcome_grant)
+            if object_kind == "owner-facts" and object_id == "current":
+                asks = await run_in_threadpool(current_owner_asks, canonical)
+                outcome_source_status = "available"
+                try:
+                    profiles = await run_in_threadpool(read_owner_profiles)
+                except OwnerFactRefusal:
+                    if not any(ask["status"] == "current" for ask in asks):
+                        raise
+                    profiles = []
+                    outcome_source_status = "unavailable"
+                subjects = [p["subject_ref"] for p in profiles if p["repository"] == canonical]
+                if not subjects and not asks:
+                    raise OwnerFactRefusal("owner_source_unavailable", 503)
+                items = []
+                for subject in subjects:
+                    try:
+                        items.append(await run_in_threadpool(store.get_owner_outcomes, canonical, subject, grant_reader=credentials.has_owner_outcome_grant))
+                    except Exception as exc:
+                        items.append({"subject_ref": subject, "status": "unavailable", "reason": type(exc).__name__})
+                return {"contract": "builder_owner_fact_collection.v1", "repository": canonical, "subjects": items, "owner_asks": asks, "owner_outcomes_status": outcome_source_status}
             if object_kind == "records":
                 receipt = await run_in_threadpool(store.get_record, canonical, object_id)
             elif object_kind == "promotions":

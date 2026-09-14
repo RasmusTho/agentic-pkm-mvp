@@ -5,8 +5,11 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-13 (bounded DevUI managed read-journey and inquiry-command writeback)
+Last reviewed: 2026-09-14 (bounded DevUI owner-fact producer writeback; repository evidence only)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
+Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
+`app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
+and `tests/api/test_devui_owner_facts.py`; isolated PostgreSQL production-path proof, 2026-09-14.
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
 `app/dispatcher/sync_github.py`, `app/builderops/cockpit_registry.py`,
@@ -61,6 +64,12 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
   Production-path tests with fake host/provider boundaries and the packaged startup/refusal check
   establish repository implementation proof. Service/destination activation and current permissions,
   FCP-02 visual handoff, and parent/owner acceptance remain separate gates; no live inquiry is claimed.
+- FCA-05 (#5404) implements the four finite owner-fact producers in the existing authenticated
+  BuilderOps receipt service and Overview/Focus read transport. Exact candidate readiness, explicit
+  human trial and decision remain distinct; source changes and corrections withdraw current claims
+  while preserving durable history. The owner contract is
+  [Candidate-bound owner outcomes](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09).
+  This repository proof does not establish host activation, a live trial or owner acceptance.
 - The pure `devui.discovery-projection.v1` composer derives detached discovery items from the
   existing composition envelope and caller-declared source records. It preserves authority,
   provenance, lifecycle, source-state limitations, and source-bound read-only navigation; it adds

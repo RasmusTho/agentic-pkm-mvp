@@ -651,6 +651,7 @@ def read_focus_inputs(
     *,
     repository: str | None = None,
     issue_reader: Callable[[str, str], Any] | None = None,
+    owner_fact_reader: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return detached composer inputs for exactly one stable governed subject."""
 
@@ -658,9 +659,12 @@ def read_focus_inputs(
         raise FocusInputError("subject must be a stable governed identity")
     match = _ISSUE_SUBJECT.fullmatch(subject_id)
     if match is not None:
-        return _read_issue_inputs(
+        from app.builderops.devui_owner_facts import append_focus_owner_facts, read_owner_fact_transport
+
+        inputs = _read_issue_inputs(
             subject_id, match, repository=repository, issue_reader=issue_reader
         )
+        return append_focus_owner_facts(inputs, owner_fact_reader() if owner_fact_reader else read_owner_fact_transport(repository=repository))
     raise FocusInputError("selected subject is unsupported")
 
 

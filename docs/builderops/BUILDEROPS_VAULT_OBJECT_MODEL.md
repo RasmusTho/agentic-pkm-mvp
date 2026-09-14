@@ -678,10 +678,10 @@ existing source contracts and, where a durable transition must be recorded, by a
 
 #### Candidate-bound owner outcome contract (FCA-09)
 
-This is the target contract defined by #5503. FCA-05/#5404 owns its producer and read-transport
-implementation. These facts remain withdrawn until that implementation and the selected source's
-authenticated authority/admission gates are verified. Publishing this contract admits no writer,
-deployment or human outcome. It neither extends nor interprets ADR-0065: `done`, `ignore` and
+This contract was defined by #5503 and implemented by FCA-05/#5404 in the existing service and
+PostgreSQL owner. Production call-site tests prove the finite repository implementation; live
+source admission, deployment and human observations remain separate gates. Missing source or
+human grant withdraws these facts. It neither extends nor interprets ADR-0065: `done`, `ignore` and
 `never_show_again` retain only their temporal-intention meanings.
 
 **Writer and actor.** The sole canonical writer is the existing authenticated BuilderOps
@@ -691,7 +691,8 @@ PostgreSQL record/transaction/receipt/outbox owner under ADR-0062. FCA-05 extend
 local-store fallback, new generic fact service or the temporal-intention record type. The current
 generic `POST /v1/records`, `records:write` permission and
 `GET /v1/receipts/{object_kind}/{object_id}` read primitive alone do not admit owner outcomes.
-They do not yet supply the owner confirmation, binding validation or ordered outcome lookup below.
+The finite subtype and ordered readback below supply those additional checks; generic ingestion
+does not supply owner confirmation.
 
 The confirmation issuer and verifier are the same existing service's `commit_record` admission,
 backed by `CredentialRegistry` in `app/builderops/control_plane/auth.py`. FCA-05 adds an explicit
@@ -703,7 +704,7 @@ credential configuration is the grant/revocation source; the profile's immutable
 is the subject authority. Generic write scopes, all-repository access and a caller's `actor_type`
 do not supply the dedicated grant. An agent credential must never carry it or act as the owner.
 Provisioning this human-only credential and activating its permission remain separately authorized
-operator work; this document neither provisions a credential nor admits the writer.
+operator work; repository delivery does not provision a credential or activate the writer.
 
 The owner's client displays the complete immutable request, then sends that exact request and its
 hash with an explicit confirm action through this authenticated route. The service requires that
@@ -849,6 +850,43 @@ they do not provide a policy for free-text trial observations, transcripts or pe
 copies. That is a real content-retention gap, so such content is refused by this bounded contract.
 Any later content-bearing extension must first obtain a named policy from the source/receipt owner
 and its own bounded implementation contract; ADR-0065's content-free first slice cannot supply it.
+
+**Implemented source and transport (#5404).** `app/builderops/owner_fact_producers.py` admits the
+existing typed VM102 `devui_projection` qualification/deploy/health chain. The deployment owner's
+existing `DEVUI_VM102_RECEIPT_DIR/devui-runtime-prerequisites.json` may carry a closed
+`owner_acceptance_profiles` list. Each profile has `id`, `version`, `repository`, `subject_ref`,
+`source_owner`, `owner_actor`, `authorization_ref`, `criterion_refs`, `limitation_refs`, and
+`retention_policy_ref`; their shapes are the finite references above. Its immutable digest binds
+the owner designation and required criteria to that exact repository/subject. The source owner is
+`builderops_vm102_receipt_source`; no client, label or model creates a profile. Other candidate or
+environment owners remain unadmitted. An exact retained chain whose freshness expired can support
+only `unable_to_try`; deleted or incompatible source history remains unavailable.
+
+The human sends `{record_type: BuilderOpsReceipt, owner_outcome: {contract, request,
+request_sha256, confirm: confirm}, idempotency_key}` on the existing `POST /v1/records`. The
+host credential manifest must explicitly designate `principal_kind: human` and the dedicated
+grant. `owner-outcomes/current` on the existing authenticated receipt GET accepts `repository`,
+`subject_ref` and optional original `idempotency_key`. A keyed lookup during a source outage can
+still return the intact historical receipt with unavailable projection. Readback checks complete
+journal/idempotency/record lineage, including a missing terminal correction, before selecting any
+current receipt. It projects from the fresh binding observed under the guard and separately
+rechecks the current human principal/repository grant. Grant withdrawal hides current outcomes
+while authorized historical reads retain the exact receipt; a replacement credential for the
+same human does not create another decision slot. Generic admission reserves the outcome scope
+and operation-key namespace. The existing outbox stores a rebuild intent in the same outcome transaction;
+each read rebuilds from current source and predecessor history. No cached projection or
+background external-effect executor supplies outcome authority.
+
+For `owner_ask`, the same record route accepts `{record_type: BuilderOpsReceipt, owner_ask:
+{proposal, material}}`, revalidates the existing inquiry proposal and current action permission,
+and records its exact pending Start/Hold ask as `builder_owner_ask.v1` in `BuilderOpsReceipt`.
+This publication performs no Start operation. Source, permission, expiry or actual approval
+withdraws the pending ask. `owner-facts/current` returns these asks and the bounded admitted
+outcome subjects for Overview/Focus. When an independently valid ask remains but profiles are
+unavailable, the collection preserves that outcome-source failure and Overview reports partial
+coverage; an empty subject list is not proof of no earlier outcome. Missing profiles do not manufacture outcomes. These
+repository seams do not provision credentials, activate a host, perform an inquiry or authorize
+the separately gated Issue-delivery operation.
 
 ### PromotionIntent
 

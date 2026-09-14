@@ -31,6 +31,7 @@ class Credential:
     token_length: int
     repositories: frozenset[str] = frozenset()
     all_repositories: bool = False
+    principal_kind: str = "agent"
 
     def may_address(self, repository: str) -> bool:
         """Return whether this credential is granted authority for ``repository``.
@@ -149,6 +150,11 @@ class CredentialRegistry:
                     "explicit repositories list; the combination is ambiguous"
                 )
             revoked = raw.get("revoked", False)
+            principal_kind = raw.get("principal_kind", "agent")
+            if not isinstance(principal_kind, str) or principal_kind not in {"human", "agent", "service"}:
+                raise CredentialConfigurationError("invalid principal kind")
+            if "owner_outcomes:confirm" in scopes and principal_kind != "human":
+                raise CredentialConfigurationError("owner confirmation is a human-only grant")
             if type(revoked) is not bool:
                 raise CredentialConfigurationError("invalid BuilderOps credential metadata")
             if revoked:
@@ -208,6 +214,7 @@ class CredentialRegistry:
                         token_length=token_length,
                         repositories=repositories,
                         all_repositories=all_repositories_raw,
+                        principal_kind=principal_kind,
                     ),
                     verifier,
                 )
@@ -234,6 +241,13 @@ class CredentialRegistry:
     def current_credential(self, credential_id: str) -> Credential | None:
         """Re-read non-secret permission metadata, including revocation/rotation."""
         return next((credential for credential, _ in self._entries() if credential.credential_id == credential_id), None)
+
+    def has_owner_outcome_grant(self, repository: str, principal: str) -> bool:
+        """Current human eligibility; credential rotation is not a decision slot."""
+        return any(credential.principal == principal and credential.principal_kind == "human"
+                   and credential.may_address(repository)
+                   and {"records:write", "receipts:read", "owner_outcomes:confirm"}.issubset(credential.scopes)
+                   for credential, _ in self._entries())
 
     def is_registered_secret(self, value: str) -> bool:
         """Check a candidate without retaining or returning raw credential material."""

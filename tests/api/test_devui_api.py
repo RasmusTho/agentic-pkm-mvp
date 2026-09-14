@@ -342,7 +342,7 @@ def test_devui_admits_only_direct_loopback_or_server_derived_companion_proxy(
     monkeypatch.setattr(auth_module.settings, "api_key", "configured-key")
     monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", proxy_ip)
     monkeypatch.setattr(auth_module, "_proxy_dns_cache", {})
-    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {})
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {"providers": {}, "captured_at": "2026-09-14T00:00:00Z"})
     monkeypatch.setattr(
         devui_route,
         "compose_overview_view",
@@ -400,7 +400,7 @@ def test_devui_proxy_admission_preserves_direct_loopback_contract(monkeypatch) -
     subject = "github:RasmusTho/agentic-pkm-mvp#4768"
     monkeypatch.setattr(auth_module.settings, "api_key", "configured-key")
     monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", "172.19.0.7")
-    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {})
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {"providers": {}, "captured_at": "2026-09-14T00:00:00Z"})
     monkeypatch.setattr(devui_route, "compose_overview_view", lambda **_: {})
     monkeypatch.setattr(
         devui_route,
@@ -596,7 +596,7 @@ def test_devui_composition_isolates_non_utf8_provider_strings(monkeypatch) -> No
 
 
 def test_overview_route_reuses_local_admission_and_exact_contract(monkeypatch) -> None:
-    composition = {"contract_version": "devui.composition.v1"}
+    composition = {"contract_version": "devui.composition.v1", "providers": {}, "captured_at": "2026-09-14T00:00:00Z"}
     expected = {"contract_version": "devui-overview-view.v1", "now": []}
 
     monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: composition)
@@ -615,7 +615,7 @@ def test_overview_route_reuses_local_admission_and_exact_contract(monkeypatch) -
 
 
 def test_overview_route_rejects_via_forwarded_identity(monkeypatch) -> None:
-    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {})
+    monkeypatch.setattr(devui_route, "compose_owner_snapshot", lambda **_: {"providers": {}, "captured_at": "2026-09-14T00:00:00Z"})
     monkeypatch.setattr(devui_route, "compose_overview_view", lambda **_: {})
 
     response = TestClient(app).get(
@@ -664,7 +664,7 @@ def test_overview_route_is_get_only() -> None:
 
 
 def test_overview_route_uses_live_composition_and_delivered_composer(monkeypatch) -> None:
-    composition = {"contract_version": "devui.composition.v1"}
+    composition = {"contract_version": "devui.composition.v1", "providers": {}, "captured_at": "2026-09-14T00:00:00Z"}
     seen: dict[str, object] = {}
 
     def composition_reader(**kwargs: object) -> dict:

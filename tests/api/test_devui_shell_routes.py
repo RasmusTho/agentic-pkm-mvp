@@ -23,7 +23,7 @@ def test_real_now_subject_gets_only_verified_visual_focus_target(monkeypatch) ->
     monkeypatch.setattr(
         devui_route,
         "compose_owner_snapshot",
-        lambda **_kwargs: {"providers": {"work": {"status": "available"}}},
+        lambda **_kwargs: {"providers": {"work": {"status": "available"}}, "captured_at": "2026-09-14T00:00:00Z"},
     )
     monkeypatch.setattr(
         devui_route,

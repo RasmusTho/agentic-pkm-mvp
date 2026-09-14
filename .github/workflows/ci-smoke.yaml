@@ -1119,6 +1119,17 @@ jobs:
               - 'tests/heimdal/test_trigger_ownership_pg.py'
               - 'tests/migrations/test_heimdal_raw_representation_migration.py'
               - 'tests/migrations/test_heimdal_raw_liveness_migration.py'
+              # FCA-05 authority/correction and production read transport need
+              # real PostgreSQL; the not-pg lane cannot execute these ACs.
+              - 'app/builderops/control_plane/**'
+              - 'app/builderops/owner_fact_producers.py'
+              - 'app/builderops/devui_owner_facts.py'
+              - 'app/builderops/devui_focus_inputs.py'
+              - 'app/builderops/devui_overview_inputs.py'
+              - 'app/builderops/devui_runtime.py'
+              - 'app/builderops/devui_sources.py'
+              - 'tests/builderops/test_owner_fact_producers.py'
+              - 'tests/api/test_devui_owner_facts.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -1194,6 +1205,8 @@ jobs:
             tests/heimdal/test_trigger_ownership_pg.py \
             tests/migrations/test_heimdal_raw_representation_migration.py \
             tests/migrations/test_heimdal_raw_liveness_migration.py \
+            tests/builderops/test_owner_fact_producers.py \
+            tests/api/test_devui_owner_facts.py \
             --tb=short \
             | tee pytest-index-pg.log
 

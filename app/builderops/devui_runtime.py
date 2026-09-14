@@ -33,6 +33,7 @@ from app.builderops.devui_focus_inputs import FocusInputError
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs, bind_visual_focus_targets
 from app.builderops.devui_receipts import read_vm102_receipt_provider
+from app.builderops.devui_owner_facts import owner_fact_trust, read_owner_fact_transport
 from app.builderops.devui_sources import (
     SourceConfiguration,
     SourceConfigurationError,
@@ -261,9 +262,13 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
             ckm_reader=_unavailable_provider,
             receipt_reader=receipt_provider,
         )
+        owner_facts = read_owner_fact_transport(repository=configuration.sources.repository,
+            environment=configuration.sources.api_environment, authority_epoch=configuration.sources.authority_epoch)
+        snapshot["providers"]["owner_facts"] = owner_fact_trust(owner_facts, snapshot["captured_at"])
         inputs = derive_overview_inputs(
             work_provider=snapshot["providers"]["work"],
             receipt_provider=snapshot["providers"]["vm102_evidence"],
+            owner_fact_provider=owner_facts,
         )
         return compose_overview_view(
             composition=snapshot, candidates=bind_visual_focus_targets(inputs)

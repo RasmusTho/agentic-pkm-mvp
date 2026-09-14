@@ -776,6 +776,15 @@ Delivered now:
   output and explicit model-unavailable states;
 - the #5468 / PR #5469 read adapter for an exact VM102 qualification/deploy/health chain, which
   can project bounded `ready_to_try` evidence for `devui_projection` and otherwise withdraws it;
+- the #5404 source producers for exact pending inquiry Start/Hold asks, candidate readiness,
+  explicit human trial and accept/reject receipts. The existing authenticated record service
+  owns confirmation and atomic correction/replay; the
+  [outcome owner](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09)
+  defines its finite source profiles and transport. Overview and both Focus production readers
+  re-read source lineage; deployed candidate, verification, readiness, trial and acceptance stay
+  distinct. Missing source/permission, changed candidate/profile and corrected trial withdraw
+  current claims without discarding historical receipts. No label or model output creates an ask
+  or human outcome; no live writer grant or owner observation is implied;
 - the #5476 / PR #5477 standalone managed DevUI listener and pure typed receipt producers,
   extended by #5520 with admitted BuilderOps API, bounded GitHub REST and immutable candidate-document
   reads in the managed Overview GET; #5522 adds the independent packaged Overview/Focus/browser
@@ -815,11 +824,12 @@ This remains delivered repository/proof truth, not production-deployed or owner-
 Not delivered now: request/preview/authenticated approval in one owner experience; complete PostgreSQL
 client-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
 provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
-Control route/UI and whole lens; managed DevUI production deployment; owner pilot and candidate-bound
-owner trial/acceptance producers. Their separate target
+Control route/UI and whole lens; managed DevUI production deployment; owner pilot and live
+candidate-bound owner trial/acceptance. The separate
 [outcome contract](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09)
-is defined by #5503; #5404 still owns implementation and source-admission proof. The facts remain
-withdrawn, and the retained P1 on #5404 is not resolved by specification delivery.
+was defined by #5503 and its production writer/read transport implemented by #5404. Facts remain
+withdrawn without actual source admission, exact candidate/readiness/profile and human grant.
+Repository proof repairs the retained production-path gap; specification delivery alone did not.
 
 The [2026-09-12 activation receipt on #5181](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181#issuecomment-5647954880)
 records source `c7a4da3a80a1108b269bd8e88c4535a17499290a` deployed in the dedicated BuilderOps

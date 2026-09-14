@@ -36,6 +36,8 @@ _DELIVERY_FACTS = frozenset(
         "delivery",
         "availability",
         "issue_closure",
+        "deployed_candidate",
+        "verification",
         "ready_to_try",
         "owner_trial",
         "owner_acceptance",
@@ -303,12 +305,17 @@ def _candidate(value: Any, *, zone: str) -> dict[str, Any]:
             fact = _mapping(fact, label=f"{zone} candidate.delivery_facts.{key}")
             _keys(
                 fact,
-                allowed={"state", "source_ref", "receipt_ref", "evidence_id"},
+                allowed={"state", "source_ref", "receipt_ref", "evidence_id", "outcome"},
                 required={"state", "source_ref", "evidence_id"},
                 label=f"{zone} candidate.delivery_facts.{key}",
             )
             if fact["state"] not in {"evidenced", "unknown", "not_applicable"}:
                 raise OverviewContractError(f"{zone} candidate.delivery_facts.{key}.state is unsupported")
+            if "outcome" in fact and (not isinstance(fact["outcome"], str) or fact["outcome"] not in {
+                "owner_trial": {"tried", "unable_to_try"},
+                "owner_acceptance": {"accepted", "rejected"},
+            }.get(key, set())):
+                raise OverviewContractError("owner outcome must preserve its finite source vocabulary")
             fact["source_ref"] = _source_ref(
                 fact["source_ref"], label=f"{zone} candidate.delivery_facts.{key}.source_ref"
             )
