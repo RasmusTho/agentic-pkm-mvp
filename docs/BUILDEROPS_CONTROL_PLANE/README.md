@@ -245,6 +245,11 @@ observation time, and constructs the native `TaskRecord` fields from those sourc
 no caller-supplied Issue facts or arbitrary payload. A generic initial task creation, fixture,
 model narration or hand-written TaskRecord cannot establish this provenance.
 
+Structural readiness reuses the canonical section, AC/Verify grammar, parent and admission
+predicates. It does not infer source-file availability from the validator's checkout. Source owners
+and the independently observed candidate document manifest must establish that availability; missing
+documents still refuse the observation.
+
 The existing authenticated `BuilderOpsControlPlaneClient.transition_task` → service
 `POST /v1/tasks/transition` → `PostgresBuilderOpsStore.commit_transition` path is the only storage
 writer: initial `ready` creation, no lease/outbox/effect launch, current authority epoch, addressed
@@ -350,6 +355,9 @@ client summary; source owners retain the independent authenticated exchange and 
 The pure producer accepts `--kind first-read` with `evidence` and `prerequisites`. Its ten closed
 source packets are `selection`, `operator`, `source`, `github`, `task`, `exchange`, `installed`,
 `browser`, `journey` and `owner`; prerequisites are the full `inventory` and `activation` records.
+The exchange packet retains the exact UTF-8 HTTP `request_body`, its SHA-256, its decoded `request`
+and observed `response`. The validator compares those bytes and decoded fields directly; it never
+guesses a client's JSON serialization or reconstructs the response from a task row.
 The closed schema fixes the output shape. The existing read-only receipt mount retains
 `first-read/inputs.json` and `first-read/observation.json`. The separately named reader re-derives
 that observation and checks actual candidate assets/documents and live Issue/task/epoch/grants on

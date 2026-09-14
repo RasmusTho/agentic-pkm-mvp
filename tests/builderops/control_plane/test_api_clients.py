@@ -317,10 +317,14 @@ def test_malformed_409_body_raises_instead_of_silently_downgrading(tmp_path: Pat
         client.status()
 def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_path, monkeypatch, capsys):
     import copy
+    import hashlib
+    from datetime import datetime, timezone
     from dataclasses import replace
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client_cli import main
     from tests.builderops.control_plane.test_client_cli import _import_source, _manifest_dir
+    from tests.ops.test_devui_vm102_runtime_receipts import _first_read_inputs
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, canonical_digest
 
     class SourceStore(InMemoryStore):
         def get_task(self, repository, task_id):
@@ -343,7 +347,9 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
             self.result = TransactionResult(kw["envelope"].repository, kw["task_id"], "ready", self._next(), "0/1", None)
             return self.result
 
+    inputs = _first_read_inputs()
     source, store = _import_source(), SourceStore()
+    source["body"] = source["body"].replace(".codex/skills/_shared/ISSUE_CONTRACT.md", "docs/AGENT_ISSUE_DISPATCHER.md").replace(".github/workflows/issue-pr-governance.yml", "docs/AGENT_ISSUE_DISPATCHER.md")
     monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(source))
     monkeypatch.setenv("BUILDEROPS_API_URL", "http://builderops")
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "client-token")
@@ -357,8 +363,15 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
     async def observe(request, call_next):
         observed.append((request.method, request.url.path, dict(request.query_params), request.headers.get("x-builderops-authority-epoch")))
         return await call_next(request)
+    exchanges = []
+    def capture_response(response):
+        if response.request.method == "POST":
+            response.read()
+            exchanges.append((response.request.content, response.json()))
     def factory(config):
-        return BuilderOpsControlPlaneClient(config, http_client=TestClient(service), max_retries=0)
+        transport = TestClient(service)
+        transport.event_hooks = {"request": [], "response": [capture_response]}
+        return BuilderOpsControlPlaneClient(config, http_client=transport, max_retries=0)
 
     for replayed in (False, True):
         assert main(command, client_factory=factory) == 0
@@ -366,6 +379,23 @@ def test_issue_import_uses_authenticated_transition_and_addressed_readback(tmp_p
     writes = [item for item in observed if item[0] == "POST"]
     assert writes == [("POST", "/v1/tasks/transition", {}, "1")] * 2
     assert all(query == {"repository": CANON} for method, path, query, _ in observed if "/tasks/" in path and method == "GET")
+    # Independently observe the real service exchange instead of reproducing
+    # the importer's summary or a guessed HTTPX serialization formula.
+    body, response = exchanges[0]
+    request = json.loads(body)
+    evidence = inputs["evidence"]
+    evidence["source"]["repository"] = evidence["selection"]["repository"] = CANON
+    stamp = datetime.now(timezone.utc).isoformat()
+    for name in ("exchange", "github", "task", "journey", "owner"):
+        evidence[name]["observed_at"] = stamp
+    evidence["exchange"].update(request=request, request_body=body.decode(), response=response,
+                                request_sha256=hashlib.sha256(body).hexdigest())
+    evidence["github"]["payload"] = copy.deepcopy(source)
+    evidence["task"]["payload"] = copy.deepcopy(store.row)
+    evidence["journey"].update(started_at=stamp, subject=f"github:{CANON}#501", task_id=request["task_id"],
+        issue_version=source["updated_at"], body_sha256=request["request"]["sync_state"]["body_sha256"])
+    evidence["owner"]["journey_sha256"] = canonical_digest(evidence["journey"])
+    assert build_first_read_observation(**inputs)["verdict"] == "pass"
     before = store._seq
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "wrong")
     assert main(command, client_factory=factory) == 3

@@ -664,3 +664,18 @@ def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys
     assert len(writes) == 1
     assert row["payload"]["title"] == source["title"]
     assert row["lease"] is None
+    from app.builderops.control_plane.client_cli import issue_source_task
+    from scripts import validate_issue_readiness as readiness
+    source["body"] = source["body"].replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        "doc writeback at `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Initial Issue work source before M2`",
+    ).replace(
+        "`tests/governance/test_issue_pr_governance.py::test_issue_readiness_workflow_is_strict_for_agent_ready_only`",
+        "diff of `Dockerfile.builderops` neutral dependency closure\n  - Verify: `.github/workflows/app-image-build.yml :: build-builderops-images`",
+    )
+    def unexpected_file_read(*args):
+        raise AssertionError("pure source binding consulted checkout files")
+    monkeypatch.setattr(readiness, "_target_has_missing_file_path", unexpected_file_read)
+    monkeypatch.setattr(readiness, "_target_has_existing_file_path", unexpected_file_read)
+    assert issue_source_task(source, repository="rasmustho/agentic-pkm-mvp", number=501,
+                             observed_at=source["updated_at"], authority_epoch=1)["title"] == source["title"]

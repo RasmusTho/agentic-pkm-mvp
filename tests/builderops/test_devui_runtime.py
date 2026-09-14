@@ -1192,7 +1192,10 @@ def _install_first_read_observation(source, monkeypatch, *, retain=True):
     evidence["source"]["authority_epoch"] = evidence["exchange"]["authority_epoch"] = source.epoch
     request = evidence["exchange"]["request"]
     request["request"] = task
-    evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    import httpx
+    body = httpx.Request("POST", "http://builderops/v1/tasks/transition", json=request).content
+    evidence["exchange"]["request_body"] = body.decode()
+    evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(body).hexdigest()
     row = evidence["task"]["payload"]
     row["payload"] = copy.deepcopy(task)
     source.tasks = [copy.deepcopy(row)]

@@ -730,6 +730,7 @@ def test_control_plane_project_must_match_activation() -> None:
 
 
 def _first_read_inputs():
+    import httpx
     from app.builderops.control_plane.client_cli import issue_source_task
     from tests.builderops.control_plane.test_client_cli import _import_source
     from app.builderops.devui_assets import ASSET_SHA256
@@ -747,6 +748,7 @@ def _first_read_inputs():
     envelope = {"repository": repo, "scope": "issue:501", "stack": "builderops-control-plane", "source_refs": task["source_anchor_refs"]}
     request = {"envelope": envelope, "task_id": task["task_id"], "to_state": "ready", "idempotency_key": "retained-initial-write",
                "request": task, "outbox": None, "lease": None, "expected_states": None, "expected_version": None}
+    request_body = httpx.Request("POST", "http://builderops/v1/tasks/transition", json=request).content.decode()
     row = {"repository": repo, "task_id": task["task_id"], "state": "ready", "version": 1,
            "lease": None, "payload": task, "updated_at": now,
            "authority_envelope": {**envelope, "actor": "source-owner", "schema_version": 1}}
@@ -771,8 +773,8 @@ def _first_read_inputs():
             reachable=True, quota_complete=True),
         "github": packet("github-read", payload=issue),
         "task": packet("task-read", payload=row),
-        "exchange": packet("exchange", authority_epoch=epoch, request=request, response=result,
-            request_sha256=__import__("hashlib").sha256(json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()).hexdigest()),
+        "exchange": packet("exchange", authority_epoch=epoch, request=request, request_body=request_body, response=result,
+            request_sha256=__import__("hashlib").sha256(request_body.encode()).hexdigest()),
         "installed": packet("installed", candidate_identity=candidate, origin="http://127.0.0.1:8113",
             assets=ASSET_SHA256, documents={"docs/AGENT_ISSUE_DISPATCHER.md": "c" * 64},
             runtime=bundle["evidence"]["runtime"]),
@@ -802,9 +804,26 @@ def test_first_read_observation_validates_independent_source_evidence():
     # Later unrelated main is deliberately not a validator input.
     assert "current_main_sha" not in receipt
     assert "github" in receipt["observations"] and "exchange" in receipt["observations"]
+    # Source owners retain actual HTTP bytes, including whitespace/escaping;
+    # a validator must never guess the transport library's serialization.
+    import httpx
+    exchange = inputs["evidence"]["exchange"]
+    for body in (
+        httpx.Request("POST", "http://builderops/v1/tasks/transition", json=exchange["request"]).content,
+        json.dumps(exchange["request"], ensure_ascii=True, indent=2).encode(),
+    ):
+        exchange["request_body"] = body.decode()
+        exchange["request_sha256"] = __import__("hashlib").sha256(body).hexdigest()
+        assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    rollback = inputs["evidence"]["operator"]["rollback"]
+    rollback.update(state="available", previous_identity=copy.deepcopy(receipt["candidate_identity"]),
+                    compatibility="verified_no_data_rewind")
+    assert build_first_read_observation(**inputs)["verdict"] == "pass"
+    rollback["previous_identity"] = dict.fromkeys(rollback["previous_identity"], "garbage")
+    assert build_first_read_observation(**inputs)["verdict"] == "refused"
 
 
-@pytest.mark.parametrize("failure", ["response", "request", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback"])
+@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins"])
 def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
     from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
 
@@ -821,6 +840,11 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         del evidence["exchange"]["response"]
     elif failure == "request":
         evidence["exchange"]["request"]["outbox"] = {}
+    elif failure == "wire":
+        evidence["exchange"]["request_body"] = evidence["exchange"]["request_body"].replace("Import one source Issue", "invented")
+        evidence["exchange"]["request_sha256"] = __import__("hashlib").sha256(evidence["exchange"]["request_body"].encode()).hexdigest()
+    elif failure == "wire_digest":
+        evidence["exchange"]["request_sha256"] = "f" * 64
     elif failure == "source":
         evidence["github"]["payload"]["body"] += "changed"
     elif failure == "native":
@@ -835,6 +859,8 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         evidence["installed"]["candidate_identity"] = {**evidence["installed"]["candidate_identity"], "source_sha": "f" * 40}
     elif failure == "assets":
         evidence["installed"]["assets"] = {}
+    elif failure == "documents":
+        evidence["installed"]["documents"] = {}
     elif failure == "secret":
         evidence["source"]["password"] = "sentinel-never-export"
     elif failure == "partial":
@@ -851,6 +877,9 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         inputs["prerequisites"]["inventory"]["components"].pop()
     elif failure == "browser":
         evidence["browser"]["artifact_sha256"] = "f" * 64
+    elif failure == "rollback_pins":
+        evidence["operator"]["rollback"].update(state="available", compatibility="verified_no_data_rewind",
+            previous_identity=dict.fromkeys(evidence["selection"]["candidate_identity"], "garbage"))
     else:
         evidence["operator"]["rollback"]["state"] = "available"
     refused = build_first_read_observation(**inputs)

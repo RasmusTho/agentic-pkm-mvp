@@ -7,6 +7,10 @@
 !app/**
 !scripts
 !scripts/validate_issue_readiness.py
+!tests/
+!tests/fixtures/
+!tests/fixtures/issue_readiness/
+!tests/fixtures/issue_readiness/valid_ready_candidate.md
 !.codex
 !.codex/skills
 !.codex/skills/start-model-inquiry

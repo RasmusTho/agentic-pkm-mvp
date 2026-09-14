@@ -462,7 +462,7 @@ _FIRST_FIELDS = {
     "operator": {"activation_sha256", "private_ingress", "promotion_acknowledged", "linux_probe", "rollback"},
     "source": {"repository", "authority_epoch", "grants", "custody_ref", "reachable", "quota_complete"},
     "github": {"payload"}, "task": {"payload"},
-    "exchange": {"authority_epoch", "request", "response", "request_sha256"},
+    "exchange": {"authority_epoch", "request", "request_body", "response", "request_sha256"},
     "installed": {"candidate_identity", "origin", "assets", "documents", "runtime"},
     "browser": {"candidate_sha", "origin", "applicability_observed_at", "artifacts", "artifact_sha256", "passed"},
     "journey": {"started_at", "candidate_sha", "origin", "task_id", "issue_version", "body_sha256", "subject", "routes", "inspected_documents", "artifacts", "artifact_sha256", "effects"},
@@ -515,6 +515,9 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
     selection, operator, source = (evidence[key] for key in ("selection", "operator", "source"))
     installed, browser, journey, owner = (evidence[key] for key in ("installed", "browser", "journey", "owner"))
     candidate = selection["candidate_identity"]
+    full_schema = json.loads((ROOT / "config/platform/devui_vm102_runtime_qualification.v1.schema.json").read_text())
+    candidate_validator = Draft202012Validator(full_schema["properties"]["candidate_identity"])
+    candidate_validator.validate(candidate)
     _candidate(candidate)
     _first_require(
         selection["eligible"] is True and selection["required_checks"] == "passed"
@@ -541,6 +544,7 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
         _first_require(rollback["state"] == "available" and rollback["compatibility"] == "verified_no_data_rewind"
                        and set(rollback["previous_identity"]) == set(candidate), "compatible exact rollback pins are required")
         _candidate(rollback["previous_identity"])
+        candidate_validator.validate(rollback["previous_identity"])
     _first_require(source["repository"] == selection["repository"] and source["grants"] == ["receipts:read", "status:read"]
                    and source["reachable"] is True and source["quota_complete"] is True and bool(source["custody_ref"])
                    and type(source["authority_epoch"]) is int
@@ -551,8 +555,9 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
     _first_require(request["to_state"] == "ready" and all(request[key] is None for key in ("outbox", "lease", "expected_states", "expected_version"))
                    and isinstance(request["idempotency_key"], str) and bool(request["idempotency_key"])
                    and exchange["authority_epoch"] == source["authority_epoch"], "initial transition authority is invalid")
-    digest = hashlib.sha256(json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-    _first_require(exchange["request_sha256"] == digest, "observed request bytes differ")
+    body = exchange["request_body"]
+    _first_require(isinstance(body, str) and json.loads(body) == request, "observed request bytes differ from decoded request")
+    _first_require(exchange["request_sha256"] == hashlib.sha256(body.encode("utf-8")).hexdigest(), "observed request digest differs")
     issue = evidence["github"]["payload"]
     original_time = request["request"]["sync_state"]["last_pull_at"]
     expected_task = issue_source_task(issue, repository=source["repository"], number=issue["number"], observed_at=original_time, authority_epoch=source["authority_epoch"])
@@ -575,7 +580,6 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
                    and browser["origin"] == journey["origin"] == installed["origin"]
                    and browser["candidate_sha"] == journey["candidate_sha"] == candidate["source_sha"], "journey origin or candidate differs")
     runtime = installed["runtime"]
-    full_schema = json.loads((ROOT / "config/platform/devui_vm102_runtime_qualification.v1.schema.json").read_text())
     Draft202012Validator(full_schema["properties"]["runtime"]).validate(runtime)
     _first_require(runtime["engine_id"] == activation["dedicated_engine"]["engine_id"], "runtime engine differs from activation")
     for packet in (browser, journey):

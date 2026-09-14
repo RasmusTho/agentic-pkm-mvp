@@ -314,6 +314,33 @@ def _dispatch(
     raise ValueError(f"unknown command: {command}")
 
 
+def _source_contract_ready(body: str) -> bool:
+    """Reuse strict content predicates without a checkout-dependent file test.
+
+    Source owners and candidate document evidence own file availability. A
+    pure retained-source check cannot infer it from this process's checkout.
+    """
+    from scripts import validate_issue_readiness as readiness
+
+    sections = readiness.extract_sections(body)
+    present = [name for name in readiness.REQUIRED_SECTIONS
+               if readiness._section_content(sections, name) is not None]
+    items = readiness._extract_acceptance_items(readiness._section_content(sections, "Acceptance Criteria"))
+    targets = [tuple(readiness._declared_verify_targets(item)) for item in items]
+    return (
+        len(present) == len(readiness.REQUIRED_SECTIONS)
+        and not readiness._unknown_body(body, [readiness._normalize_heading(name) for name in present])
+        and bool(readiness._non_placeholder_lines(readiness._section_content(sections, "Source Docs")))
+        and bool(items)
+        and all(group and len(set(group)) == len(group)
+                and all(readiness.is_resolvable_verify_target(target) for target in group) for group in targets)
+        and readiness._parent_reference_problem(body) is None
+        and readiness.admission_contract_problem(body) is None
+        and not readiness._contains_any(
+            (*readiness.NOT_AGENTABLE_PATTERNS, *readiness.AUTHORITY_RISK_PATTERNS, *readiness.AMBIGUOUS_PATTERNS), body)
+    )
+
+
 def issue_source_task(
     issue: Any, *, repository: str, number: int, observed_at: str, authority_epoch: int
 ) -> dict[str, Any]:
@@ -324,7 +351,6 @@ def issue_source_task(
     """
     from app.dispatcher.sync_github import normalize_github_issue
     from app.ops.builderops_vm_rebuild_activation import _contains_secret
-    from scripts.validate_issue_readiness import classify_issue_body
 
     try:
         repo = RepoRef.parse(repository).canonical
@@ -344,7 +370,7 @@ def issue_source_task(
             or issue["html_url"].lower() != url
             or issue["url"].lower() != f"https://api.github.com/repos/{repo}/issues/{number}"
             or issue["repository_url"].lower() != f"https://api.github.com/repos/{repo}"
-            or classify_issue_body(issue["body"], issue_number=number, labels=labels).readiness_classification != "ready_candidate"
+            or not _source_contract_ready(issue["body"])
         ):
             raise ValueError()
         created, updated = (
