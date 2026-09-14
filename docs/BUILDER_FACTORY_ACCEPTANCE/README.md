@@ -207,7 +207,9 @@ within its existing owner. Before Start, it must bind all of these values withou
   expiry and current repository/operation grant, revocation version and authority epoch;
 - one destination identity: authenticated executor principal, host/system identity, channel,
   canonical repository checkout, dedicated worktree/branch, target base ref and observed base SHA,
-  plus a destination-reserved run identity; a Codex session ID is attached only when observed;
+  plus one proposed run identity allocated without effects for the preview. Start approves that
+  exact identity; only after approval commits may the destination durably reserve it. A Codex
+  session ID is attached only when observed;
 - exact entrypoint `app/builderops/epic_dispatch.py::dispatch_issue_sessions` with
   `CodexIssueSessionLauncher.launch`, workflow contract `fca-issue-delivery.v1`, immutable source
   commit and a content-hashed artifact manifest for the CLI/launcher, role adapter and selected
@@ -255,6 +257,17 @@ adapter support below still missing. No second service, queue, store or authorit
 | Independent result reconciliation | Extend the existing authenticated control-plane readback with a bounded Issue source adapter. Reuse GitHub REST evidence acquisition from `cockpit_github_plane.py::default_github_reader` and the applicable read methods of `verification_github.py::GitHubProtectedRepositoryAuthority`; neither the overview summary nor a worker-supplied receipt suffices. Persist source references/hashes, observation time, epoch, exact identities and missing/contradictory evidence through the existing receipt owner. Read credentials remain separately scoped; reads confer no merge authority. |
 | Owner projection and outcome | Existing DevUI Overview/Focus/action projection renders that readback and source links. Existing FCA-05 producer/service and the [FCA-09 outcome owner](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09) retain exact candidate/profile/trial/acceptance authority. The loopback GET listener, worker text, dispatcher and browser supply no approval or owner fact. |
 
+The addressed Issue must also reach the existing BuilderOps-owned task envelope consumed by
+`devui_sources.py::_task`. Its admitted payload needs the native `TaskRecord` Issue identity
+(`repo`, `task_id`, `issue_number`, `title`), source/version references and matching service-owned
+repository/state/version/lease envelope. The bounded adapter must use the existing authenticated
+`/v1/tasks/transition`/task lifecycle API and `PostgresBuilderOpsStore.commit_transition`, then
+re-read that envelope through the existing task GET path; current source/body hashes remain bound
+to the approved Issue. Generic CLI tasks, verification documents and a legacy local dispatcher
+claim do not supply this projection. FCA-ID-C owns this exact one-Issue producer/read-path proof;
+enabling a source overlay alone cannot populate Overview. This is an extension of the existing
+task owner, not a second task store or general import engine.
+
 Authenticated readback carries the complete FCA-08 approval/key/manifest/workflow/destination/run
 binding, the independently observed Codex session when available, reservation/attempt/entry
 receipt refs, state and stop support. It also carries these finite source-owned evidence groups:
@@ -285,6 +298,7 @@ is no assumption that GitHub/worktree effects roll back atomically with a servic
 | Event / observed state | Lawful next action | Required evidence and unsupported behavior |
 | --- | --- | --- |
 | Hold before invocation | `held`; perform no claim, reservation or launch | Exact Hold/preview binding. Absence of Start is not a terminal execution receipt. |
+| Approval committed; crash or replay before reservation | Preserve the immutable approval and pre-reservation state; after fresh checks, perform only the first reservation of its proposed run ID | Complete service approval receipt and authoritative absence of reservation/attempt/entry under the destination guard. Unavailable or contradictory lookup stays unresolved; do not allocate a new run ID or re-confirm/mutate the original approval. |
 | Same-key replay, refresh, competing submit or service restart | Return the existing reservation/active/terminal observation; reconcile before any effect | Unique key + approval + manifest + run readback from the destination-owned service records. No second session, attempt or synthetic success. |
 | Same key with changed manifest, or new key reusing approval | `refused`; preserve original operation | Atomic key and approval binding conflict. No overwrite, key rotation or approval reuse; a genuinely new operation needs fresh approval and a resolved predecessor. |
 | Permission revoked/expired, epoch changed, or authority unavailable before launch | `invalidated` or `refused`; no invocation | Fresh service grant/epoch/time readback against the immutable approval. Cached permission and inquiry consent are insufficient. |
@@ -310,7 +324,7 @@ production-path tests, not claims that tests exist or pass today.
 | --- | --- | --- |
 | 1 — **FCA-ID-A** | Existing `service.py::create_app` and record/receipt API, `CredentialRegistry`, existing client and `PostgresBuilderOpsStore.commit_record`: exact one-Issue preview/Hold/approval/read grant and immutable manifest, generic-write bypass refusal and source/profile invalidation. No launcher invocation. | `tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission` must call the real service/credential/store path and cover owner vs inquiry/generic grants, exact hashes, Hold, replay, revocation/expiry and immutable approval. `::test_issue_approval_transaction_recovery` must prove committed approval/readback vs pre-commit rollback. |
 | 2 — **FCA-ID-B**, after A | Authenticated destination adapter at `cli.py::dispatch_sessions` → `epic_dispatch.py::dispatch_issue_sessions` → `CodexIssueSessionLauncher.launch`, backed by the same service transaction/receipt/outbox owner; bind unique reservation/attempt/entry and current authority into real claim/publication/merge/closure gates. No raw CLI or prompt-only admission bypass. | `tests/builderops/test_issue_delivery_operation.py::test_production_dispatch_reservation_and_crash_matrix` must enter the real adapter and exercise competing keys/approvals, crashes before/after attempt and lost entry response. `::test_delivery_effect_boundaries_recheck_authority` must reach the owning effect gates, refuse changed/revoked authority before the next effect and prove no second launch. `::test_selected_launcher_reports_stop_unsupported` covers truthful stop. Substitute only external effect transports; a stubbed gate verdict is insufficient. |
-| 3 — **FCA-ID-C**, after B | Existing authenticated service readback, GitHub source readers and DevUI projection compose exact Issue/PR/head/CI/review/merge/closure evidence with the admitted candidate/profile source. Reuse FCA-05 for owner outcomes; implement the first operation's consumed seams for the FCA-06/07 harnesses without claiming their live evidence. | `tests/builderops/test_issue_delivery_readback.py::test_production_readback_uses_independent_github_evidence` must exercise real source parsing/composition for forged worker success, missing/contradictory sources, late-head drift, partial merge/closure and reconnect. `::test_issue_delivery_candidate_profile_linkage` must prove exact FCA-09 candidate/profile binding and withdrawal on unsupported/mismatched candidates; docs writeback at this section and `docs/plans/DEVUI_IMPLEMENTATION.md :: Delivery milestones` records repository support only. |
+| 3 — **FCA-ID-C**, after B | Existing authenticated task lifecycle API and `devui_sources.py::_task` admit/read the one Issue-bearing task envelope; service readback, GitHub source readers and DevUI projection compose exact Issue/PR/head/CI/review/merge/closure evidence with the admitted candidate/profile source. Reuse FCA-05 for owner outcomes; implement the first operation's consumed seams for the FCA-06/07 harnesses without claiming their live evidence. | `tests/builderops/test_issue_delivery_readback.py::test_production_issue_task_envelope_reaches_overview` must cover native Issue creation/version readback and withdrawal for absent/generic/mismatched tasks. `::test_production_readback_uses_independent_github_evidence` must exercise real source parsing/composition for forged worker success, missing/contradictory sources, late-head drift, partial merge/closure and reconnect. `::test_issue_delivery_candidate_profile_linkage` must prove exact FCA-09 candidate/profile binding and withdrawal on unsupported/mismatched candidates; docs writeback at this section and `docs/plans/DEVUI_IMPLEMENTATION.md :: Delivery milestones` records repository support only. |
 
 After these pre-merge adapters/proofs, separately authorized host activation and deployment must
 prove the exact service/destination/source/profile/epoch and scoped credentials before any live
