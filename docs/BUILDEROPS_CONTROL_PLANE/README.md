@@ -712,9 +712,10 @@ by [Start Model Inquiry](../../.codex/skills/start-model-inquiry/SKILL.md). Its 
 The admission adapter must delegate to that boundary and must not copy host proof, subscription,
 lock, staging, provider or cleanup logic into this service.
 
-The approval/handoff implementation, destination-owned operation-key-to-inquiry reservation and
-authenticated lookup/restart reconciliation are still missing. Record-write idempotency and the
-fixed staging lock do not establish launch deduplication. Inquiry stop is currently unsupported;
+FCP-04 / #4697 implements the repository inquiry approval/handoff, destination-owned
+operation-key reservation and authenticated lookup/restart reconciliation. Live host activation
+remains separate. Record-write idempotency and the fixed staging lock alone do not establish
+launch deduplication. Inquiry stop is currently unsupported;
 storing a record, observing a workflow terminal receipt and observing a requested process
 termination are distinct facts. No fallback to browser state or a parallel local authority is
 admitted by this contract.
@@ -725,6 +726,24 @@ directly launch a worker; the existing DDO reducer and BuilderOps outbox/effect 
 responsible for execution. A separately approved Issue workflow must establish its own exact
 permissions, destination/readback and existing executor fences before admission. An inquiry
 approval grants no Issue, code, GitHub, merge, closure or deployment effect.
+
+The [first approved Issue-delivery operation](../BUILDER_FACTORY_ACCEPTANCE/README.md#first-approved-issue-delivery-operation)
+now defines the finite M2 extension under FCA-08. Its
+[admission/readback responsibilities](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-admission-and-readback)
+stay with this authenticated service, `CredentialRegistry` and the existing PostgreSQL
+record/transaction/receipt/outbox owner. The destination adapter reuses `dispatch_sessions` →
+`dispatch_issue_sessions` → `CodexIssueSessionLauncher`; it owns reservation/attempt/entry observations
+through that same service authority. No local epic run-state file or dispatcher lease becomes an
+approval or execution ledger. The existing launcher requests claim, edits, publication, governed
+merge and closure; it does not yet enforce an owner manifest at those boundaries or support stop.
+
+The Issue subtype, atomic approval/key reservation, crash-safe entry observation, continuing
+permission checks and independently sourced GitHub outcome readback are still missing production
+support, assigned to the [three source-anchored slices](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices).
+The existing GitHub readers and closure owners supply PR/head/CI/review/merge/closure evidence;
+authenticated worker text and process exit supply no delivery verdict. FCA-09 separately owns
+candidate/profile-bound human trial/acceptance. This contract publication neither activates the
+service/destination nor admits a new credential, candidate source, host or owner outcome.
 
 ## Implementation tasks
 
