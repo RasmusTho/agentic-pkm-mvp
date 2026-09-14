@@ -48,6 +48,34 @@ def _facts(**overrides: object) -> ChangeFacts:
     return ChangeFacts(**values)  # type: ignore[arg-type]
 
 
+def test_current_kernel_routes_ai_substitution_principle() -> None:
+    outcome = resolve_design_packet(
+        _facts(
+            changed_paths=("app/builderops/design_packet.py",),
+            system_classification="builder",
+            write_class="read-only",
+            persistence_class="none",
+            external_effects=(),
+            risk_triggers=("cognition-or-implementation-substitution",),
+        ),
+        repository_root=REPO_ROOT,
+        repository_head=REPO_HEAD,
+    )
+
+    assert isinstance(outcome, DesignPacket)
+    assert [item.principle_id for item in outcome.principles] == ["DP-02C"]
+    assert [item.applicability for item in outcome.principles] == [
+        "cognition-or-implementation-substitution"
+    ]
+    assert [item.owner for item in outcome.principles] == [
+        "docs/DESIGN_PRINCIPLES.md :: 2C. AI and Agentic Substitution With Contract Preservation"
+    ]
+    assert [item.required_reading for item in outcome.principles] == [
+        "docs/CAPABILITY_CONTRACT_MODEL.md :: Standard capability contract shape"
+    ]
+    assert [item.enforcement for item in outcome.principles] == ["manual-review"]
+
+
 def _write_kernel_repository(
     root: Path,
     *,
