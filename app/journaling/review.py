@@ -959,7 +959,15 @@ def _assert_candidate_unchanged_at(directory_fd: int, candidate: _Candidate) -> 
         raise JournalReviewConflictError(
             "journal candidate disappeared during canonical acceptance; the owner must retry"
         ) from None
-    if current.identity != candidate.identity or current.raw != candidate.raw:
+    # stat's first seven fields are mode, inode, device, link count, uid, gid
+    # and size. Reads may advance atime without changing the approved candidate;
+    # retain all mutation-relevant fields and compare write timestamps at ns precision.
+    if (
+        current.identity[:7] != candidate.identity[:7]
+        or current.identity.st_mtime_ns != candidate.identity.st_mtime_ns
+        or current.identity.st_ctime_ns != candidate.identity.st_ctime_ns
+        or current.raw != candidate.raw
+    ):
         raise JournalReviewConflictError(
             "journal candidate changed before canonical acceptance; the current edited draft remains available"
         )
