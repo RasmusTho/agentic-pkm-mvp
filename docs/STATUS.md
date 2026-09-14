@@ -768,7 +768,8 @@ Repo-side governance added:
 - delivery feedback loop governance for learning capture, retrospective review, and post-merge owner-doc receipt enforcement
 - verified-merge convergence recovery authenticates retained prior-candidate history under its own
   unique same-PR authority before selecting current-head proof; phase recovery and the owner-doc
-  watchdog preserve the same boundary. See
+  watchdog preserve the same boundary. Prepared production rejects observations that differ from
+  the authenticated convergence receipt's exact embedded final observation (#5541). See
   [Builder System feedback loops](development/BUILDER_SYSTEM_PROCESS_MAP.md#8-feedback-loops).
 
 Platform-side governance applied:
