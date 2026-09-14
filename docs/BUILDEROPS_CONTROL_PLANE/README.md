@@ -255,6 +255,18 @@ and readback, foreign identity, stale epoch, missing scope, version/idempotency 
 existing incompatible record refuses import; it never overwrites a claim or updates an active task.
 An identical retry may reuse only the same verified transaction and exact source binding.
 
+The generic service authenticates the write, not its Issue provenance or which client performed
+it; CLI routing and a self-reported importer marker are not enforcement. For qualification, the
+source owner must independently retrieve the selected Issue through the existing authorized gh
+reader and the addressed TaskRecord/transaction through the existing authenticated API reader.
+Retained source packets must bind those observed responses, their identities/times and exact bytes
+or digests. The bounded observation validator must compare the native task fields, canonical
+repository/Issue identity, source version/body hash and stored transaction binding against those
+independent GitHub bytes. Missing independent evidence or disagreement refuses qualification;
+the stored row, transaction receipt or importer's own assertions alone can never pass. This proves
+the real Issue binding, not a server-attested importer identity, and requires no new write scope or
+service enforcement point.
+
 This producer is a separately authorized source preparation write, outside the GET-only journey.
 It neither claims the Issue in GitHub nor launches M2, and does not move labels, acquire task leases,
 start a provider session or emit an outbox action. No `PullSyncAdapter`/local SQLite import,
@@ -319,8 +331,10 @@ preceding stable anchors. Its closed production surface is the selected initial 
 the bounded record kind/closed schema in `app/ops/devui_vm102_runtime_receipts.py` and
 `config/platform/devui_first_read_observation.v1.schema.json`, and its distinct consumer in
 `app/builderops/devui_receipts.py` wired through `app/builderops/devui_runtime.py`. Candidate packaging
-in `Dockerfile.builderops` and `requirements-builderops.txt` must retain that exact neutral dependency
-closure if the reused normalizer/schema needs packaging. No new service, store, API route, visual
+in `Dockerfile.builderops`, `Dockerfile.builderops.dockerignore` and `requirements-builderops.txt`
+must retain that exact neutral dependency closure. The filtered build inputs must include the new
+schema and the importer's existing `scripts/validate_issue_readiness.py` dependency used by the
+reused normalizer. No new service, store, API route, visual
 surface, profile engine or workflow executor belongs to the slice. Existing control-plane service,
 store, auth/epoch and source grants are reused unchanged; a need to change those contracts requires
 re-decomposition before coding, not expansion of this slice.
@@ -334,8 +348,9 @@ closed evidence, freshness, identity and rejection by every full-chain kind;
 `tests/builderops/test_devui_receipts.py` and `test_devui_runtime.py` for retained-input rereads,
 source withdrawal, admission and unchanged full-system/ready-to-try behavior; and
 `tests/companion_ui/test_devui_managed_journeys.py` for the real standalone GET journey, exact
-candidate and zero effects. Dependency packaging proof must reach the actual filtered Builder image
-input, not a Product-rich test environment. Reuse these suites; don't replace them with a new harness.
+candidate and zero effects. Dependency packaging proof must exercise importer imports and schema
+loading through the actual filtered Builder image input, not a Product-rich test environment.
+Reuse these suites; don't replace them with a new harness.
 
 Repository implementation can merge without live credentials, a deployment, full #5181/#4749 or M2.
 It does not produce live evidence. Subsequent source-owner preparation and operator qualification/
