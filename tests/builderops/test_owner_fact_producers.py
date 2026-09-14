@@ -200,14 +200,14 @@ def test_conflicting_submissions_require_explicit_correction(owner_writer, outco
 
 @pytest.mark.parametrize("correction_first", [True, False])
 def test_acceptance_and_trial_correction_share_serialization(owner_writer, correction_first, monkeypatch):
-    from app.builderops.control_plane import owner_outcomes
+    from app.builderops.control_plane import store as owner_store
 
     w = owner_writer
     old = w.submit(w.request(), "trial").json()["receipt"]["id"]
     acceptance = w.request("owner_acceptance", "accepted", trial_receipt_ref=old)
     correction = w.request(expected_previous_receipt_id=old, supersedes_receipt_id=old, correction_reason="owner_correction")
     held, attempted, release = threading.Event(), threading.Event(), threading.Event()
-    lock, fault = owner_outcomes._lock, w.store._fault
+    lock, fault = owner_store._owner_outcome_lock, w.store._fault
     calls = []
     def observed_lock(*args):
         calls.append(args[-1])
@@ -219,7 +219,7 @@ def test_acceptance_and_trial_correction_share_serialization(owner_writer, corre
             held.set()
             assert release.wait(5)
         return fault(_requested, point)
-    monkeypatch.setattr(owner_outcomes, "_lock", observed_lock)
+    monkeypatch.setattr(owner_store, "_owner_outcome_lock", observed_lock)
     monkeypatch.setattr(w.store, "_fault", hold_first)
     first, second = ((correction, "correction"), (acceptance, "acceptance")) if correction_first else ((acceptance, "acceptance"), (correction, "correction"))
     with ThreadPoolExecutor(2) as pool:
@@ -255,16 +255,16 @@ def test_changed_candidate_cannot_inherit_trial_or_acceptance(owner_writer, fiel
     accepted = w.submit(w.request("owner_acceptance", "accepted", trial_receipt_ref=trial), "accepted").json()["receipt"]
     if field == "readiness_expiry":
         from app.builderops import devui_receipts
-        from app.builderops.control_plane import owner_outcomes
+        from app.builderops.control_plane import store as owner_store
 
         observed = datetime.fromisoformat(w.chain[-1]["observed_at"])
         monkeypatch.setenv("DEVUI_VM102_RECEIPT_MAX_AGE_SECONDS", "1")
         monkeypatch.setattr(devui_receipts, "_utc_now", lambda: observed)
-        original_lock = owner_outcomes._lock
+        original_lock = owner_store._owner_outcome_lock
         def expires_while_waiting(*args):
             original_lock(*args)
             monkeypatch.setattr(devui_receipts, "_utc_now", lambda: observed + timedelta(seconds=2))
-        monkeypatch.setattr(owner_outcomes, "_lock", expires_while_waiting)
+        monkeypatch.setattr(owner_store, "_owner_outcome_lock", expires_while_waiting)
         result = w.read("accepted").json()
         assert result["facts"]["ready_to_try"] is None
         assert result["facts"]["owner_acceptance"] is None

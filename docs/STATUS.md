@@ -8,7 +8,7 @@ Source of truth: mixed
 Last reviewed: 2026-09-14 (bounded DevUI owner-fact producer writeback; repository evidence only)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
-`app/builderops/control_plane/owner_outcomes.py`, `tests/builderops/test_owner_fact_producers.py`
+`app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
 and `tests/api/test_devui_owner_facts.py`; isolated PostgreSQL production-path proof, 2026-09-14.
 Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `53d7aa76b4b9184600c16f33cccb0e8bd9bee4a3`, closing issue #5204),
