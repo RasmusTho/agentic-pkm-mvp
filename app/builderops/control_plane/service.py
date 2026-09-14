@@ -1148,19 +1148,31 @@ def create_app(
             ):
                 raise StateConflict("Issue-delivery approval does not match durable admission")
             owner_permission = approved.get("permission")
-            owner_credential_id = (
-                owner_permission.get("credential_id")
-                if isinstance(owner_permission, Mapping)
-                else None
-            )
-            owner = (
-                credentials.current_credential(owner_credential_id)
-                if isinstance(owner_credential_id, str)
-                else None
-            )
-            if owner is None:
-                raise StateConflict("Issue-delivery approval owner is unavailable")
-            validate_issue_delivery_approval(approved, owner)
+            if request.purpose == "execute":
+                owner_credential_id = (
+                    owner_permission.get("credential_id")
+                    if isinstance(owner_permission, Mapping)
+                    else None
+                )
+                owner = (
+                    credentials.current_credential(owner_credential_id)
+                    if isinstance(owner_credential_id, str)
+                    else None
+                )
+                if owner is None:
+                    raise StateConflict("Issue-delivery approval owner is unavailable")
+                validate_issue_delivery_approval(approved, owner)
+                destination = approved.get("destination")
+                destination_identity = (
+                    destination.get("identity")
+                    if isinstance(destination, Mapping)
+                    else None
+                )
+                if destination_identity != credential.principal:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Issue-delivery destination does not match credential principal",
+                    )
             required_scope = (
                 "issue_delivery:execute"
                 if request.purpose == "execute"

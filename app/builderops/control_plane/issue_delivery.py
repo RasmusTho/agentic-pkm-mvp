@@ -62,6 +62,7 @@ OPTIONAL_NON_EFFECTS = frozenset(
 NON_EFFECTS = REQUIRED_NON_EFFECTS | OPTIONAL_NON_EFFECTS
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _NODE_ID = re.compile(r"^[A-Za-z0-9_:-]{1,256}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$")
 _SERVER_FIELDS = frozenset(
@@ -264,8 +265,11 @@ def _workflow_fields(value: Any) -> dict[str, Any]:
             raise IssueDeliveryContractError("workflow artifacts must be unique")
         paths.add(path)
         artifacts.append({**artifact, "path": path, "sha256": digest})
+    artifacts.sort(key=lambda item: item["path"])
     if paths != REQUIRED_WORKFLOW_ARTIFACTS:
         raise IssueDeliveryContractError("workflow artifact manifest is incomplete or unrelated")
+    if workflow_hash != canonical_hash(artifacts):
+        raise IssueDeliveryContractError("workflow hash does not bind its artifact manifest")
     return {
         **workflow,
         "version": version,
@@ -273,6 +277,39 @@ def _workflow_fields(value: Any) -> dict[str, Any]:
         "entrypoint": entrypoint,
         "launcher": launcher,
         "artifacts": artifacts,
+    }
+
+
+def _destination_fields(value: Any) -> dict[str, Any]:
+    destination = _mapping(value, "destination")
+    identity = _text(destination.get("identity"), "destination identity", limit=256)
+    run_id = _text(
+        destination.get("run_id", destination.get("proposed_run_id")),
+        "proposed run identity",
+        limit=256,
+    )
+    required_text = {
+        "host_identity": ("host_identity", "host"),
+        "system_identity": ("system_identity", "system"),
+        "checkout": ("checkout", "checkout_path"),
+        "worktree": ("worktree", "worktree_path"),
+        "branch": ("branch", "branch_name"),
+        "channel": ("channel",),
+        "base_ref": ("base_ref",),
+    }
+    resolved: dict[str, str] = {}
+    for normalized_name, aliases in required_text.items():
+        candidate = next((destination.get(alias) for alias in aliases if alias in destination), None)
+        resolved[normalized_name] = _text(candidate, f"destination {normalized_name}", limit=1024)
+    base_sha = _text(destination.get("base_sha"), "observed destination base SHA", limit=40).lower()
+    if _GIT_SHA.fullmatch(base_sha) is None:
+        raise IssueDeliveryContractError("observed destination base SHA must be a Git commit")
+    return {
+        **destination,
+        "identity": identity,
+        "run_id": run_id,
+        **resolved,
+        "base_sha": base_sha,
     }
 
 
@@ -388,10 +425,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             "context",
         )
         workflow = _workflow_fields(raw.get("workflow"))
-        destination = _mapping(raw.get("destination"), "destination")
-        destination_identity = _text(destination.get("identity"), "destination identity", limit=256)
-        run_id = _text(destination.get("run_id", destination.get("proposed_run_id")), "proposed run identity", limit=256)
-        destination = {**destination, "identity": destination_identity, "run_id": run_id}
+        destination = _destination_fields(raw.get("destination"))
         profile = _hash_binding(raw.get("profile"), "profile")
         effects = _list_of_text(raw.get("permitted_effects"), "permitted effects")
         non_effects = _list_of_text(raw.get("explicit_non_effects"), "explicit non-effects")

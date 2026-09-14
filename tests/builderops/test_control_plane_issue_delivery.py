@@ -26,6 +26,7 @@ from app.builderops.control_plane.client import (
 )
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.control_plane.service import create_app
+from app.builderops.control_plane.issue_delivery import canonical_hash
 
 pytestmark = pytest.mark.pg
 
@@ -91,6 +92,13 @@ def registry(tmp_path: Path) -> CredentialRegistry:
             ["issue_delivery:execute"],
             "agent",
         ),
+        (
+            "executor-other",
+            "destination:other",
+            "executor-other-token",
+            ["issue_delivery:execute"],
+            "agent",
+        ),
         ("inquiry", "inquiry:agent", "inquiry-token", ["inquiries:approve"], "agent"),
         ("generic", "generic:agent", "generic-token", ["records:write"], "agent"),
     ):
@@ -115,6 +123,18 @@ def registry(tmp_path: Path) -> CredentialRegistry:
 
 def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
     expiry = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()
+    artifacts = [
+        {"path": "app/builderops/cli.py", "sha256": "1" * 64},
+        {"path": "app/builderops/epic_dispatch.py", "sha256": "1" * 64},
+        {"path": ".codex/agents/slice-implementer.toml", "sha256": "1" * 64},
+        {"path": ".codex/skills/issue-to-code/SKILL.md", "sha256": "1" * 64},
+        {"path": ".codex/skills/publish-pr/SKILL.md", "sha256": "1" * 64},
+        {
+            "path": ".codex/skills/verification-and-closure/SKILL.md",
+            "sha256": "1" * 64,
+        },
+    ]
+    artifacts.sort(key=lambda item: item["path"])
     return {
         "contract_version": "fca-issue-delivery.v1",
         "operation_type": "deliver_ready_issue",
@@ -136,25 +156,20 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         "context": {"pack_id": "context-5550", "content_hash": "c" * 64},
         "workflow": {
             "version": "fca-issue-delivery.v1",
-            "content_hash": "d" * 64,
+            "content_hash": canonical_hash(artifacts),
             "entrypoint": "app/builderops/epic_dispatch.py::dispatch_issue_sessions",
             "launcher": "app/builderops/epic_dispatch.py::CodexIssueSessionLauncher.launch",
-            "artifacts": [
-                {"path": "app/builderops/cli.py", "sha256": "1" * 64},
-                {"path": "app/builderops/epic_dispatch.py", "sha256": "1" * 64},
-                {"path": ".codex/agents/slice-implementer.toml", "sha256": "1" * 64},
-                {"path": ".codex/skills/issue-to-code/SKILL.md", "sha256": "1" * 64},
-                {"path": ".codex/skills/publish-pr/SKILL.md", "sha256": "1" * 64},
-                {
-                    "path": ".codex/skills/verification-and-closure/SKILL.md",
-                    "sha256": "1" * 64,
-                },
-            ],
+            "artifacts": artifacts,
         },
         "destination": {
-            "identity": "executor:local",
+            "identity": "destination:shared",
             "run_id": "run-5550",
+            "host_identity": "host:local",
+            "system_identity": "system:builderops",
             "channel": "dev",
+            "checkout": "/workspaces/agentic-pkm-mvp",
+            "worktree": "/worktrees/issue-5550",
+            "branch": "codex/5550-issue-delivery-approval",
             "base_ref": "main",
             "base_sha": "e" * 40,
         },
@@ -190,11 +205,12 @@ def _client(store: PostgresBuilderOpsStore, registry: CredentialRegistry, token:
     )
 
 
-def test_issue_approval_production_admission(store, registry) -> None:
+def test_issue_approval_production_admission(store, registry, monkeypatch) -> None:
     owner = _client(store, registry, "owner-token")
     reader = _client(store, registry, "reader-token")
     executor_low = _client(store, registry, "executor-low-token")
     executor_high = _client(store, registry, "executor-high-token")
+    executor_other = _client(store, registry, "executor-other-token")
     inquiry = _client(store, registry, "inquiry-token")
     generic = _client(store, registry, "generic-token")
     manifest = _manifest()
@@ -234,6 +250,22 @@ def test_issue_approval_production_admission(store, registry) -> None:
         manifest=started["approval"], purpose="execute"
     )
     assert authority["purpose"] == "execute"
+    with pytest.raises(ControlPlaneScopeError):
+        executor_other.issue_delivery_authority(manifest=started["approval"], purpose="execute")
+
+    # Readback remains available to its separate reader after authority epoch
+    # drift so an invalidated approval can still be reconciled.
+    current_readiness = store.readiness()
+    monkeypatch.setattr(
+        store,
+        "readiness",
+        lambda: {**current_readiness, "authority_epoch": current_readiness["authority_epoch"] + 1},
+    )
+    stale_readback = reader.issue_delivery_authority(
+        manifest=started["approval"], purpose="readback"
+    )
+    assert stale_readback["purpose"] == "readback"
+    monkeypatch.setattr(store, "readiness", lambda: current_readiness)
 
     for field, replacement in (
         ("version", "fca-issue-delivery.v0"),
@@ -248,6 +280,10 @@ def test_issue_approval_production_admission(store, registry) -> None:
     invalid_artifacts["workflow"]["artifacts"][0]["path"] = "app/other_launcher.py"  # type: ignore[index]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_artifacts)
+    invalid_artifact_hash = deepcopy(manifest)
+    invalid_artifact_hash["workflow"]["artifacts"][0]["sha256"] = "2" * 64  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_artifact_hash)
 
     incomplete_parent = deepcopy(manifest)
     incomplete_parent["parent_evidence"] = {"kind": "issue"}
