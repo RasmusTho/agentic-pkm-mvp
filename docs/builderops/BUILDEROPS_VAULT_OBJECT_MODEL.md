@@ -869,7 +869,11 @@ grant. `owner-outcomes/current` on the existing authenticated receipt GET accept
 `subject_ref` and optional original `idempotency_key`. A keyed lookup during a source outage can
 still return the intact historical receipt with unavailable projection. Readback checks complete
 journal/idempotency/record lineage, including a missing terminal correction, before selecting any
-current receipt. The existing outbox stores a rebuild intent in the same outcome transaction;
+current receipt. It projects from the fresh binding observed under the guard and separately
+rechecks the current human principal/repository grant. Grant withdrawal hides current outcomes
+while authorized historical reads retain the exact receipt; a replacement credential for the
+same human does not create another decision slot. Generic admission reserves the outcome scope
+and operation-key namespace. The existing outbox stores a rebuild intent in the same outcome transaction;
 each read rebuilds from current source and predecessor history. No cached projection or
 background external-effect executor supplies outcome authority.
 

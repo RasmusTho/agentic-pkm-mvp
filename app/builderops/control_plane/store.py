@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -962,7 +962,7 @@ class PostgresBuilderOpsStore:
         if owner_outcome is not None:
             return commit_owner_outcome(self, envelope=envelope, admission=owner_outcome,
                                         idempotency_key=idempotency_key, fault_at=fault_at)
-        if is_owner_outcome(record_id, payload):
+        if envelope.scope == "owner-outcome" or is_owner_outcome(record_id, payload):
             raise OwnerFactRefusal("owner_confirmation_required", 403)
         return self._commit_authority_object(
             envelope=envelope,
@@ -980,10 +980,11 @@ class PostgresBuilderOpsStore:
 
     def get_owner_outcomes(
         self, repository: str, subject_ref: str, *, idempotency_key: str | None = None,
+        grant_reader: Callable[[str, str], bool],
     ) -> dict[str, Any]:
         from app.builderops.control_plane.owner_outcomes import read_owner_outcomes
 
-        return read_owner_outcomes(self, repository, subject_ref, idempotency_key=idempotency_key)
+        return read_owner_outcomes(self, repository, subject_ref, idempotency_key=idempotency_key, grant_reader=grant_reader)
 
     def get_owner_asks(self, repository: str) -> list[dict[str, Any]]:
         with self._connect() as conn:

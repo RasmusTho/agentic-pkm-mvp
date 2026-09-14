@@ -6,7 +6,7 @@ chain in BuilderOpsReceipt records, serialized under one trial/acceptance guard.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +53,7 @@ def _history(conn: Any, repository: str, subject: str) -> list[dict[str, Any]]:
         "LEFT JOIN builderops_records AS record ON record.repository=journal.repository AND record.record_id=journal.task_id "
         "LEFT JOIN builderops_idempotency AS idem ON idem.repository=journal.repository AND idem.idempotency_key=journal.idempotency_key "
         "WHERE journal.repository=%s AND journal.authority_envelope->>'scope'='owner-outcome' "
+        "AND journal.event_type IN ('owner_outcome_recorded','owner_outcome_corrected') "
         "AND journal.authority_envelope->'source_refs' ? %s",
         (repository, subject),
     ).fetchall()
@@ -148,6 +149,8 @@ def _project(receipt: dict[str, Any], history: list[dict[str, Any]], binding: di
     if selected is None or selected["id"] != receipt["id"]:
         return {"status": "superseded", "reason": "owner_correction"}
     request = receipt["receipt_body"]["request"]
+    if binding["owner_grant_status"] != "available":
+        return {"status": "withdrawn", "reason": "owner_grant_unavailable"}
     if binding["readiness_status"] != "current" and request["outcome"] != "unable_to_try":
         return {"status": "withdrawn", "reason": "readiness_withdrawn"}
     if kind == "owner_acceptance" and request["trial_receipt_ref"] is not None:
@@ -250,6 +253,7 @@ def commit_owner_outcome(
 
 def read_owner_outcomes(
     store: PostgresBuilderOpsStore, repository: str, subject_ref: str, *, idempotency_key: str | None,
+    grant_reader: Callable[[str, str], bool],
 ) -> dict[str, Any]:
     repository = canonical_repository(repository)
     with store._connect() as conn:
@@ -275,6 +279,8 @@ def read_owner_outcomes(
         current_binding = read_owner_binding(repository, subject_ref, authority_epoch=epoch, allow_withdrawn_readiness=True)
         if current_binding["binding_hash"] != binding["binding_hash"]:
             raise OwnerFactRefusal("owner_binding_changed", 409)
+        binding = current_binding
+        binding["owner_grant_status"] = "available" if grant_reader(repository, binding["owner_actor"]["id"]) else "unavailable"
         history = _history(conn, repository, subject_ref)
         facts: dict[str, Any] = {"ready_to_try": binding if binding["readiness_status"] == "current" else None, "owner_trial": None, "owner_acceptance": None}
         for kind in ("owner_trial", "owner_acceptance"):

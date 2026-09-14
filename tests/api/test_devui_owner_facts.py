@@ -58,6 +58,7 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     graph = inquiry_operation_fixture.InquiryGraph(graph_root, monkeypatch)
     graph.store = w.store
     graph.credentials["credentials"][0]["scopes"].extend(["records:write", "receipts:read"])
+    graph.credentials["credentials"].append({**w.credentials[0], "id": "outcome-owner"})
     graph.write_credentials()
     graph.http = TestClient(control_service.production_app())
     monkeypatch.setenv("DEVUI_GITHUB_ENABLED", "true")
@@ -94,3 +95,6 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     assert unavailable.status_code == 200
     assert "owner_facts_unavailable" in unavailable.text
     assert "Owner decision: accepted" not in unavailable.text
+    unavailable_overview = TestClient(app).get("/api/devui/overview")
+    assert unavailable_overview.status_code == 200
+    assert "owner_facts_source_unavailable" in unavailable_overview.text

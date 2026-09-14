@@ -73,6 +73,18 @@ def _source_ref(item: Mapping[str, Any], identity: str, version: str) -> dict[st
             "locator": identity if identity.startswith("receipt:") else f"/v1/receipts/records/{quote(identity, safe='')}?repository={quote(repository, safe='')}"}
 
 
+def owner_fact_trust(provider: Mapping[str, Any], captured_at: str) -> dict[str, Any]:
+    """Preserve source failure in the existing Overview provider trust frame."""
+    result: dict[str, Any] = {"provider": "builderops_owner_facts", "authority": "source_receipt",
+                              "captured_at": None, "snapshot": None, "completeness": None}
+    if provider.get("status") != "available":
+        return {**result, "status": "refused", "refusal": {"code": "owner_facts_source_unavailable"}}
+    unavailable = [row["subject_ref"] for row in provider["subjects"] if row.get("status") == "unavailable"
+                   or row.get("binding", {}).get("owner_grant_status") != "available"]
+    return {**result, "status": "available", "captured_at": captured_at,
+            "completeness": {"state": "partial" if unavailable else "complete", "unavailable_owner_subjects": unavailable}}
+
+
 def _claims(item: Mapping[str, Any]) -> list[tuple[str, str, dict[str, str], str | None]]:
     binding = item["binding"]
     readiness = binding["readiness_receipt_ref"]
@@ -150,6 +162,8 @@ def append_focus_owner_facts(inputs: dict[str, Any], provider: dict[str, Any]) -
     if provider.get("status") != "available" or item is None or item.get("status") == "unavailable":
         inputs["limitations"].append({"kind": "owner_facts_unavailable", "reason": "Owner outcome source is unavailable or unadmitted; no trial or decision is inferred.", "evidence_state": "unavailable"})
         return inputs
+    if item["binding"].get("owner_grant_status") != "available":
+        inputs["limitations"].append({"kind": "owner_outcomes_unavailable", "reason": "The current human outcome grant is unavailable; historical receipts do not assert a current owner outcome.", "evidence_state": "unavailable"})
     for kind, claim, reference, _outcome in _claims(item):
         inputs["evidence"].append({"claim_id": kind + ":" + reference["source_id"], "claim": claim,
             "source_ref": reference, "availability": "available", "freshness": "fresh", "coverage": "complete",

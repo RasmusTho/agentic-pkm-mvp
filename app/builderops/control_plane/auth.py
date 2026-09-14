@@ -242,6 +242,13 @@ class CredentialRegistry:
         """Re-read non-secret permission metadata, including revocation/rotation."""
         return next((credential for credential, _ in self._entries() if credential.credential_id == credential_id), None)
 
+    def has_owner_outcome_grant(self, repository: str, principal: str) -> bool:
+        """Current human eligibility; credential rotation is not a decision slot."""
+        return any(credential.principal == principal and credential.principal_kind == "human"
+                   and credential.may_address(repository)
+                   and {"records:write", "receipts:read", "owner_outcomes:confirm"}.issubset(credential.scopes)
+                   for credential, _ in self._entries())
+
     def is_registered_secret(self, value: str) -> bool:
         """Check a candidate without retaining or returning raw credential material."""
         fingerprint = self._fingerprint(value)

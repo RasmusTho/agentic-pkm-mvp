@@ -286,6 +286,8 @@ def _assert_secret_metadata_shape(key: str, value: Any) -> None:
 
 
 def _envelope(request: Any, credential: Credential) -> AuthorityEnvelope:
+    if request.scope in {"owner-outcome", "owner-ask"}:
+        raise OwnerFactRefusal("owner_fact_scope_requires_source_admission", 403)
     return AuthorityEnvelope(
         repository=request.repository,
         scope=request.scope,
@@ -344,6 +346,10 @@ def _assert_durable_payload_safe(
     _remaining_nodes: list[int] | None = None,
 ) -> None:
     """Reject credential-shaped material before it can enter PostgreSQL/WAL/backups."""
+    if not _path and not key and isinstance(value, Mapping):
+        operation_key = value.get("idempotency_key")
+        if isinstance(operation_key, str) and operation_key.startswith(("owner-outcome:", "owner-ask:")):
+            raise OwnerFactRefusal("owner_fact_key_requires_source_admission", 403)
     remaining_chars = (
         [_MAX_DURABLE_TEXT_SCAN_CHARS]
         if _remaining_chars is None
@@ -965,7 +971,7 @@ def create_app(
         # do not extend generic ingestion's forbidden-field exemptions.
         scan = dict(immutable)
         scan["policy_reference"] = scan.pop("authorization_ref")
-        _assert_durable_payload_safe({"request": scan, "idempotency_key": request.idempotency_key}, credentials)
+        _assert_durable_payload_safe({"request": scan, "request_key": request.idempotency_key}, credentials)
         request_hash = outcome_request_hash(immutable)
         if supplied["request_sha256"] != request_hash:
             raise OwnerFactRefusal("owner_request_hash_mismatch")
@@ -996,7 +1002,7 @@ def create_app(
         result = store.commit_record(envelope=envelope, record_id=outcome_record_id(repo, request.idempotency_key), record_type="BuilderOpsReceipt", state="active", payload={}, idempotency_key=request.idempotency_key, owner_outcome=admission)
         receipt = dict(store.get_record(repo, result.object_id))["payload"]
         try:
-            readback = store.get_owner_outcomes(repo, subject, idempotency_key=request.idempotency_key)
+            readback = store.get_owner_outcomes(repo, subject, idempotency_key=request.idempotency_key, grant_reader=credentials.has_owner_outcome_grant)
             projection = readback["projection"]
         except Exception:
             projection = {"status": "unavailable", "reason": "source_readback_required"}
@@ -1323,7 +1329,7 @@ def create_app(
             if object_kind == "owner-outcomes" and object_id == "current":
                 if subject_ref is None:
                     raise OwnerFactRefusal("owner_subject_required")
-                return await run_in_threadpool(store.get_owner_outcomes, canonical, subject_ref, idempotency_key=idempotency_key)
+                return await run_in_threadpool(store.get_owner_outcomes, canonical, subject_ref, idempotency_key=idempotency_key, grant_reader=credentials.has_owner_outcome_grant)
             if object_kind == "owner-facts" and object_id == "current":
                 asks = await run_in_threadpool(current_owner_asks, canonical)
                 try:
@@ -1338,7 +1344,7 @@ def create_app(
                 items = []
                 for subject in subjects:
                     try:
-                        items.append(await run_in_threadpool(store.get_owner_outcomes, canonical, subject))
+                        items.append(await run_in_threadpool(store.get_owner_outcomes, canonical, subject, grant_reader=credentials.has_owner_outcome_grant))
                     except Exception as exc:
                         items.append({"subject_ref": subject, "status": "unavailable", "reason": type(exc).__name__})
                 return {"contract": "builder_owner_fact_collection.v1", "repository": canonical, "subjects": items, "owner_asks": asks}

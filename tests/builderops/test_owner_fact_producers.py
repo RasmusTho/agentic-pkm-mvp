@@ -146,6 +146,25 @@ def test_production_writer_is_authorized_version_bound_and_idempotent(owner_writ
     assert confirmation["confirmed_at"] <= receipt["receipt_body"]["recorded_at"]
     assert w.submit(request).json()["receipt"] == receipt
     assert w.count("builderops_records") == w.count("builderops_receipts") == w.count("builderops_idempotency") == w.count("builderops_outbox") == 1
+    generic = {"envelope": {"repository": REPO, "scope": "owner-outcome", "stack": "builderops", "source_refs": [SUBJECT]},
+        "record_id": "ordinary-record", "record_type": "BuilderOpsReceipt", "state": "active", "payload": {}, "idempotency_key": "ordinary-record"}
+    assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"}).status_code == 403
+    generic["envelope"]["scope"] = "ordinary"
+    generic["idempotency_key"] = "owner-outcome:reserved"
+    assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"}).status_code == 403
+    assert w.read("first").json()["receipt"] == receipt
+    accepted = w.submit(w.request("owner_acceptance", "accepted", trial_receipt_ref=receipt["id"]), "accepted").json()["receipt"]
+    w.credentials[0]["scopes"].remove("owner_outcomes:confirm")
+    w.write_credentials()
+    withdrawn = w.read("accepted").json()
+    assert withdrawn["receipt"] == accepted
+    assert withdrawn["facts"]["owner_trial"] is withdrawn["facts"]["owner_acceptance"] is None
+    assert withdrawn["projection"]["reason"] == "owner_grant_unavailable"
+    w.credentials.append(w.entry("replacement", "human:owner", "human", ["records:write", "receipts:read", "owner_outcomes:confirm"]))
+    w.write_credentials()
+    recovered = w.read("accepted").json()
+    assert recovered["facts"]["owner_acceptance"] == accepted
+    assert recovered["projection"]["status"] == "current"
 
 
 @pytest.mark.parametrize("outcomes", [("accepted", "rejected"), ("accepted", "accepted")])
@@ -214,16 +233,33 @@ def test_acceptance_and_trial_correction_share_serialization(owner_writer, corre
         # production source/chain. The old intent carries no projection state.
         with w.store._connect() as conn:
             intent = conn.execute("SELECT payload FROM builderops_outbox WHERE task_id=%s", (accepted["id"],)).fetchone()["payload"]
-        delayed = w.store.get_owner_outcomes(REPO, intent["subject_ref"], idempotency_key="acceptance")
+        delayed = w.store.get_owner_outcomes(REPO, intent["subject_ref"], idempotency_key="acceptance", grant_reader=w.registry.has_owner_outcome_grant)
         assert delayed["projection"]["status"] == "withdrawn"
     assert w.read().json()["facts"]["owner_acceptance"] is None
 
 
-@pytest.mark.parametrize("field", ["candidate_ref", "environment_ref", "readiness_receipt_ref"])
-def test_changed_candidate_cannot_inherit_trial_or_acceptance(owner_writer, field):
+@pytest.mark.parametrize("field", ["candidate_ref", "environment_ref", "readiness_receipt_ref", "readiness_expiry"])
+def test_changed_candidate_cannot_inherit_trial_or_acceptance(owner_writer, field, monkeypatch):
     w = owner_writer
     trial = w.submit(w.request(), "trial").json()["receipt"]["id"]
     accepted = w.submit(w.request("owner_acceptance", "accepted", trial_receipt_ref=trial), "accepted").json()["receipt"]
+    if field == "readiness_expiry":
+        from app.builderops import devui_receipts
+        from app.builderops.control_plane import owner_outcomes
+
+        observed = datetime.fromisoformat(w.chain[-1]["observed_at"])
+        monkeypatch.setenv("DEVUI_VM102_RECEIPT_MAX_AGE_SECONDS", "1")
+        monkeypatch.setattr(devui_receipts, "_utc_now", lambda: observed)
+        original_lock = owner_outcomes._lock
+        def expires_while_waiting(*args):
+            original_lock(*args)
+            monkeypatch.setattr(devui_receipts, "_utc_now", lambda: observed + timedelta(seconds=2))
+        monkeypatch.setattr(owner_outcomes, "_lock", expires_while_waiting)
+        result = w.read("accepted").json()
+        assert result["facts"]["ready_to_try"] is None
+        assert result["facts"]["owner_acceptance"] is None
+        assert result["receipt"] == accepted and result["projection"]["status"] == "withdrawn"
+        return
     changed = w.request()
     changed[field] = {**changed[field], "changed": "new-source-binding"}
     assert w.submit(changed, "changed").status_code in {400, 409}

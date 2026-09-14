@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.builderops.owner_fact_producers import OwnerOutcomeAdmission
@@ -308,6 +308,7 @@ class StorePort(Protocol):
 
     def get_owner_outcomes(
         self, repository: str, subject_ref: str, *, idempotency_key: str | None = None,
+        grant_reader: Callable[[str, str], bool],
     ) -> dict[str, Any]: ...
 
     def get_owner_asks(self, repository: str) -> list[dict[str, Any]]: ...
