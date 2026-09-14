@@ -123,6 +123,14 @@ promote, restart, or mutate production. Any defect, source-authority gap, design
 journey, identity mismatch, effect, error, storage use, or unauthorized write is returned to its
 owning blocked contract and blocks the pilot.
 
+The separate [M1 first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target)
+defines an earlier one-Issue read observation only. It is source-definition, pending its own bounded
+implementation and live observation. Its `devui_first_read_observation.v1` record cannot be consumed
+by this full #4749 pilot or replace any inventory, qualification, deployment, health, hostile-state,
+exact-current-main or owner-evidence requirement below. This task remains the complete Stage A
+parent-validation gate for #4741; a first-read acknowledgement neither closes it nor weakens its
+normal/review/blocked/completed scenarios or independent artifact inventories.
+
 Prerequisites are strict: the merged ARO-09 contract; the separately delivered and admitted
 managed shell/assets, typed Focus and required work/GitHub/document sources; applicable design
 evidence; fresh exact-final-main #4748 proof for deployed `M` including managed-origin applicability;

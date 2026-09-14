@@ -50,8 +50,18 @@ The complete topology and all unresolved components are owned by
 Every component must be classified as `VM-102 resident (target)`, `explicit external dependency`,
 or `intentionally non-runtime`, with an owner, service/project, source/image identity, ingress/auth
 posture, health/version evidence, deployment role, lifecycle evidence, migration boundary, and
-rollback boundary. An unknown or unavailable component remains an explicit gap and blocks admission;
+rollback boundary. An unknown or unavailable component remains an explicit gap and blocks complete-system admission;
 it cannot be silently omitted or inferred from a guest check.
+
+The separate [M1 first-read qualification target](../BUILDEROPS_CONTROL_PLANE/README.md#m1-first-read-qualification-target)
+is a source-defined, not-yet-implemented qualification/observation boundary for one real Issue read.
+It preserves the complete inventory and applicable host/engine, naming, no-dual-writer, source-grant,
+private-ingress, operator/Linux-probe, migration and rollback prerequisites. Its later bounded record
+can attest only the exact selected candidate's observed journey; it cannot authorize deployment,
+substitute for any full receipt below, erase an unconsumed component gap, close #5181 or establish
+#5399 platform acceptance. The [minimum later implementation](../BUILDEROPS_CONTROL_PLANE/README.md#minimum-later-first-read-implementation)
+keeps repository producer/consumer verification separate from source preparation, operator release
+and live owner observation. This definition changes no current validator or operator permission.
 
 ### VM-102 deployment receipts
 
