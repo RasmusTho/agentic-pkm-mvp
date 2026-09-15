@@ -304,6 +304,7 @@ class StorePort(Protocol):
         expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
         owner_outcome: OwnerOutcomeAdmission | None = None,
+        issue_delivery_admission: object | None = None,
     ) -> AuthorityObjectResult: ...
 
     def get_owner_outcomes(
@@ -342,6 +343,10 @@ class StorePort(Protocol):
     ) -> AuthorityObjectResult: ...
 
     def get_record(self, repository: str, record_id: str) -> Mapping[str, Any]: ...
+
+    def get_issue_delivery_by_operation_key(
+        self, repository: str, operation_key: str
+    ) -> Mapping[str, Any] | None: ...
 
     def get_attempt(self, repository: str, task_id: str, attempt_id: str) -> Mapping[str, Any]: ...
 

@@ -43,6 +43,31 @@ VERIFICATION_AGENT_LOOP = REPO_ROOT / "app/dispatcher/verification_agent_loop.py
 PR_INTEGRATION_SKILL = REPO_ROOT / ".codex/skills/pr-integration/SKILL.md"
 
 
+def _current_workflow_review_receipt(tmp_path: Path) -> Path:
+    """Provide the real candidate diff receipt needed by downstream gate tests."""
+
+    from scripts.workflow_review_risk import workflow_risk_evidence_from_git
+
+    evidence = workflow_risk_evidence_from_git(REPO_ROOT)
+    receipt_path = tmp_path / "workflow-review-receipt.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "base_sha": evidence.base_sha,
+                "head_sha": evidence.head_sha,
+                "diff_digest": evidence.diff_digest,
+                "risks": list(evidence.risks),
+                "verdict": "pass",
+                "reviewer": "test workflow reviewer",
+                "scenario_matrix_complete": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return receipt_path
+
+
 def test_rejects_stale_workflow_review_receipt(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -825,7 +850,8 @@ def test_single_legacy_rejected_round_does_not_require_lineage_marker() -> None:
     assert history["rejected_round_contracts"][0]["governing_contract_sha256"] is None
 
 
-def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
+def test_existing_publication_mode_cannot_omit_pr_scope_revalidation(tmp_path: Path) -> None:
+    receipt_path = _current_workflow_review_receipt(tmp_path)
     result = subprocess.run(
         [
             sys.executable,
@@ -838,6 +864,8 @@ def test_existing_publication_mode_cannot_omit_pr_scope_revalidation() -> None:
             "--review-gate-complete",
             "--publication-mode",
             "existing",
+            "--workflow-review-receipt",
+            str(receipt_path),
         ],
         cwd=REPO_ROOT,
         capture_output=True,
@@ -1376,7 +1404,8 @@ def test_github_origin_parser_authenticates_supported_transport_forms(
     assert _github_repository_from_origin() == "octo/repo"
 
 
-def test_new_publication_mode_requires_repository_identity() -> None:
+def test_new_publication_mode_requires_repository_identity(tmp_path: Path) -> None:
+    receipt_path = _current_workflow_review_receipt(tmp_path)
     result = subprocess.run(
         [
             sys.executable,
@@ -1389,6 +1418,8 @@ def test_new_publication_mode_requires_repository_identity() -> None:
             "--review-gate-complete",
             "--publication-mode",
             "new",
+            "--workflow-review-receipt",
+            str(receipt_path),
         ],
         cwd=REPO_ROOT,
         capture_output=True,

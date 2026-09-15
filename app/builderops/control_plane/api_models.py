@@ -98,6 +98,62 @@ class InquiryCommandAuthorityRequest(BaseModel):
     purpose: Literal["reserve", "attempt", "execute", "readback"]
 
 
+class IssueDeliveryPreviewRequest(BaseModel):
+    """Exact manifest for the finite FCA-ID-A Issue-delivery admission slice.
+
+    The before-validator accepts both the explicit ``manifest`` envelope and
+    the top-level form used by older control-plane clients.  The service owns
+    the canonicalization and adds the authenticated grant/epoch fields; no
+    caller can provide those authority fields as a substitute.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    manifest: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_top_level_manifest(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "manifest" not in value:
+            return {"manifest": value}
+        return value
+
+
+class IssueDeliveryStartRequest(BaseModel):
+    """Owner Hold/Start decision over one exact preview manifest."""
+
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["start", "hold"]
+    manifest: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_proposal_alias(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            result = dict(value)
+            if "manifest" not in result and "proposal" in result:
+                result["manifest"] = result.pop("proposal")
+            return result
+        return value
+
+
+class IssueDeliveryAuthorityRequest(BaseModel):
+    """Destination authority read; execution/read grants stay separate."""
+
+    model_config = ConfigDict(extra="forbid")
+    manifest: dict[str, Any]
+    purpose: Literal["execute", "readback"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_approval_alias(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            result = dict(value)
+            if "manifest" not in result and "approval" in result:
+                result["manifest"] = result.pop("approval")
+            return result
+        return value
+
+
 class TaskClaimRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     task_id: str
@@ -259,6 +315,9 @@ __all__ = [
     "AttemptCommitRequest",
     "AuthorityEnvelopeInput",
     "InquiryCommitRequest",
+    "IssueDeliveryAuthorityRequest",
+    "IssueDeliveryPreviewRequest",
+    "IssueDeliveryStartRequest",
     "LeaseClaimRequest",
     "LeaseInput",
     "OutboxClaimRequest",

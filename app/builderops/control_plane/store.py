@@ -34,6 +34,48 @@ from app.builderops.control_plane.models import (
     canonical_repository,
 )
 
+_ISSUE_DELIVERY_IDEMPOTENCY_PREFIX = "issue-delivery:"
+_ISSUE_DELIVERY_SCOPE = "issue-delivery-approval"
+_ISSUE_DELIVERY_RECORD_TYPE = "IssueDeliveryApproval"
+_ISSUE_DELIVERY_ADMISSION_CAPABILITY = object()
+
+
+def _issue_delivery_admission_capability() -> object:
+    """Return the in-process capability held by the owner-admission service."""
+
+    return _ISSUE_DELIVERY_ADMISSION_CAPABILITY
+
+
+def _guard_idempotency_namespace(
+    idempotency_key: str,
+    *,
+    envelope: AuthorityEnvelope,
+    object_kind: str | None = None,
+    record_type: str | None = None,
+    secondary_id: str | None = None,
+) -> None:
+    """Reserve the Issue-delivery keyspace at every global write boundary.
+
+    The Issue-delivery approval writer is the sole admitted owner of this
+    prefix. Keeping the decision here, rather than only in an HTTP route,
+    prevents direct store callers (including leases and task transitions) from
+    squatting an operation key before the authenticated approval is committed.
+    """
+    if not isinstance(idempotency_key, str) or not idempotency_key.startswith(
+        _ISSUE_DELIVERY_IDEMPOTENCY_PREFIX
+    ):
+        return
+    issue_delivery_record = (
+        envelope.scope == _ISSUE_DELIVERY_SCOPE
+        and object_kind == "record"
+        and (
+            record_type == _ISSUE_DELIVERY_RECORD_TYPE
+            or secondary_id == _ISSUE_DELIVERY_RECORD_TYPE
+        )
+    )
+    if not issue_delivery_record:
+        raise StateConflict("Issue-delivery idempotency keys require exact owner admission")
+
 
 def _canonical(value: Mapping[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -601,6 +643,7 @@ class PostgresBuilderOpsStore:
         expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
+        _guard_idempotency_namespace(idempotency_key, envelope=envelope)
         if not task_id or not to_state or not idempotency_key:
             raise ValueError("task_id, to_state, and idempotency_key are mandatory")
         if claim_holder is not None and lease is not None:
@@ -955,9 +998,24 @@ class PostgresBuilderOpsStore:
         expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
         owner_outcome: OwnerOutcomeAdmission | None = None,
+        issue_delivery_admission: object | None = None,
     ) -> AuthorityObjectResult:
         from app.builderops.owner_fact_producers import OwnerFactRefusal
 
+        _guard_idempotency_namespace(
+            idempotency_key,
+            envelope=envelope,
+            object_kind="record",
+            record_type=record_type,
+        )
+        if record_type == "IssueDeliveryApproval" and envelope.scope != "issue-delivery-approval":
+            raise StateConflict("Issue-delivery approvals require exact owner admission")
+        if record_type == _ISSUE_DELIVERY_RECORD_TYPE and (
+            issue_delivery_admission is not _ISSUE_DELIVERY_ADMISSION_CAPABILITY
+        ):
+            raise StateConflict(
+                "Issue-delivery approvals require the service admission capability"
+            )
         if owner_outcome is not None:
             return _commit_owner_outcome(self, envelope=envelope, admission=owner_outcome,
                                         idempotency_key=idempotency_key, fault_at=fault_at)
@@ -1069,6 +1127,12 @@ class PostgresBuilderOpsStore:
         expected_task_version: int | None = None,
         fault_at: str | None = None,
     ) -> AuthorityObjectResult:
+        _guard_idempotency_namespace(
+            idempotency_key,
+            envelope=envelope,
+            object_kind=object_kind,
+            secondary_id=secondary_id,
+        )
         if not object_id or not state or not idempotency_key:
             raise ValueError("object identity, state, and idempotency_key are mandatory")
         request_hash = _hash(
@@ -1441,6 +1505,29 @@ class PostgresBuilderOpsStore:
             raise KeyError(record_id)
         return dict(row)
 
+    def get_issue_delivery_by_operation_key(
+        self, repository: str, operation_key: str
+    ) -> Mapping[str, Any] | None:
+        """Read the unique FCA-ID-A approval bound to ``operation_key``.
+
+        This lookup is deliberately a narrow projection over the existing
+        record owner.  It prevents a fresh approval id from reusing an
+        already admitted operation key without adding another authority table.
+        """
+
+        repository = canonical_repository(repository)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT record_id, record_type, state, payload, authority_envelope "
+                "FROM builderops_records WHERE repository = %s "
+                "AND record_type = 'IssueDeliveryApproval' "
+                "AND payload->>'operation_key' = %s LIMIT 2",
+                (repository, operation_key),
+            ).fetchall()
+        if len(rows) > 1:
+            raise StateConflict("Issue-delivery operation key is not unique")
+        return dict(rows[0]) if rows else None
+
     def get_attempt(self, repository: str, task_id: str, attempt_id: str) -> Mapping[str, Any]:
         repository = canonical_repository(repository)
         with self._connect() as conn:
@@ -1720,6 +1807,7 @@ class PostgresBuilderOpsStore:
         lease: Lease | None = None,
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]:
+        _guard_idempotency_namespace(idempotency_key, envelope=envelope)
         if (
             not resource_id
             or not holder

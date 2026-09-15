@@ -1122,6 +1122,8 @@ jobs:
               # FCA-05 authority/correction and production read transport need
               # real PostgreSQL; the not-pg lane cannot execute these ACs.
               - 'app/builderops/control_plane/**'
+              - 'app/builderops/epic_dispatch.py'
+              - 'docs/settings/models/providers.yaml'
               - 'app/builderops/owner_fact_producers.py'
               - 'app/builderops/devui_owner_facts.py'
               - 'app/builderops/devui_focus_inputs.py'
@@ -1130,6 +1132,7 @@ jobs:
               - 'app/builderops/devui_sources.py'
               - 'tests/builderops/test_owner_fact_producers.py'
               - 'tests/api/test_devui_owner_facts.py'
+              - 'tests/builderops/test_control_plane_issue_delivery.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -1149,11 +1152,13 @@ jobs:
         if: steps.changes.outputs.index_pg == 'true'
         run: python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
-      - name: Run exact index, YouTube quota, entity-review journal, and durable table ownership PG surface
+      - name: Run exact index, BuilderOps, YouTube quota, entity-review journal, and durable table ownership PG surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
         run: |
           set -o pipefail
+          # FCA-ID-A (#5550): the two Issue-delivery Verify nodes require
+          # the explicit scratch PostgreSQL service in this lane.
           pytest -q -m "pg" \
             tests/index/test_provenance_stamp.py \
             tests/index/test_identity_migration.py \
@@ -1207,6 +1212,10 @@ jobs:
             tests/migrations/test_heimdal_raw_liveness_migration.py \
             tests/builderops/test_owner_fact_producers.py \
             tests/api/test_devui_owner_facts.py \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_transaction_recovery \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_identical_start_replays_winner \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_competing_start_preserves_conflict \
             tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries \
             --tb=short \
             | tee pytest-index-pg.log

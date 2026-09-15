@@ -12,11 +12,16 @@
 !tests/fixtures/issue_readiness/
 !tests/fixtures/issue_readiness/valid_ready_candidate.md
 !.codex
+!.codex/agents
+!.codex/agents/slice-implementer.toml
 !.codex/skills
 !.codex/skills/start-model-inquiry
 !.codex/skills/start-model-inquiry/SKILL.md
 !docs
 !docs/**
+!docs/settings
+!docs/settings/models
+!docs/settings/models/providers.yaml
 !config
 !config/platform
 !config/platform/builderops_vm_rebuild_activation.v1.schema.json
