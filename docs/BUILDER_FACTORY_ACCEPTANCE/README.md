@@ -126,7 +126,7 @@ ledger. The authenticated approval receipt binds the following complete fields:
 
 | Field group | Exact required binding |
 | --- | --- |
-| Approval and principal | `approval_id`, `approval_manifest_hash`, authenticated `owner_principal`, repository-scoped authority/permission reference and version, approval receipt reference and `approved_at`; no credential or bearer-token material is retained. |
+| Approval and principal | `approval_id`, `approval_manifest_hash`, authenticated `owner_principal`, repository-scoped authority/permission reference and version, approval receipt reference and `approved_at`; only non-secret credential identity/rotation/scope metadata and a `permission_version` may be retained, never a bearer verifier or fingerprint. |
 | Addressed subject | Canonical `repository` (`owner/repo`), `subject_kind`, exact `issue_number` when Issue-addressed, and exact question bytes/hash for an inquiry. A pre-ticket question explicitly carries `issue_number: null`; it cannot inherit a default repository or Issue. |
 | Mutable source authority | Bounded source references with immutable revision/content hashes, exact Issue-body and acceptance-criteria hashes when an Issue exists, canonical proposal and context-pack hashes. Pre-ticket Issue/AC fields are explicitly not applicable, never inferred from another Issue. |
 | Operation and destination | `operation_type`, stable `operation_key`, destination identity, exact workflow contract/version/hash and its declared entrypoint. The same approval binds exactly one key and one operation; a changed key cannot reuse that approval. |

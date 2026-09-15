@@ -373,6 +373,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     started = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
     assert started["state"] == "approved"
     assert started["approval"]["approval_manifest_hash"] == preview["manifest"]["approval_manifest_hash"]
+    assert "fingerprint" not in started["approval"]["permission"]
     assert started["receipt"]["receipt_sequence"] > 0
 
     replay = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
@@ -384,6 +385,12 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     assert readback["state"] == "approved"
     assert readback["manifest"]["operation_key"] == "operation-5550"
     assert readback["operation"]["operation_key"] == "operation-5550"
+    readback_permission = readback["manifest"]["permission"]
+    assert "fingerprint" not in readback_permission
+    assert "permission_version" in readback_permission
+    owner_credential = registry.current_credential("owner")
+    assert owner_credential is not None
+    assert owner_credential.fingerprint not in json.dumps(readback, sort_keys=True)
 
     # A principal-wide grant lookup must not let a read-only credential borrow
     # its sibling's execute grant.  The high-privilege credential is allowed
@@ -409,6 +416,8 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         manifest=started["approval"], purpose="readback"
     )
     assert stale_readback["purpose"] == "readback"
+    assert "fingerprint" not in stale_readback["approval"]["permission"]
+    assert owner_credential.fingerprint not in json.dumps(stale_readback, sort_keys=True)
     monkeypatch.setattr(store, "readiness", lambda: current_readiness)
 
     for field, replacement in (

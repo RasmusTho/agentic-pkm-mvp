@@ -692,16 +692,27 @@ def create_app(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="exact Issue-delivery owner grant required",
             )
-        return {
+        # Bind approval validity to public credential metadata only.  The
+        # registry's bearer verifier is deliberately not part of the durable
+        # permission or any Issue-delivery readback, where it would enable
+        # offline guessing by a read-scoped client.
+        permission = {
             "grant": "issue_delivery:approve",
             "credential_id": credential.credential_id,
             "principal": credential.principal,
             "rotation_generation": credential.rotation_generation,
-            "fingerprint": credential.fingerprint,
             "scopes": sorted(credential.scopes),
             "repositories": sorted(credential.repositories),
             "all_repositories": credential.all_repositories,
         }
+        permission["permission_version"] = canonical_hash(permission)
+        return permission
+
+    def _assert_issue_delivery_permission_safe(permission: Any) -> None:
+        """Reject legacy or malformed approvals that would expose a verifier."""
+
+        if isinstance(permission, Mapping) and "fingerprint" in permission:
+            raise StateConflict("Issue-delivery approval contains a credential verifier")
 
     def issue_delivery_manifest(
         manifest_input: Mapping[str, Any], credential: Credential
@@ -818,13 +829,14 @@ def create_app(
         payload = dict(row["payload"])
         if payload.get("approval_manifest_hash") != issue_delivery_manifest_hash(payload):
             raise StateConflict("Issue-delivery approval manifest is corrupt")
+        permission = payload.get("permission")
+        _assert_issue_delivery_permission_safe(permission)
         operation_key = payload.get("operation_key")
         if not isinstance(operation_key, str):
             raise StateConflict("Issue-delivery approval operation key is missing")
         state = "approved"
         reason: str | None = None
         try:
-            permission = payload.get("permission")
             credential_id = permission.get("credential_id") if isinstance(permission, Mapping) else None
             current = credentials.current_credential(credential_id) if isinstance(credential_id, str) else None
             current_permission = issue_delivery_permission(current, canonical) if current is not None else None
@@ -1047,6 +1059,7 @@ def create_app(
                 or existing_payload.get("operation_key") != manifest["operation_key"]
             ):
                 raise StateConflict("Issue-delivery approval is immutable")
+            _assert_issue_delivery_permission_safe(existing_payload.get("permission"))
             replay = store.replay(repository, key)
             if replay is None:
                 raise ControlPlaneError("Issue-delivery approval replay is unavailable")
@@ -1189,6 +1202,7 @@ def create_app(
             ):
                 raise StateConflict("Issue-delivery approval does not match durable admission")
             owner_permission = approved.get("permission")
+            _assert_issue_delivery_permission_safe(owner_permission)
             if request.purpose == "execute":
                 owner_credential_id = (
                     owner_permission.get("credential_id")
