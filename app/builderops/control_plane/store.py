@@ -35,6 +35,39 @@ from app.builderops.control_plane.models import (
 )
 
 _ISSUE_DELIVERY_IDEMPOTENCY_PREFIX = "issue-delivery:"
+_ISSUE_DELIVERY_SCOPE = "issue-delivery-approval"
+_ISSUE_DELIVERY_RECORD_TYPE = "IssueDeliveryApproval"
+
+
+def _guard_idempotency_namespace(
+    idempotency_key: str,
+    *,
+    envelope: AuthorityEnvelope,
+    object_kind: str | None = None,
+    record_type: str | None = None,
+    secondary_id: str | None = None,
+) -> None:
+    """Reserve the Issue-delivery keyspace at every global write boundary.
+
+    The Issue-delivery approval writer is the sole admitted owner of this
+    prefix. Keeping the decision here, rather than only in an HTTP route,
+    prevents direct store callers (including leases and task transitions) from
+    squatting an operation key before the authenticated approval is committed.
+    """
+    if not isinstance(idempotency_key, str) or not idempotency_key.startswith(
+        _ISSUE_DELIVERY_IDEMPOTENCY_PREFIX
+    ):
+        return
+    issue_delivery_record = (
+        envelope.scope == _ISSUE_DELIVERY_SCOPE
+        and object_kind == "record"
+        and (
+            record_type == _ISSUE_DELIVERY_RECORD_TYPE
+            or secondary_id == _ISSUE_DELIVERY_RECORD_TYPE
+        )
+    )
+    if not issue_delivery_record:
+        raise StateConflict("Issue-delivery idempotency keys require exact owner admission")
 
 
 def _canonical(value: Mapping[str, Any]) -> str:
@@ -603,10 +636,7 @@ class PostgresBuilderOpsStore:
         expected_version: int | None = None,
         fault_at: str | None = None,
     ) -> TransactionResult:
-        if idempotency_key.startswith(_ISSUE_DELIVERY_IDEMPOTENCY_PREFIX):
-            raise StateConflict(
-                "Issue-delivery idempotency keys require exact owner admission"
-            )
+        _guard_idempotency_namespace(idempotency_key, envelope=envelope)
         if not task_id or not to_state or not idempotency_key:
             raise ValueError("task_id, to_state, and idempotency_key are mandatory")
         if claim_holder is not None and lease is not None:
@@ -964,13 +994,12 @@ class PostgresBuilderOpsStore:
     ) -> AuthorityObjectResult:
         from app.builderops.owner_fact_producers import OwnerFactRefusal
 
-        if idempotency_key.startswith(_ISSUE_DELIVERY_IDEMPOTENCY_PREFIX) and not (
-            record_type == "IssueDeliveryApproval"
-            and envelope.scope == "issue-delivery-approval"
-        ):
-            raise StateConflict(
-                "Issue-delivery idempotency keys require exact owner admission"
-            )
+        _guard_idempotency_namespace(
+            idempotency_key,
+            envelope=envelope,
+            object_kind="record",
+            record_type=record_type,
+        )
         if record_type == "IssueDeliveryApproval" and envelope.scope != "issue-delivery-approval":
             raise StateConflict("Issue-delivery approvals require exact owner admission")
         if owner_outcome is not None:
@@ -1084,14 +1113,12 @@ class PostgresBuilderOpsStore:
         expected_task_version: int | None = None,
         fault_at: str | None = None,
     ) -> AuthorityObjectResult:
-        if idempotency_key.startswith(_ISSUE_DELIVERY_IDEMPOTENCY_PREFIX) and not (
-            object_kind == "record"
-            and secondary_id == "IssueDeliveryApproval"
-            and envelope.scope == "issue-delivery-approval"
-        ):
-            raise StateConflict(
-                "Issue-delivery idempotency keys require exact owner admission"
-            )
+        _guard_idempotency_namespace(
+            idempotency_key,
+            envelope=envelope,
+            object_kind=object_kind,
+            secondary_id=secondary_id,
+        )
         if not object_id or not state or not idempotency_key:
             raise ValueError("object identity, state, and idempotency_key are mandatory")
         request_hash = _hash(
@@ -1766,10 +1793,7 @@ class PostgresBuilderOpsStore:
         lease: Lease | None = None,
         fault_at: str | None = None,
     ) -> tuple[TransactionResult, Lease]:
-        if idempotency_key.startswith(_ISSUE_DELIVERY_IDEMPOTENCY_PREFIX):
-            raise StateConflict(
-                "Issue-delivery idempotency keys require exact owner admission"
-            )
+        _guard_idempotency_namespace(idempotency_key, envelope=envelope)
         if (
             not resource_id
             or not holder
