@@ -109,6 +109,11 @@ _TOP_LEVEL_ISSUE_ALIASES = frozenset(
         "acceptance_criteria_hash",
     }
 )
+# ``state`` is also a service-owned durable approval field.  Once an
+# approval is persisted, its top-level ``approved`` lifecycle state must not
+# be mistaken for a legacy Issue-state alias when the nested immutable Issue
+# still correctly carries ``open``.
+_SERVICE_APPROVAL_STATES = frozenset({"approved"})
 _TOP_LEVEL_SOURCE_ALIASES = frozenset(
     {
         "source_revision",
@@ -205,7 +210,10 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
         }
     issue = _mapping(raw, "issue")
     if value.get("issue") is not None:
-        for key in _TOP_LEVEL_ISSUE_ALIASES:
+        issue_aliases = _TOP_LEVEL_ISSUE_ALIASES
+        if value.get("state") in _SERVICE_APPROVAL_STATES:
+            issue_aliases = issue_aliases - {"state"}
+        for key in issue_aliases:
             if key not in value:
                 continue
             if key in issue and issue[key] != value[key]:

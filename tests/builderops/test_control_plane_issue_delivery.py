@@ -411,6 +411,11 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     assert isinstance(started["approval"].get("approval_digest"), str)
     assert "fingerprint" not in started["approval"]["permission"]
     assert started["receipt"]["receipt_sequence"] > 0
+    # The durable approval adds the service-owned lifecycle state at the
+    # top level; it must still round-trip as an Issue with state=open before
+    # the destination's execute admission validates the same payload.
+    normalized_started = normalize_issue_delivery_manifest(started["approval"])
+    assert normalized_started["issue"]["state"] == "open"
 
     replay = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
     assert replay["state"] == "approved"
