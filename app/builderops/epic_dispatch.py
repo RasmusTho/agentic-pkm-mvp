@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
+import shlex
 import subprocess
 import tomllib
 from threading import Thread
@@ -179,23 +179,69 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
         )
     ):
         return False
-    if re.search(
-        r"\bgit\b(?:(?!\b(?:push|commit|tag)\b).)*\b(?:push|commit|tag)\b|"
-        r"\bgh\b(?:(?!\b(?:issue|pr)\b).)*\bissue\s+"
-        r"(?:comment|create|close|edit|reopen|lock|unlock|label|delete|transfer|pin|unpin)\b|"
-        r"\bgh\b(?:(?!\b(?:issue|pr)\b).)*\bpr\s+"
-        r"(?:create|merge|close|edit|reopen|ready|unready)\b",
-        lowered,
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return True
+    if any(
+        token in {"push", "commit", "tag"}
+        for index, token in enumerate(tokens)
+        if token == "git" and index + 1 < len(tokens)
+        for token in tokens[index + 1 :]
     ):
         return True
-    if "gh api" in lowered and re.search(
-        r"(?:--method|-x)\s*(?:post|put|patch|delete)\b", lowered
-    ):
-        return True
-    if "/issues" in lowered or "/pulls" in lowered:
-        return re.search(
-            r"(?:--method|-x)\s*(?:post|put|patch|delete)\b", lowered
-        ) is not None
+    issue_mutations = {
+        "comment",
+        "create",
+        "close",
+        "edit",
+        "reopen",
+        "lock",
+        "unlock",
+        "label",
+        "delete",
+        "transfer",
+        "pin",
+        "unpin",
+    }
+    pr_mutations = {"create", "merge", "close", "edit", "reopen", "ready", "unready"}
+    for index, token in enumerate(tokens):
+        if token != "gh":
+            continue
+        for resource_index in range(index + 1, len(tokens)):
+            resource = tokens[resource_index]
+            if resource not in {"issue", "pr"}:
+                continue
+            flags_with_values = {"--repo", "-R", "--hostname"}
+            for subcommand_index in range(resource_index + 1, len(tokens)):
+                candidate = tokens[subcommand_index]
+                if candidate in flags_with_values:
+                    continue
+                if candidate.startswith("-"):
+                    continue
+                if subcommand_index > resource_index + 1 and tokens[subcommand_index - 1] in flags_with_values:
+                    continue
+                if candidate in (issue_mutations if resource == "issue" else pr_mutations):
+                    return True
+                break
+    for index, token in enumerate(tokens):
+        if token != "gh" or index + 1 >= len(tokens) or tokens[index + 1] != "api":
+            continue
+        method = None
+        has_body = False
+        for candidate in tokens[index + 2 :]:
+            if candidate.startswith("--method="):
+                method = candidate.split("=", 1)[1].lower()
+            elif candidate in {"--method", "-X"}:
+                method = "next"
+            elif method == "next":
+                method = candidate.lower()
+            elif candidate in {"-f", "-F", "--field", "--raw-field", "--input"}:
+                has_body = True
+        if any("/issues" in candidate or "/pulls" in candidate for candidate in tokens[index + 2 :]):
+            if method in {"post", "put", "patch", "delete"} or has_body:
+                return True
     return False
 
 
