@@ -26,6 +26,7 @@ from app.builderops.control_plane.client import (
     ControlPlaneScopeError,
     ControlPlaneUnavailableError,
 )
+from app.builderops.control_plane.models import AuthorityEnvelope, StateConflict
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.control_plane.service import create_app, issue_delivery_manifest_hash
 from app.builderops.control_plane.issue_delivery import canonical_hash
@@ -658,6 +659,20 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
             state="active",
             payload={"kind": "generic"},
             idempotency_key="issue-delivery:operation-prefix-reservation",
+        )
+    with pytest.raises(StateConflict):
+        store.claim_lease(
+            envelope=AuthorityEnvelope(
+                repository=REPOSITORY,
+                scope="generic-lease",
+                stack="builderops-control-plane",
+                actor="generic:agent",
+                source_refs=("test:issue-5550",),
+            ),
+            resource_id="generic-resource",
+            holder="generic:agent",
+            idempotency_key="issue-delivery:lease-prefix-reservation",
+            request={},
         )
 
     changed_source = dict(preview["manifest"])
