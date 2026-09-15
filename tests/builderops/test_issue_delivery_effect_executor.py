@@ -31,6 +31,7 @@ from app.builderops.issue_delivery_effect_executor import (
     BuilderOpsIssueDeliveryEffectLedger,
     ContentOnlyIssueDeliverySessionLauncher,
     DestinationBinding,
+    EXECUTOR_ARTIFACT,
     EffectAuthorityReadback,
     EffectReadback,
     FrozenIssueDeliveryDestination,
@@ -38,6 +39,7 @@ from app.builderops.issue_delivery_effect_executor import (
     IssueDeliveryEffectRequest,
     IssueDeliveryHostExecutor,
     PreparedIssueDeliveryWorker,
+    WORKER_ISOLATION_ARTIFACT,
     WorkerIsolationBinding,
 )
 from app.builderops.control_plane.issue_delivery import (
@@ -126,18 +128,18 @@ def _approval(
     destination: FrozenIssueDeliveryDestination,
     executor_artifact: Path,
     isolation_artifact: Path,
+    workflow_root: Path,
     *,
     parent: bool = False,
 ) -> dict[str, Any]:
+    artifact_paths = {
+        path: workflow_root / path for path in REQUIRED_WORKFLOW_ARTIFACTS
+    }
+    artifact_paths[EXECUTOR_ARTIFACT] = executor_artifact
+    artifact_paths[WORKER_ISOLATION_ARTIFACT] = isolation_artifact
     artifacts = [
-        {
-            "path": "app/builderops/issue_delivery_effect_executor.py",
-            "sha256": _sha(executor_artifact.read_bytes()),
-        },
-        {
-            "path": "app/builderops/issue_delivery_worker_isolation.py",
-            "sha256": _sha(isolation_artifact.read_bytes()),
-        },
+        {"path": path, "sha256": _sha(artifact_paths[path].read_bytes())}
+        for path in sorted(REQUIRED_WORKFLOW_ARTIFACTS)
     ]
     return {
         "contract_version": "fca-issue-delivery.v1",
@@ -553,10 +555,23 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
     isolation_artifact = tmp_path / "issue_delivery_worker_isolation.py"
     executor_artifact.write_text("host executor\n", encoding="utf-8")
     isolation_artifact.write_text("worker isolation\n", encoding="utf-8")
+    workflow_root = tmp_path / "workflow-root"
+    for artifact_path in REQUIRED_WORKFLOW_ARTIFACTS:
+        if artifact_path in {EXECUTOR_ARTIFACT, WORKER_ISOLATION_ARTIFACT}:
+            continue
+        trusted_artifact = workflow_root / artifact_path
+        trusted_artifact.parent.mkdir(parents=True, exist_ok=True)
+        trusted_artifact.write_text(
+            f"trusted workflow artifact: {artifact_path}\n", encoding="utf-8"
+        )
     destination = _destination(tmp_path)
     isolation = _isolation()
     approval = _approval(
-        destination, executor_artifact, isolation_artifact, parent=parent
+        destination,
+        executor_artifact,
+        isolation_artifact,
+        workflow_root,
+        parent=parent,
     )
     request = _request(
         approval,
@@ -583,6 +598,7 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
         transport=transport,
         trusted_executor_artifact=executor_artifact,
         trusted_worker_isolation_artifact=isolation_artifact,
+        trusted_workflow_root=workflow_root,
     )
     return (
         executor,
@@ -1528,6 +1544,19 @@ def test_unit_revocation_and_target_drift_fail_closed(tmp_path: Path) -> None:
         executor.execute(request)
     assert transport.apply_calls == credentials.calls == 0
 
+    workflow_executor, workflow_request, *_rest, workflow_transport = _executor(
+        tmp_path / "workflow-artifact"
+    )
+    (
+        tmp_path
+        / "workflow-artifact"
+        / "workflow-root"
+        / ".codex/skills/publish-pr/SKILL.md"
+    ).write_text("replaced\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact"):
+        workflow_executor.execute(workflow_request)
+    assert workflow_transport.apply_calls == 0
+
     epoch_executor, epoch_request, epoch_authority, *_ = _executor(tmp_path / "epoch")
     epoch_authority.epoch_drifted = True
     with pytest.raises(ValueError, match="authority changed"):
@@ -1549,14 +1578,30 @@ def test_unit_revocation_and_target_drift_fail_closed(tmp_path: Path) -> None:
         profile_executor.execute(profile_request)
     assert profile_transport.apply_calls == 0
 
-    parent_executor, parent_request, *_rest, parent_transport = _executor(
-        tmp_path / "parent", effect_kind="parent_evidence", parent=True
-    )
+    (
+        parent_executor,
+        parent_request,
+        parent_authority,
+        *_rest,
+        parent_transport,
+    ) = _executor(tmp_path / "parent", effect_kind="parent_evidence", parent=True)
     foreign_parent = parent_request.model_dump(mode="json")
     foreign_parent["target"]["issue_number"] = 5400
     with pytest.raises(ValueError, match="parent evidence"):
         parent_executor.execute(
             IssueDeliveryEffectRequest.model_validate(foreign_parent)
+        )
+    assert parent_transport.apply_calls == 0
+
+    foreign_repository = parent_request.model_dump(mode="json")
+    foreign_repository["approval"]["parent_evidence"]["repository"] = (
+        "other/parent-repository"
+    )
+    foreign_repository["target"]["repository"] = "other/parent-repository"
+    parent_authority.approval = deepcopy(foreign_repository["approval"])
+    with pytest.raises(ValueError, match="parent evidence"):
+        parent_executor.execute(
+            IssueDeliveryEffectRequest.model_validate(foreign_repository)
         )
     assert parent_transport.apply_calls == 0
 

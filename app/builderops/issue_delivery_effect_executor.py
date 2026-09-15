@@ -25,6 +25,7 @@ from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ControlPlaneNotFoundError,
 )
+from app.builderops.control_plane.issue_delivery import REQUIRED_WORKFLOW_ARTIFACTS
 from app.builderops.control_plane.models import canonical_repository
 from app.builderops.issue_delivery_worker_isolation import (
     ISOLATION_RECEIPT_CONTRACT,
@@ -596,6 +597,7 @@ class IssueDeliveryHostExecutor:
         trusted_worker_isolation_artifact: Path = Path(__file__).with_name(
             "issue_delivery_worker_isolation.py"
         ),
+        trusted_workflow_root: Path = Path(__file__).resolve().parents[2],
     ) -> None:
         self.authority = authority
         self.ledger = ledger
@@ -609,6 +611,7 @@ class IssueDeliveryHostExecutor:
         self.trusted_worker_isolation_artifact = (
             trusted_worker_isolation_artifact.resolve()
         )
+        self.trusted_workflow_root = trusted_workflow_root.resolve()
 
     def execute(
         self, request: IssueDeliveryEffectRequest
@@ -931,6 +934,8 @@ class IssueDeliveryHostExecutor:
         if (
             not isinstance(parent, Mapping)
             or parent.get("kind") != "issue"
+            or target.repository
+            != canonical_repository(str(approval.get("repository")))
             or canonical_repository(str(parent.get("repository"))) != target.repository
             or parent.get("number") != target.issue_number
             or parent.get("node_id") != target.issue_node_id
@@ -956,26 +961,30 @@ class IssueDeliveryHostExecutor:
         artifacts = workflow.get("artifacts")
         if not isinstance(artifacts, Sequence):
             raise ValueError("Issue-delivery workflow artifacts are unavailable")
-        expected = {
-            EXECUTOR_ARTIFACT: (
-                request.executor_artifact_sha256,
-                self.trusted_executor_artifact,
-            ),
-            WORKER_ISOLATION_ARTIFACT: (
-                request.worker_isolation_artifact_sha256,
-                self.trusted_worker_isolation_artifact,
-            ),
+        request_digests = {
+            EXECUTOR_ARTIFACT: request.executor_artifact_sha256,
+            WORKER_ISOLATION_ARTIFACT: request.worker_isolation_artifact_sha256,
         }
-        for artifact_path, (digest, actual_path) in expected.items():
+        trusted_paths = {
+            artifact_path: self.trusted_workflow_root / PurePath(artifact_path)
+            for artifact_path in REQUIRED_WORKFLOW_ARTIFACTS
+        }
+        trusted_paths[EXECUTOR_ARTIFACT] = self.trusted_executor_artifact
+        trusted_paths[WORKER_ISOLATION_ARTIFACT] = (
+            self.trusted_worker_isolation_artifact
+        )
+        for artifact_path in sorted(REQUIRED_WORKFLOW_ARTIFACTS):
             matches = [
                 item
                 for item in artifacts
                 if isinstance(item, Mapping) and item.get("path") == artifact_path
             ]
+            digest = matches[0].get("sha256") if len(matches) == 1 else None
             if (
                 len(matches) != 1
-                or matches[0].get("sha256") != digest
-                or _file_sha256(actual_path) != digest
+                or request_digests.get(artifact_path, digest) != digest
+                or not trusted_paths[artifact_path].is_file()
+                or _file_sha256(trusted_paths[artifact_path]) != digest
             ):
                 raise ValueError("trusted Issue-delivery artifact changed")
 
