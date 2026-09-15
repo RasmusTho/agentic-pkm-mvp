@@ -769,6 +769,18 @@ def create_app(
         supplied_hash = manifest_input.get("approval_manifest_hash")
         if not isinstance(supplied_hash, str) or supplied_hash != issue_delivery_manifest_hash(manifest_input):
             raise StateConflict("Issue-delivery approval manifest changed")
+        # Start must re-check every addressed repository even when the caller
+        # skips preview.  Do this after immutable-hash admission but before
+        # contract normalization so a well-formed foreign parent is reported
+        # as a typed scope denial rather than being downgraded to a generic
+        # protocol rejection by a later validation branch.
+        parent_evidence = manifest_input.get("parent_evidence")
+        if isinstance(parent_evidence, Mapping) and parent_evidence.get("kind") == "issue":
+            parent_repository = parent_evidence.get(
+                "repository", parent_evidence.get("parent_repository")
+            )
+            if isinstance(parent_repository, str) and parent_repository.strip():
+                _enforce_repo_scope(credential, canonical_repository(parent_repository.strip()))
         manifest = normalize_issue_delivery_manifest(manifest_input)
         if manifest.get("owner_principal") != credential.principal:
             raise HTTPException(status_code=403, detail="Issue-delivery approval owner mismatch")
