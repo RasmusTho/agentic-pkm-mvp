@@ -25,7 +25,7 @@ from app.builderops.control_plane.client import (
     ControlPlaneUnavailableError,
 )
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
-from app.builderops.control_plane.service import create_app
+from app.builderops.control_plane.service import create_app, issue_delivery_manifest_hash
 from app.builderops.control_plane.issue_delivery import canonical_hash
 from app.builderops.epic_dispatch import HANDOFF_RECEIPT_SCHEMA
 
@@ -554,6 +554,13 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     incomplete_parent["parent_evidence"] = {"kind": "issue"}
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=incomplete_parent)
+    foreign_parent_start = deepcopy(preview["manifest"])
+    foreign_parent_start["parent_evidence"] = foreign_parent["parent_evidence"]
+    foreign_parent_start["approval_manifest_hash"] = issue_delivery_manifest_hash(
+        foreign_parent_start
+    )
+    with pytest.raises(ControlPlaneScopeError):
+        owner.issue_delivery_start(decision="start", manifest=foreign_parent_start)
 
     slash_bound_id = deepcopy(manifest)
     slash_bound_id["approval_id"] = "team/approval-1"

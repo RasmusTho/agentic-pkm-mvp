@@ -218,7 +218,8 @@ within its existing owner. Before Start, it must bind all of these values withou
   source-authenticated relationship to the selected Issue, current parent contract hash/version,
   and permission for PR-specific receipt comments and this child's generated-ledger writeback.
   If the selected workflow requires parent writeback, an absent binding refuses launch; it cannot
-  infer a parent later. This evidence destination grants no parent delivery, contract or acceptance
+  infer a parent later. Preview and Start both enforce the authenticated owner's repository scope
+  for this destination. This evidence destination grants no parent delivery, contract or acceptance
   change, closure, or sibling mutation;
 - operation type/version, `approval_id`, one `operation_key`, owner principal, approval receipt,
   expiry and current repository/operation grant, revocation version and authority epoch;

@@ -1161,6 +1161,12 @@ def validate_issue_delivery_plan(
         raise EpicDispatchError("Issue delivery plan must preserve run identity and run-state observation")
     if plan.get("github_mutations") != [] or plan.get("agent_spawns") != []:
         raise EpicDispatchError("Issue delivery planner output must be mutation-free")
+    decisions = plan.get("decisions")
+    if isinstance(decisions, list) and any(
+        isinstance(decision, Mapping) and "execution_routing" in decision
+        for decision in decisions
+    ):
+        raise EpicDispatchError("Issue delivery plan cannot contain canary or fallback routing")
 
     scope = plan.get("scope")
     epic_issue_number = plan.get("epic_issue_number")

@@ -763,6 +763,12 @@ def create_app(
             raise HTTPException(status_code=403, detail="Issue-delivery approval owner mismatch")
         repository = manifest["repository"]
         _enforce_repo_scope(credential, repository)
+        parent_evidence = manifest.get("parent_evidence")
+        if isinstance(parent_evidence, Mapping) and parent_evidence.get("kind") == "issue":
+            parent_repository = parent_evidence.get("repository")
+            if not isinstance(parent_repository, str):
+                raise IssueDeliveryContractError("parent evidence repository is required")
+            _enforce_repo_scope(credential, parent_repository)
         permission = issue_delivery_permission(credential, repository)
         if manifest.get("permission") != permission:
             raise StateConflict("Issue-delivery approval permission was revoked or rotated")
