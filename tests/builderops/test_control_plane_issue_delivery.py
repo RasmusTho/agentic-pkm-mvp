@@ -709,6 +709,13 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         owner.issue_delivery_start(decision="start", manifest=foreign_parent_start)
     foreign_owner_profile_start = deepcopy(preview["manifest"])
     foreign_owner_profile_start["owner_profile"]["principal"] = "owner:other"  # type: ignore[union-attr]
+    foreign_owner_profile_start["profile"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        {
+            key: value
+            for key, value in foreign_owner_profile_start["profile"].items()  # type: ignore[union-attr]
+            if key != "content_hash"
+        }
+    )
     foreign_owner_profile_start["approval_manifest_hash"] = issue_delivery_manifest_hash(
         foreign_owner_profile_start
     )
