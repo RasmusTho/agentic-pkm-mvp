@@ -430,10 +430,13 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationRefused(
                     "effect target Issue is required for closure mutation"
                 )
+            if type(mutation_issue) is not int:
+                raise IssueDeliveryOperationRefused(
+                    "effect target Issue must identify an existing Issue"
+                )
             if isinstance(raw_mutation_repository, str):
                 mutation_repository = raw_mutation_repository
-                if type(mutation_issue) is int:
-                    mutation_target = (raw_mutation_repository, mutation_issue)
+                mutation_target = (raw_mutation_repository, mutation_issue)
             target = {
                 **expected,
                 "repository": expected["repository"],
