@@ -18,6 +18,7 @@ from app.builderops.issue_delivery_operation import (
     IssueDeliveryOperationAdapter,
     IssueDeliveryOperationError,
     IssueDeliveryOperationRefused,
+    _default_live_binding_reader,
 )
 from tests.builderops.test_control_plane_issue_delivery import _manifest
 from tests.builderops.test_control_plane_issue_delivery import (
@@ -119,8 +120,8 @@ def _approved_live_binding(approval: Mapping[str, Any]) -> Mapping[str, Any]:
     destination = approval["destination"]
     workflow = approval["workflow"]
     return {
-        "checkout": str(Path(destination["checkout"]).resolve()),
-        "worktree": str(Path(destination["worktree"]).resolve()),
+        "checkout": str(destination["resolved_checkout"]),
+        "worktree": str(destination["resolved_worktree"]),
         "branch": destination["branch"],
         "source_revision": approval["source"]["revision"],
         "base_sha": destination["base_sha"],
@@ -178,6 +179,12 @@ def test_production_dispatch_reservation_and_crash_matrix() -> None:
         crashing.launch(crashing_context)
     assert crashing_launcher.calls == 1
     assert crashing_client.records["issue-delivery-terminal:operation-b-crash"]["state"] == "launch_unknown"
+    assert (
+        crashing_client.records["issue-delivery-terminal:operation-b-crash"]["payload"][
+            "entry_receipt_hash"
+        ]
+        is None
+    )
     with pytest.raises(IssueDeliveryOperationError, match="unresolved"):
         crashing.launch(crashing_context)
     assert crashing_launcher.calls == 1
@@ -255,6 +262,64 @@ def test_delivery_effect_boundaries_recheck_authority() -> None:
 
     with pytest.raises(IssueDeliveryOperationRefused, match="not permitted"):
         adapter.authorize_effect("deployment")
+
+
+def test_closure_effect_binds_an_approved_parent_target() -> None:
+    approval = _manifest(operation_key="operation-b-parent-gate")
+    approval["parent_evidence"] = {
+        "kind": "issue",
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "number": 5399,
+    }
+    approval["approval_manifest_hash"] = manifest_hash(approval)
+    client = _Client(approval)
+    adapter = _adapter(client=client, launcher=_Launcher())
+
+    authorized = adapter.authorize_effect("closure_reconciliation")
+    assert authorized["target"]["parent_repository"] == "RasmusTho/agentic-pkm-mvp"
+    assert authorized["target"]["parent_issue_number"] == 5399
+    with pytest.raises(IssueDeliveryOperationRefused, match="parent Issue differs"):
+        adapter.authorize_effect(
+            "closure_reconciliation",
+            target={
+                **authorized["target"],
+                "parent_issue_number": 5400,
+            },
+        )
+
+
+def test_live_binding_rejects_a_retargeted_approved_checkout(tmp_path: Path) -> None:
+    actual_checkout = tmp_path / "actual-checkout"
+    actual_checkout.mkdir()
+    (actual_checkout / "tracked.txt").write_text("approved\n", encoding="utf-8")
+    link = tmp_path / "checkout-link"
+    link.symlink_to(actual_checkout, target_is_directory=True)
+    other_checkout = tmp_path / "other-checkout"
+    other_checkout.mkdir()
+    (other_checkout / "tracked.txt").write_text("retargeted\n", encoding="utf-8")
+
+    approval = {
+        "destination": {
+            "checkout": str(link),
+            "resolved_checkout": str(actual_checkout),
+            "worktree": str(tmp_path / "worktree"),
+            "resolved_worktree": str(tmp_path / "worktree"),
+            "base_sha": "a" * 40,
+            "branch": "codex/test",
+        },
+        "workflow": {
+            "artifacts": [{"path": "tracked.txt", "sha256": ""}],
+            "content_hash": "workflow",
+        },
+        "source": {"revision": "source"},
+    }
+    # The reader checks identity before the Git/artifact assertions, so this
+    # focused fixture does not need to pretend that the temporary directory is
+    # a complete approved checkout.
+    link.unlink()
+    link.symlink_to(other_checkout, target_is_directory=True)
+    with pytest.raises(IssueDeliveryOperationRefused, match="identity changed"):
+        _default_live_binding_reader(approval)
 
 
 def test_selected_launcher_reports_stop_unsupported() -> None:

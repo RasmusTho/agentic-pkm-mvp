@@ -1285,8 +1285,8 @@ def create_app(
                     "Issue-delivery approval bindings are incomplete"
                 )
             expected_live_binding = {
-                "checkout": str(Path(str(destination["checkout"])).resolve()),
-                "worktree": str(Path(str(destination["worktree"])).resolve()),
+                "checkout": str(destination["resolved_checkout"]),
+                "worktree": str(destination["resolved_worktree"]),
                 "branch": str(destination["branch"]),
                 "source_revision": str(source["revision"]),
                 "base_sha": str(destination["base_sha"]),

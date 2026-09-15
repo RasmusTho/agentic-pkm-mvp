@@ -108,6 +108,15 @@ def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, An
 
     destination = approval["destination"]
     checkout = Path(str(destination["checkout"])).resolve()
+    if str(checkout) != str(destination["resolved_checkout"]):
+        raise IssueDeliveryOperationRefused(
+            "approved destination checkout identity changed after approval"
+        )
+    worktree = Path(str(destination["worktree"])).resolve()
+    if str(worktree) != str(destination["resolved_worktree"]):
+        raise IssueDeliveryOperationRefused(
+            "approved destination worktree identity changed after approval"
+        )
     if not checkout.is_dir():
         raise IssueDeliveryOperationRefused(
             "approved destination checkout is unavailable for live binding"
@@ -144,7 +153,7 @@ def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, An
     observed_artifacts.sort(key=lambda item: item["path"])
     return {
         "checkout": str(checkout),
-        "worktree": str(Path(str(destination["worktree"])).resolve()),
+        "worktree": str(worktree),
         "branch": str(destination["branch"]),
         "source_revision": str(approval["source"]["revision"]),
         "base_sha": str(destination["base_sha"]),
@@ -258,7 +267,7 @@ class IssueDeliveryOperationAdapter:
         self.launcher = launcher or CodexIssueSessionLauncher(repo_root=selected_root)
         self.repo_root = selected_root.resolve()
         destination = self.approval["destination"]
-        if self.repo_root != Path(destination["checkout"]).resolve():
+        if self.repo_root != Path(destination["resolved_checkout"]):
             raise IssueDeliveryOperationRefused(
                 "launcher repository root differs from approved destination checkout"
             )
@@ -269,8 +278,9 @@ class IssueDeliveryOperationAdapter:
         if (
             dispatch_plan["run_id"] != destination["run_id"]
             or worktree_plan["branch"] != destination["branch"]
-            or Path(worktree_plan["worktree"]).resolve()
-            != Path(destination["worktree"]).resolve()
+            or worktree_plan["worktree"] != destination["worktree"]
+            or Path(destination["worktree"]).resolve()
+            != Path(destination["resolved_worktree"])
         ):
             raise IssueDeliveryOperationRefused(
                 "approved context and destination are not bound to one run"
@@ -323,8 +333,31 @@ class IssueDeliveryOperationAdapter:
         destination = value.get("destination")
         if not isinstance(destination, Mapping):
             raise IssueDeliveryOperationRefused("Issue-delivery destination is missing")
-        for name in ("identity", "run_id", "checkout", "worktree", "branch", "base_ref"):
+        for name in (
+            "identity",
+            "run_id",
+            "checkout",
+            "resolved_checkout",
+            "worktree",
+            "resolved_worktree",
+            "branch",
+            "base_ref",
+        ):
             _text(destination.get(name), f"destination {name}", limit=1024)
+        for raw_name, frozen_name in (
+            ("checkout", "resolved_checkout"),
+            ("worktree", "resolved_worktree"),
+        ):
+            try:
+                resolved = Path(str(destination[raw_name])).resolve()
+            except (OSError, RuntimeError) as exc:
+                raise IssueDeliveryOperationRefused(
+                    f"destination {raw_name} cannot be resolved"
+                ) from exc
+            if resolved != Path(str(destination[frozen_name])):
+                raise IssueDeliveryOperationRefused(
+                    f"destination {frozen_name} does not match approved identity"
+                )
         if destination.get("branch", "").removeprefix("refs/heads/") == destination.get("base_ref", "").removeprefix("refs/heads/"):
             raise IssueDeliveryOperationRefused("destination branch must be isolated from base ref")
         context = value.get("context")
@@ -356,10 +389,14 @@ class IssueDeliveryOperationAdapter:
         target: dict[str, Any] = {
             "repository": self.repository,
             "issue_number": issue["number"],
-            "checkout": str(Path(str(destination["checkout"])).resolve()),
-            "worktree": str(Path(str(destination["worktree"])).resolve()),
+            "checkout": str(destination["resolved_checkout"]),
+            "worktree": str(destination["resolved_worktree"]),
             "branch": destination["branch"],
         }
+        parent = self.approval.get("parent_evidence")
+        if effect == "closure_reconciliation" and isinstance(parent, Mapping) and parent.get("kind") == "issue":
+            target["parent_repository"] = parent["repository"]
+            target["parent_issue_number"] = parent["number"]
         return target
 
     def _validate_effect_target(
@@ -374,6 +411,30 @@ class IssueDeliveryOperationAdapter:
             return expected
         if not isinstance(target, Mapping):
             raise IssueDeliveryOperationRefused("effect target binding is malformed")
+        mutation_target: tuple[str, int] | None = None
+        mutation_repository: str | None = None
+        partial_resource_target = False
+        raw_target = dict(target)
+        if effect == "closure_reconciliation" and set(raw_target).issubset(
+            {"repository", "issue_number"}
+        ) and raw_target:
+            # Boundary classifiers may know only the exact GitHub mutation
+            # target (for example an Issue comment endpoint); the immutable
+            # checkout/branch binding still comes from the approval.  Keep the
+            # context binding in the ordinary target fields while checking
+            # the mutation resource separately below.
+            partial_resource_target = True
+            raw_mutation_repository = raw_target.get("repository", expected["repository"])
+            mutation_issue = raw_target.get("issue_number")
+            if isinstance(raw_mutation_repository, str):
+                mutation_repository = raw_mutation_repository
+                if type(mutation_issue) is int:
+                    mutation_target = (raw_mutation_repository, mutation_issue)
+            target = {
+                **expected,
+                "repository": expected["repository"],
+                "issue_number": expected["issue_number"],
+            }
         allowed = {
             "repository",
             "issue_number",
@@ -385,6 +446,8 @@ class IssueDeliveryOperationAdapter:
             "pr_issue_number",
             "pr_head_ref",
             "pr_base_ref",
+            "parent_repository",
+            "parent_issue_number",
         }
         if set(target) - allowed:
             raise IssueDeliveryOperationRefused("effect target binding contains unrelated fields")
@@ -415,7 +478,59 @@ class IssueDeliveryOperationAdapter:
                 )
         if target.get("branch") != expected["branch"]:
             raise IssueDeliveryOperationRefused("effect target branch differs from approval")
-        if effect in {"review_merge", "closure_reconciliation"}:
+        parent = self.approval.get("parent_evidence")
+        if effect == "closure_reconciliation":
+            if isinstance(parent, Mapping) and parent.get("kind") == "issue":
+                if "parent_repository" not in target or "parent_issue_number" not in target:
+                    # Existing closure owner wrappers do not know the parent
+                    # fields independently; bind them to the committed
+                    # approval while still rejecting any caller-supplied drift.
+                    target = {
+                        **dict(expected),
+                        **dict(target),
+                        "parent_repository": parent["repository"],
+                        "parent_issue_number": parent["number"],
+                    }
+                if (
+                    target.get("parent_repository") != parent["repository"]
+                    or target.get("parent_issue_number") != parent["number"]
+                ):
+                    raise IssueDeliveryOperationRefused(
+                        "effect target parent Issue differs from approval"
+                    )
+            elif "parent_repository" in target or "parent_issue_number" in target:
+                raise IssueDeliveryOperationRefused(
+                    "effect target parent Issue is not approved"
+                )
+            if mutation_target is not None:
+                try:
+                    canonical_mutation_repository = canonical_repository(mutation_target[0])
+                except (TypeError, ValueError, EnvelopeValidationError) as exc:
+                    raise IssueDeliveryOperationRefused(
+                        "effect target mutation repository is malformed"
+                    ) from exc
+                effect_issue = mutation_target[1]
+                approved_targets = {(expected["repository"], expected["issue_number"])}
+                if isinstance(parent, Mapping) and parent.get("kind") == "issue":
+                    approved_targets.add((parent["repository"], parent["number"]))
+                if (
+                    (canonical_mutation_repository, effect_issue) not in approved_targets
+                ):
+                    raise IssueDeliveryOperationRefused(
+                        "effect target mutation Issue differs from approved closure targets"
+                    )
+            elif mutation_repository is not None:
+                try:
+                    canonical_mutation_repository = canonical_repository(mutation_repository)
+                except (TypeError, ValueError, EnvelopeValidationError) as exc:
+                    raise IssueDeliveryOperationRefused(
+                        "effect target mutation repository is malformed"
+                    ) from exc
+                if canonical_mutation_repository != expected["repository"]:
+                    raise IssueDeliveryOperationRefused(
+                        "effect target mutation repository differs from approval"
+                    )
+        if effect in {"review_merge", "closure_reconciliation"} and not partial_resource_target:
             pr_fields = {
                 "pr_number",
                 "pr_repository",
@@ -499,8 +614,8 @@ class IssueDeliveryOperationAdapter:
         ]
         observed_artifacts.sort(key=lambda item: item["path"])
         expected = {
-            "checkout": str(Path(str(expected_destination["checkout"])).resolve()),
-            "worktree": str(Path(str(expected_destination["worktree"])).resolve()),
+            "checkout": str(expected_destination["resolved_checkout"]),
+            "worktree": str(expected_destination["resolved_worktree"]),
             "branch": str(expected_destination["branch"]),
             "source_revision": str(self.approval["source"]["revision"]),
             "base_sha": str(expected_destination["base_sha"]),
@@ -845,7 +960,15 @@ class IssueDeliveryOperationAdapter:
             state,
             {
                 "attempt_receipt_hash": _record_hash(attempt),
-                "entry_receipt_hash": _record_hash(entry) if entry is not None else None,
+                # A launch-unknown outcome proves only the attempt and any
+                # separately observed entry.  It must not claim that entry as
+                # a verified terminal predecessor; the service rejects that
+                # combination by design.
+                "entry_receipt_hash": (
+                    None
+                    if state == "launch_unknown"
+                    else _record_hash(entry) if entry is not None else None
+                ),
                 "session_id": session_id,
                 "worker_receipt": dict(worker_receipt) if worker_receipt is not None else None,
                 "observed_at": self.now(),

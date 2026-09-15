@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tomllib
 from threading import Thread
@@ -108,6 +109,10 @@ class IssueSessionLaunchError(RuntimeError):
         super().__init__(message)
 
 
+class _EffectGateDenied(RuntimeError):
+    """Internal signal used to stop a streamed child at a denied boundary."""
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -121,8 +126,22 @@ class IssueSessionLauncher(Protocol):
         *,
         execution_routing: Mapping[str, Any] | None = None,
         on_entry: Callable[[str], None] | None = None,
-        effect_gate: Callable[[str], Mapping[str, Any]] | None = None,
+        effect_gate: Callable[..., Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]: ...
+
+
+def _owner_boundary_command(event: Mapping[str, Any]) -> str | None:
+    if event.get("type") != "item.started":
+        return None
+    item = event.get("item")
+    if not isinstance(item, Mapping) or item.get("type") != "command_execution":
+        return None
+    raw_command = item.get("command", item.get("cmd"))
+    if isinstance(raw_command, (list, tuple)):
+        return " ".join(str(part) for part in raw_command)
+    if isinstance(raw_command, str):
+        return raw_command
+    return None
 
 
 def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
@@ -145,15 +164,8 @@ def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
         )
     if event.get("type") != "item.started":
         return None
-    item = event.get("item")
-    if not isinstance(item, Mapping) or item.get("type") != "command_execution":
-        return None
-    raw_command = item.get("command", item.get("cmd"))
-    if isinstance(raw_command, (list, tuple)):
-        command = " ".join(str(part) for part in raw_command)
-    elif isinstance(raw_command, str):
-        command = raw_command
-    else:
+    command = _owner_boundary_command(event)
+    if command is None:
         return None
     lowered = command.lower()
     if (
@@ -162,6 +174,13 @@ def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
         or ("gh issue edit" in lowered and "agent:ready" in lowered)
     ):
         return "issue_claim"
+    if (
+        "gh issue comment" in lowered
+        or ("/issues/" in lowered and "/comments" in lowered and "post" in lowered)
+        or "gh issue create" in lowered
+        or ("/issues" in lowered and "--method post" in lowered)
+    ):
+        return "closure_reconciliation"
     if (
         "git push" in lowered
         or "gh pr create" in lowered
@@ -182,6 +201,50 @@ def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
     ):
         return "closure_reconciliation"
     return None
+
+
+def _owner_boundary_target(
+    event: Mapping[str, Any], effect: str,
+) -> dict[str, Any] | None:
+    """Extract a concrete GitHub mutation target when the worker exposes one.
+
+    The adapter's ordinary repository/Issue/branch target remains the default.
+    For a GitHub comment, the existing repository/Issue target fields identify
+    the exact resource touched, allowing the destination adapter to reject an
+    unapproved parent or repository.
+    """
+
+    if effect != "closure_reconciliation":
+        return None
+    item = event.get("item")
+    explicit = event.get("target")
+    if not isinstance(explicit, Mapping) and isinstance(item, Mapping):
+        explicit = item.get("target")
+    if isinstance(explicit, Mapping):
+        return dict(explicit)
+    command = _owner_boundary_command(event)
+    if command is None:
+        return None
+    target: dict[str, Any] = {}
+    repo_match = re.search(
+        r"(?:--repo|-R)(?:=|\s+)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", command
+    )
+    api_repo_match = re.search(
+        r"(?:^|\s)(?:/)?repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", command
+    )
+    repository = (
+        repo_match.group(1)
+        if repo_match is not None
+        else api_repo_match.group(1) if api_repo_match is not None else None
+    )
+    if repository is not None:
+        target["repository"] = repository
+    issue_match = re.search(r"gh\s+issue\s+comment\s+(\d+)", command, re.IGNORECASE)
+    api_issue_match = re.search(r"/issues/(\d+)/comments(?:\b|/)", command, re.IGNORECASE)
+    issue = issue_match or api_issue_match
+    if issue is not None:
+        target["issue_number"] = int(issue.group(1))
+    return target or None
 
 
 _CAPABILITY_FOR_MODEL_CLASS = {
@@ -318,7 +381,7 @@ class CodexIssueSessionLauncher:
         *,
         execution_routing: Mapping[str, Any] | None = None,
         on_entry: Callable[[str], None] | None = None,
-        effect_gate: Callable[[str], Mapping[str, Any]] | None = None,
+        effect_gate: Callable[..., Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]:
         prompt = self.prompt(context_pack)
         canary_target = None
@@ -338,6 +401,24 @@ class CodexIssueSessionLauncher:
         entry_notified = False
         effect_gate_error: Exception | None = None
         streamed_gate_line_indexes: set[int] = set()
+        process: subprocess.Popen[str] | None = None
+
+        def stop_process_after_gate_denial() -> None:
+            """Bound the child before it can execute a denied raw effect."""
+
+            if process is None or process.poll() is not None:
+                return
+            try:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                # The authority denial remains the source error.  Do not
+                # replace it with a best-effort process-control diagnostic.
+                return
 
         def notify_entry(candidate: str) -> None:
             nonlocal entry_notified, entry_error
@@ -349,18 +430,27 @@ class CodexIssueSessionLauncher:
             except Exception as exc:  # preserve the process for reconciliation
                 entry_error = exc
 
-        def notify_effect_boundary(event: Mapping[str, Any]) -> None:
+        def notify_effect_boundary(
+            event: Mapping[str, Any], *, stop_child_on_denial: bool = False
+        ) -> None:
             nonlocal effect_gate_error
             if effect_gate is None:
                 return
             effect = _effect_for_owner_boundary_event(event)
             if effect is None:
                 return
+            target = _owner_boundary_target(event, effect)
             try:
-                effect_gate(effect)
-            except Exception as exc:  # preserve the child for reconciliation
+                if target is None:
+                    effect_gate(effect)
+                else:
+                    effect_gate(effect, target=target)
+            except Exception as exc:
                 if effect_gate_error is None:
                     effect_gate_error = exc
+                if stop_child_on_denial:
+                    stop_process_after_gate_denial()
+                    raise _EffectGateDenied from exc
 
         if self._stream_output:
             # Do not leak an outer Issue-delivery approval into a nested
@@ -396,24 +486,36 @@ class CodexIssueSessionLauncher:
 
             stderr_thread = Thread(target=drain_stderr, daemon=True)
             stderr_thread.start()
-            for line in process.stdout:
-                output_lines.append(line)
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if (
-                    isinstance(event, Mapping)
-                    and event.get("type") == "thread.started"
-                ):
-                    candidate = event.get("thread_id")
-                    if isinstance(candidate, str) and candidate.strip():
-                        notify_entry(candidate.strip())
-                if isinstance(event, Mapping):
-                    notify_effect_boundary(event)
-                    if _effect_for_owner_boundary_event(event) is not None:
-                        streamed_gate_line_indexes.add(len(output_lines) - 1)
-            stderr_thread.join()
+            try:
+                for line in process.stdout:
+                    output_lines.append(line)
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (
+                        isinstance(event, Mapping)
+                        and event.get("type") == "thread.started"
+                    ):
+                        candidate = event.get("thread_id")
+                        if isinstance(candidate, str) and candidate.strip():
+                            notify_entry(candidate.strip())
+                    if isinstance(event, Mapping):
+                        if _effect_for_owner_boundary_event(event) is not None:
+                            streamed_gate_line_indexes.add(len(output_lines) - 1)
+                        notify_effect_boundary(event, stop_child_on_denial=True)
+            except _EffectGateDenied:
+                # The gate callback already synchronously stopped the child;
+                # leave the boundary line in the receipt for reconciliation,
+                # but never consume later child output.
+                pass
+            finally:
+                if effect_gate_error is not None:
+                    try:
+                        process.stdout.close()
+                    except OSError:
+                        pass
+            stderr_thread.join(timeout=5)
             stderr = "".join(stderr_lines)
             returncode = process.wait()
             stdout = "".join(output_lines)

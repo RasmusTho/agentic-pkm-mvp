@@ -295,7 +295,9 @@ rollback, lock deletion, or synthetic terminal evidence is added.
 
 The adapter exposes fresh BuilderOps effect gates for the five permitted effect groups and the
 service rechecks permission, expiry, authority epoch, source, workflow, profile, and destination
-identity at each destination receipt write. Local run state remains coordination-only. FCA-ID-B
+identity at each destination receipt write. Admission also freezes the resolved checkout and
+worktree identities; a later symlink retarget is a destination drift, not a new approved target.
+Local run state remains coordination-only. FCA-ID-B
 does not provide independent GitHub/CI/PR/source readback, live activation, deployment, candidate
 trial, owner acceptance, or parent closure authority; those remain explicit FCA-ID-C/M2 evidence
 boundaries.

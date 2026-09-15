@@ -337,7 +337,9 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "system_identity": "system:builderops",
             "channel": "dev",
             "checkout": "/workspaces/agentic-pkm-mvp",
+            "resolved_checkout": "/workspaces/agentic-pkm-mvp",
             "worktree": "/worktrees/issue-5550",
+            "resolved_worktree": "/worktrees/issue-5550",
             "branch": "codex/5550-issue-delivery-approval",
             "base_ref": "main",
             "base_sha": "e" * 40,
@@ -849,6 +851,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_p
         owner.issue_delivery_preview(manifest=symlink_overlap)
     sibling_worktree = deepcopy(manifest)
     sibling_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
+        "/workspaces/agentic-pkm-mvp-sibling"
+    )
+    sibling_worktree["destination"]["resolved_worktree"] = (  # type: ignore[union-attr]
         "/workspaces/agentic-pkm-mvp-sibling"
     )
     sibling_worktree["context"]["dispatch_plan"]["context_packs"][0][  # type: ignore[union-attr]

@@ -708,6 +708,22 @@ def _destination_fields(value: Any) -> dict[str, Any]:
             destination, aliases, f"destination {normalized_name}"
         )
         resolved[normalized_name] = _text(candidate, f"destination {normalized_name}", limit=1024)
+    # The raw paths remain the launch/context arguments, but their resolved
+    # identities are part of the approval itself.  A symlink parent may be
+    # retargeted between Start and a later effect; recomputing the identity
+    # from the raw path at that point would silently authorize a different
+    # checkout or worktree.  Keep these two values explicit and hash-bound.
+    for raw_name, frozen_name in (
+        ("checkout", "resolved_checkout"),
+        ("worktree", "resolved_worktree"),
+    ):
+        resolved_path = _resolved_absolute_path(resolved[raw_name])
+        supplied_path = destination.get(frozen_name)
+        if supplied_path is not None and supplied_path != resolved_path:
+            raise IssueDeliveryContractError(
+                f"destination {frozen_name} does not match its approved path"
+            )
+        resolved[frozen_name] = resolved_path
     base_sha = _text(destination.get("base_sha"), "observed destination base SHA", limit=40).lower()
     if _GIT_SHA.fullmatch(base_sha) is None:
         raise IssueDeliveryContractError("observed destination base SHA must be a Git commit")

@@ -17,6 +17,8 @@ from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
     EpicDispatchError,
     IssueSessionLaunchError,
+    _effect_for_owner_boundary_event,
+    _owner_boundary_target,
     build_dispatch_plan,
     dispatch_issue_sessions,
     frozen_dispatch_plan_hash,
@@ -1967,6 +1969,129 @@ def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:
             run_id="bounded-fast-risk-override",
             candidates=[candidate],
         )
+
+
+def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() -> None:
+    comment = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh issue comment 5399 --repo RasmusTho/agentic-pkm-mvp --body receipt",
+        },
+    }
+    follow_up = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh issue create --repo RasmusTho/agentic-pkm-mvp --title follow-up",
+        },
+    }
+
+    assert _effect_for_owner_boundary_event(comment) == "closure_reconciliation"
+    assert _owner_boundary_target(comment, "closure_reconciliation") == {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 5399,
+    }
+    assert _effect_for_owner_boundary_event(follow_up) == "closure_reconciliation"
+    assert _owner_boundary_target(follow_up, "closure_reconciliation") == {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+    }
+
+
+def test_streamed_child_is_stopped_before_denied_raw_effect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5852],
+        run_id="stream-gate-denial-stop",
+        candidates=[
+            _candidate(
+                5852,
+                risk="high",
+                files=["app/a.py"],
+                worktree=str(tmp_path / "issue-5852"),
+            )
+        ],
+    )
+    events = [
+        json.dumps({"type": "thread.started", "thread_id": "session-5852"}),
+        json.dumps(
+            {
+                "type": "item.started",
+                "item": {"type": "command_execution", "command": "git push origin HEAD"},
+            }
+        ),
+        json.dumps(
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "command_execution",
+                    "command": "gh issue comment 5399 --repo RasmusTho/agentic-pkm-mvp",
+                },
+            }
+        ),
+    ]
+
+    class _Lines:
+        def __init__(self, values: list[str]) -> None:
+            self.values = values
+            self.closed = False
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter(self.values)
+
+        def write(self, _value: str) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdin = _Lines([])
+            self.stdout = _Lines([f"{line}\n" for line in events])
+            self.stderr = _Lines([])
+            self.returncode: int | None = None
+            self.terminated = False
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    process = _Process()
+    monkeypatch.setattr(
+        "app.builderops.epic_dispatch.subprocess.Popen",
+        lambda *args, **kwargs: process,
+    )
+    observed: list[tuple[str, dict[str, object] | None]] = []
+
+    def gate(effect: str, **kwargs: object) -> Mapping[str, object]:
+        target = kwargs.get("target")
+        observed.append((effect, target if isinstance(target, dict) else None))
+        if effect == "publication":
+            raise RuntimeError("authority revoked")
+        return {}
+
+    launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
+    with pytest.raises(IssueSessionLaunchError, match="revalidated"):
+        launcher.launch(plan["context_packs"][0], effect_gate=gate)
+
+    assert process.terminated is True
+    assert observed == [("repository_worktree", None), ("publication", None)]
+    assert process.stdout.closed is True
 
 
 def test_codex_issue_session_captures_exposed_token_usage_and_pack_bytes(
