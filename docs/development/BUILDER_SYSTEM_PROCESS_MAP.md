@@ -344,17 +344,27 @@ target is not claimed as shipped.
 **Issue-delivery credential-isolation prerequisite:** repository support now includes the
 fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile.
 It re-resolves the exact executor and distinct unprivileged worker UID/GID with no supplementary
-groups, clean frozen worktree,
-private worker-owned `0700` model-auth identity, pinned Git/Codex/system executables, direct Codex
-command, and fixed systemd properties;
-then a forked child drops supplementary groups, GID, and UID and proves that the executor-owned
-GitHub effect credential cannot be opened immediately before a no-shell transient systemd entry.
+groups, clean frozen worktree, its exact linked per-worktree and common Git administration
+directories, private worker-owned `0700` model-auth
+identity, content-/mode-/owner-pinned Git/Codex/system executables, direct Codex command, and fixed
+systemd properties; then forked children drop supplementary groups, GID, and UID and prove both
+that the executor-owned GitHub effect credential cannot be opened and that the worker has effective
+POSIX/ACL access to edit every existing regular worktree/model-state file and traverse/write every
+directory while Git control, index, `HEAD`, common refs, and objects remain non-writable immediately
+before a no-shell transient systemd entry.
 The unit has `NoNewPrivileges`, a closed environment, one exact working directory, and explicit
-worktree/model-state write apertures. Its receipt contains only identity hashes and typed live facts;
+worktree-content and model-state write apertures; the nested Git control file plus per-worktree and
+common Git directories are explicit read-only paths, so it grants no Git-metadata aperture. Its receipt
+binds both Git-directory identities, the typed metadata-denial fact, and executable
+content/mode/ownership identities using only hashes and typed live facts;
 the GitHub credential path and bytes never enter worker argv, environment, prompt, logs, or receipt.
 Unsupported or drifted hosts stop without a same-user fallback. This is repository-only enabling
 support: #5558, FCA-ID-B/C, bob activation, candidate trial, and owner outcome all remain pending,
-and no account, credential, service, or deployment is provisioned here.
+and no account, credential, ACL, service, or deployment is provisioned here. The future host-profile
+producer is responsible for recursively granting the already-provisioned worker only worktree
+content permissions. Local stage/commit/ref/object mutation and publication stay host-executor
+effects for #5558; this dormant adapter only refuses absent content access or writable Git metadata
+and never provisions bob or widens a Git/common/worktree-parent aperture.
 
 ### Exception and human-decision model
 

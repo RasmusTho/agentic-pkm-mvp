@@ -59,6 +59,9 @@ _REQUIRED_SYSTEMD_PROPERTY_TEMPLATE = (
     "ProtectHome=read-only",
     "ReadWritePaths=<worktree>",
     "ReadWritePaths=<model-auth-home>",
+    "ReadOnlyPaths=<worktree-git-control>",
+    "ReadOnlyPaths=<worktree-git-directory>",
+    "ReadOnlyPaths=<worktree-git-common-directory>",
     "PrivateTmp=yes",
     "PrivateDevices=yes",
     "ProtectControlGroups=yes",
@@ -103,6 +106,15 @@ class CredentialProbeResult(str, Enum):
     FAILED = "failed"
 
 
+class WorkerAccessProbeResult(str, Enum):
+    """Only values permitted to cross the private filesystem probe pipe."""
+
+    ADMITTED = "worktree-writable-git-denied"
+    WORKTREE_DENIED = "worktree-denied"
+    GIT_METADATA_WRITABLE = "git-metadata-writable"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class ResolvedPrincipal:
     user: str
@@ -117,6 +129,10 @@ class ExecutableIdentity:
     path: str
     device: int
     inode: int
+    sha256: str
+    mode: int
+    owner_uid: int
+    owner_gid: int
 
 
 @dataclass(frozen=True)
@@ -133,6 +149,7 @@ class CredentialProbeSyscalls:
     getgroups: Callable[[], list[int]]
     open: Callable[[Path, int], int]
     close: Callable[[int], None]
+    access: Callable[..., bool]
 
 
 @dataclass(frozen=True)
@@ -161,6 +178,8 @@ class _IsolationProfile:
     worker: ResolvedPrincipal
     worktree: _PathIdentity
     worktree_head: str
+    worktree_git_directory: _PathIdentity
+    worktree_git_common_directory: _PathIdentity
     model_auth_home: _PathIdentity
     model_auth_reference: str
     protected_credential: _PathIdentity
@@ -222,6 +241,12 @@ def file_sha256(path: Path) -> str:
 
 def _has_control_characters(value: str) -> bool:
     return any(ord(character) < 32 or ord(character) == 127 for character in value)
+
+
+def _validate_systemd_path_value(path: Path, *, label: str) -> None:
+    value = str(path)
+    if any(character.isspace() or character in {"\\", "%"} for character in value):
+        raise IssueWorkerIsolationError(f"worker isolation {label} path is invalid")
 
 
 def _validated_text(
@@ -313,11 +338,27 @@ def _profile_path(value: object, *, label: str) -> _PathIdentity:
 
 
 def _profile_executable(value: object, *, label: str) -> ExecutableIdentity:
-    identity = _profile_path(value, label=label)
+    document = _strict_mapping(
+        value,
+        keys=frozenset({"path", "device", "inode", "sha256", "mode", "owner_uid", "owner_gid"}),
+        label=label,
+    )
+    identity = _profile_path(
+        {key: document[key] for key in ("path", "device", "inode")},
+        label=label,
+    )
+    digest = _validated_text(document["sha256"], label=f"{label} hash", pattern=_HEX_64)
+    mode = _validated_nonnegative_int(document["mode"], label=f"{label} mode")
+    if mode > 0o7777 or mode & 0o111 == 0 or mode & 0o6022:
+        raise IssueWorkerIsolationError(f"worker isolation {label} mode is invalid")
     return ExecutableIdentity(
         path=str(identity.path),
         device=identity.device,
         inode=identity.inode,
+        sha256=digest,
+        mode=mode,
+        owner_uid=_validated_nonnegative_int(document["owner_uid"], label=f"{label} owner uid"),
+        owner_gid=_validated_nonnegative_int(document["owner_gid"], label=f"{label} owner gid"),
     )
 
 
@@ -374,7 +415,16 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
         )
     worktree_document = _strict_mapping(
         document["worktree"],
-        keys=frozenset({"path", "device", "inode", "git_head"}),
+        keys=frozenset(
+            {
+                "path",
+                "device",
+                "inode",
+                "git_head",
+                "git_directory",
+                "git_common_directory",
+            }
+        ),
         label="worktree",
     )
     worktree = _profile_path(
@@ -383,6 +433,13 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
     )
     worktree_head = _validated_text(
         worktree_document["git_head"], label="worktree head", pattern=re.compile(r"[0-9a-f]{40}")
+    )
+    worktree_git_directory = _profile_path(
+        worktree_document["git_directory"], label="worktree Git directory"
+    )
+    worktree_git_common_directory = _profile_path(
+        worktree_document["git_common_directory"],
+        label="worktree Git common directory",
     )
     model_document = _strict_mapping(
         document["model_auth"],
@@ -428,6 +485,21 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
     )
     if isolation_hash != REQUIRED_SYSTEMD_PROPERTIES_SHA256:
         raise IssueWorkerIsolationError("worker isolation properties changed")
+    executables = {
+        "systemd": _profile_executable(document["systemd_run"], label="systemd"),
+        "environment executable": _profile_executable(
+            document["environment_executable"], label="environment executable"
+        ),
+        "Git executable": _profile_executable(document["git_executable"], label="Git executable"),
+        "Codex executable": _profile_executable(
+            document["codex_executable"], label="Codex executable"
+        ),
+    }
+    if any(
+        identity.owner_uid not in {0, executor.uid} or identity.owner_uid == worker.uid
+        for identity in executables.values()
+    ):
+        raise IssueWorkerIsolationError("worker isolation executable owner is invalid")
     return _IsolationProfile(
         profile_id=profile_id,
         profile_version=1,
@@ -436,17 +508,15 @@ def _load_profile(path: Path, expected_sha256: str) -> _IsolationProfile:
         worker=worker,
         worktree=worktree,
         worktree_head=worktree_head,
+        worktree_git_directory=worktree_git_directory,
+        worktree_git_common_directory=worktree_git_common_directory,
         model_auth_home=model_auth_home,
         model_auth_reference=model_auth_reference,
         protected_credential=protected_credential,
-        systemd_run=_profile_executable(document["systemd_run"], label="systemd"),
-        environment_executable=_profile_executable(
-            document["environment_executable"], label="environment executable"
-        ),
-        git_executable=_profile_executable(document["git_executable"], label="Git executable"),
-        codex_executable=_profile_executable(
-            document["codex_executable"], label="Codex executable"
-        ),
+        systemd_run=executables["systemd"],
+        environment_executable=executables["environment executable"],
+        git_executable=executables["Git executable"],
+        codex_executable=executables["Codex executable"],
         command_sha256=command_sha256,
         environment=environment,
         isolation_properties_sha256=isolation_hash,
@@ -481,23 +551,66 @@ def resolve_principal(user: str, group: str) -> ResolvedPrincipal:
 
 
 def resolve_executable(path: str) -> ExecutableIdentity:
-    """Bind one executable to its canonical regular-file identity."""
+    """Bind one executable to canonical inode, content, mode, and ownership."""
 
     candidate = Path(path)
     if not candidate.is_absolute() or _has_control_characters(path):
         raise IssueWorkerIsolationError("worker isolation executable is unavailable")
     try:
         resolved = candidate.resolve(strict=True)
-        metadata = candidate.lstat()
-    except OSError as exc:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(candidate, flags)
+    except (OSError, RuntimeError) as exc:
         raise IssueWorkerIsolationError("worker isolation executable is unavailable") from exc
-    if resolved != candidate or not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o111 == 0:
-        raise IssueWorkerIsolationError("worker isolation executable is unavailable")
-    return ExecutableIdentity(
-        path=str(candidate),
-        device=metadata.st_dev,
-        inode=metadata.st_ino,
-    )
+    try:
+        metadata = os.fstat(descriptor)
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            resolved != candidate
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size <= 0
+            or mode & 0o111 == 0
+            or mode & 0o6022
+        ):
+            raise IssueWorkerIsolationError("worker isolation executable is unavailable")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        repeated = os.fstat(descriptor)
+        if (
+            repeated.st_dev,
+            repeated.st_ino,
+            repeated.st_size,
+            repeated.st_mode,
+            repeated.st_uid,
+            repeated.st_gid,
+            repeated.st_mtime_ns,
+            repeated.st_ctime_ns,
+        ) != (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mode,
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        ):
+            raise IssueWorkerIsolationError("worker isolation executable changed during admission")
+        return ExecutableIdentity(
+            path=str(candidate),
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+            sha256=digest.hexdigest(),
+            mode=mode,
+            owner_uid=metadata.st_uid,
+            owner_gid=metadata.st_gid,
+        )
+    finally:
+        os.close(descriptor)
 
 
 def systemd_preflight() -> ExecutableIdentity:
@@ -584,6 +697,60 @@ def resolve_worktree_head(path: Path, git_executable: str) -> str:
     return lines[1]
 
 
+def resolve_worktree_git_topology(path: Path, git_executable: str) -> tuple[Path, Path]:
+    """Resolve a linked worktree's exact per-worktree and common Git directories."""
+
+    git_identity = resolve_executable(git_executable)
+    try:
+        result = subprocess.run(
+            [
+                git_identity.path,
+                "-C",
+                str(path),
+                "rev-parse",
+                "--absolute-git-dir",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+            env=dict(_GIT_INSPECTION_ENVIRONMENT),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise IssueWorkerIsolationError("worker isolation Git directory is unavailable") from exc
+    lines = result.stdout.splitlines()
+    if result.returncode != 0 or len(lines) != 2:
+        raise IssueWorkerIsolationError("worker isolation Git directory is unavailable")
+    git_directory, common_directory = (Path(line) for line in lines)
+    for candidate in (git_directory, common_directory):
+        try:
+            resolved = candidate.resolve(strict=True)
+            metadata = candidate.lstat()
+        except (OSError, RuntimeError) as exc:
+            raise IssueWorkerIsolationError(
+                "worker isolation Git directory is unavailable"
+            ) from exc
+        if (
+            not candidate.is_absolute()
+            or candidate == Path("/")
+            or resolved != candidate
+            or not stat.S_ISDIR(metadata.st_mode)
+        ):
+            raise IssueWorkerIsolationError("worker isolation Git directory is unavailable")
+    if (
+        git_directory == common_directory
+        or git_directory.is_relative_to(path)
+        or path.is_relative_to(git_directory)
+        or common_directory.is_relative_to(path)
+        or path.is_relative_to(common_directory)
+        or not git_directory.is_relative_to(common_directory / "worktrees")
+    ):
+        raise IssueWorkerIsolationError("worker isolation requires a linked Git worktree")
+    return git_directory, common_directory
+
+
 def _validate_directory(
     identity: _PathIdentity,
     *,
@@ -608,11 +775,44 @@ def _validate_directory(
         raise IssueWorkerIsolationError(f"worker isolation {label} changed")
 
 
+def _git_metadata_denial_targets(profile: _IsolationProfile) -> tuple[Path, ...]:
+    control_file = profile.worktree.path / ".git"
+    targets = (
+        control_file,
+        profile.worktree_git_directory.path,
+        profile.worktree_git_directory.path / "HEAD",
+        profile.worktree_git_directory.path / "index",
+        profile.worktree_git_common_directory.path,
+        profile.worktree_git_common_directory.path / "objects",
+        profile.worktree_git_common_directory.path / "refs",
+    )
+    expected_directories = {targets[1], targets[4], targets[5], targets[6]}
+    for target in targets:
+        try:
+            resolved = target.resolve(strict=True)
+            metadata = target.lstat()
+        except (OSError, RuntimeError) as exc:
+            raise IssueWorkerIsolationError("worker isolation Git metadata is unavailable") from exc
+        expected_type = (
+            stat.S_ISDIR(metadata.st_mode)
+            if target in expected_directories
+            else stat.S_ISREG(metadata.st_mode)
+        )
+        if resolved != target or not expected_type:
+            raise IssueWorkerIsolationError("worker isolation Git metadata is unavailable")
+    expected_control = f"gitdir: {profile.worktree_git_directory.path}\n".encode("utf-8")
+    if _secure_file_bytes(control_file) != expected_control:
+        raise IssueWorkerIsolationError("worker isolation Git metadata is unavailable")
+    return targets
+
+
 def _validate_credential(
     identity: _PathIdentity,
     *,
     executor: ResolvedPrincipal,
     worktree: Path,
+    worktree_git_directory: Path,
+    worktree_git_common_directory: Path,
     model_auth_home: Path,
 ) -> _CredentialIdentity:
     try:
@@ -623,9 +823,12 @@ def _validate_credential(
             "worker isolation protected credential is unavailable"
         ) from None
     try:
-        overlaps_worker_path = identity.path.is_relative_to(
-            worktree
-        ) or identity.path.is_relative_to(model_auth_home)
+        overlaps_worker_path = (
+            identity.path.is_relative_to(worktree)
+            or identity.path.is_relative_to(worktree_git_directory)
+            or identity.path.is_relative_to(worktree_git_common_directory)
+            or identity.path.is_relative_to(model_auth_home)
+        )
     except ValueError:
         overlaps_worker_path = True
     if (
@@ -654,6 +857,8 @@ def _validate_host_profile_file(
     *,
     executor: ResolvedPrincipal,
     worktree: Path,
+    worktree_git_directory: Path,
+    worktree_git_common_directory: Path,
     model_auth_home: Path,
 ) -> None:
     try:
@@ -669,12 +874,21 @@ def _validate_host_profile_file(
         or metadata.st_gid != executor.gid
         or stat.S_IMODE(metadata.st_mode) & 0o077
         or path.is_relative_to(worktree)
+        or path.is_relative_to(worktree_git_directory)
+        or path.is_relative_to(worktree_git_common_directory)
         or path.is_relative_to(model_auth_home)
     ):
         raise IssueWorkerIsolationError("worker isolation profile is unavailable")
 
 
 def _write_probe_result(descriptor: int, result: CredentialProbeResult) -> None:
+    try:
+        os.write(descriptor, result.value.encode("ascii"))
+    except OSError:
+        pass
+
+
+def _write_worker_access_probe_result(descriptor: int, result: WorkerAccessProbeResult) -> None:
     try:
         os.write(descriptor, result.value.encode("ascii"))
     except OSError:
@@ -693,6 +907,7 @@ def _production_probe_syscalls() -> CredentialProbeSyscalls:
         getgroups=os.getgroups,
         open=os.open,
         close=os.close,
+        access=os.access,
     )
 
 
@@ -733,6 +948,64 @@ def _drop_principal_and_probe(
         return CredentialProbeResult.READABLE
     except BaseException:
         return CredentialProbeResult.FAILED
+
+
+def _drop_principal_and_probe_write_access(
+    writable_roots: Sequence[Path],
+    denied_git_metadata: Sequence[Path],
+    worker: ResolvedPrincipal,
+    syscalls: CredentialProbeSyscalls,
+) -> WorkerAccessProbeResult:
+    if not callable(syscalls.setresgid) or not callable(syscalls.setresuid):
+        return WorkerAccessProbeResult.FAILED
+    try:
+        syscalls.setgroups([])
+        syscalls.setresgid(worker.gid, worker.gid, worker.gid)
+        syscalls.setresuid(worker.uid, worker.uid, worker.uid)
+        if (
+            syscalls.getuid() != worker.uid
+            or syscalls.geteuid() != worker.uid
+            or syscalls.getgid() != worker.gid
+            or syscalls.getegid() != worker.gid
+            or syscalls.getgroups()
+        ):
+            return WorkerAccessProbeResult.FAILED
+        denied_set = set(denied_git_metadata)
+        for root in writable_roots:
+            walk_errors: list[OSError] = []
+            for directory, child_directories, child_files in os.walk(
+                root,
+                topdown=True,
+                onerror=walk_errors.append,
+                followlinks=False,
+            ):
+                directory_path = Path(directory)
+                if not syscalls.access(
+                    directory_path,
+                    os.W_OK | os.X_OK,
+                    effective_ids=True,
+                ):
+                    return WorkerAccessProbeResult.WORKTREE_DENIED
+                for name in (*child_directories, *child_files):
+                    candidate = directory_path / name
+                    try:
+                        metadata = candidate.lstat()
+                    except OSError:
+                        return WorkerAccessProbeResult.FAILED
+                    if (
+                        stat.S_ISREG(metadata.st_mode)
+                        and candidate not in denied_set
+                        and not syscalls.access(candidate, os.W_OK, effective_ids=True)
+                    ):
+                        return WorkerAccessProbeResult.WORKTREE_DENIED
+            if walk_errors:
+                return WorkerAccessProbeResult.FAILED
+        for path in denied_git_metadata:
+            if syscalls.access(path, os.W_OK, effective_ids=True):
+                return WorkerAccessProbeResult.GIT_METADATA_WRITABLE
+        return WorkerAccessProbeResult.ADMITTED
+    except BaseException:
+        return WorkerAccessProbeResult.FAILED
 
 
 def probe_credential_denial(
@@ -789,6 +1062,75 @@ def probe_credential_denial(
         return CredentialProbeResult.FAILED
 
 
+def probe_worker_write_access(
+    writable_roots: Sequence[Path],
+    denied_git_metadata: Sequence[Path],
+    worker: ResolvedPrincipal,
+    executor: ResolvedPrincipal,
+    *,
+    syscalls: CredentialProbeSyscalls | None = None,
+) -> WorkerAccessProbeResult:
+    """Fork, drop to the worker IDs, and prove effective W+X path access."""
+
+    del executor
+    if (
+        not hasattr(os, "fork")
+        or len(writable_roots) != 2
+        or len(denied_git_metadata) != 7
+        or len(set((*writable_roots, *denied_git_metadata)))
+        != len((*writable_roots, *denied_git_metadata))
+        or any(
+            not isinstance(path, Path)
+            or not path.is_absolute()
+            or _has_control_characters(str(path))
+            for path in (*writable_roots, *denied_git_metadata)
+        )
+    ):
+        return WorkerAccessProbeResult.FAILED
+    operations = syscalls or _production_probe_syscalls()
+    try:
+        reader, writer = os.pipe()
+        os.set_inheritable(reader, False)
+        os.set_inheritable(writer, False)
+        child_pid = os.fork()
+    except OSError:
+        return WorkerAccessProbeResult.FAILED
+    if child_pid == 0:  # pragma: no branch - child exits through one bounded result.
+        try:
+            os.close(reader)
+            outcome = _drop_principal_and_probe_write_access(
+                writable_roots, denied_git_metadata, worker, operations
+            )
+            _write_worker_access_probe_result(writer, outcome)
+        except BaseException:
+            _write_worker_access_probe_result(writer, WorkerAccessProbeResult.FAILED)
+        finally:
+            try:
+                os.close(writer)
+            except OSError:
+                pass
+        os._exit(0)
+    os.close(writer)
+    try:
+        payload = os.read(reader, 32)
+        trailing = os.read(reader, 1)
+    except OSError:
+        payload = b""
+        trailing = b""
+    finally:
+        os.close(reader)
+    try:
+        _pid, status = os.waitpid(child_pid, 0)
+    except OSError:
+        return WorkerAccessProbeResult.FAILED
+    if trailing or not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+        return WorkerAccessProbeResult.FAILED
+    try:
+        return WorkerAccessProbeResult(payload.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        return WorkerAccessProbeResult.FAILED
+
+
 def _validate_command_parts(command: Sequence[str]) -> None:
     if isinstance(command, (str, bytes)) or not command or len(command) > _MAX_COMMAND_PARTS:
         raise IssueWorkerIsolationError("worker isolation command is invalid")
@@ -830,6 +1172,9 @@ def _systemd_properties(profile: _IsolationProfile) -> tuple[str, ...]:
         "ProtectHome=read-only",
         f"ReadWritePaths={profile.worktree.path}",
         f"ReadWritePaths={profile.model_auth_home.path}",
+        f"ReadOnlyPaths={profile.worktree.path / '.git'}",
+        f"ReadOnlyPaths={profile.worktree_git_directory.path}",
+        f"ReadOnlyPaths={profile.worktree_git_common_directory.path}",
         "PrivateTmp=yes",
         "PrivateDevices=yes",
         "ProtectControlGroups=yes",
@@ -852,6 +1197,27 @@ def _path_identity_digest(identity: _PathIdentity, **extra: object) -> str:
     return _canonical_sha256({"device": identity.device, "inode": identity.inode, **extra})
 
 
+def _executable_set_digest(profile: _IsolationProfile) -> str:
+    return _canonical_sha256(
+        {
+            role: {
+                "device": identity.device,
+                "inode": identity.inode,
+                "sha256": identity.sha256,
+                "mode": identity.mode,
+                "owner_uid": identity.owner_uid,
+                "owner_gid": identity.owner_gid,
+            }
+            for role, identity in (
+                ("systemd", profile.systemd_run),
+                ("environment", profile.environment_executable),
+                ("git", profile.git_executable),
+                ("codex", profile.codex_executable),
+            )
+        }
+    )
+
+
 class _SystemdWorkerRunner:
     def __init__(
         self,
@@ -863,7 +1229,17 @@ class _SystemdWorkerRunner:
         credential_probe: Callable[
             [Path, ResolvedPrincipal, ResolvedPrincipal], CredentialProbeResult
         ],
+        worker_access_probe: Callable[
+            [
+                Sequence[Path],
+                Sequence[Path],
+                ResolvedPrincipal,
+                ResolvedPrincipal,
+            ],
+            WorkerAccessProbeResult,
+        ],
         worktree_head_resolver: Callable[[Path, str], str],
+        worktree_git_topology_resolver: Callable[[Path, str], tuple[Path, Path]],
         systemd_preflight_resolver: Callable[[], ExecutableIdentity],
         executable_resolver: Callable[[str], ExecutableIdentity],
         path_lstat_resolver: Callable[[Path], os.stat_result],
@@ -877,7 +1253,9 @@ class _SystemdWorkerRunner:
         self._principal_resolver = principal_resolver
         self._current_identity = current_identity
         self._credential_probe = credential_probe
+        self._worker_access_probe = worker_access_probe
         self._worktree_head_resolver = worktree_head_resolver
+        self._worktree_git_topology_resolver = worktree_git_topology_resolver
         self._systemd_preflight = systemd_preflight_resolver
         self._executable_resolver = executable_resolver
         self._path_lstat_resolver = path_lstat_resolver
@@ -895,6 +1273,18 @@ class _SystemdWorkerRunner:
         if resolved != configured:
             raise IssueWorkerIsolationError("worker isolation principal changed")
 
+    def _validate_executable_set(self, profile: _IsolationProfile) -> None:
+        for label, configured in (
+            ("systemd", profile.systemd_run),
+            ("environment", profile.environment_executable),
+            ("Git", profile.git_executable),
+            ("Codex", profile.codex_executable),
+        ):
+            if self._executable_resolver(configured.path) != configured:
+                raise IssueWorkerIsolationError(
+                    f"worker isolation {label} executable identity changed"
+                )
+
     def _validate_live(
         self, profile: _IsolationProfile
     ) -> tuple[_CredentialIdentity, ExecutableIdentity]:
@@ -908,11 +1298,18 @@ class _SystemdWorkerRunner:
             self._profile_file,
             executor=executor,
             worktree=profile.worktree.path,
+            worktree_git_directory=profile.worktree_git_directory.path,
+            worktree_git_common_directory=profile.worktree_git_common_directory.path,
             model_auth_home=profile.model_auth_home.path,
         )
         if file_sha256(self._profile_file) != profile.profile_sha256:
             raise IssueWorkerIsolationError("worker isolation profile changed")
         _validate_directory(profile.worktree, label="worktree")
+        _validate_directory(profile.worktree_git_directory, label="worktree Git directory")
+        _validate_directory(
+            profile.worktree_git_common_directory,
+            label="worktree Git common directory",
+        )
         _validate_directory(
             profile.model_auth_home,
             label="model auth home",
@@ -920,32 +1317,57 @@ class _SystemdWorkerRunner:
             owner=worker,
             required_mode=0o700,
         )
+        _validate_systemd_path_value(profile.worktree.path, label="worktree")
+        _validate_systemd_path_value(profile.worktree.path / ".git", label="worktree Git control")
+        _validate_systemd_path_value(
+            profile.worktree_git_directory.path, label="worktree Git directory"
+        )
+        _validate_systemd_path_value(
+            profile.worktree_git_common_directory.path,
+            label="worktree Git common directory",
+        )
+        _validate_systemd_path_value(profile.model_auth_home.path, label="model auth home")
         if (
-            profile.worktree.path == profile.model_auth_home.path
+            profile.worktree_git_directory.path == profile.worktree.path
+            or profile.worktree.path.is_relative_to(profile.worktree_git_directory.path)
+            or profile.worktree_git_common_directory.path.is_relative_to(profile.worktree.path)
+            or profile.worktree.path.is_relative_to(profile.worktree_git_common_directory.path)
+            or profile.worktree.path == profile.model_auth_home.path
             or profile.worktree.path.is_relative_to(profile.model_auth_home.path)
             or profile.model_auth_home.path.is_relative_to(profile.worktree.path)
+            or profile.worktree_git_directory.path.is_relative_to(profile.model_auth_home.path)
+            or profile.model_auth_home.path.is_relative_to(profile.worktree_git_directory.path)
+            or profile.worktree_git_common_directory.path.is_relative_to(
+                profile.model_auth_home.path
+            )
+            or profile.model_auth_home.path.is_relative_to(
+                profile.worktree_git_common_directory.path
+            )
         ):
             raise IssueWorkerIsolationError("worker isolation writable paths overlap")
-        if self._executable_resolver(profile.git_executable.path) != profile.git_executable:
-            raise IssueWorkerIsolationError("worker isolation Git identity changed")
+        self._validate_executable_set(profile)
         if (
             self._worktree_head_resolver(profile.worktree.path, profile.git_executable.path)
             != profile.worktree_head
         ):
             raise IssueWorkerIsolationError("worker isolation worktree head changed")
+        if self._worktree_git_topology_resolver(
+            profile.worktree.path, profile.git_executable.path
+        ) != (
+            profile.worktree_git_directory.path,
+            profile.worktree_git_common_directory.path,
+        ):
+            raise IssueWorkerIsolationError("worker isolation Git directory changed")
+        _git_metadata_denial_targets(profile)
         systemd_identity = self._systemd_preflight()
         if systemd_identity != profile.systemd_run:
             raise IssueWorkerIsolationError("worker isolation systemd identity changed")
-        if (
-            self._executable_resolver(profile.environment_executable.path)
-            != profile.environment_executable
-            or self._executable_resolver(profile.codex_executable.path) != profile.codex_executable
-        ):
-            raise IssueWorkerIsolationError("worker isolation executable identity changed")
         credential = _validate_credential(
             profile.protected_credential,
             executor=executor,
             worktree=profile.worktree.path,
+            worktree_git_directory=profile.worktree_git_directory.path,
+            worktree_git_common_directory=profile.worktree_git_common_directory.path,
             model_auth_home=profile.model_auth_home.path,
         )
         return credential, systemd_identity
@@ -994,16 +1416,39 @@ class _SystemdWorkerRunner:
             ) from None
         if probe_result is not CredentialProbeResult.DENIED:
             raise IssueWorkerIsolationError("worker isolation credential denial is unproven")
-        # Re-stat only the protected file after the fork.  No command, principal,
-        # manager, or profile subprocess runs between this proof and systemd entry.
+        writable_paths = (
+            profile.worktree.path,
+            profile.model_auth_home.path,
+        )
+        denied_git_metadata = _git_metadata_denial_targets(profile)
+        try:
+            worker_access_result = self._worker_access_probe(
+                writable_paths,
+                denied_git_metadata,
+                profile.worker,
+                profile.executor,
+            )
+        except Exception:
+            raise IssueWorkerIsolationError(
+                "worker isolation effective write access is unproven"
+            ) from None
+        if worker_access_result is not WorkerAccessProbeResult.ADMITTED:
+            raise IssueWorkerIsolationError(
+                "worker isolation worktree access or Git metadata denial is unproven"
+            )
+        # Re-stat the protected file and re-hash every executable after the
+        # forked identity probes. No external command runs before systemd entry.
         post_probe_credential = _validate_credential(
             profile.protected_credential,
             executor=profile.executor,
             worktree=profile.worktree.path,
+            worktree_git_directory=profile.worktree_git_directory.path,
+            worktree_git_common_directory=profile.worktree_git_common_directory.path,
             model_auth_home=profile.model_auth_home.path,
         )
         if post_probe_credential != credential:
             raise IssueWorkerIsolationError("worker isolation protected credential changed")
+        self._validate_executable_set(profile)
         child_environment = {
             "CODEX_HOME": str(profile.model_auth_home.path),
             "HOME": str(profile.model_auth_home.path),
@@ -1067,8 +1512,14 @@ class _SystemdWorkerRunner:
             },
             "unit_identity": unit,
             "worktree_identity_sha256": _path_identity_digest(
-                profile.worktree, git_head=profile.worktree_head
+                profile.worktree,
+                git_head=profile.worktree_head,
+                git_directory_device=profile.worktree_git_directory.device,
+                git_directory_inode=profile.worktree_git_directory.inode,
+                git_common_directory_device=profile.worktree_git_common_directory.device,
+                git_common_directory_inode=profile.worktree_git_common_directory.inode,
             ),
+            "executable_set_identity_sha256": _executable_set_digest(profile),
             "model_auth_reference": profile.model_auth_reference,
             "model_auth_identity_sha256": _path_identity_digest(
                 profile.model_auth_home,
@@ -1084,6 +1535,8 @@ class _SystemdWorkerRunner:
                 }
             ),
             "probe_result": probe_result.value,
+            "worker_write_access_probe_result": worker_access_result.value,
+            "git_metadata_write_denied": True,
             "command_sha256": profile.command_sha256,
             "isolation_properties_sha256": emitted_properties_sha256,
             "isolation_template_sha256": profile.isolation_properties_sha256,
@@ -1114,7 +1567,19 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         credential_probe: Callable[
             [Path, ResolvedPrincipal, ResolvedPrincipal], CredentialProbeResult
         ] = probe_credential_denial,
+        worker_access_probe: Callable[
+            [
+                Sequence[Path],
+                Sequence[Path],
+                ResolvedPrincipal,
+                ResolvedPrincipal,
+            ],
+            WorkerAccessProbeResult,
+        ] = probe_worker_write_access,
         worktree_head_resolver: Callable[[Path, str], str] = resolve_worktree_head,
+        worktree_git_topology_resolver: Callable[
+            [Path, str], tuple[Path, Path]
+        ] = resolve_worktree_git_topology,
         systemd_preflight: Callable[[], ExecutableIdentity] = systemd_preflight,
         executable_resolver: Callable[[str], ExecutableIdentity] = resolve_executable,
         path_lstat_resolver: Callable[[Path], os.stat_result] = lambda path: path.lstat(),
@@ -1131,7 +1596,9 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
             principal_resolver=principal_resolver,
             current_identity=current_identity,
             credential_probe=credential_probe,
+            worker_access_probe=worker_access_probe,
             worktree_head_resolver=worktree_head_resolver,
+            worktree_git_topology_resolver=worktree_git_topology_resolver,
             systemd_preflight_resolver=systemd_preflight,
             executable_resolver=executable_resolver,
             path_lstat_resolver=path_lstat_resolver,
@@ -1174,11 +1641,14 @@ __all__ = [
     "IssueWorkerIsolationError",
     "LinuxSystemdCodexIssueSessionLauncher",
     "ResolvedPrincipal",
+    "WorkerAccessProbeResult",
     "canonical_command_sha256",
     "file_sha256",
     "probe_credential_denial",
+    "probe_worker_write_access",
     "resolve_executable",
     "resolve_principal",
+    "resolve_worktree_git_topology",
     "resolve_worktree_head",
     "systemd_preflight",
 ]
