@@ -227,121 +227,21 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str) -> dict[str, Any]:
-    """Validate the narrower one-Issue frozen plan admitted by FCA-ID-A."""
+    """Validate the complete one-Issue frozen plan admitted by FCA-ID-A."""
 
-    plan = _mapping(value, "frozen dispatch plan")
-    if plan.get("schema_version") != 2:
-        raise IssueDeliveryContractError("frozen dispatch plan schema version is unsupported")
-    if plan.get("source") != "builderops.epic_dispatch.dry_run":
-        raise IssueDeliveryContractError("frozen dispatch plan must come from the dry-run planner")
-    run_id = _text(plan.get("run_id"), "frozen dispatch run id", limit=256)
-    if _RUN_ID.fullmatch(run_id) is None:
-        raise IssueDeliveryContractError("frozen dispatch run id is not launcher-compatible")
-    decisions = plan.get("decisions")
-    context_packs = plan.get("context_packs")
-    if not isinstance(decisions, list) or not isinstance(context_packs, list):
-        raise IssueDeliveryContractError("frozen dispatch plan decisions and context packs are required")
-    if plan.get("selected_count") != 1:
-        raise IssueDeliveryContractError("Issue delivery admits exactly one selected dispatch")
-    selected = [
-        item
-        for item in decisions
-        if isinstance(item, Mapping) and item.get("selected_for_dispatch") is True
-    ]
-    if len(selected) != 1:
-        raise IssueDeliveryContractError("frozen dispatch plan must select exactly one Issue")
-    selected_decision = dict(selected[0])
-    if (
-        selected_decision.get("issue_number") != issue_number
-        or selected_decision.get("context_pack_id") != context_pack_id
-        or selected_decision.get("dispatch_slot") != 1
-        or selected_decision.get("selected_path") != "subagent"
-    ):
-        raise IssueDeliveryContractError("frozen dispatch plan does not bind the addressed Issue")
-    decision_runtime = _mapping(
-        selected_decision.get("runtime_model_hint"), "frozen dispatch runtime hint"
-    )
-    if (
-        decision_runtime.get("runtime") != "codex"
-        or decision_runtime.get("carrier", "codex") != "codex"
-        or decision_runtime.get("selection_intent") != "general_delivery"
-    ):
-        raise IssueDeliveryContractError("frozen dispatch runtime is not the approved Codex delivery route")
-    if "execution_routing" in plan or any(
-        isinstance(item, Mapping) and "execution_routing" in item for item in decisions
-    ):
-        raise IssueDeliveryContractError("Issue delivery cannot admit a canary or fallback route")
-    run_state_update = _mapping(
-        plan.get("epic_run_state_update"), "frozen dispatch run-state summary"
-    )
-    state_decisions = run_state_update.get("dispatch_decisions")
-    if not isinstance(state_decisions, list) or len(state_decisions) != len(decisions):
-        raise IssueDeliveryContractError("frozen dispatch run-state summary is incomplete")
-    expected_state_decisions: list[dict[str, Any]] = []
-    for raw_decision in decisions:
-        decision = _mapping(raw_decision, "frozen dispatch decision")
-        required_decision_fields = {
-            "id",
-            "issue_number",
-            "selected_path",
-            "selected_for_dispatch",
-            "runtime_model_hint",
-            "budget_class",
-            "stop_condition",
-            "skip_reason",
-            "context_pack_id",
-        }
-        if not required_decision_fields.issubset(decision):
-            raise IssueDeliveryContractError("frozen dispatch decision is incomplete")
-        expected_state_decisions.append(
-            {key: decision[key] for key in required_decision_fields}
-        )
-    if state_decisions != expected_state_decisions:
-        raise IssueDeliveryContractError(
-            "frozen dispatch run-state summary must mirror every decision"
-        )
-    # Reuse the dispatch entrypoint's own frozen-plan preflight so admission
-    # cannot drift from what the later launcher accepts (notably run identity,
-    # selected/context cardinality, and run-state mirroring).
     try:
-        from app.builderops.epic_dispatch import _validated_session_contexts
+        from app.builderops.epic_dispatch import validate_issue_delivery_plan
 
-        _validated_session_contexts(plan)
+        plan = validate_issue_delivery_plan(
+            _mapping(value, "frozen dispatch plan"),
+            issue_number=issue_number,
+            context_pack_id=context_pack_id,
+        )
     except Exception as exc:
         raise IssueDeliveryContractError(
-            "frozen dispatch plan fails the selected launcher preflight"
+            "frozen dispatch plan fails the canonical planner and launcher preflight"
         ) from exc
-    matching_contexts = [
-        item
-        for item in context_packs
-        if isinstance(item, Mapping) and item.get("context_pack_id") == context_pack_id
-    ]
-    if len(context_packs) != 1 or len(matching_contexts) != 1:
-        raise IssueDeliveryContractError("frozen dispatch plan must contain one matching context pack")
-    selected_context = matching_contexts[0]
-    issue_contract = selected_context.get("issue_contract")
-    runtime = selected_context.get("runtime")
-    if (
-        not isinstance(issue_contract, Mapping)
-        or issue_contract.get("number") != issue_number
-        or selected_context.get("dispatch_slot") != 1
-        or not isinstance(runtime, Mapping)
-        or runtime.get("runtime") != "codex"
-        or runtime.get("carrier", "codex") != "codex"
-    ):
-        raise IssueDeliveryContractError("frozen dispatch context does not bind one Codex Issue session")
-    if "run_state" in selected_context:
-        raise IssueDeliveryContractError("frozen dispatch context cannot carry persisted run-state")
-    worktree_plan = _mapping(
-        selected_context.get("branch_worktree_plan"), "frozen branch/worktree plan"
-    )
-    _text(worktree_plan.get("branch"), "frozen dispatch branch", limit=512)
-    worktree = _text(worktree_plan.get("worktree"), "frozen dispatch worktree", limit=1024)
-    if not worktree.startswith("/") or "<" in worktree or ">" in worktree:
-        raise IssueDeliveryContractError("frozen dispatch worktree must be an explicit absolute path")
-    if worktree_plan.get("worker_self_claim") is not True or worktree_plan.get("coordinator_preclaim") is not False:
-        raise IssueDeliveryContractError("frozen dispatch ownership plan is not exact")
-    return plan
+    return dict(plan)
 
 
 def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
@@ -664,6 +564,16 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         selected_context = context["dispatch_plan"]["context_packs"][0]
         runtime = selected_context["runtime"]
         resolved = profile["resolved"]
+        dispatch_plan = context["dispatch_plan"]
+        branch_worktree_plan = selected_context["branch_worktree_plan"]
+        if (
+            destination["run_id"] != dispatch_plan["run_id"]
+            or destination["branch"] != branch_worktree_plan["branch"]
+            or destination["worktree"] != branch_worktree_plan["worktree"]
+        ):
+            raise IssueDeliveryContractError(
+                "destination identity must match the frozen dispatch plan"
+            )
         for field in ("carrier", "selection_intent", "capability"):
             approved_value = (
                 profile["selection_intent"]
@@ -674,9 +584,12 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
                 raise IssueDeliveryContractError(
                     f"execution profile {field} does not match the frozen dispatch context"
                 )
-        if "model" in runtime and runtime["model"] != resolved["model"]:
+        if (
+            runtime.get("model") != resolved["model"]
+            or runtime.get("reasoning_effort") != resolved["reasoning_effort"]
+        ):
             raise IssueDeliveryContractError(
-                "execution profile model does not match the frozen dispatch context"
+                "execution profile target does not match the frozen dispatch context"
             )
         effects = _list_of_text(raw.get("permitted_effects"), "permitted effects")
         non_effects = _list_of_text(raw.get("explicit_non_effects"), "explicit non-effects")

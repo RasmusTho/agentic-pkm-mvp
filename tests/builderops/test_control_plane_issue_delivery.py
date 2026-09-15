@@ -27,6 +27,7 @@ from app.builderops.control_plane.client import (
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.control_plane.service import create_app
 from app.builderops.control_plane.issue_delivery import canonical_hash
+from app.builderops.epic_dispatch import HANDOFF_RECEIPT_SCHEMA
 
 pytestmark = pytest.mark.pg
 
@@ -143,6 +144,16 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         "dispatch_slot": 1,
         "context_pack_id": "context-5550",
         "budget_class": "medium",
+        "candidate_index": 0,
+        "title": "task: admit exact one-Issue delivery approval",
+        "expected_value": "high",
+        "context_cost_estimate": {
+            "measurement": "proxy",
+            "input_tokens": "unknown(pre-dispatch-runtime-dependent)",
+            "agent_starts": 1,
+            "context_pack_bytes": 128,
+            "compactions": "unknown(pre-dispatch-runtime-dependent)",
+        },
         "stop_condition": "stop on authority ambiguity",
         "skip_reason": None,
         "runtime_model_hint": {
@@ -150,6 +161,10 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "carrier": "codex",
             "selection_intent": "general_delivery",
             "capability": "luna",
+            "model_class": "standard",
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "xhigh",
+            "runtime_difference": "invocation-hint-only",
         },
     }
     dispatch_plan = {
@@ -167,18 +182,47 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
                 "schema_version": 2,
                 "context_pack_id": "context-5550",
                 "dispatch_slot": 1,
-                "issue_contract": {"number": 5550},
-                "runtime": {
-                    "runtime": "codex",
-                    "carrier": "codex",
-                    "selection_intent": "general_delivery",
-                    "capability": "luna",
+                "issue_contract": {
+                    "number": 5550,
+                    "title": "task: admit exact one-Issue delivery approval",
+                    "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/5550",
+                    "scope": "one addressed Ready Issue",
                 },
+                "runtime": dispatch_decision["runtime_model_hint"],
                 "branch_worktree_plan": {
                     "branch": "codex/5550-issue-delivery-approval",
                     "worktree": "/worktrees/issue-5550",
                     "worker_self_claim": True,
                     "coordinator_preclaim": False,
+                },
+                "skill_loaded": ".codex/skills/issue-to-code/SKILL.md",
+                "source_anchors": ["docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: FCA-ID-A"],
+                "owner_docs": ["docs/BUILDER_FACTORY_ACCEPTANCE/README.md"],
+                "known_constraints": ["one Issue, one writer, no canary route"],
+                "validation_ledger": [
+                    "tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission"
+                ],
+                "publication_closure_expectations": {
+                    "publish_skill": ".codex/skills/publish-pr/SKILL.md",
+                    "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
+                    "builderops_routing_required": True,
+                    "github_lifecycle_truth": "Issues/PRs/CI",
+                    "no_project_or_label_mutation_by_dispatch_planner": True,
+                    "terminal_delivery_expected": True,
+                },
+                "coordination": {
+                    "routine_worker_to_worker": "prohibited",
+                    "discovered_overlap": "reject-whole-explicit-set-before-dispatch",
+                    "coordinator_scope": "cross_issue_only",
+                    "worker_scope": "one_issue_end_to_end",
+                    "issue_local_helper_budget": 0,
+                    "issue_local_helper_rationale": None,
+                    "sole_writer": "issue_agent",
+                },
+                "return_schema": HANDOFF_RECEIPT_SCHEMA,
+                "context_cost_baseline": {
+                    "measurement": "actual",
+                    "context_pack_bytes_excluding_baseline": 128,
                 },
             }
         ],
@@ -200,6 +244,12 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         "github_mutations": [],
         "agent_spawns": [],
         "source": "builderops.epic_dispatch.dry_run",
+        "run_state_seen": False,
+        "scope": {
+            "kind": "independent_issue_set",
+            "issue_numbers": [5550],
+            "parent_closure": "prohibited-without-real-governed-parent",
+        },
     }
     return {
         "contract_version": "fca-issue-delivery.v1",
@@ -380,6 +430,24 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_plan["context"]["dispatch_plan"]["selected_count"] = 2  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_plan)
+    for missing_plan_field in ("scope", "run_state_seen"):
+        incomplete_plan = deepcopy(manifest)
+        incomplete_plan["context"]["dispatch_plan"].pop(missing_plan_field)  # type: ignore[union-attr]
+        incomplete_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+            incomplete_plan["context"]["dispatch_plan"]  # type: ignore[union-attr]
+        )
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=incomplete_plan)
+    for missing_context_field in ("validation_ledger", "publication_closure_expectations"):
+        incomplete_context = deepcopy(manifest)
+        incomplete_context["context"]["dispatch_plan"]["context_packs"][0].pop(  # type: ignore[union-attr]
+            missing_context_field
+        )
+        incomplete_context["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+            incomplete_context["context"]["dispatch_plan"]  # type: ignore[union-attr]
+        )
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=incomplete_context)
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["run_id"] = "run/5550"  # type: ignore[union-attr]
     invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
@@ -387,6 +455,27 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_plan)
+    for destination_field, replacement in (
+        ("run_id", "other-run-5550"),
+        ("branch", "codex/other-issue"),
+        ("worktree", "/worktrees/other-issue"),
+    ):
+        invalid_destination = deepcopy(manifest)
+        invalid_destination["destination"][destination_field] = replacement  # type: ignore[union-attr]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=invalid_destination)
+    invalid_runtime = deepcopy(manifest)
+    invalid_runtime["context"]["dispatch_plan"]["context_packs"][0]["runtime"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
+    invalid_runtime["context"]["dispatch_plan"]["decisions"][0]["runtime_model_hint"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
+    invalid_runtime["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        invalid_runtime["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_runtime)
+    invalid_profile_target = deepcopy(manifest)
+    invalid_profile_target["profile"]["resolved"]["reasoning_effort"] = "high"  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile_target)
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"].pop("epic_run_state_update")  # type: ignore[union-attr]
     invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
@@ -458,7 +547,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
             "effects": ["pr_receipt_comments", "child_generated_ledger_writeback"],
         },
     }
-    with pytest.raises(ControlPlaneProtocolError):
+    with pytest.raises((ControlPlaneProtocolError, ControlPlaneScopeError)):
         owner.issue_delivery_preview(manifest=foreign_parent)
 
     incomplete_parent = deepcopy(manifest)

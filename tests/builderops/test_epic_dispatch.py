@@ -362,7 +362,15 @@ def test_codex_launcher_resolves_model_from_capability_census(tmp_path: Path) ->
         repo_root=tmp_path,
         provider_census_path=census_path,
     )
-    command = launcher.command(plan["context_packs"][0])
+    # A legacy context pack without the new frozen target fields still uses
+    # the launcher's configured census; planner output now always carries
+    # those fields for strict Issue-delivery admission.
+    legacy_pack = dict(plan["context_packs"][0])
+    legacy_runtime = dict(legacy_pack["runtime"])
+    legacy_runtime.pop("model")
+    legacy_runtime.pop("reasoning_effort")
+    legacy_pack["runtime"] = legacy_runtime
+    command = launcher.command(legacy_pack)
 
     assert command[command.index("--model") + 1] == configured_model
 
@@ -497,6 +505,8 @@ def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
                         "model_class": "high-reasoning",
                         "selection_intent": "strong_reasoning",
                         "capability": "sol",
+                        "model": "gpt-6-astra",
+                        "reasoning_effort": "max",
                         "runtime_difference": "invocation-hint-only",
                     },
             "budget_class": "high",
@@ -1096,6 +1106,12 @@ def test_codex_tcd_route_resolves_explicit_gpt_6_astra(tmp_path: Path) -> None:
     invalid_pack["runtime"] = invalid_runtime
     with pytest.raises(EpicDispatchError, match="not selectable"):
         launcher.command(invalid_pack)
+    invalid_reasoning = dict(plan["context_packs"][0]["runtime"])
+    invalid_reasoning["reasoning_effort"] = "low"
+    invalid_reasoning_pack = dict(plan["context_packs"][0])
+    invalid_reasoning_pack["runtime"] = invalid_reasoning
+    with pytest.raises(EpicDispatchError, match="frozen Codex runtime"):
+        launcher.command(invalid_reasoning_pack)
 
 
 def test_resolve_execution_target_uses_declared_model_reasoning() -> None:

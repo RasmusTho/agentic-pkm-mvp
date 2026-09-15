@@ -207,8 +207,11 @@ within its existing owner. Before Start, it must bind all of these values withou
 - `repository`, numeric Issue identity and node identity, caller-bound Issue body/AC hashes, one
   immutable 40-character Git commit source revision, proposal/context-pack hash, and a complete
   one-Issue frozen dispatch plan with its independently retained `expected_plan_hash`. The plan
-  contains exactly one selected Codex Issue/context pack, a launcher-compatible run identity and
-  no canary/fallback route; admission applies the selected launcher's frozen-plan preflight.
+  contains the planner's bound scope or `epic_issue_number`, run-state observation, validation
+  ledger, publication/closure expectations, exactly one selected Codex Issue/context pack, and a
+  launcher-compatible run identity. Its destination branch/worktree/run ID and resolved
+  model/reasoning are the same values the launcher will execute; it has no canary/fallback route.
+  Admission reuses the planner/launcher frozen-plan preflight rather than trusting a source label.
   FCA-ID-A seals these source/profile identity hashes immutably; it does not independently re-read GitHub or
   recompute source/profile truth before Start;
 - parent evidence destination: explicit `none`, or one exact parent repository/number/node,
@@ -222,7 +225,8 @@ within its existing owner. Before Start, it must bind all of these values withou
 - one destination identity: authenticated executor principal, host/system identity, channel,
   canonical repository checkout, dedicated worktree/branch, target base ref and observed base SHA,
   plus one proposed run identity allocated without effects for the preview. Start approves that
-  exact identity; only after approval commits may the destination durably reserve it. A Codex
+  exact identity, cross-checked against the frozen dispatch plan; only after approval commits may
+  the destination durably reserve it. A Codex
   session ID is attached only when observed;
 - exact entrypoint `app/builderops/epic_dispatch.py::dispatch_issue_sessions` with
   `CodexIssueSessionLauncher.launch`, workflow contract `fca-issue-delivery.v1`, immutable source

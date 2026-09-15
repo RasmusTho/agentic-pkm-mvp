@@ -418,6 +418,19 @@ class CodexIssueSessionLauncher:
             raise EpicDispatchError(str(exc)) from exc
         if not invocation.launchable or invocation.model is None:
             raise EpicDispatchError("resolved Codex target is not launchable")
+        declared_model = runtime.get("model")
+        declared_reasoning = runtime.get("reasoning_effort")
+        if (declared_model is None) != (declared_reasoning is None):
+            raise EpicDispatchError(
+                "context pack must bind model and reasoning_effort together"
+            )
+        if declared_model is not None and (
+            declared_model != invocation.model
+            or declared_reasoning != invocation.reasoning_effort
+        ):
+            raise EpicDispatchError(
+                "frozen Codex runtime does not match the resolved launch target"
+            )
         return invocation.model, invocation.reasoning_effort
 
     @staticmethod
@@ -1115,6 +1128,209 @@ def _validated_session_contexts(
     return run_id, ordered
 
 
+def validate_issue_delivery_plan(
+    plan: Mapping[str, Any],
+    *,
+    issue_number: int,
+    context_pack_id: str,
+) -> Mapping[str, Any]:
+    """Validate the complete, single-Issue output admitted by FCA-ID-A.
+
+    ``_validated_session_contexts`` is the launch entrypoint's canonical
+    preflight.  This stricter wrapper adds the planner-owned fields that make
+    a one-Issue delivery plan complete, so the control-plane admission cannot
+    accept a caller-shaped object that merely claims to be a dry-run plan.
+    """
+
+    try:
+        expected_issue = _normalize_positive_int(issue_number, "issue_number")
+        expected_context = _normalize_string(context_pack_id, "context_pack_id")
+        run_id, ordered = _validated_session_contexts(plan)
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, EpicDispatchError):
+            raise
+        raise EpicDispatchError("invalid Issue delivery dispatch plan") from exc
+
+    if len(plan.get("decisions", ())) != 1 or len(plan.get("context_packs", ())) != 1:
+        raise EpicDispatchError("Issue delivery plan must contain one decision and context pack")
+    if len(ordered) != 1 or plan.get("selected_count") != 1:
+        raise EpicDispatchError("Issue delivery plan must select exactly one dispatch")
+    if plan.get("runtime_targets") != [ACTIVE_WORKER_RUNTIME]:
+        raise EpicDispatchError("Issue delivery plan must target the active Codex runtime")
+    if plan.get("run_id") != run_id or not isinstance(plan.get("run_state_seen"), bool):
+        raise EpicDispatchError("Issue delivery plan must preserve run identity and run-state observation")
+    if plan.get("github_mutations") != [] or plan.get("agent_spawns") != []:
+        raise EpicDispatchError("Issue delivery planner output must be mutation-free")
+
+    scope = plan.get("scope")
+    epic_issue_number = plan.get("epic_issue_number")
+    if scope is not None:
+        if epic_issue_number is not None or not isinstance(scope, Mapping):
+            raise EpicDispatchError("Issue delivery plan has an invalid dispatch scope")
+        if set(scope) != {"kind", "issue_numbers", "parent_closure"}:
+            raise EpicDispatchError("Issue delivery plan scope is incomplete")
+        if scope != {
+            "kind": "independent_issue_set",
+            "issue_numbers": [expected_issue],
+            "parent_closure": "prohibited-without-real-governed-parent",
+        }:
+            raise EpicDispatchError("Issue delivery plan scope does not bind the addressed Issue")
+    elif epic_issue_number != expected_issue:
+        raise EpicDispatchError("Issue delivery plan must bind the addressed epic Issue")
+
+    decision, context_pack = ordered[0]
+    if (
+        decision.get("issue_number") != expected_issue
+        or decision.get("context_pack_id") != expected_context
+        or decision.get("selected_path") != "subagent"
+        or decision.get("selected_for_dispatch") is not True
+        or decision.get("dispatch_slot") != 1
+        or decision.get("skip_reason") is not None
+    ):
+        raise EpicDispatchError("Issue delivery plan does not bind the addressed dispatch")
+    required_decision_fields = {
+        "id",
+        "candidate_index",
+        "issue_number",
+        "title",
+        "selected_path",
+        "selected_for_dispatch",
+        "dispatch_slot",
+        "context_pack_id",
+        "expected_value",
+        "runtime_model_hint",
+        "budget_class",
+        "context_cost_estimate",
+        "stop_condition",
+        "skip_reason",
+    }
+    if not required_decision_fields.issubset(decision):
+        raise EpicDispatchError("Issue delivery dispatch decision is incomplete")
+    if (
+        not isinstance(decision.get("candidate_index"), int)
+        or isinstance(decision.get("candidate_index"), bool)
+        or decision["candidate_index"] < 0
+        or not isinstance(decision.get("title"), str)
+        or decision.get("expected_value") not in {"low", "medium", "high"}
+        or not isinstance(decision.get("context_cost_estimate"), Mapping)
+    ):
+        raise EpicDispatchError("Issue delivery dispatch decision has invalid planner fields")
+    decision_runtime = decision.get("runtime_model_hint")
+    if not isinstance(decision_runtime, Mapping):
+        raise EpicDispatchError("Issue delivery dispatch runtime hint is incomplete")
+
+    required_context_fields = {
+        "schema_version",
+        "context_pack_id",
+        "dispatch_slot",
+        "issue_contract",
+        "runtime",
+        "skill_loaded",
+        "source_anchors",
+        "owner_docs",
+        "known_constraints",
+        "branch_worktree_plan",
+        "validation_ledger",
+        "publication_closure_expectations",
+        "coordination",
+        "return_schema",
+        "context_cost_baseline",
+    }
+    if not required_context_fields.issubset(context_pack):
+        raise EpicDispatchError("Issue delivery context pack is incomplete")
+    if (
+        context_pack.get("schema_version") != SCHEMA_VERSION
+        or context_pack.get("context_pack_id") != expected_context
+        or context_pack.get("dispatch_slot") != 1
+        or context_pack.get("skill_loaded") != ".codex/skills/issue-to-code/SKILL.md"
+    ):
+        raise EpicDispatchError("Issue delivery context pack identity is incomplete")
+    issue_contract = context_pack.get("issue_contract")
+    if not isinstance(issue_contract, Mapping) or not {
+        "number", "title", "url", "scope"
+    }.issubset(issue_contract) or issue_contract.get("number") != expected_issue:
+        raise EpicDispatchError("Issue delivery context pack contract is incomplete")
+    if decision_runtime != context_pack.get("runtime"):
+        raise EpicDispatchError("dispatch decision and context runtime must be identical")
+    if not isinstance(context_pack.get("source_anchors"), list) or not context_pack["source_anchors"]:
+        raise EpicDispatchError("Issue delivery context pack source anchors are required")
+    if not isinstance(context_pack.get("owner_docs"), list) or not context_pack["owner_docs"]:
+        raise EpicDispatchError("Issue delivery context pack owner docs are required")
+    if not isinstance(context_pack.get("known_constraints"), list) or not context_pack["known_constraints"]:
+        raise EpicDispatchError("Issue delivery context pack constraints are required")
+    if not isinstance(context_pack.get("validation_ledger"), list) or not context_pack["validation_ledger"]:
+        raise EpicDispatchError("Issue delivery context pack validation ledger is required")
+    branch_worktree_plan = context_pack.get("branch_worktree_plan")
+    if not isinstance(branch_worktree_plan, Mapping):
+        raise EpicDispatchError("Issue delivery branch/worktree plan is required")
+    branch = branch_worktree_plan.get("branch")
+    worktree = branch_worktree_plan.get("worktree")
+    if (
+        not isinstance(branch, str)
+        or not branch.strip()
+        or not isinstance(worktree, str)
+        or not worktree.startswith("/")
+        or "<" in worktree
+        or ">" in worktree
+        or branch_worktree_plan.get("worker_self_claim") is not True
+        or branch_worktree_plan.get("coordinator_preclaim") is not False
+    ):
+        raise EpicDispatchError("Issue delivery branch/worktree ownership plan is not launchable")
+
+    expected_publication = {
+        "publish_skill": ".codex/skills/publish-pr/SKILL.md",
+        "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
+        "builderops_routing_required": True,
+        "github_lifecycle_truth": "Issues/PRs/CI",
+        "no_project_or_label_mutation_by_dispatch_planner": True,
+        "terminal_delivery_expected": True,
+    }
+    if context_pack.get("publication_closure_expectations") != expected_publication:
+        raise EpicDispatchError("Issue delivery publication and closure expectations are incomplete")
+    expected_coordination = {
+        "routine_worker_to_worker": "prohibited",
+        "discovered_overlap": context_pack["coordination"].get("discovered_overlap")
+        if isinstance(context_pack.get("coordination"), Mapping)
+        else None,
+        "coordinator_scope": "cross_issue_only",
+        "worker_scope": "one_issue_end_to_end",
+        "issue_local_helper_budget": context_pack["coordination"].get("issue_local_helper_budget")
+        if isinstance(context_pack.get("coordination"), Mapping)
+        else None,
+        "issue_local_helper_rationale": context_pack["coordination"].get("issue_local_helper_rationale")
+        if isinstance(context_pack.get("coordination"), Mapping)
+        else None,
+        "sole_writer": "issue_agent",
+    }
+    coordination = context_pack.get("coordination")
+    if not isinstance(coordination, Mapping) or coordination != expected_coordination:
+        raise EpicDispatchError("Issue delivery coordination contract is incomplete")
+    if context_pack.get("return_schema") != HANDOFF_RECEIPT_SCHEMA:
+        raise EpicDispatchError("Issue delivery handoff receipt schema is not canonical")
+    baseline = context_pack.get("context_cost_baseline")
+    if (
+        not isinstance(baseline, Mapping)
+        or baseline.get("measurement") != "actual"
+        or not isinstance(baseline.get("context_pack_bytes_excluding_baseline"), int)
+        or isinstance(baseline.get("context_pack_bytes_excluding_baseline"), bool)
+        or baseline["context_pack_bytes_excluding_baseline"] < 0
+    ):
+        raise EpicDispatchError("Issue delivery context cost baseline is incomplete")
+    runtime = context_pack.get("runtime")
+    if (
+        not isinstance(runtime, Mapping)
+        or runtime.get("runtime") != ACTIVE_WORKER_RUNTIME
+        or runtime.get("carrier") != ACTIVE_WORKER_RUNTIME
+        or runtime.get("selection_intent") != "general_delivery"
+        or runtime.get("capability") not in {"luna", "terra", "sol"}
+        or not isinstance(runtime.get("model_class"), str)
+        or not isinstance(runtime.get("model"), str)
+        or not isinstance(runtime.get("reasoning_effort"), str)
+    ):
+        raise EpicDispatchError("Issue delivery runtime must bind the complete Codex target")
+    return plan
+
+
 def _validate_execution_routing_context(
     decision: Mapping[str, Any],
     context_pack: Mapping[str, Any],
@@ -1380,14 +1596,14 @@ def _build_tcd_decision(
     elif selected_path == "script":
         skip_reason = skip_reason or "script-deterministic"
 
+    selection_intent = candidate["selection_intent"] or _selection_intent_for_risk(risk)
     runtime_model_hint = {
         "runtime": runtime_target,
         "carrier": runtime_target,
         "model_class": _model_class_for(risk),
-        "selection_intent": candidate["selection_intent"]
-        or _selection_intent_for_risk(risk),
+        "selection_intent": selection_intent,
         "capability": _capability_for_selection_intent(
-            candidate["selection_intent"] or _selection_intent_for_risk(risk),
+            selection_intent,
             provider_census=provider_census,
         ),
         "runtime_difference": "invocation-hint-only",
@@ -1399,6 +1615,17 @@ def _build_tcd_decision(
     model_override = candidate.get("model_override")
     if model_override is not None:
         runtime_model_hint["model"] = model_override
+    resolved_target = resolve_execution_target(
+        provider_census,
+        channel="dev",
+        capability=cast(CapabilityTier, runtime_model_hint["capability"]),
+        model_id=model_override,
+        selection_intent=(
+            None if capability_override is not None else cast(SelectionIntent, selection_intent)
+        ),
+    )
+    runtime_model_hint["model"] = resolved_target.model
+    runtime_model_hint["reasoning_effort"] = resolved_target.reasoning_effort
 
     return {
         "issue_number": issue_number,
