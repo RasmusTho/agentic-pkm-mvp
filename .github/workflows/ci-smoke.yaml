@@ -1212,6 +1212,7 @@ jobs:
             tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission \
             tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_transaction_recovery \
             tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_identical_start_replays_winner \
+            tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_competing_start_preserves_conflict \
             tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries \
             --tb=short \
             | tee pytest-index-pg.log

@@ -761,6 +761,12 @@ def create_app(
         manifest = normalize_issue_delivery_manifest(manifest_input)
         if manifest.get("owner_principal") != credential.principal:
             raise HTTPException(status_code=403, detail="Issue-delivery approval owner mismatch")
+        owner_profile = manifest.get("owner_profile")
+        if (
+            not isinstance(owner_profile, Mapping)
+            or owner_profile.get("principal") != credential.principal
+        ):
+            raise HTTPException(status_code=403, detail="owner profile does not match authenticated owner")
         repository = manifest["repository"]
         _enforce_repo_scope(credential, repository)
         parent_evidence = manifest.get("parent_evidence")
@@ -1092,13 +1098,18 @@ def create_app(
                 payload=payload,
                 idempotency_key=key,
             )
-        except IdempotencyConflict:
+        except IdempotencyConflict as commit_conflict:
             # Two identical Starts can both pass the read-before-write checks.
             # The losing writer must project the winner's immutable approval as
             # a replay, not surface a false conflict to the owner.
             try:
                 winner = store.get_record(repository, record)
             except KeyError as exc:
+                if issue_delivery_existing_by_operation(repository, manifest["operation_key"]):
+                    # A competing approval id won the operation-key race.  Keep
+                    # the normal 409 conflict semantics instead of turning a
+                    # timing-dependent collision into a generic 400 error.
+                    raise commit_conflict
                 raise ControlPlaneError(
                     "Issue-delivery approval commit raced without durable readback"
                 ) from exc

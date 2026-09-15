@@ -335,7 +335,7 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         ],
         "parent_evidence": {"kind": "none"},
         "expires_at": expiry,
-        "owner_profile": {"kind": "human-owner"},
+        "owner_profile": {"kind": "human-owner", "principal": "owner:human"},
     }
 
 
@@ -469,6 +469,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         )
         with pytest.raises(ControlPlaneProtocolError):
             owner.issue_delivery_preview(manifest=mismatched_context_issue)
+    invalid_issue_url = deepcopy(manifest)
+    invalid_issue_url["issue"]["url"] = "https://github.com/RasmusTho/agentic-pkm-mvp/issues/1"  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_issue_url)
     missing_ready_label = deepcopy(manifest)
     missing_ready_label["issue"]["labels"] = ["type:task"]  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -506,6 +510,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_census_target)
+    missing_owner_profile = deepcopy(manifest)
+    missing_owner_profile["owner_profile"] = {"kind": "human-owner"}
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=missing_owner_profile)
     invalid_profile_target = deepcopy(manifest)
     invalid_profile_target["profile"]["resolved"]["reasoning_effort"] = "high"  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -557,6 +565,32 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
 
+    shared_checkout = deepcopy(manifest)
+    shared_checkout["destination"]["worktree"] = shared_checkout["destination"]["checkout"]  # type: ignore[union-attr]
+    shared_checkout["context"]["dispatch_plan"]["context_packs"][0]["branch_worktree_plan"]["worktree"] = shared_checkout["destination"]["checkout"]  # type: ignore[union-attr]
+    shared_checkout["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        shared_checkout["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=shared_checkout)
+    base_branch = deepcopy(manifest)
+    base_branch["destination"]["branch"] = base_branch["destination"]["base_ref"]  # type: ignore[union-attr]
+    base_branch["context"]["dispatch_plan"]["context_packs"][0]["branch_worktree_plan"]["branch"] = base_branch["destination"]["base_ref"]  # type: ignore[union-attr]
+    base_branch["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        base_branch["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=base_branch)
+    normalized_shared_checkout = deepcopy(manifest)
+    normalized_shared_checkout["destination"]["worktree"] = "/workspaces/agentic-pkm-mvp/./"  # type: ignore[union-attr]
+    normalized_shared_checkout["destination"]["checkout"] = "/workspaces/agentic-pkm-mvp"  # type: ignore[union-attr]
+    normalized_shared_checkout["context"]["dispatch_plan"]["context_packs"][0]["branch_worktree_plan"]["worktree"] = "/workspaces/agentic-pkm-mvp/./"  # type: ignore[union-attr]
+    normalized_shared_checkout["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        normalized_shared_checkout["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=normalized_shared_checkout)
+
     for revision in ("main", "main:a5f0e10b666e74c4b8de36a67563a99e30ee801d", "HEAD"):
         invalid_source = deepcopy(manifest)
         invalid_source["source"]["revision"] = revision  # type: ignore[union-attr]
@@ -595,6 +629,13 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneScopeError):
         owner.issue_delivery_start(decision="start", manifest=foreign_parent_start)
+    foreign_owner_profile_start = deepcopy(preview["manifest"])
+    foreign_owner_profile_start["owner_profile"]["principal"] = "owner:other"  # type: ignore[union-attr]
+    foreign_owner_profile_start["approval_manifest_hash"] = issue_delivery_manifest_hash(
+        foreign_owner_profile_start
+    )
+    with pytest.raises(ControlPlaneScopeError):
+        owner.issue_delivery_start(decision="start", manifest=foreign_owner_profile_start)
 
     slash_bound_id = deepcopy(manifest)
     slash_bound_id["approval_id"] = "team/approval-1"
@@ -661,3 +702,44 @@ def test_issue_approval_concurrent_identical_start_replays_winner(
 
     assert sorted(item["replayed"] for item in outcomes) == [False, True]
     assert len({item["receipt"]["receipt_sequence"] for item in outcomes}) == 1
+
+
+def test_issue_approval_concurrent_competing_start_preserves_conflict(
+    store, registry, monkeypatch
+) -> None:
+    owner_a = _client(store, registry, "owner-token")
+    owner_b = _client(store, registry, "owner-token")
+    preview_a = owner_a.issue_delivery_preview(
+        manifest=_manifest(operation_key="operation-competing-race")
+    )
+    manifest_b = _manifest(operation_key="operation-competing-race")
+    manifest_b["approval_id"] = "approval-5550-other"
+    preview_b = owner_b.issue_delivery_preview(manifest=manifest_b)
+    barrier = threading.Barrier(2)
+    original = store.commit_record
+
+    def synchronized_commit(**kwargs):  # type: ignore[no-untyped-def]
+        barrier.wait(timeout=10)
+        return original(**kwargs)
+
+    monkeypatch.setattr(store, "commit_record", synchronized_commit)
+
+    def start(args):  # type: ignore[no-untyped-def]
+        client, manifest = args
+        try:
+            return "approved", client.issue_delivery_start(decision="start", manifest=manifest)
+        except ControlPlaneConflictError:
+            return "conflict", None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(
+            pool.map(
+                start,
+                (
+                    (owner_a, preview_a["manifest"]),
+                    (owner_b, preview_b["manifest"]),
+                ),
+            )
+        )
+
+    assert sorted(item[0] for item in outcomes) == ["approved", "conflict"]

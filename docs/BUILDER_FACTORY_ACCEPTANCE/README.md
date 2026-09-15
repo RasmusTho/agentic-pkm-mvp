@@ -222,13 +222,15 @@ within its existing owner. Before Start, it must bind all of these values withou
   infer a parent later. Preview and Start both enforce the authenticated owner's repository scope
   for this destination. This evidence destination grants no parent delivery, contract or acceptance
   change, closure, or sibling mutation;
-- operation type/version, `approval_id`, one `operation_key`, owner principal, approval receipt,
-  expiry and current repository/operation grant, revocation version and authority epoch;
+- operation type/version, `approval_id`, one `operation_key`, owner principal, and an explicit
+  owner-profile principal equal to the authenticated owner, plus approval receipt, expiry and
+  current repository/operation grant, revocation version and authority epoch;
 - one destination identity: authenticated executor principal, host/system identity, channel,
   canonical repository checkout, dedicated worktree/branch, target base ref and observed base SHA,
   plus one proposed run identity allocated without effects for the preview. Start approves that
-  exact identity, cross-checked against the full Issue contract and frozen dispatch plan; only after approval commits may
-  the destination durably reserve it. A Codex
+  exact identity, cross-checked against the full Issue contract and frozen dispatch plan; the
+  worktree cannot equal the checkout or filesystem root, and the branch cannot equal the base ref.
+  Only after approval commits may the destination durably reserve it. A Codex
   session ID is attached only when observed;
 - exact entrypoint `app/builderops/epic_dispatch.py::dispatch_issue_sessions` with
   `CodexIssueSessionLauncher.launch`, workflow contract `fca-issue-delivery.v1`, immutable source

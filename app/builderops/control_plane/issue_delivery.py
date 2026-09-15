@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from posixpath import normpath
 from typing import Any
 
 from app.builderops.control_plane.models import canonical_repository
@@ -581,6 +582,10 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         expected_issue_url = (
             f"https://github.com/{repository}/issues/{issue['number']}"
         )
+        if issue["url"].casefold() != expected_issue_url.casefold():
+            raise IssueDeliveryContractError(
+                "approved Issue URL does not bind the canonical repository and number"
+            )
         context_repository = canonical_repository(
             _text(context_issue.get("repository"), "context Issue repository")
         )
@@ -602,6 +607,23 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise IssueDeliveryContractError(
                 "destination identity must match the frozen dispatch plan"
+            )
+        checkout_path = normpath(destination["checkout"])
+        worktree_path = normpath(destination["worktree"])
+        if (
+            not destination["checkout"].startswith("/")
+            or not destination["worktree"].startswith("/")
+            or checkout_path == "/"
+            or worktree_path in {checkout_path, "/"}
+        ):
+            raise IssueDeliveryContractError(
+                "destination worktree must be isolated from the checkout and root"
+            )
+        branch = destination["branch"].removeprefix("refs/heads/")
+        base_ref = destination["base_ref"].removeprefix("refs/heads/")
+        if branch == base_ref:
+            raise IssueDeliveryContractError(
+                "destination branch must be isolated from the base ref"
             )
         for field in ("carrier", "selection_intent", "capability"):
             approved_value = (
@@ -629,9 +651,16 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         if not REQUIRED_NON_EFFECTS.issubset(non_effects) or not set(non_effects).issubset(NON_EFFECTS):
             raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
         parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"])
-        owner_profile = raw.get("owner_profile")
-        if owner_profile is not None:
-            owner_profile = _mapping(owner_profile, "owner profile")
+        owner_profile = _mapping(raw.get("owner_profile"), "owner profile")
+        profile_principal = owner_profile.get(
+            "principal", owner_profile.get("owner_principal")
+        )
+        profile_principal = _text(profile_principal, "owner profile principal", limit=256)
+        legacy_profile_principal = owner_profile.get("owner_principal")
+        if legacy_profile_principal is not None and legacy_profile_principal != profile_principal:
+            raise IssueDeliveryContractError(
+                "owner profile principal bindings disagree"
+            )
         result = {
             **raw,
             "contract_version": CONTRACT_VERSION,
@@ -649,9 +678,8 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             "permitted_effects": effects,
             "explicit_non_effects": non_effects,
             "parent_evidence": parent,
+            "owner_profile": {**owner_profile, "principal": profile_principal},
         }
-        if owner_profile is not None:
-            result["owner_profile"] = owner_profile
         return result
     except IssueDeliveryContractError:
         raise
