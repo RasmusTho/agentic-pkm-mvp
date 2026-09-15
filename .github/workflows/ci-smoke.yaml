@@ -1123,6 +1123,7 @@ jobs:
               # real PostgreSQL; the not-pg lane cannot execute these ACs.
               - 'app/builderops/control_plane/**'
               - 'app/builderops/epic_dispatch.py'
+              - 'docs/settings/models/providers.yaml'
               - 'app/builderops/owner_fact_producers.py'
               - 'app/builderops/devui_owner_facts.py'
               - 'app/builderops/devui_focus_inputs.py'

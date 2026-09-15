@@ -244,12 +244,9 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(labels, (list, tuple)) or not labels:
         raise IssueDeliveryContractError("immutable Issue labels are required")
     normalized_labels = [_text(label, "Issue label", limit=256) for label in labels]
-    if "agent:ready" not in normalized_labels:
+    agent_labels = {label for label in normalized_labels if label.startswith("agent:")}
+    if agent_labels != {"agent:ready"}:
         raise IssueDeliveryContractError("Issue-delivery admission requires the agent:ready label")
-    if {"agent:blocked", "agent:needs-human"}.intersection(normalized_labels):
-        raise IssueDeliveryContractError(
-            "Issue-delivery admission rejects blocked or needs-human labels"
-        )
     return {
         **_without_aliases(issue, _TOP_LEVEL_ISSUE_ALIASES),
         "number": number,
@@ -345,7 +342,9 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str) -> dict[str, Any]:
+def _dispatch_plan_fields(
+    value: Any, *, issue_number: int, context_pack_id: str, channel: str
+) -> dict[str, Any]:
     """Validate the complete one-Issue frozen plan admitted by FCA-ID-A."""
 
     try:
@@ -355,6 +354,7 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
             _mapping(value, "frozen dispatch plan"),
             issue_number=issue_number,
             context_pack_id=context_pack_id,
+            channel=channel,
         )
     except Exception as exc:
         raise IssueDeliveryContractError(
@@ -363,7 +363,7 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
     return dict(plan)
 
 
-def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
+def _context_fields(value: Any, *, issue_number: int, channel: str) -> dict[str, Any]:
     context = _mapping(value, "context")
     if "content_hash" not in context:
         raise IssueDeliveryContractError(
@@ -383,7 +383,12 @@ def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
     expected_plan_hash = _sha(
         context.get("expected_plan_hash"), "expected dispatch plan hash"
     )
-    plan = _dispatch_plan_fields(plan, issue_number=issue_number, context_pack_id=pack_id)
+    plan = _dispatch_plan_fields(
+        plan,
+        issue_number=issue_number,
+        context_pack_id=pack_id,
+        channel=channel,
+    )
     if expected_plan_hash != canonical_hash(plan):
         raise IssueDeliveryContractError(
             "expected dispatch plan hash does not bind the frozen dispatch plan"
@@ -802,9 +807,11 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             ("context", "context_pack", "context_pack_ref"),
             "context binding",
         )
-        context = _context_fields(context_value, issue_number=issue["number"])
-        workflow = _workflow_fields(raw.get("workflow"))
         destination = _destination_fields(raw.get("destination"))
+        context = _context_fields(
+            context_value, issue_number=issue["number"], channel=destination["channel"]
+        )
+        workflow = _workflow_fields(raw.get("workflow"))
         profile = _execution_profile_fields(raw.get("profile"))
         selected_context = context["dispatch_plan"]["context_packs"][0]
         runtime = selected_context["runtime"]
@@ -884,6 +891,16 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         if set(non_effects) != NON_EFFECTS:
             raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
         parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"])
+        if parent.get("kind") == "issue" and (
+            parent.get("repository") == repository
+            and (
+                parent.get("number") == issue["number"]
+                or parent.get("node_id") == issue["node_id"]
+            )
+        ):
+            raise IssueDeliveryContractError(
+                "parent evidence must not refer to the addressed Issue"
+            )
         owner_profile = _mapping(raw.get("owner_profile"), "owner profile")
         profile_principal = owner_profile.get(
             "principal", owner_profile.get("owner_principal")

@@ -546,7 +546,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     missing_ready_label["issue"]["labels"] = ["type:task"]  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=missing_ready_label)
-    for conflicting_label in ("agent:blocked", "agent:needs-human"):
+    for conflicting_label in ("agent:blocked", "agent:needs-human", "agent:other"):
         conflicting_lifecycle_label = deepcopy(manifest)
         conflicting_lifecycle_label["issue"]["labels"] = [  # type: ignore[union-attr]
             "agent:ready",
@@ -570,6 +570,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         invalid_destination["destination"][destination_field] = replacement  # type: ignore[union-attr]
         with pytest.raises(ControlPlaneProtocolError):
             owner.issue_delivery_preview(manifest=invalid_destination)
+    invalid_destination_channel = deepcopy(manifest)
+    invalid_destination_channel["destination"]["channel"] = "unsupported"  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_destination_channel)
     invalid_runtime = deepcopy(manifest)
     invalid_runtime["context"]["dispatch_plan"]["context_packs"][0]["runtime"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
     invalid_runtime["context"]["dispatch_plan"]["decisions"][0]["runtime_model_hint"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
@@ -737,6 +741,26 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     incomplete_parent["parent_evidence"] = {"kind": "issue"}
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=incomplete_parent)
+    self_parent = deepcopy(manifest)
+    self_parent["parent_evidence"] = {
+        "kind": "issue",
+        "repository": REPOSITORY,
+        "number": 5550,
+        "node_id": "I_self_parent",
+        "relationship": {
+            "kind": "parent",
+            "child_issue_number": 5550,
+            "authenticated": True,
+        },
+        "contract_version": "fca-parent.v1",
+        "contract_hash": "8" * 64,
+        "write_permission": {
+            "scope": "parent_evidence:write",
+            "effects": ["pr_receipt_comments", "child_generated_ledger_writeback"],
+        },
+    }
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=self_parent)
     foreign_parent_start = deepcopy(preview["manifest"])
     foreign_parent_start["parent_evidence"] = foreign_parent["parent_evidence"]
     foreign_parent_start["approval_manifest_hash"] = issue_delivery_manifest_hash(
