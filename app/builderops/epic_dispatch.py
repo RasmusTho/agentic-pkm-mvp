@@ -142,6 +142,7 @@ class CodexIssueSessionLauncher:
         provider_census_path: Path | None = None,
         builder_channel: str = "dev",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+        precreated_worktree_only: bool = False,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.adapter_path = adapter_path or (
@@ -151,6 +152,7 @@ class CodexIssueSessionLauncher:
             / "slice-implementer.toml"
         )
         self.runner = runner or subprocess.run
+        self.precreated_worktree_only = precreated_worktree_only
         self.provider_census = load_provider_census(
             provider_census_path or _DECLARED_PROVIDER_CENSUS_PATH
         )
@@ -186,7 +188,7 @@ class CodexIssueSessionLauncher:
             model = target.model
             reasoning_effort = target.reasoning_effort
         worktree = self._planned_worktree(context_pack)
-        return [
+        command = [
             "codex",
             "exec",
             "--json",
@@ -198,10 +200,20 @@ class CodexIssueSessionLauncher:
             f'model_reasoning_effort="{reasoning_effort}"',
             "-C",
             str(self.repo_root),
-            "--add-dir",
-            str(worktree.parent),
-            "-",
         ]
+        if self.precreated_worktree_only:
+            try:
+                resolved_worktree = worktree.resolve(strict=True)
+            except OSError as exc:
+                raise EpicDispatchError("planned pre-created worktree is unavailable") from exc
+            if not resolved_worktree.is_dir() or resolved_worktree != self.repo_root:
+                raise EpicDispatchError(
+                    "planned pre-created worktree must equal the launcher repository root"
+                )
+        else:
+            command.extend(["--add-dir", str(worktree.parent)])
+        command.append("-")
+        return command
 
     def prompt(self, context_pack: Mapping[str, Any]) -> str:
         try:

@@ -359,6 +359,29 @@ remain the serial destination/readback obligations. Each Issue binds its exact p
 and inline `Verify:` targets. The named test pointers below are required production-path
 production-path tests, not claims that tests exist or pass today.
 
+The credential-isolation prerequisite for FCA-ID-B now has repository support through a dormant
+Linux/systemd adapter around the existing Codex Issue-session launcher. A pinned host profile binds
+the exact distinct executor/worker principals (including an empty worker supplementary-group set),
+content/mode/ownership executable identities, a clean-worktree identity and its exact linked
+per-worktree/common Git administration directories, a private worker-owned `0700` model-login
+directory, fixed isolation properties, and direct-command hash.
+Immediately before entry, the
+fork/drop-GID/drop-UID probes must return only typed proof that the executor-owned GitHub effect
+credential is unreadable, every regular worktree/model-state file and directory is effectively
+editable by the worker through POSIX permissions/ACLs, and the linked Git control file,
+per-worktree index/`HEAD`, common refs, and objects remain non-writable. The unit grants only
+worktree-content and model-state write apertures; the nested Git control file plus both Git
+directories are explicit read-only paths, and their identities, typed metadata denial, and
+executable facts are revalidated and receipt-bound without persisting their paths. Same-user,
+uneditable worktree, writable Git metadata, readable/missing/aliased credential, primary checkout,
+drifted, shell-mediated, and unsupported-host cases refuse with no legacy fallback. This
+prerequisite does not deliver FCA-ID-B: #5558, FCA-ID-B/C destination and readback work, bob
+activation, candidate trial, and owner outcome remain pending. No bob principal, credential,
+profile, ACL, service, or deployment is created or activated by this repository change. The future
+host-profile producer owns recursive worktree content permission while local Git
+stage/commit/ref/object mutation and publication remain host-executor effects for #5558. The adapter
+proves those boundaries or stops, without granting a Git/common/worktree-parent aperture.
+
 The same three slices cover parent evidence without another operation: A must prove exact or
 explicitly absent parent admission and reject missing/foreign targets when writeback is required;
 B must prove bounded receipt/child-ledger effects, preservation of the parent contract and other
