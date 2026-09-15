@@ -180,9 +180,8 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
     ):
         return False
 
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
+    tokens = _shell_command_tokens(command)
+    if tokens is None:
         return True
     if any(
         token in {"push", "commit", "tag"}
@@ -243,6 +242,28 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
             if method in {"post", "put", "patch", "delete"} or has_body:
                 return True
     return False
+
+
+def _shell_command_tokens(command: str) -> list[str] | None:
+    """Tokenize a command and the command payload of a shell ``-c`` wrapper."""
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    expanded = list(tokens)
+    shell_names = {"ash", "bash", "dash", "ksh", "sh", "zsh"}
+    for index, token in enumerate(tokens[:-2]):
+        if Path(token).name not in shell_names:
+            continue
+        option = tokens[index + 1]
+        if not option.startswith("-") or "c" not in option:
+            continue
+        nested = _shell_command_tokens(tokens[index + 2])
+        if nested is None:
+            return None
+        expanded.extend(nested)
+    return expanded
 
 
 def _owner_boundary_target(

@@ -2024,6 +2024,20 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
             "command": "gh --repo RasmusTho/agentic-pkm-mvp issue close 5551",
         },
     }
+    shell_push = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "/bin/zsh -lc 'git -C \"$worktree\" push origin HEAD'",
+        },
+    }
+    shell_close = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "/bin/zsh -lc 'gh issue close 5551 --repo RasmusTho/agentic-pkm-mvp'",
+        },
+    }
 
     assert _effect_for_owner_boundary_event(comment) == "closure_reconciliation"
     assert _owner_boundary_target(comment, "closure_reconciliation") == comment["target"]
@@ -2033,6 +2047,8 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
     assert _raw_mutation_command(close) is True
     assert _raw_mutation_command(alternate_push) is True
     assert _raw_mutation_command(alternate_close) is True
+    assert _raw_mutation_command(shell_push) is True
+    assert _raw_mutation_command(shell_close) is True
 
 
 def test_streamed_child_rejects_raw_effect_without_process_control(
