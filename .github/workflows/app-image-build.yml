@@ -247,7 +247,7 @@ jobs:
           set -euo pipefail
           docker run --rm --entrypoint python \
             "${{ steps.images.outputs.control_plane }}" \
-            -c 'from app.builderops.control_plane.service import production_app; assert callable(production_app)'
+            -c 'from pathlib import Path; from app.builderops.control_plane.service import production_app; from app.builderops.epic_dispatch import CodexIssueSessionLauncher; assert callable(production_app); launcher = CodexIssueSessionLauncher(repo_root=Path("/app")); assert launcher.adapter_path.is_file(); assert launcher.provider_census is not None'
           docker run --rm --entrypoint postgres \
             "${{ steps.images.outputs.postgres }}" --version
 

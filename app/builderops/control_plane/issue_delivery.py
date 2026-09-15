@@ -22,6 +22,9 @@ OPERATION_TYPE = "deliver_ready_issue"
 RECORD_TYPE = "IssueDeliveryApproval"
 RECORD_PREFIX = "issue-delivery-approval:"
 IDEMPOTENCY_PREFIX = "issue-delivery:"
+# FCA-ID-A is intentionally qualified only for the repository whose owner
+# document and live Issue contract define this first delivery operation.
+QUALIFIED_REPOSITORY = "rasmustho/agentic-pkm-mvp"
 WORKFLOW_ENTRYPOINT = "app/builderops/epic_dispatch.py::dispatch_issue_sessions"
 WORKFLOW_LAUNCHER = "app/builderops/epic_dispatch.py::CodexIssueSessionLauncher.launch"
 REQUIRED_WORKFLOW_ARTIFACTS = frozenset(
@@ -228,6 +231,11 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
                 )
     else:
         refs = []
+    for ref in refs:
+        if ref.startswith("git:") and ref.removeprefix("git:") != revision:
+            raise IssueDeliveryContractError(
+                "Git source references must match the normalized source revision"
+            )
     content_hash = source.get(
         "content_hash", source.get("source_hash", source.get("source_content_hash"))
     )
@@ -258,6 +266,11 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
 
 def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
     context = _hash_binding(value, "context")
+    if "content_hash" not in context:
+        raise IssueDeliveryContractError(
+            "context content hash must be declared at the top level"
+        )
+    context_hash = _sha(context["content_hash"], "context hash")
     pack_id = _text(context.get("pack_id", context.get("context_pack_id")), "context pack id")
     plan = context.get("dispatch_plan", context.get("frozen_dispatch_plan"))
     expected_plan_hash = _sha(
@@ -268,9 +281,15 @@ def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
         raise IssueDeliveryContractError(
             "expected dispatch plan hash does not bind the frozen dispatch plan"
         )
+    selected_context_pack = plan["context_packs"][0]
+    if context_hash != canonical_hash(selected_context_pack):
+        raise IssueDeliveryContractError(
+            "context hash does not bind the selected context pack"
+        )
     return {
         **context,
         "pack_id": pack_id,
+        "content_hash": context_hash,
         "dispatch_plan": plan,
         "expected_plan_hash": expected_plan_hash,
     }
@@ -556,6 +575,10 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         if raw.get("operation_type") != OPERATION_TYPE:
             raise IssueDeliveryContractError("deliver_ready_issue operation is required")
         repository = canonical_repository(_text(raw.get("repository"), "repository", limit=256))
+        if repository != QUALIFIED_REPOSITORY:
+            raise IssueDeliveryContractError(
+                "Issue-delivery admission is not qualified for this repository"
+            )
         approval_id = _text(raw.get("approval_id"), "approval id")
         operation_key = _text(raw.get("operation_key"), "operation key")
         if _ID.fullmatch(approval_id) is None or _ID.fullmatch(operation_key) is None:
@@ -648,7 +671,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError("permitted and non-effect sets must be disjoint")
         if set(effects) != PERMITTED_EFFECTS:
             raise IssueDeliveryContractError("permitted effects do not match the closed delivery set")
-        if not REQUIRED_NON_EFFECTS.issubset(non_effects) or not set(non_effects).issubset(NON_EFFECTS):
+        if set(non_effects) != NON_EFFECTS:
             raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
         parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"])
         owner_profile = _mapping(raw.get("owner_profile"), "owner profile")

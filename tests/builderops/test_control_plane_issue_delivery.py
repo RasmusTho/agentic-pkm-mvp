@@ -278,7 +278,7 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         },
         "context": {
             "pack_id": "context-5550",
-            "content_hash": "c" * 64,
+            "content_hash": canonical_hash(dispatch_plan["context_packs"][0]),
             "dispatch_plan": dispatch_plan,
             "expected_plan_hash": canonical_hash(dispatch_plan),
         },
@@ -333,6 +333,11 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "deployment",
             "credential_provisioning",
             "owner_acceptance",
+            "release_stable_movement",
+            "host_setup",
+            "destructive_database_vault_operations",
+            "other_repository_issue_effects",
+            "universal_unattended_execution",
         ],
         "parent_evidence": {"kind": "none"},
         "expires_at": expiry,
@@ -358,6 +363,11 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     inquiry = _client(store, registry, "inquiry-token")
     generic = _client(store, registry, "generic-token")
     manifest = _manifest()
+
+    unsupported_repository = deepcopy(manifest)
+    unsupported_repository["repository"] = "OtherOrg/other-repository"
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=unsupported_repository)
 
     preview = owner.issue_delivery_preview(manifest=manifest)
     assert preview["state"] == "previewed"
@@ -442,6 +452,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_plan["context"].pop("expected_plan_hash")  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_plan)
+    invalid_context_hash = deepcopy(manifest)
+    invalid_context_hash["context"]["content_hash"] = "c" * 64  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_context_hash)
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["selected_count"] = 2  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -606,6 +620,22 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         invalid_source["source"]["revision"] = revision  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_source)
+    mismatched_source_ref = deepcopy(manifest)
+    mismatched_source_ref["source"]["refs"][1] = "git:" + "b" * 40  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=mismatched_source_ref)
+
+    for non_effect in (
+        "release_stable_movement",
+        "host_setup",
+        "destructive_database_vault_operations",
+        "other_repository_issue_effects",
+        "universal_unattended_execution",
+    ):
+        incomplete_non_effects = deepcopy(manifest)
+        incomplete_non_effects["explicit_non_effects"].remove(non_effect)  # type: ignore[union-attr]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=incomplete_non_effects)
 
     foreign_parent = deepcopy(manifest)
     foreign_parent["parent_evidence"] = {
