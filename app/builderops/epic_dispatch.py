@@ -7,7 +7,7 @@ import subprocess
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Protocol, cast
 
 from app.builderops.delivery_orchestration_contracts import canonical_hash
 from app.builderops.epic_run_state import validate_run_id
@@ -37,6 +37,9 @@ from app.builderops.execution_routing_receipts import (
 )
 from app.components.settings.providers_loader import ProviderCensus, load_provider_census
 from app.dispatcher.verification_consumer import _is_codex_usage_limit_event
+
+if TYPE_CHECKING:
+    from app.builderops.issue_delivery_operation import IssueDeliveryOperationAdapter
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL = 2
@@ -671,6 +674,7 @@ def dispatch_issue_sessions(
     expected_plan_hash: str | None = None,
     canary_observed_at: str | None = None,
     receipt_store: ReceiptStore | None = None,
+    operation_adapter: "IssueDeliveryOperationAdapter | None" = None,
 ) -> dict[str, Any]:
     """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
 
@@ -689,6 +693,14 @@ def dispatch_issue_sessions(
             raise EpicDispatchError(
                 "frozen dispatch plan does not match the independently preserved hash"
             )
+    if operation_adapter is not None:
+        if _contains_canary_execution_routing(plan):
+            raise EpicDispatchError(
+                "Issue-delivery operation does not permit canary routing"
+            )
+        operation_adapter.bind_dispatch_plan(
+            plan, expected_plan_hash=expected_plan_hash
+        )
 
     run_id, ordered = _validated_session_contexts(plan)
     sessions: list[dict[str, Any]] = []
@@ -712,7 +724,10 @@ def dispatch_issue_sessions(
                     receipt_store=receipt_store,
                 )
             else:
-                launch_result = launcher.launch(context_pack)
+                if operation_adapter is not None:
+                    launch_result = operation_adapter.launch(context_pack)
+                else:
+                    launch_result = launcher.launch(context_pack)
                 canary_receipt = None
             if not isinstance(launch_result, Mapping):
                 raise IssueSessionLaunchError(

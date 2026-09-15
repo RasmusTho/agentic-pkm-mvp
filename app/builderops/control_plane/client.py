@@ -203,6 +203,64 @@ class BuilderOpsControlPlaneClient:
             json_body={"decision": decision, "manifest": dict(manifest)},
         )
 
+    def issue_delivery_operation_record(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        record_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        operation_key: str,
+        approval_id: str,
+        approval_manifest_hash: str,
+        path: str = "/v1/issue-delivery/operation-record",
+    ) -> dict[str, Any]:
+        """Persist one destination reservation/attempt/entry receipt.
+
+        The service resolves the approved manifest by ``approval_id`` and
+        rechecks its current destination execute authority before writing.
+        This client method therefore never accepts a worker-supplied approval
+        as a substitute for service-owned authority.
+        """
+
+        return self._request(
+            "POST",
+            path,
+            json_body={
+                "envelope": dict(envelope),
+                "record_id": record_id,
+                "state": state,
+                "payload": dict(payload),
+                "idempotency_key": idempotency_key,
+                "operation_key": operation_key,
+                "approval_id": approval_id,
+                "approval_manifest_hash": approval_manifest_hash,
+            },
+        )
+
+    def issue_delivery_operation_record_read(
+        self,
+        *,
+        repository: str,
+        record_id: str,
+        path: str = "/v1/issue-delivery/operation-record",
+    ) -> dict[str, Any]:
+        """Read one destination receipt with the execute grant.
+
+        The generic receipt endpoint is intentionally protected by the broad
+        ``receipts:read`` scope.  An Issue-delivery destination only needs its
+        narrower ``issue_delivery:execute`` grant to reconcile the records it
+        owns, so this uses the dedicated service route.
+        """
+
+        return self._request(
+            "GET",
+            f"{path}/{record_id}",
+            params={"repository": repository},
+            pin_epoch=False,
+        )
+
     def issue_delivery_readback(
         self, *, repository: str, approval_id: str, path: str = "/v1/issue-delivery"
     ) -> dict[str, Any]:

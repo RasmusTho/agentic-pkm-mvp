@@ -2468,6 +2468,15 @@ def dispatch_plan(
         "contains execution_routing evidence."
     ),
 )
+@click.option(
+    "--approval-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Committed FCA-ID-B approval JSON. When supplied, destination "
+        "reservation/attempt/entry receipts are required before launch."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def dispatch_sessions(
@@ -2475,11 +2484,38 @@ def dispatch_sessions(
     plan_file: Path,
     repo_root: Path,
     expected_plan_hash: str | None,
+    approval_file: Path | None,
     as_json: bool,
 ) -> None:
     plan = _load_json_object_file(plan_file, field="plan-file")
+    control_plane_client = None
     try:
         launcher = CodexIssueSessionLauncher(repo_root=repo_root)
+        operation_adapter = None
+        if approval_file is not None:
+            from app.builderops.control_plane.client import (
+                BuilderOpsControlPlaneClient,
+                ClientConfig,
+            )
+            from app.builderops.issue_delivery_operation import (
+                IssueDeliveryOperationAdapter,
+            )
+
+            approval_document = _load_json_object_file(
+                approval_file, field="approval-file"
+            )
+            approval = approval_document.get("approval", approval_document)
+            if not isinstance(approval, Mapping):
+                raise EpicDispatchError("approval-file must contain one committed approval")
+            control_plane_client = BuilderOpsControlPlaneClient(
+                ClientConfig.from_env(), max_retries=0
+            )
+            operation_adapter = IssueDeliveryOperationAdapter(
+                approval,
+                client=control_plane_client,
+                launcher=launcher,
+                repo_root=repo_root,
+            )
         receipt_store = None
         if (
             _contains_canary_execution_routing(plan)
@@ -2497,9 +2533,13 @@ def dispatch_sessions(
             launcher,
             expected_plan_hash=expected_plan_hash,
             receipt_store=receipt_store,
+            operation_adapter=operation_adapter,
         )
     except EpicDispatchError as exc:
         raise click.ClickException(str(exc)) from exc
+    finally:
+        if control_plane_client is not None:
+            control_plane_client.close()
     _emit(receipt, as_json)
 
 
