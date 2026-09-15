@@ -30,7 +30,7 @@ from app.builderops.control_plane.models import AuthorityEnvelope, StateConflict
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.control_plane.service import create_app, issue_delivery_manifest_hash
 from app.builderops.control_plane.issue_delivery import canonical_hash
-from app.builderops.epic_dispatch import HANDOFF_RECEIPT_SCHEMA
+from app.builderops.epic_dispatch import CodexIssueSessionLauncher, HANDOFF_RECEIPT_SCHEMA
 
 pytestmark = pytest.mark.pg
 
@@ -313,7 +313,14 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
                 "carrier": "codex",
             },
             "verification_profile": {
-                "content_hash": "3" * 64,
+                "content_hash": canonical_hash(
+                    {
+                        "AC1": "4" * 64,
+                        "AC2": "5" * 64,
+                        "AC3": "6" * 64,
+                        "AC4": "7" * 64,
+                    }
+                ),
                 "criterion_hashes": {
                     "AC1": "4" * 64,
                     "AC2": "5" * 64,
@@ -422,6 +429,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         "readiness",
         lambda: {**current_readiness, "authority_epoch": current_readiness["authority_epoch"] + 1},
     )
+    def fail_current_launcher_preflight(*_args, **_kwargs):
+        raise AssertionError("readback must not rerun current launcher preflight")
+
+    monkeypatch.setattr(CodexIssueSessionLauncher, "__init__", fail_current_launcher_preflight)
     stale_readback = reader.issue_delivery_authority(
         manifest=started["approval"], purpose="readback"
     )
@@ -588,6 +599,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_profile["profile"]["verification_profile"]["criterion_hashes"] = {}  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_verification_hash = deepcopy(manifest)
+    invalid_verification_hash["profile"]["verification_profile"]["criterion_hashes"]["AC1"] = "8" * 64  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_verification_hash)
 
     shared_checkout = deepcopy(manifest)
     shared_checkout["destination"]["worktree"] = shared_checkout["destination"]["checkout"]  # type: ignore[union-attr]

@@ -1182,8 +1182,65 @@ def create_app(
     ) -> dict[str, Any]:
         try:
             supplied = request.manifest
+            if not isinstance(supplied, Mapping):
+                raise StateConflict("Issue-delivery approval manifest is malformed")
             if supplied.get("approval_manifest_hash") != issue_delivery_manifest_hash(supplied):
                 raise StateConflict("Issue-delivery approval manifest changed")
+            if request.purpose == "readback":
+                # Readback must remain available for reconciliation when the
+                # current provider census or launcher assets have drifted. It
+                # authenticates the supplied immutable hash against the
+                # durable approval without rerunning launchability preflight.
+                repository_value = supplied.get("repository")
+                approval_id = supplied.get("approval_id")
+                operation_key = supplied.get("operation_key")
+                if (
+                    not isinstance(repository_value, str)
+                    or not repository_value.strip()
+                    or not isinstance(approval_id, str)
+                    or not approval_id.strip()
+                    or not isinstance(operation_key, str)
+                    or not operation_key.strip()
+                ):
+                    raise StateConflict("Issue-delivery readback identity is malformed")
+                repository = canonical_repository(repository_value)
+                _enforce_repo_scope(credential, repository)
+                if "issue_delivery:read" not in credential.scopes:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="issue_delivery:read grant required",
+                    )
+                try:
+                    row = store.get_record(
+                        repository, issue_delivery_record_id(approval_id)
+                    )
+                except KeyError as exc:
+                    raise StateConflict(
+                        "Issue-delivery approval is not durably admitted"
+                    ) from exc
+                approved = dict(row.get("payload", {}))
+                if (
+                    row.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
+                    or row.get("state") != "approved"
+                    or approved.get("repository") != repository
+                    or approved.get("approval_id") != approval_id
+                    or approved.get("operation_key") != operation_key
+                    or approved.get("approval_manifest_hash")
+                    != supplied.get("approval_manifest_hash")
+                    or approved.get("approval_manifest_hash")
+                    != issue_delivery_manifest_hash(approved)
+                ):
+                    raise StateConflict(
+                        "Issue-delivery approval does not match durable admission"
+                    )
+                _assert_issue_delivery_permission_safe(approved.get("permission"))
+                return {
+                    "approval": approved,
+                    "purpose": "readback",
+                    "operation_key": operation_key,
+                    "authority_epoch": store.readiness()["authority_epoch"],
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                }
             normalized = normalize_issue_delivery_manifest(supplied)
             repository = normalized["repository"]
             _enforce_repo_scope(credential, repository)

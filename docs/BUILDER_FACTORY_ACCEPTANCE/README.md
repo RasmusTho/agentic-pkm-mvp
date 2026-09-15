@@ -186,7 +186,9 @@ is a separately bound effect below. Project Status is not a pickup gate.
 `app/builderops/cli.py::dispatch_sessions` loads a frozen plan and constructs
 `app/builderops/epic_dispatch.py::CodexIssueSessionLauncher`; `dispatch_issue_sessions` calls its
 `launch` method. The launcher invokes `codex exec --json --sandbox workspace-write`, resolves
-the configured execution target and loads `.codex/agents/slice-implementer.toml` instructions.
+the configured execution target and loads `.codex/agents/slice-implementer.toml` instructions. The
+rebuildable BuilderOps image packages that adapter and `docs/settings/models/providers.yaml`, and
+the image smoke check instantiates the launcher preflight against those packaged paths.
 Those instructions require the worker to self-claim and perform `issue-to-code`, `publish-pr`,
 `verification-and-closure`, owner-doc reconciliation and closeout. This is a full delivery worker,
 not an edit-only worker. Agent reasoning and bounded execution remain permitted under DP-02C;
@@ -241,7 +243,11 @@ within its existing owner. Before Start, it must bind all of these values withou
   hashes, never a moving `main`, an example revision or a version label alone;
 - the closed execution profile: provider-census hash, configuration digest, provider-neutral
   `general_delivery` selection intent, resolved capability/model/reasoning/carrier,
-  verification-profile hash and required criterion hashes. This operation's resolved carrier is
+  verification-profile hash equal to the canonical criterion-hash map, and required criterion hashes. The
+  context hash is top-level and equals the canonical selected context pack; Git source references
+  equal the single immutable source revision, and the explicit non-effect list equals the complete
+  closed set. This first operation is qualified only for `RasmusTho/agentic-pkm-mvp`; expanding
+  credential repository configuration does not expand this operation. This operation's resolved carrier is
   Codex and must agree with the frozen dispatch context. Unknown or incomplete profile fields
   refuse admission; an unavailable target withdraws launch.
 

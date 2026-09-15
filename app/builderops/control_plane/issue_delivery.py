@@ -352,6 +352,10 @@ def _execution_profile_fields(value: Any) -> dict[str, Any]:
     else:
         raise IssueDeliveryContractError("verification criterion hashes are required")
     profile_hash = _sha(profile.get("content_hash"), "execution profile hash")
+    if verification_hash != canonical_hash(normalized_criteria):
+        raise IssueDeliveryContractError(
+            "verification profile hash does not bind its criterion hashes"
+        )
     return {
         **profile,
         "content_hash": profile_hash,
