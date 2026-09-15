@@ -5,8 +5,10 @@ import re
 from pathlib import Path
 
 from click.testing import CliRunner
+import pytest
 
 from app.builderops.cli import builderops
+from app.builderops.ckm import linkers as linker_module
 from app.builderops.ckm.ingest_repo import iter_docs, iter_schemas, iter_source, iter_tests
 from app.builderops.ckm.linkers import link_deterministic
 from app.builderops.ckm.seed import seed_capabilities
@@ -179,6 +181,7 @@ def test_shared_boundary_evidence_is_capability_specific(tmp_path: Path) -> None
 
 def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "repo"
     matrix = root / "docs/architecture/traceability-matrix.md"
@@ -234,6 +237,30 @@ def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
             provenance=json.dumps({"source_ref": source_ref}),
         )
 
+    # A representative large unrelated test corpus must not expand the AST
+    # work needed to retain the same capability-specific test edge.
+    for number in range(64):
+        source_ref = f"tests/test_unrelated_{number}.py"
+        path = root / source_ref
+        path.write_text('application = "application"\n', encoding="utf-8")
+        store.upsert_artifact(
+            source_ref=source_ref,
+            artifact_kind="test",
+            source="fixture",
+            watermark="one",
+            provenance=json.dumps({"source_ref": source_ref}),
+        )
+
+    parse_calls = 0
+    real_parse = linker_module.ast.parse
+
+    def count_parse(*args: object, **kwargs: object) -> object:
+        nonlocal parse_calls
+        parse_calls += 1
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(linker_module.ast, "parse", count_parse)
+
     link_deterministic(store, root)
 
     artifacts = {item.id: item for item in store.list_artifacts()}
@@ -256,6 +283,33 @@ def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
         and edge.basis == "test-code:app/retrieval/capability.py"
         for edge in retrieval_edges
     )
+    assert parse_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from app . retrieval . capability import retrieve\n", {"app.retrieval.capability"}),
+        ("import app . retrieval . capability\n", {"app.retrieval.capability"}),
+        ("from app. " + "\\" + "\n    retrieval import retrieve\n", {"app.retrieval"}),
+        ("import ａｐｐ.retrieval\n", {"app.retrieval"}),
+        ("import app\n", {"app"}),
+        ("if True:\n    x = 1\n  y = 2\nimport app.retrieval\n", set()),
+    ],
+)
+def test_import_scanner_preserves_ast_import_semantics(
+    tmp_path: Path,
+    source: str,
+    expected: set[str],
+) -> None:
+    test_path = tmp_path / "test_imports.py"
+    test_path.write_text(source, encoding="utf-8")
+
+    modules = linker_module._imported_modules(test_path)
+
+    assert modules == expected
+    if modules == {"app"}:
+        assert not any(module.startswith("app.") for module in modules)
 
 
 def test_stale_source_and_dependent_test_edges_converge_in_one_run(

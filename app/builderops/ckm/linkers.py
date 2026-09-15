@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 import posixpath
 import re
+import tokenize
+import unicodedata
 from pathlib import Path
 
 from app.builderops.ckm.models import CkmArtifact, CkmCapability
@@ -378,8 +381,27 @@ def _adr_links(
 
 def _imported_modules(path: Path) -> set[str]:
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source = path.read_text(encoding="utf-8")
     except (OSError, SyntaxError, UnicodeDecodeError):
+        return set()
+    # `_test_links` only retains imports below ``app.``. Most test modules do
+    # not contain an ``app`` name at all, so avoid parsing and walking their
+    # full AST. Tokenizing keeps whitespace, comments, continuations, and
+    # normalized identifier spellings from becoming a semantic filter: every
+    # possible app import still reaches the AST-based resolver below.
+    try:
+        has_app_name = any(
+            token.type == tokenize.NAME
+            and unicodedata.normalize("NFKC", token.string) == "app"
+            for token in tokenize.generate_tokens(io.StringIO(source).readline)
+        )
+    except (tokenize.TokenError, SyntaxError):
+        has_app_name = True
+    if not has_app_name:
+        return set()
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
         return set()
     modules: set[str] = set()
     for node in ast.walk(tree):
