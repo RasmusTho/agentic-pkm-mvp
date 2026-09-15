@@ -716,6 +716,29 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=normalized_shared_checkout)
+    descendant_worktree = deepcopy(manifest)
+    descendant_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
+        "/workspaces/agentic-pkm-mvp/child"
+    )
+    descendant_worktree["context"]["dispatch_plan"]["context_packs"][0][  # type: ignore[union-attr]
+        "branch_worktree_plan"
+    ]["worktree"] = "/workspaces/agentic-pkm-mvp/child"
+    descendant_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        descendant_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=descendant_worktree)
+    sibling_worktree = deepcopy(manifest)
+    sibling_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
+        "/workspaces/agentic-pkm-mvp-sibling"
+    )
+    sibling_worktree["context"]["dispatch_plan"]["context_packs"][0][  # type: ignore[union-attr]
+        "branch_worktree_plan"
+    ]["worktree"] = "/workspaces/agentic-pkm-mvp-sibling"
+    sibling_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        sibling_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    assert owner.issue_delivery_preview(manifest=sibling_worktree)["state"] == "previewed"
 
     for revision in ("main", "main:a5f0e10b666e74c4b8de36a67563a99e30ee801d", "HEAD"):
         invalid_source = deepcopy(manifest)

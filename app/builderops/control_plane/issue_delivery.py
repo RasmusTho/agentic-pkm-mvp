@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from posixpath import normpath
 from typing import Any
 
@@ -158,6 +159,12 @@ def _mapping(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or not value:
         raise IssueDeliveryContractError(f"{name} is required")
     return dict(value)
+
+
+def _is_same_or_descendant_path(candidate: str, parent: str) -> bool:
+    """Compare normalized absolute paths by components, never string prefixes."""
+
+    return PurePosixPath(candidate).is_relative_to(PurePosixPath(parent))
 
 
 def _coalesce_aliases(
@@ -870,7 +877,8 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             not destination["checkout"].startswith("/")
             or not destination["worktree"].startswith("/")
             or checkout_path == "/"
-            or worktree_path in {checkout_path, "/"}
+            or worktree_path == "/"
+            or _is_same_or_descendant_path(worktree_path, checkout_path)
         ):
             raise IssueDeliveryContractError(
                 "destination worktree must be isolated from the checkout and root"
