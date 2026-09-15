@@ -2069,6 +2069,20 @@ def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
             "command": "gh api repos/RasmusTho/agentic-pkm-mvp/releases -iFtag_name=v1",
         },
     }
+    read_api_attached_jq = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh api repos/RasmusTho/agentic-pkm-mvp/releases -q.foo",
+        },
+    }
+    read_api_attached_header = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh api repos/RasmusTho/agentic-pkm-mvp/releases -Hfoo:bar",
+        },
+    }
     owner_wrapper = {
         "type": "item.started",
         "item": {
@@ -2091,6 +2105,8 @@ def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
     assert _raw_mutation_command(raw_api_equals_method) is True
     assert _raw_mutation_command(raw_api_combined_method) is True
     assert _raw_mutation_command(raw_api_combined_body) is True
+    assert _raw_mutation_command(read_api_attached_jq) is False
+    assert _raw_mutation_command(read_api_attached_header) is False
     assert _raw_mutation_command(owner_wrapper) is False
 
 

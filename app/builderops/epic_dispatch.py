@@ -199,13 +199,22 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
                 method = candidate[2:].removeprefix("=").lower()
             elif candidate.startswith("-") and not candidate.startswith("--"):
                 short_flags = candidate[1:]
-                method_index = short_flags.find("X")
-                if method_index >= 0:
-                    method = short_flags[method_index + 1 :].removeprefix("=").lower()
-                    if not method:
-                        method = "next"
-                if "f" in short_flags or "F" in short_flags:
-                    has_body = True
+                index = 0
+                while index < len(short_flags):
+                    option = short_flags[index]
+                    if option in {"i"}:
+                        index += 1
+                        continue
+                    if option in {"X", "F", "f", "H", "p", "q", "t"}:
+                        argument = short_flags[index + 1 :]
+                        if option == "X":
+                            method = argument.removeprefix("=").lower() or "next"
+                        elif option in {"F", "f"}:
+                            has_body = True
+                        # Every remaining character is this option's attached
+                        # argument, not another option in the cluster.
+                        break
+                    index += 1
             elif method == "next":
                 method = candidate.lower()
             elif (
