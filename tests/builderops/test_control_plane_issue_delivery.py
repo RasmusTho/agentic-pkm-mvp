@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -495,6 +497,15 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_runtime)
+    invalid_census_target = deepcopy(manifest)
+    invalid_census_target["context"]["dispatch_plan"]["context_packs"][0]["runtime"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
+    invalid_census_target["context"]["dispatch_plan"]["decisions"][0]["runtime_model_hint"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
+    invalid_census_target["profile"]["resolved"]["model"] = "gpt-5.6-sol"  # type: ignore[union-attr]
+    invalid_census_target["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        invalid_census_target["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_census_target)
     invalid_profile_target = deepcopy(manifest)
     invalid_profile_target["profile"]["resolved"]["reasoning_effort"] = "high"  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -624,3 +635,29 @@ def test_issue_approval_transaction_recovery(store, registry, monkeypatch) -> No
     assert recovered["state"] == "approved"
     assert recovered["replayed"] is False
     assert store.get_record(REPOSITORY, "issue-delivery-approval:approval-5550")["state"] == "approved"
+
+
+def test_issue_approval_concurrent_identical_start_replays_winner(
+    store, registry, monkeypatch
+) -> None:
+    owner_a = _client(store, registry, "owner-token")
+    owner_b = _client(store, registry, "owner-token")
+    preview = owner_a.issue_delivery_preview(
+        manifest=_manifest(operation_key="operation-concurrent")
+    )
+    barrier = threading.Barrier(2)
+    original = store.commit_record
+
+    def synchronized_commit(**kwargs):  # type: ignore[no-untyped-def]
+        barrier.wait(timeout=10)
+        return original(**kwargs)
+
+    monkeypatch.setattr(store, "commit_record", synchronized_commit)
+    def start(client: BuilderOpsControlPlaneClient) -> dict[str, object]:
+        return client.issue_delivery_start(decision="start", manifest=preview["manifest"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(start, (owner_a, owner_b)))
+
+    assert sorted(item["replayed"] for item in outcomes) == [False, True]
+    assert len({item["receipt"]["receipt_sequence"] for item in outcomes}) == 1

@@ -1030,15 +1030,14 @@ def create_app(
         approval_id = manifest["approval_id"]
         key = issue_delivery_idempotency_key(manifest["operation_key"])
         record = issue_delivery_record_id(approval_id)
-        try:
-            existing = store.get_record(repository, record)
-        except KeyError:
-            existing = None
-        if existing is not None:
+
+        def replay_existing(existing: Mapping[str, Any]) -> dict[str, Any]:
             existing_payload = existing.get("payload", {})
             if (
                 existing.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
-                or existing_payload.get("approval_manifest_hash") != manifest["approval_manifest_hash"]
+                or not isinstance(existing_payload, Mapping)
+                or existing_payload.get("approval_manifest_hash")
+                != manifest["approval_manifest_hash"]
                 or existing_payload.get("operation_key") != manifest["operation_key"]
             ):
                 raise StateConflict("Issue-delivery approval is immutable")
@@ -1060,6 +1059,13 @@ def create_app(
                 "replayed": True,
                 "effects": [],
             }
+
+        try:
+            existing = store.get_record(repository, record)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            return replay_existing(existing)
         by_operation = issue_delivery_existing_by_operation(repository, manifest["operation_key"])
         if by_operation is not None:
             raise IdempotencyConflict("Issue-delivery operation key is already approved")
@@ -1077,14 +1083,26 @@ def create_app(
                 f"manifest:{manifest['approval_manifest_hash']}",
             ),
         )
-        result = store.commit_record(
-            envelope=envelope,
-            record_id=record,
-            record_type=ISSUE_DELIVERY_RECORD_TYPE,
-            state="approved",
-            payload=payload,
-            idempotency_key=key,
-        )
+        try:
+            result = store.commit_record(
+                envelope=envelope,
+                record_id=record,
+                record_type=ISSUE_DELIVERY_RECORD_TYPE,
+                state="approved",
+                payload=payload,
+                idempotency_key=key,
+            )
+        except IdempotencyConflict:
+            # Two identical Starts can both pass the read-before-write checks.
+            # The losing writer must project the winner's immutable approval as
+            # a replay, not surface a false conflict to the owner.
+            try:
+                winner = store.get_record(repository, record)
+            except KeyError as exc:
+                raise ControlPlaneError(
+                    "Issue-delivery approval commit raced without durable readback"
+                ) from exc
+            return replay_existing(winner)
         return {
             "contract_version": ISSUE_DELIVERY_CONTRACT,
             "operation_type": ISSUE_DELIVERY_OPERATION,

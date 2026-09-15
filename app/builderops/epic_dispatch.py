@@ -1334,6 +1334,14 @@ def validate_issue_delivery_plan(
         or not isinstance(runtime.get("reasoning_effort"), str)
     ):
         raise EpicDispatchError("Issue delivery runtime must bind the complete Codex target")
+    try:
+        CodexIssueSessionLauncher(repo_root=Path.cwd())._tcd_route(
+            {"runtime": runtime}
+        )
+    except (EpicDispatchError, OSError) as exc:
+        raise EpicDispatchError(
+            "Issue delivery runtime fails the launcher provider-census preflight"
+        ) from exc
     return plan
 
 
