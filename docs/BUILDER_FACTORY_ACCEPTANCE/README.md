@@ -204,8 +204,10 @@ support is assigned below; a prompt asking the model to obey a manifest is insuf
 **Exact approval.** Extend the [FCA-08 manifest](#immutable-approval-manifest-and-operation-permissions)
 within its existing owner. Before Start, it must bind all of these values without defaults:
 
-- `repository`, numeric Issue identity and node identity, caller-bound Issue body/AC hashes,
-  bounded source revisions, proposal/context-pack hash, and the frozen dispatch-plan hash. FCA-ID-A
+- `repository`, numeric Issue identity and node identity, caller-bound Issue body/AC hashes, one
+  immutable 40-character Git commit source revision, proposal/context-pack hash, and a complete
+  one-Issue frozen dispatch plan with its independently retained `expected_plan_hash`. The plan
+  contains exactly one selected Codex Issue/context pack and no canary/fallback route. FCA-ID-A
   seals these source/profile identity hashes immutably; it does not independently re-read GitHub or
   recompute source/profile truth before Start;
 - parent evidence destination: explicit `none`, or one exact parent repository/number/node,
@@ -228,9 +230,10 @@ within its existing owner. Before Start, it must bind all of these values withou
   keys, compact separators, UTF-8); every artifact entry binds path and SHA-256 of its exact bytes.
   The source commit pins their repository dependencies. A live request must contain resolved
   hashes, never a moving `main`, an example revision or a version label alone;
-- the effective provider-census/configuration digest, selection intent and resolved capability,
-  model, reasoning and carrier profile; the exact verification/acceptance profile and required
-  criterion hashes; and the complete effects below. An unavailable target withdraws launch.
+- the closed execution profile: provider-census hash, configuration digest, provider-neutral
+  selection intent, resolved capability/model/reasoning/carrier, verification-profile hash and
+  required criterion hashes. Unknown or incomplete profile fields refuse admission; an unavailable
+  target withdraws launch.
 
 The target destination may be bob-1 only after its separately authorized runtime qualification and
 activation. This source contract chooses no live host, credential or deployment. Workflow/profile,

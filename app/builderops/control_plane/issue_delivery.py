@@ -63,6 +63,14 @@ NON_EFFECTS = REQUIRED_NON_EFFECTS | OPTIONAL_NON_EFFECTS
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_SELECTION_INTENTS = frozenset(
+    {"coordination", "general_delivery", "strong_reasoning", "verification"}
+)
+_CAPABILITIES = frozenset({"spark", "luna", "terra", "sol"})
+_REASONING_EFFORTS = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+)
+_CARRIERS = frozenset({"codex", "claude"})
 _NODE_ID = re.compile(r"^[A-Za-z0-9_:-]{1,256}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$")
 _SERVER_FIELDS = frozenset(
@@ -192,10 +200,19 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
         revisions = source.get("revisions", source.get("source_revisions"))
         if isinstance(revisions, (list, tuple)) and len(revisions) == 1:
             revision = revisions[0]
-    revision = _text(revision, "source revision", limit=1024)
+    revision = _text(revision, "source revision", limit=64).lower()
+    if _GIT_SHA.fullmatch(revision) is None:
+        raise IssueDeliveryContractError(
+            "source revision must be one immutable 40-character Git commit"
+        )
     refs = source.get("refs", source.get("source_refs", []))
     if refs:
         refs = _list_of_text(refs, "source references")
+        for ref in refs:
+            if ref.startswith("git:") and _GIT_SHA.fullmatch(ref.removeprefix("git:")) is None:
+                raise IssueDeliveryContractError(
+                    "Git source references must bind immutable commits"
+                )
     else:
         refs = []
     content_hash = source.get(
@@ -206,6 +223,158 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     if content_hash is None and not refs:
         raise IssueDeliveryContractError("source hash or source reference is required")
     return {**source, "revision": revision, "refs": refs, **({"content_hash": content_hash} if content_hash else {})}
+
+
+def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str) -> dict[str, Any]:
+    """Validate the narrower one-Issue frozen plan admitted by FCA-ID-A."""
+
+    plan = _mapping(value, "frozen dispatch plan")
+    if plan.get("schema_version") != 2:
+        raise IssueDeliveryContractError("frozen dispatch plan schema version is unsupported")
+    if plan.get("source") != "builderops.epic_dispatch.dry_run":
+        raise IssueDeliveryContractError("frozen dispatch plan must come from the dry-run planner")
+    decisions = plan.get("decisions")
+    context_packs = plan.get("context_packs")
+    if not isinstance(decisions, list) or not isinstance(context_packs, list):
+        raise IssueDeliveryContractError("frozen dispatch plan decisions and context packs are required")
+    if plan.get("selected_count") != 1:
+        raise IssueDeliveryContractError("Issue delivery admits exactly one selected dispatch")
+    selected = [
+        item
+        for item in decisions
+        if isinstance(item, Mapping) and item.get("selected_for_dispatch") is True
+    ]
+    if len(selected) != 1:
+        raise IssueDeliveryContractError("frozen dispatch plan must select exactly one Issue")
+    selected_decision = dict(selected[0])
+    if (
+        selected_decision.get("issue_number") != issue_number
+        or selected_decision.get("context_pack_id") != context_pack_id
+        or selected_decision.get("dispatch_slot") != 1
+    ):
+        raise IssueDeliveryContractError("frozen dispatch plan does not bind the addressed Issue")
+    if "execution_routing" in plan or any(
+        isinstance(item, Mapping) and "execution_routing" in item for item in decisions
+    ):
+        raise IssueDeliveryContractError("Issue delivery cannot admit a canary or fallback route")
+    matching_contexts = [
+        item
+        for item in context_packs
+        if isinstance(item, Mapping) and item.get("context_pack_id") == context_pack_id
+    ]
+    if len(context_packs) != 1 or len(matching_contexts) != 1:
+        raise IssueDeliveryContractError("frozen dispatch plan must contain one matching context pack")
+    selected_context = matching_contexts[0]
+    issue_contract = selected_context.get("issue_contract")
+    runtime = selected_context.get("runtime")
+    if (
+        not isinstance(issue_contract, Mapping)
+        or issue_contract.get("number") != issue_number
+        or selected_context.get("dispatch_slot") != 1
+        or not isinstance(runtime, Mapping)
+        or runtime.get("runtime") != "codex"
+        or runtime.get("carrier", "codex") != "codex"
+    ):
+        raise IssueDeliveryContractError("frozen dispatch context does not bind one Codex Issue session")
+    return plan
+
+
+def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
+    context = _hash_binding(value, "context")
+    pack_id = _text(context.get("pack_id", context.get("context_pack_id")), "context pack id")
+    plan = context.get("dispatch_plan", context.get("frozen_dispatch_plan"))
+    expected_plan_hash = _sha(
+        context.get("expected_plan_hash"), "expected dispatch plan hash"
+    )
+    plan = _dispatch_plan_fields(plan, issue_number=issue_number, context_pack_id=pack_id)
+    if expected_plan_hash != canonical_hash(plan):
+        raise IssueDeliveryContractError(
+            "expected dispatch plan hash does not bind the frozen dispatch plan"
+        )
+    return {
+        **context,
+        "pack_id": pack_id,
+        "dispatch_plan": plan,
+        "expected_plan_hash": expected_plan_hash,
+    }
+
+
+def _execution_profile_fields(value: Any) -> dict[str, Any]:
+    """Require a closed, resolved execution and verification profile."""
+
+    profile = _mapping(value, "profile")
+    if set(profile) != {
+        "content_hash",
+        "provider_census_hash",
+        "configuration_digest",
+        "selection_intent",
+        "resolved",
+        "verification_profile",
+    }:
+        raise IssueDeliveryContractError("execution profile fields are not the closed approved set")
+    provider_census_hash = _sha(profile.get("provider_census_hash"), "provider census hash")
+    configuration_digest = _sha(
+        profile.get("configuration_digest"), "execution configuration digest"
+    )
+    selection_intent = _text(profile.get("selection_intent"), "execution selection intent", limit=64)
+    if selection_intent not in _SELECTION_INTENTS:
+        raise IssueDeliveryContractError("execution selection intent is unsupported")
+    resolved = _mapping(profile.get("resolved"), "resolved execution target")
+    if set(resolved) != {"capability", "model", "reasoning_effort", "carrier"}:
+        raise IssueDeliveryContractError("resolved execution target fields are incomplete")
+    capability = _text(resolved.get("capability"), "resolved execution capability", limit=32)
+    if capability not in _CAPABILITIES:
+        raise IssueDeliveryContractError("resolved execution capability is unsupported")
+    model = _text(resolved.get("model"), "resolved execution model", limit=256)
+    reasoning_effort = _text(
+        resolved.get("reasoning_effort"), "resolved execution reasoning effort", limit=32
+    )
+    if reasoning_effort not in _REASONING_EFFORTS:
+        raise IssueDeliveryContractError("resolved execution reasoning effort is unsupported")
+    carrier = _text(resolved.get("carrier"), "resolved execution carrier", limit=32)
+    if carrier not in _CARRIERS:
+        raise IssueDeliveryContractError("resolved execution carrier is unsupported")
+    verification = _mapping(profile.get("verification_profile"), "verification profile")
+    if set(verification) != {"content_hash", "criterion_hashes"}:
+        raise IssueDeliveryContractError("verification profile fields are incomplete")
+    verification_hash = _sha(verification.get("content_hash"), "verification profile hash")
+    criterion_hashes = verification.get("criterion_hashes")
+    if isinstance(criterion_hashes, Mapping):
+        if not criterion_hashes:
+            raise IssueDeliveryContractError("verification criterion hashes are required")
+        normalized_criteria: dict[str, str] = {}
+        for criterion, digest in criterion_hashes.items():
+            criterion_id = _text(criterion, "verification criterion id", limit=256)
+            normalized_criteria[criterion_id] = _sha(digest, "verification criterion hash")
+        if len(normalized_criteria) != len(criterion_hashes):
+            raise IssueDeliveryContractError("verification criterion ids must be unique")
+    elif isinstance(criterion_hashes, (list, tuple)) and criterion_hashes:
+        normalized_criteria = {
+            str(index): _sha(digest, "verification criterion hash")
+            for index, digest in enumerate(criterion_hashes, start=1)
+        }
+    else:
+        raise IssueDeliveryContractError("verification criterion hashes are required")
+    profile_hash = _sha(profile.get("content_hash"), "execution profile hash")
+    return {
+        **profile,
+        "content_hash": profile_hash,
+        "provider_census_hash": provider_census_hash,
+        "configuration_digest": configuration_digest,
+        "selection_intent": selection_intent,
+        "resolved": {
+            **resolved,
+            "capability": capability,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "carrier": carrier,
+        },
+        "verification_profile": {
+            **verification,
+            "content_hash": verification_hash,
+            "criterion_hashes": normalized_criteria,
+        },
+    }
 
 
 def _hash_binding(value: Any, name: str) -> dict[str, Any]:
@@ -420,13 +589,13 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError("expiry must be timezone-aware")
         issue = _issue_fields(raw)
         source = _source_fields(raw)
-        context = _hash_binding(
+        context = _context_fields(
             raw.get("context", raw.get("context_pack", raw.get("context_pack_ref"))),
-            "context",
+            issue_number=issue["number"],
         )
         workflow = _workflow_fields(raw.get("workflow"))
         destination = _destination_fields(raw.get("destination"))
-        profile = _hash_binding(raw.get("profile"), "profile")
+        profile = _execution_profile_fields(raw.get("profile"))
         effects = _list_of_text(raw.get("permitted_effects"), "permitted effects")
         non_effects = _list_of_text(raw.get("explicit_non_effects"), "explicit non-effects")
         if set(effects) & set(non_effects):

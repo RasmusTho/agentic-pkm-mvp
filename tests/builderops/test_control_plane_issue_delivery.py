@@ -135,6 +135,51 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         },
     ]
     artifacts.sort(key=lambda item: item["path"])
+    dispatch_decision = {
+        "id": "dispatch-5550",
+        "issue_number": 5550,
+        "selected_path": "subagent",
+        "selected_for_dispatch": True,
+        "dispatch_slot": 1,
+        "context_pack_id": "context-5550",
+        "runtime_model_hint": {
+            "runtime": "codex",
+            "carrier": "codex",
+            "selection_intent": "general_delivery",
+            "capability": "luna",
+        },
+    }
+    dispatch_plan = {
+        "schema_version": 2,
+        "run_id": "run-5550",
+        "requested_max_parallel": 1,
+        "max_parallel": 1,
+        "parallel_cap_reason": None,
+        "runtime_targets": ["codex"],
+        "selected_count": 1,
+        "selected_helper_slots": 0,
+        "decisions": [dispatch_decision],
+        "context_packs": [
+            {
+                "schema_version": 2,
+                "context_pack_id": "context-5550",
+                "dispatch_slot": 1,
+                "issue_contract": {"number": 5550},
+                "runtime": {
+                    "runtime": "codex",
+                    "carrier": "codex",
+                    "selection_intent": "general_delivery",
+                    "capability": "luna",
+                },
+            }
+        ],
+        "epic_run_state_update": {
+            "dispatch_decisions": [dispatch_decision]
+        },
+        "github_mutations": [],
+        "agent_spawns": [],
+        "source": "builderops.epic_dispatch.dry_run",
+    }
     return {
         "contract_version": "fca-issue-delivery.v1",
         "operation_type": "deliver_ready_issue",
@@ -150,10 +195,15 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "acceptance_criteria_hash": "b" * 64,
         },
         "source": {
-            "revision": "main:a5f0e10b666e74c4b8de36a67563a99e30ee801d",
+            "revision": "a5f0e10b666e74c4b8de36a67563a99e30ee801d",
             "refs": ["github:issue:5550", "git:a5f0e10b666e74c4b8de36a67563a99e30ee801d"],
         },
-        "context": {"pack_id": "context-5550", "content_hash": "c" * 64},
+        "context": {
+            "pack_id": "context-5550",
+            "content_hash": "c" * 64,
+            "dispatch_plan": dispatch_plan,
+            "expected_plan_hash": canonical_hash(dispatch_plan),
+        },
         "workflow": {
             "version": "fca-issue-delivery.v1",
             "content_hash": canonical_hash(artifacts),
@@ -175,8 +225,24 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         },
         "profile": {
             "content_hash": "f" * 64,
-            "model": "gpt-5.6-luna",
-            "reasoning_effort": "xhigh",
+            "provider_census_hash": "1" * 64,
+            "configuration_digest": "2" * 64,
+            "selection_intent": "general_delivery",
+            "resolved": {
+                "capability": "luna",
+                "model": "gpt-5.6-luna",
+                "reasoning_effort": "xhigh",
+                "carrier": "codex",
+            },
+            "verification_profile": {
+                "content_hash": "3" * 64,
+                "criterion_hashes": {
+                    "AC1": "4" * 64,
+                    "AC2": "5" * 64,
+                    "AC3": "6" * 64,
+                    "AC4": "7" * 64,
+                },
+            },
         },
         "permitted_effects": [
             "repository_worktree",
@@ -284,6 +350,41 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_artifact_hash["workflow"]["artifacts"][0]["sha256"] = "2" * 64  # type: ignore[index]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_artifact_hash)
+
+    invalid_plan = deepcopy(manifest)
+    invalid_plan["context"].pop("expected_plan_hash")  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_plan)
+    invalid_plan = deepcopy(manifest)
+    invalid_plan["context"]["dispatch_plan"]["selected_count"] = 2  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_plan)
+    invalid_plan = deepcopy(manifest)
+    invalid_plan["context"]["dispatch_plan"]["decisions"][0]["execution_routing"] = {  # type: ignore[union-attr]
+        "mode": "canary"
+    }
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_plan)
+
+    for field in ("provider_census_hash", "configuration_digest", "selection_intent"):
+        invalid_profile = deepcopy(manifest)
+        invalid_profile["profile"].pop(field)  # type: ignore[union-attr]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_profile = deepcopy(manifest)
+    invalid_profile["profile"]["resolved"].pop("carrier")  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_profile = deepcopy(manifest)
+    invalid_profile["profile"]["verification_profile"]["criterion_hashes"] = {}  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile)
+
+    for revision in ("main", "main:a5f0e10b666e74c4b8de36a67563a99e30ee801d", "HEAD"):
+        invalid_source = deepcopy(manifest)
+        invalid_source["source"]["revision"] = revision  # type: ignore[union-attr]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=invalid_source)
 
     incomplete_parent = deepcopy(manifest)
     incomplete_parent["parent_evidence"] = {"kind": "issue"}
