@@ -195,9 +195,14 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
                 method = candidate.split("=", 1)[1].lower()
             elif candidate in {"--method", "-X"}:
                 method = "next"
+            elif candidate.startswith("-X") and len(candidate) > 2:
+                method = candidate[2:].lower()
             elif method == "next":
                 method = candidate.lower()
-            elif candidate in {"-f", "-F", "--field", "--raw-field", "--input"}:
+            elif candidate in {"-f", "-F", "--field", "--raw-field", "--input"} or any(
+                candidate.startswith(f"{flag}=")
+                for flag in {"--field", "--raw-field", "--input"}
+            ):
                 has_body = True
             elif graphql and candidate.lower().startswith(("query=mutation", "mutation")):
                 graphql_mutation = True
