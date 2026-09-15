@@ -67,6 +67,7 @@ def test_store_port_exposes_complete_recovery_and_durability_surface() -> None:
             "expected_states",
             "fault_at",
             "owner_outcome",
+            "issue_delivery_admission",
         ),
         "get_owner_outcomes": ("self", "repository", "subject_ref", "idempotency_key", "grant_reader"),
         "get_owner_asks": ("self", "repository"),
