@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tomllib
+from threading import Thread
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Protocol, cast
@@ -52,6 +53,15 @@ _DECLARED_PROVIDER_CENSUS_PATH = (
     / "settings"
     / "models"
     / "providers.yaml"
+)
+_ISSUE_DELIVERY_EFFECTS = frozenset(
+    {
+        "repository_worktree",
+        "issue_claim",
+        "publication",
+        "review_merge",
+        "closure_reconciliation",
+    }
 )
 
 HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
@@ -112,6 +122,54 @@ class IssueSessionLauncher(Protocol):
         on_entry: Callable[[str], None] | None = None,
         effect_gate: Callable[[str], Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]: ...
+
+
+def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
+    """Map a worker owner-boundary event to the finite approved effect set.
+
+    ``codex exec --json`` emits ``item.started`` before a command execution.
+    The launcher observes those events while the child is still running and
+    asks the authenticated destination adapter for a fresh gate before the
+    command can become the next lifecycle effect.  A worker may also emit the
+    explicit boundary event in its handoff protocol; unknown commands are not
+    guessed or granted by this adapter.
+    """
+
+    if event.get("type") == "builderops.effect_boundary":
+        effect = event.get("effect")
+        return (
+            effect
+            if isinstance(effect, str) and effect in _ISSUE_DELIVERY_EFFECTS
+            else None
+        )
+    if event.get("type") != "item.started":
+        return None
+    item = event.get("item")
+    if not isinstance(item, Mapping) or item.get("type") != "command_execution":
+        return None
+    raw_command = item.get("command", item.get("cmd"))
+    if isinstance(raw_command, (list, tuple)):
+        command = " ".join(str(part) for part in raw_command)
+    elif isinstance(raw_command, str):
+        command = raw_command
+    else:
+        return None
+    lowered = command.lower()
+    if "issue_pickup_claim" in lowered or (
+        "gh issue edit" in lowered and "agent:ready" in lowered
+    ):
+        return "issue_claim"
+    if "git push" in lowered or "gh pr create" in lowered:
+        return "publication"
+    if "gh pr merge" in lowered or "prepare_verified_issue_set_merge" in lowered:
+        return "review_merge"
+    if (
+        "gh pr close" in lowered
+        or "gh issue close" in lowered
+        or "dispatcher complete" in lowered
+    ):
+        return "closure_reconciliation"
+    return None
 
 
 _CAPABILITY_FOR_MODEL_CLASS = {
@@ -229,6 +287,9 @@ class CodexIssueSessionLauncher:
             "Self-claim through issue-to-code before editing, work in the named dedicated "
             "worktree, and return only one JSON object matching the requested "
             "subagent_handoff_receipt; final_state=done is valid only after terminal delivery. "
+            "Before each claim, publication, review/merge, or closure/reconciliation effect, "
+            "emit one builderops.effect_boundary JSON event naming that exact permitted effect; "
+            "the launcher rechecks current authority at that boundary. "
             "This invocation is a fresh session; do not resume or reuse another Issue's session.\n"
             f"{serialized}\n"
         )
@@ -247,18 +308,18 @@ class CodexIssueSessionLauncher:
             canary_target = ResolvedExecutionTarget.model_validate(
                 execution_routing.get("proposed_target")
             )
+        # The repository/worktree gate owns the launcher boundary itself.
+        # Later lifecycle gates are checked from the worker's explicit
+        # owner-boundary events below, immediately before accepting each
+        # corresponding effect.  A single up-front sweep would incorrectly
+        # turn a time-varying permission into launch authority.
         if effect_gate is not None:
-            for effect in (
-                "repository_worktree",
-                "issue_claim",
-                "publication",
-                "review_merge",
-                "closure_reconciliation",
-            ):
-                effect_gate(effect)
+            effect_gate("repository_worktree")
         command = self.command(context_pack, execution_routing=execution_routing)
         entry_error: Exception | None = None
         entry_notified = False
+        effect_gate_error: Exception | None = None
+        streamed_gate_line_indexes: set[int] = set()
 
         def notify_entry(candidate: str) -> None:
             nonlocal entry_notified, entry_error
@@ -269,6 +330,19 @@ class CodexIssueSessionLauncher:
                 on_entry(candidate)
             except Exception as exc:  # preserve the process for reconciliation
                 entry_error = exc
+
+        def notify_effect_boundary(event: Mapping[str, Any]) -> None:
+            nonlocal effect_gate_error
+            if effect_gate is None:
+                return
+            effect = _effect_for_owner_boundary_event(event)
+            if effect is None:
+                return
+            try:
+                effect_gate(effect)
+            except Exception as exc:  # preserve the child for reconciliation
+                if effect_gate_error is None:
+                    effect_gate_error = exc
 
         if self._stream_output:
             process = subprocess.Popen(
@@ -285,6 +359,14 @@ class CodexIssueSessionLauncher:
             process.stdin.write(prompt)
             process.stdin.close()
             output_lines: list[str] = []
+            stderr_lines: list[str] = []
+
+            def drain_stderr() -> None:
+                if process.stderr is not None:
+                    stderr_lines.extend(process.stderr)
+
+            stderr_thread = Thread(target=drain_stderr, daemon=True)
+            stderr_thread.start()
             for line in process.stdout:
                 output_lines.append(line)
                 try:
@@ -298,7 +380,12 @@ class CodexIssueSessionLauncher:
                     candidate = event.get("thread_id")
                     if isinstance(candidate, str) and candidate.strip():
                         notify_entry(candidate.strip())
-            stderr = process.stderr.read() if process.stderr is not None else ""
+                if isinstance(event, Mapping):
+                    notify_effect_boundary(event)
+                    if _effect_for_owner_boundary_event(event) is not None:
+                        streamed_gate_line_indexes.add(len(output_lines) - 1)
+            stderr_thread.join()
+            stderr = "".join(stderr_lines)
             returncode = process.wait()
             stdout = "".join(output_lines)
         else:
@@ -318,20 +405,20 @@ class CodexIssueSessionLauncher:
         terminal_error: str | None = None
         allocation_unavailable = False
         observed_input_tokens: int | None = None
-        for line in stdout.splitlines():
+        for line_index, line in enumerate(stdout.splitlines()):
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
             if not isinstance(event, Mapping):
                 continue
+            if line_index not in streamed_gate_line_indexes:
+                notify_effect_boundary(event)
             if event.get("type") == "thread.started":
                 candidate = event.get("thread_id")
                 if isinstance(candidate, str) and candidate.strip():
                     session_id = candidate.strip()
                     notify_entry(session_id)
-                    if on_entry is not None:
-                        on_entry(session_id)
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
             if event.get("allocation_state") == "allocation_unavailable":
@@ -364,6 +451,11 @@ class CodexIssueSessionLauncher:
                 "session entry could not be durably observed",
                 session_id=session_id,
             ) from entry_error
+        if effect_gate_error is not None:
+            raise IssueSessionLaunchError(
+                "effect authority could not be revalidated at its owning boundary",
+                session_id=session_id,
+            ) from effect_gate_error
         if returncode != 0 or terminal_error is not None:
             detail = stderr.strip() or terminal_error or "codex exec failed"
             raise IssueSessionLaunchError(

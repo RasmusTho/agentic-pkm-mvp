@@ -627,6 +627,10 @@ class IssueDeliveryOperationAdapter:
                 "reservation_receipt_hash": reservation_hash,
                 "attempt_id": f"{self.operation_key}:attempt",
                 "attempted_at": self.now(),
+                # Attempt ownership is an authority-bearing write too.  Bind
+                # the observed checkout/workflow to it before the service
+                # accepts the receipt, just as for reservation/entry writes.
+                "live_binding": self._live_binding(),
             },
         )
 
