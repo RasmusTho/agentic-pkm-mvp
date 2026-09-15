@@ -327,8 +327,11 @@ labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle 
 Preparing the database does not sync or claim the expected task. If the wrapper reports a missing
 task, sync the dispatcher queue through its existing operator path, then rerun the complete wrapper;
 never remove the label separately. After successful dispatcher-backed pickup, run
-`dispatcher heartbeat` about every 30 minutes and use `dispatcher complete`, `block`, or `release`
-at the normal lifecycle boundary.
+`dispatcher heartbeat` about every 30 minutes. Each heartbeat must be sent by the current holder
+before expiry and renew the unexpired lease from its persisted TTL, updating the task's
+`lease_expires_at` projection atomically with the lease. The default 90-minute TTL and holder/
+expiry validation remain unchanged. Use `dispatcher complete`, `block`, or `release` at the normal
+lifecycle boundary.
 
 Project reconciliation, when desired, is a separate cold-path projection repair. Do not query or mutate ProjectV2 in this claim path.
 
