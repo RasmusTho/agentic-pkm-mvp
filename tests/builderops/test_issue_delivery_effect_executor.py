@@ -9,7 +9,7 @@ import subprocess
 from copy import deepcopy
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Thread
 from typing import Any, Mapping
@@ -44,6 +44,7 @@ from app.builderops.control_plane.issue_delivery import (
     REQUIRED_WORKFLOW_ARTIFACTS,
     canonical_hash,
 )
+from app.builderops.control_plane.models import Lease, TransactionResult
 from app.builderops.control_plane.service import create_app
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.issue_delivery_worker_isolation import (
@@ -1179,6 +1180,93 @@ def test_issue_delivery_ledger_reuses_outbox_with_bounded_scope() -> None:
     )
     assert ledger.outbox.envelope["scope"] == "issue-delivery-executor"
     assert ledger.outbox.claim_ttl_seconds == ledger.claim_ttl_seconds
+
+
+def test_issue_delivery_ledger_bootstraps_task_through_authenticated_service(
+    tmp_path: Path,
+) -> None:
+    request_sha256 = "a" * 64
+
+    class BootstrapStore:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.task: dict[str, Any] | None = None
+
+        def readiness(self) -> dict[str, int]:
+            return {"schema_version": 1, "authority_epoch": 1}
+
+        def get_task(self, repository: str, task_id: str) -> Mapping[str, Any]:
+            self.calls.append("get_task")
+            if self.task is None:
+                raise KeyError(task_id)
+            return self.task
+
+        def commit_transition(self, **values: Any) -> TransactionResult:
+            key = str(values["idempotency_key"])
+            self.calls.append(f"commit_transition:{key}")
+            self.task = {
+                "repository": values["envelope"].repository,
+                "task_id": values["task_id"],
+                "state": values["to_state"],
+                "version": 1,
+            }
+            return TransactionResult(
+                values["envelope"].repository,
+                values["task_id"],
+                values["to_state"],
+                1,
+                "0/1",
+                None,
+            )
+
+        def claim_task(self, **values: Any) -> tuple[TransactionResult, Lease]:
+            key = str(values["idempotency_key"])
+            self.calls.append(f"claim_task:{key}")
+            lease = Lease(
+                repository=values["envelope"].repository,
+                resource_id=values["task_id"],
+                holder=values["holder"],
+                fencing_token=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                lease_kind="task",
+            )
+            return (
+                TransactionResult(
+                    values["envelope"].repository,
+                    values["task_id"],
+                    "claimed",
+                    2,
+                    "0/2",
+                    None,
+                ),
+                lease,
+            )
+
+    store = BootstrapStore()
+    client = _production_client(
+        store,  # type: ignore[arg-type]
+        _production_registry(tmp_path),
+        "executor-pg-token",
+    )
+    ledger = BuilderOpsIssueDeliveryEffectLedger(
+        client,
+        repository=REPOSITORY,
+        run_id="run-bootstrap",
+        approval_id="approval-bootstrap",
+        worker_id="issue-delivery-host",
+    )
+
+    lease = ledger._ensure_task_claim(  # noqa: SLF001 - exact service boundary regression
+        task_id=ledger._task_id(request_sha256),
+        request_sha256=request_sha256,
+    )
+
+    assert lease["holder"] == "destination:shared"
+    assert store.calls == [
+        "get_task",
+        f"commit_transition:delivery-effect-ingest:{request_sha256}",
+        f"claim_task:delivery-effect-claim:{request_sha256}",
+    ]
 
 
 def test_issue_delivery_approval_binds_executor_and_worker_boundary() -> None:

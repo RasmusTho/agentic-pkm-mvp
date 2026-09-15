@@ -1486,13 +1486,13 @@ class BuilderOpsIssueDeliveryEffectLedger:
                 envelope=self.envelope,
                 task_id=task_id,
                 to_state="ready",
-                idempotency_key=f"delivery-effect-task-ready:{request_sha256}",
+                idempotency_key=f"delivery-effect-ingest:{request_sha256}",
                 request=initial,
             )
         claimed = self.client.claim_task(
             envelope=self.envelope,
             task_id=task_id,
-            idempotency_key=f"delivery-effect-task-claim:{request_sha256}",
+            idempotency_key=f"delivery-effect-claim:{request_sha256}",
             request=initial,
         )
         lease = claimed.get("lease")
