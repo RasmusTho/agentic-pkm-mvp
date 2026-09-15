@@ -167,6 +167,12 @@ def _is_same_or_descendant_path(candidate: str, parent: str) -> bool:
     return PurePosixPath(candidate).is_relative_to(PurePosixPath(parent))
 
 
+def _normalized_absolute_path(value: str) -> str:
+    """Normalize POSIX destinations while collapsing repeated leading slashes."""
+
+    return normpath("/" + value.lstrip("/"))
+
+
 def _coalesce_aliases(
     value: Mapping[str, Any], aliases: tuple[str, ...], name: str
 ) -> tuple[bool, Any]:
@@ -871,8 +877,8 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError(
                 "destination identity must match the frozen dispatch plan"
             )
-        checkout_path = normpath(destination["checkout"])
-        worktree_path = normpath(destination["worktree"])
+        checkout_path = _normalized_absolute_path(destination["checkout"])
+        worktree_path = _normalized_absolute_path(destination["worktree"])
         if (
             not destination["checkout"].startswith("/")
             or not destination["worktree"].startswith("/")

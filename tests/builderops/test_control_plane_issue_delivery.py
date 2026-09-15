@@ -390,6 +390,14 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     assert preview["manifest"]["owner_principal"] == "owner:human"
     assert preview["manifest"]["authority_epoch"] == 1
 
+    case_variant_repository = deepcopy(preview["manifest"])
+    case_variant_repository["repository"] = "RasmusTho/agentic-pkm-mvp"
+    case_variant_repository["approval_manifest_hash"] = issue_delivery_manifest_hash(
+        case_variant_repository
+    )
+    with pytest.raises(ControlPlaneConflictError):
+        owner.issue_delivery_start(decision="hold", manifest=case_variant_repository)
+
     forged_receipt_ref = deepcopy(preview["manifest"])
     forged_receipt_ref["approval_receipt_ref"] = (
         "builderops:record:rasmustho/agentic-pkm-mvp:issue-delivery-approval:forged"
@@ -728,6 +736,18 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=descendant_worktree)
+    double_slash_worktree = deepcopy(manifest)
+    double_slash_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
+        "//workspaces/agentic-pkm-mvp"
+    )
+    double_slash_worktree["context"]["dispatch_plan"]["context_packs"][0][  # type: ignore[union-attr]
+        "branch_worktree_plan"
+    ]["worktree"] = "//workspaces/agentic-pkm-mvp"
+    double_slash_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        double_slash_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=double_slash_worktree)
     overlapping_worktree = deepcopy(manifest)
     overlapping_worktree["destination"]["checkout"] = (  # type: ignore[union-attr]
         "/workspaces/agentic-pkm-mvp/subdir"

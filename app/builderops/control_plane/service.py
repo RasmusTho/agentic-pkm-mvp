@@ -806,6 +806,10 @@ def create_app(
                     detail="owner profile does not match authenticated owner",
                 )
         manifest = normalize_issue_delivery_manifest(manifest_input)
+        if issue_delivery_manifest_hash(manifest) != supplied_hash:
+            raise StateConflict(
+                "Issue-delivery approval hash changed during normalization"
+            )
         if manifest.get("owner_principal") != credential.principal:
             raise HTTPException(status_code=403, detail="Issue-delivery approval owner mismatch")
         owner_profile = manifest.get("owner_profile")
