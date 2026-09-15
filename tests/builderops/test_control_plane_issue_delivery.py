@@ -142,6 +142,9 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         "selected_for_dispatch": True,
         "dispatch_slot": 1,
         "context_pack_id": "context-5550",
+        "budget_class": "medium",
+        "stop_condition": "stop on authority ambiguity",
+        "skip_reason": None,
         "runtime_model_hint": {
             "runtime": "codex",
             "carrier": "codex",
@@ -171,10 +174,28 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
                     "selection_intent": "general_delivery",
                     "capability": "luna",
                 },
+                "branch_worktree_plan": {
+                    "branch": "codex/5550-issue-delivery-approval",
+                    "worktree": "/worktrees/issue-5550",
+                    "worker_self_claim": True,
+                    "coordinator_preclaim": False,
+                },
             }
         ],
         "epic_run_state_update": {
-            "dispatch_decisions": [dispatch_decision]
+            "dispatch_decisions": [
+                {
+                    "id": "dispatch-5550",
+                    "issue_number": 5550,
+                    "selected_path": "subagent",
+                    "selected_for_dispatch": True,
+                    "runtime_model_hint": dispatch_decision["runtime_model_hint"],
+                    "budget_class": "medium",
+                    "stop_condition": "stop on authority ambiguity",
+                    "skip_reason": None,
+                    "context_pack_id": "context-5550",
+                }
+            ]
         },
         "github_mutations": [],
         "agent_spawns": [],
@@ -367,9 +388,23 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_plan)
     invalid_plan = deepcopy(manifest)
+    invalid_plan["context"]["dispatch_plan"].pop("epic_run_state_update")  # type: ignore[union-attr]
+    invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        invalid_plan["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_plan)
+    invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["decisions"][0]["execution_routing"] = {  # type: ignore[union-attr]
         "mode": "canary"
     }
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_plan)
+    invalid_plan = deepcopy(manifest)
+    invalid_plan["context"]["dispatch_plan"]["decisions"][0]["selected_path"] = "inline"  # type: ignore[union-attr]
+    invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        invalid_plan["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_plan)
 
@@ -384,6 +419,14 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         owner.issue_delivery_preview(manifest=invalid_profile)
     invalid_profile = deepcopy(manifest)
     invalid_profile["profile"]["resolved"]["carrier"] = "claude"  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_profile = deepcopy(manifest)
+    invalid_profile["profile"]["resolved"]["capability"] = "terra"  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_profile = deepcopy(manifest)
+    invalid_profile["profile"]["selection_intent"] = "coordination"  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
     invalid_profile = deepcopy(manifest)

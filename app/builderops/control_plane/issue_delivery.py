@@ -255,12 +255,62 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
         selected_decision.get("issue_number") != issue_number
         or selected_decision.get("context_pack_id") != context_pack_id
         or selected_decision.get("dispatch_slot") != 1
+        or selected_decision.get("selected_path") != "subagent"
     ):
         raise IssueDeliveryContractError("frozen dispatch plan does not bind the addressed Issue")
+    decision_runtime = _mapping(
+        selected_decision.get("runtime_model_hint"), "frozen dispatch runtime hint"
+    )
+    if (
+        decision_runtime.get("runtime") != "codex"
+        or decision_runtime.get("carrier", "codex") != "codex"
+        or decision_runtime.get("selection_intent") != "general_delivery"
+    ):
+        raise IssueDeliveryContractError("frozen dispatch runtime is not the approved Codex delivery route")
     if "execution_routing" in plan or any(
         isinstance(item, Mapping) and "execution_routing" in item for item in decisions
     ):
         raise IssueDeliveryContractError("Issue delivery cannot admit a canary or fallback route")
+    run_state_update = _mapping(
+        plan.get("epic_run_state_update"), "frozen dispatch run-state summary"
+    )
+    state_decisions = run_state_update.get("dispatch_decisions")
+    if not isinstance(state_decisions, list) or len(state_decisions) != len(decisions):
+        raise IssueDeliveryContractError("frozen dispatch run-state summary is incomplete")
+    expected_state_decisions: list[dict[str, Any]] = []
+    for raw_decision in decisions:
+        decision = _mapping(raw_decision, "frozen dispatch decision")
+        required_decision_fields = {
+            "id",
+            "issue_number",
+            "selected_path",
+            "selected_for_dispatch",
+            "runtime_model_hint",
+            "budget_class",
+            "stop_condition",
+            "skip_reason",
+            "context_pack_id",
+        }
+        if not required_decision_fields.issubset(decision):
+            raise IssueDeliveryContractError("frozen dispatch decision is incomplete")
+        expected_state_decisions.append(
+            {key: decision[key] for key in required_decision_fields}
+        )
+    if state_decisions != expected_state_decisions:
+        raise IssueDeliveryContractError(
+            "frozen dispatch run-state summary must mirror every decision"
+        )
+    # Reuse the dispatch entrypoint's own frozen-plan preflight so admission
+    # cannot drift from what the later launcher accepts (notably run identity,
+    # selected/context cardinality, and run-state mirroring).
+    try:
+        from app.builderops.epic_dispatch import _validated_session_contexts
+
+        _validated_session_contexts(plan)
+    except Exception as exc:
+        raise IssueDeliveryContractError(
+            "frozen dispatch plan fails the selected launcher preflight"
+        ) from exc
     matching_contexts = [
         item
         for item in context_packs
@@ -280,6 +330,17 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
         or runtime.get("carrier", "codex") != "codex"
     ):
         raise IssueDeliveryContractError("frozen dispatch context does not bind one Codex Issue session")
+    if "run_state" in selected_context:
+        raise IssueDeliveryContractError("frozen dispatch context cannot carry persisted run-state")
+    worktree_plan = _mapping(
+        selected_context.get("branch_worktree_plan"), "frozen branch/worktree plan"
+    )
+    _text(worktree_plan.get("branch"), "frozen dispatch branch", limit=512)
+    worktree = _text(worktree_plan.get("worktree"), "frozen dispatch worktree", limit=1024)
+    if not worktree.startswith("/") or "<" in worktree or ">" in worktree:
+        raise IssueDeliveryContractError("frozen dispatch worktree must be an explicit absolute path")
+    if worktree_plan.get("worker_self_claim") is not True or worktree_plan.get("coordinator_preclaim") is not False:
+        raise IssueDeliveryContractError("frozen dispatch ownership plan is not exact")
     return plan
 
 
@@ -321,7 +382,7 @@ def _execution_profile_fields(value: Any) -> dict[str, Any]:
         profile.get("configuration_digest"), "execution configuration digest"
     )
     selection_intent = _text(profile.get("selection_intent"), "execution selection intent", limit=64)
-    if selection_intent not in _SELECTION_INTENTS:
+    if selection_intent not in _SELECTION_INTENTS or selection_intent != "general_delivery":
         raise IssueDeliveryContractError("execution selection intent is unsupported")
     resolved = _mapping(profile.get("resolved"), "resolved execution target")
     if set(resolved) != {"capability", "model", "reasoning_effort", "carrier"}:
@@ -600,6 +661,23 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         workflow = _workflow_fields(raw.get("workflow"))
         destination = _destination_fields(raw.get("destination"))
         profile = _execution_profile_fields(raw.get("profile"))
+        selected_context = context["dispatch_plan"]["context_packs"][0]
+        runtime = selected_context["runtime"]
+        resolved = profile["resolved"]
+        for field in ("carrier", "selection_intent", "capability"):
+            approved_value = (
+                profile["selection_intent"]
+                if field == "selection_intent"
+                else resolved[field]
+            )
+            if runtime.get(field) != approved_value:
+                raise IssueDeliveryContractError(
+                    f"execution profile {field} does not match the frozen dispatch context"
+                )
+        if "model" in runtime and runtime["model"] != resolved["model"]:
+            raise IssueDeliveryContractError(
+                "execution profile model does not match the frozen dispatch context"
+            )
         effects = _list_of_text(raw.get("permitted_effects"), "permitted effects")
         non_effects = _list_of_text(raw.get("explicit_non_effects"), "explicit non-effects")
         if set(effects) & set(non_effects):

@@ -207,8 +207,9 @@ within its existing owner. Before Start, it must bind all of these values withou
 - `repository`, numeric Issue identity and node identity, caller-bound Issue body/AC hashes, one
   immutable 40-character Git commit source revision, proposal/context-pack hash, and a complete
   one-Issue frozen dispatch plan with its independently retained `expected_plan_hash`. The plan
-  contains exactly one selected Codex Issue/context pack and no canary/fallback route. FCA-ID-A
-  seals these source/profile identity hashes immutably; it does not independently re-read GitHub or
+  contains exactly one selected Codex Issue/context pack, a launcher-compatible run identity and
+  no canary/fallback route; admission applies the selected launcher's frozen-plan preflight.
+  FCA-ID-A seals these source/profile identity hashes immutably; it does not independently re-read GitHub or
   recompute source/profile truth before Start;
 - parent evidence destination: explicit `none`, or one exact parent repository/number/node,
   source-authenticated relationship to the selected Issue, current parent contract hash/version,
@@ -231,9 +232,10 @@ within its existing owner. Before Start, it must bind all of these values withou
   The source commit pins their repository dependencies. A live request must contain resolved
   hashes, never a moving `main`, an example revision or a version label alone;
 - the closed execution profile: provider-census hash, configuration digest, provider-neutral
-  selection intent, resolved capability/model/reasoning/carrier, verification-profile hash and
-  required criterion hashes. Unknown or incomplete profile fields refuse admission; an unavailable
-  target withdraws launch.
+  `general_delivery` selection intent, resolved capability/model/reasoning/carrier,
+  verification-profile hash and required criterion hashes. This operation's resolved carrier is
+  Codex and must agree with the frozen dispatch context. Unknown or incomplete profile fields
+  refuse admission; an unavailable target withdraws launch.
 
 The target destination may be bob-1 only after its separately authorized runtime qualification and
 activation. This source contract chooses no live host, credential or deployment. Workflow/profile,
