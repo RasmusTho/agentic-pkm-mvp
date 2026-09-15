@@ -526,6 +526,58 @@ def test_verification_adapter_round_trips_only_through_authenticated_api(
     assert control_plane_store.outbox_status(REPO, operation_key) == "pending"
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("worker_id", "stale-worker"),
+        ("fencing_token", 999),
+        ("intent_lsn", "0/BEEF"),
+        ("claim_lsn", "0/DEAD"),
+        ("receipt_sequence", 999),
+        ("expires_at", "2000-01-01T00:00:00+00:00"),
+    ),
+)
+def test_authenticated_effect_revalidation_denies_stale_fence_identity(
+    control_plane_store,
+    tmp_path,
+    field: str,
+    replacement: object,
+) -> None:
+    ledger, client, _outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
+    )
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "ignored-client-holder")
+    assert claimed.lease_id is not None
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.comment",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": 3603,
+            "head_sha": "a" * 40,
+        },
+        holder="executor:demerzel-verifier",
+        lease_id=claimed.lease_id,
+        idempotency_key=f"effect-revalidation-{field}",
+    )
+    exact_claim = ledger.effect_claim(operation_key)
+    current = client.revalidate_outbox_effect(
+        envelope=ledger.envelope,
+        claim=exact_claim,
+    )
+    assert current["effect_eligible"] is True
+    assert current["task_id"] == run.run_id
+    assert current["effect_type"] == "github.comment"
+
+    stale_claim = {**exact_claim, field: replacement}
+    stale = client.revalidate_outbox_effect(
+        envelope=ledger.envelope,
+        claim=stale_claim,
+    )
+    assert stale["effect_eligible"] is False
+
+
 def test_authenticated_recovery_claim_rejects_live_same_principal_task(
     control_plane_store, tmp_path
 ) -> None:

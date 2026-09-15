@@ -2655,7 +2655,9 @@ class PostgresBuilderOpsStore:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, claim_expires_at, "
-                "claim_lsn::text AS claim_lsn, clock_timestamp() AS database_now FROM builderops_outbox "
+                "intent_lsn::text AS intent_lsn, claim_lsn::text AS claim_lsn, "
+                "claim_receipt_sequence, clock_timestamp() AS database_now "
+                "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
                 (claim.repository, claim.operation_key),
             ).fetchone()
@@ -2664,8 +2666,12 @@ class PostgresBuilderOpsStore:
             and row["status"] == "claimed"
             and row["worker_id"] == claim.worker_id
             and int(row["claim_fencing_token"]) == claim.fencing_token
+            and row["intent_lsn"] == claim.intent_lsn
             and row["claim_lsn"] == claim.claim_lsn
+            and row["claim_receipt_sequence"] is not None
+            and int(row["claim_receipt_sequence"]) == claim.receipt_sequence
             and row["claim_expires_at"] is not None
+            and row["claim_expires_at"] == claim.expires_at
             and row["claim_expires_at"] > row["database_now"]
         )
 

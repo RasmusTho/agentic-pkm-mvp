@@ -26,6 +26,8 @@ from app.builderops.control_plane.api_models import (
     LeaseClaimRequest,
     LeaseInput,
     OutboxClaimRequest,
+    OutboxEffectEligibilityRequest,
+    OutboxEffectEligibilityResponse,
     OutboxRecoverRequest,
     OutboxReconcileRequest,
     OutboxUnknownRequest,
@@ -1995,6 +1997,46 @@ def create_app(
             "payload": intent["payload"],
             "effect_eligible": eligible,
         }
+
+    @application.post(
+        "/v1/executor/outbox/effect-eligible",
+        response_model=OutboxEffectEligibilityResponse,
+    )
+    async def revalidate_outbox_effect(
+        request: OutboxEffectEligibilityRequest,
+        credential: Credential = Depends(outbox_write),
+        _epoch: None = Depends(require_authority_epoch),
+    ) -> OutboxEffectEligibilityResponse:
+        """Read the DB-clock eligibility of one exact authenticated fence."""
+
+        _enforce_repo_scope(credential, request.envelope.repository)
+        try:
+            _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+            claim = _outbox_claim_from_input(
+                request.claim, repository=request.envelope.repository
+            )
+            intent = await run_in_threadpool(
+                store.outbox_intent,
+                request.envelope.repository,
+                claim.operation_key,
+            )
+            _enforce_outbox_principal(intent, credential)
+            eligible = await run_in_threadpool(store.effect_eligible, claim)
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return OutboxEffectEligibilityResponse(
+            repository=claim.repository,
+            operation_key=claim.operation_key,
+            worker_id=claim.worker_id,
+            fencing_token=claim.fencing_token,
+            intent_lsn=claim.intent_lsn,
+            claim_lsn=claim.claim_lsn,
+            receipt_sequence=claim.receipt_sequence,
+            expires_at=claim.expires_at,
+            task_id=str(intent["task_id"]),
+            effect_type=str(intent["effect_type"]),
+            effect_eligible=eligible,
+        )
 
     @application.post("/v1/executor/outbox/post-effect/pending")
     async def begin_row_derived_post_effect_pending(
