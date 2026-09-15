@@ -731,11 +731,13 @@ The [first approved Issue-delivery operation](../BUILDER_FACTORY_ACCEPTANCE/READ
 now defines the finite M2 extension under FCA-08. Its
 [admission/readback responsibilities](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-admission-and-readback)
 stay with this authenticated service, `CredentialRegistry` and the existing PostgreSQL
-record/transaction/receipt/outbox owner. The destination adapter reuses `dispatch_sessions` →
-`dispatch_issue_sessions` → `CodexIssueSessionLauncher`; it owns reservation/attempt/entry observations
-through that same service authority. No local epic run-state file or dispatcher lease becomes an
-approval or execution ledger. The existing launcher requests claim, edits, publication, governed
-merge and closure; it does not yet enforce an owner manifest at those boundaries or support stop.
+record/transaction/receipt/outbox owner. #5551's future destination adapter reuses
+`dispatch_sessions` → `dispatch_issue_sessions` → `CodexIssueSessionLauncher`; it owns
+reservation/attempt/entry observations through that same service authority. Until it exists, the
+raw `dispatch-sessions` CLI refuses before child entry. No local epic run-state file or dispatcher
+lease becomes an approval or execution ledger. The existing launcher requests claim, edits,
+publication, governed merge and closure; it does not yet enforce an owner manifest at those
+boundaries or support stop.
 
 FCA-ID-A, delivered by #5550, now supplies the repository-only Issue subtype with atomic immutable
 approval/readback admission, exact operation-key binding, fresh permission/epoch/expiry checks and

@@ -182,8 +182,13 @@ independent readback are not implemented or activated by this document. It deliv
 execution destination. It selects no sibling or parent delivery. A required parent evidence write
 is a separately bound effect below. Project Status is not a pickup gate.
 
-**Selected reuse.** Source inspected at `1a1bde5add17cf59d371216e175446929e735158`:
-`app/builderops/cli.py::dispatch_sessions` loads a frozen plan and constructs
+**Current availability and selected reuse.** The legacy
+`app/builderops/cli.py::dispatch_sessions` command now refuses every invocation before plan
+parsing, launcher construction, or child entry. It remains unavailable until #5551 supplies the
+destination-owned reservation, attempt, entry, and replay fences. The dormant
+`LinuxSystemdCodexIssueSessionLauncher`, content-only worker, and protected host executor are
+#5558's repository prerequisite; they do not complete FCA-ID-B. Historically, the legacy command
+loaded a frozen plan and constructed
 `app/builderops/epic_dispatch.py::CodexIssueSessionLauncher`; `dispatch_issue_sessions` calls its
 `launch` method. The launcher invokes `codex exec --json --sandbox workspace-write`, resolves
 the configured execution target and loads `.codex/agents/slice-implementer.toml` instructions. The
@@ -194,7 +199,7 @@ Those instructions require the worker to self-claim and perform `issue-to-code`,
 not an edit-only worker. Agent reasoning and bounded execution remain permitted under DP-02C;
 neither deterministic orchestration nor full DDO is a universal M2 prerequisite.
 
-The admitted adapter must reuse that call chain with a frozen plan containing exactly one selected
+The #5551 admitted adapter must restore that call chain only with a frozen plan containing exactly one selected
 Issue/context pack, no canary/fallback route and an independently retained `expected_plan_hash`.
 `dispatch_issue_sessions` currently accepts broader plans, and its plan hash is optional without
 routing evidence. The adapter must enforce this narrower operation. The current CLI has no owner
@@ -418,7 +423,7 @@ Stable implementation-slice anchors:
 | Order / stable source anchor | Bounded change and production callers | Resolvable verification obligation |
 | --- | --- | --- |
 | 1 — **FCA-ID-A** — delivered by #5550 | Existing `service.py::create_app` and record/receipt API, `CredentialRegistry`, existing client and `PostgresBuilderOpsStore.commit_record`: exact one-Issue preview/Hold/approval/read grant and immutable manifest, generic-write bypass refusal, caller-bound source/profile identity hashes and manifest-drift refusal. No launcher invocation or independent GitHub/source re-read. | `tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission` calls the real service/credential/store path and covers owner vs inquiry/generic grants, exact hashes, Hold, replay, revocation/expiry and immutable approval. `::test_issue_approval_transaction_recovery` proves committed approval/readback versus pre-commit rollback. |
-| 2 — **FCA-ID-B**, after A | Authenticated destination adapter at `cli.py::dispatch_sessions` → `epic_dispatch.py::dispatch_issue_sessions` → `CodexIssueSessionLauncher.launch`, backed by the same service transaction/receipt/outbox owner; bind unique reservation/attempt/entry and current authority into real claim/publication/merge/closure gates. No raw CLI or prompt-only admission bypass. | `tests/builderops/test_issue_delivery_operation.py::test_production_dispatch_reservation_and_crash_matrix` must enter the real adapter and exercise competing keys/approvals, crashes before/after attempt and lost entry response. `::test_delivery_effect_boundaries_recheck_authority` must reach the owning effect gates, refuse changed/revoked authority before the next effect and prove no second launch. `::test_selected_launcher_reports_stop_unsupported` covers truthful stop. Substitute only external effect transports; a stubbed gate verdict is insufficient. |
+| 2 — **FCA-ID-B**, after A | #5551 must restore an authenticated destination adapter at `cli.py::dispatch_sessions` → `epic_dispatch.py::dispatch_issue_sessions` → `CodexIssueSessionLauncher.launch`, backed by the same service transaction/receipt/outbox owner; bind unique reservation/attempt/entry and current authority into real claim/publication/merge/closure gates. Until then the legacy CLI remains unavailable, with no raw CLI or prompt-only admission bypass. | `tests/builderops/test_issue_delivery_operation.py::test_production_dispatch_reservation_and_crash_matrix` must enter the real adapter and exercise competing keys/approvals, crashes before/after attempt and lost entry response. `::test_delivery_effect_boundaries_recheck_authority` must reach the owning effect gates, refuse changed/revoked authority before the next effect and prove no second launch. `::test_selected_launcher_reports_stop_unsupported` covers truthful stop. Substitute only external effect transports; a stubbed gate verdict is insufficient. |
 | 3 — **FCA-ID-C**, after B | Existing authenticated task lifecycle API and `devui_sources.py::_task` admit/read the one Issue-bearing task envelope; service readback, GitHub source readers and DevUI projection compose exact Issue/PR/head/CI/review/merge/closure evidence with the admitted candidate/profile source. Reuse FCA-05 for owner outcomes; implement the first operation's consumed seams for the FCA-06/07 harnesses without claiming their live evidence. | `tests/builderops/test_issue_delivery_readback.py::test_production_issue_task_envelope_reaches_overview` must cover native Issue creation/version readback and withdrawal for absent/generic/mismatched tasks. `::test_production_readback_uses_independent_github_evidence` must exercise real source parsing/composition for forged worker success, missing/contradictory sources, late-head drift, partial merge/closure and reconnect. `::test_issue_delivery_candidate_profile_linkage` must prove exact FCA-09 candidate/profile binding and withdrawal on unsupported/mismatched candidates; docs writeback at this section and `docs/plans/DEVUI_IMPLEMENTATION.md :: Delivery milestones` records repository support only. |
 
 After these pre-merge adapters/proofs, separately authorized host activation and deployment must

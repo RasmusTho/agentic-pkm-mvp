@@ -344,6 +344,10 @@ target is not claimed as shipped.
 **Issue-delivery worker and protected-effect prerequisites:** repository support now includes the
 fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile
 and the host-only `IssueDeliveryHostExecutor`.
+The legacy `epic-run-state dispatch-sessions` CLI now refuses before frozen-plan parsing, launcher
+construction, or child entry; it does not route to those dormant components until #5551 provides
+the destination-owned reservation, attempt, entry, and replay adapter. #5558 therefore delivers
+protected-executor repository support, not FCA-ID-B completion.
 It re-resolves the exact executor and distinct unprivileged worker UID/GID with no supplementary
 groups, clean frozen worktree, its exact linked per-worktree and common Git administration
 directories, private worker-owned `0700` model-auth
@@ -904,11 +908,11 @@ existing owning workflows.
 
 Persisted and dry-run epic run-state is evidence only. It cannot authorize parent closure, GitHub
 mutation, dispatcher lifecycle changes, CI, review, merge, or worker execution. Fast-lane Verify
-evidence must exercise the production dispatch-plan and dispatch-sessions paths with persisted
-state, proving that they emit no GitHub mutations or coordinator claims and that a worker cannot
-self-attest terminal delivery. Persisted run-state, including reusable constraints, is excluded
-from worker context entirely; the production session validator also rejects an injected run-state
-key before launch. Those actions remain with their live owning workflows.
+evidence must exercise the production dispatch-plan and fail-closed dispatch-sessions paths with
+persisted state, proving that they emit no GitHub mutations, coordinator claims, or child entry.
+Persisted run-state, including reusable constraints, is excluded from worker context entirely; the
+future production session validator also rejects an injected run-state key before launch. Those
+actions remain with their live owning workflows.
 
 ### Execution Routing target contract
 
@@ -1008,13 +1012,15 @@ may be indexed by evidence-only epic run-state. The incumbent launch still runs,
 now resolves that incumbent tier through the same declared configuration rather than a hard-coded
 model table.
 
-Before a shadow-routed frozen plan can reach `dispatch-sessions`, its canonical plan hash must be
-observed and preserved outside the plan JSON and supplied as `--expected-plan-hash`. Dispatch then
+After #5551 restores an authenticated shadow-routed dispatch path, a frozen plan can reach
+`dispatch-sessions` only when its canonical plan hash is observed and preserved outside the plan
+JSON and supplied as `--expected-plan-hash`. Dispatch then
 checks that independent freeze root before replaying request -> pure route decision -> configured
 target -> canonical shadow attempt against the frozen Issue, incumbent runtime, context, authority,
 and verification hashes. Missing or changed freeze evidence refuses the routed launch; a consumer
 must never recompute the expected value from the persisted plan at dispatch time. Non-routed
-general delivery keeps its existing compatibility path.
+general delivery keeps its existing compatibility path after the same #5551 adapter; until then the
+legacy CLI is unavailable.
 
 Fallback/canary attempt contracts preserve the exact context-pack, authority, and verification
 hashes while deriving a new attempt identity and binding the triggering attempt. A Spark capacity

@@ -177,20 +177,17 @@ leases, or spawn agents. Workers still self-claim through `issue-to-code` before
 
 ## Executable serial dispatch
 
-For a small ready Issue set, save the dry-run output and run:
-
-`python3 -m app.builderops builderops epic-run-state dispatch-sessions --plan-file <frozen-plan.json> --repo-root <repo> --json`
-
-This transitional local command validates the complete frozen plan before execution, then runs each
-selected Issue through its governed delivery chain in deterministic order. Every Issue uses a new Codex session;
-the command never resumes or reuses another Issue's session, and it stops before later Issues when
-one session fails or returns `blocked`, `needs-human`, or `handoff`. The transitional bridge never
-accepts a worker's self-reported terminal `done`: only verification-and-closure's live GitHub/Git/CI
-readback may establish completed delivery. Each candidate must name an
-explicit absolute worktree path; the worker creates or enters that dedicated worktree and
-self-claims through `issue-to-code`. The coordinator does not preclaim, mutate GitHub lifecycle
-state, merge, or close; the issue agent loads `publish-pr` and `verification-and-closure` at those
-workflow boundaries and remains the sole lifecycle owner.
+The legacy local `dispatch-sessions` command is intentionally unavailable: it refuses before plan
+parsing, launcher construction, or child entry until #5551 implements the authenticated
+reservation/attempt/entry/replay adapter. Do not use it to start a ready Issue set. The future
+replacement must validate the complete frozen plan before execution, run each selected Issue in a
+new Codex session, and stop before later Issues when one session fails or returns `blocked`,
+`needs-human`, or `handoff`. It never accepts a worker's self-reported terminal `done`: only
+verification-and-closure's live GitHub/Git/CI readback may establish completed delivery. Each
+candidate must name an explicit absolute worktree path; the worker creates or enters that dedicated
+worktree and self-claims through `issue-to-code`. The coordinator does not preclaim, mutate GitHub
+lifecycle state, merge, or close; the issue agent loads `publish-pr` and
+`verification-and-closure` at those workflow boundaries and remains the sole lifecycle owner.
 
 The command is intentionally Codex-only and serial. It is the simplest executable bridge from the
 existing context-pack planner, not a second durable orchestrator. DDO-04's provider-neutral
