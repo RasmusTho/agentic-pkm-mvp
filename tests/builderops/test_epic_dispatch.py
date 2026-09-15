@@ -2041,6 +2041,20 @@ def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
             "command": "gh api repos/RasmusTho/agentic-pkm-mvp/git/refs -XPOST",
         },
     }
+    raw_api_short_body = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh api repos/RasmusTho/agentic-pkm-mvp/releases -ftag_name=v1",
+        },
+    }
+    raw_api_equals_method = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh api repos/RasmusTho/agentic-pkm-mvp/git/refs -X=POST",
+        },
+    }
     owner_wrapper = {
         "type": "item.started",
         "item": {
@@ -2059,6 +2073,8 @@ def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
     assert _raw_mutation_command(raw_api_body) is True
     assert _raw_mutation_command(raw_api_attached_body) is True
     assert _raw_mutation_command(raw_api_attached_method) is True
+    assert _raw_mutation_command(raw_api_short_body) is True
+    assert _raw_mutation_command(raw_api_equals_method) is True
     assert _raw_mutation_command(owner_wrapper) is False
 
 
