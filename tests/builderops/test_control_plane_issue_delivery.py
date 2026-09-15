@@ -384,7 +384,17 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=unsupported_repository)
 
+    launcher_roots: list[Path] = []
+    original_launcher_init = CodexIssueSessionLauncher.__init__
+
+    def capture_launcher_root(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        launcher_roots.append(Path(kwargs["repo_root"]))
+        return original_launcher_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(CodexIssueSessionLauncher, "__init__", capture_launcher_root)
     preview = owner.issue_delivery_preview(manifest=manifest)
+    monkeypatch.setattr(CodexIssueSessionLauncher, "__init__", original_launcher_init)
+    assert launcher_roots == [Path(manifest["destination"]["checkout"]).resolve()]  # type: ignore[index]
     assert preview["state"] == "previewed"
     assert preview["manifest"]["operation_type"] == "deliver_ready_issue"
     assert preview["manifest"]["owner_principal"] == "owner:human"
@@ -424,6 +434,18 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     # the destination's execute admission validates the same payload.
     normalized_started = normalize_issue_delivery_manifest(started["approval"])
     assert normalized_started["issue"]["state"] == "open"
+
+    fingerprint_preview = deepcopy(manifest)
+    fingerprint_preview["owner_profile"]["fingerprint"] = "a" * 64  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=fingerprint_preview)
+    fingerprint_start = deepcopy(preview["manifest"])
+    fingerprint_start["owner_profile"]["fingerprint"] = "a" * 64  # type: ignore[union-attr]
+    fingerprint_start["approval_manifest_hash"] = issue_delivery_manifest_hash(
+        fingerprint_start
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_start(decision="start", manifest=fingerprint_start)
 
     replay = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
     assert replay["state"] == "approved"

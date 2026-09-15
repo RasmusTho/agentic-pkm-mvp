@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from pathlib import PurePosixPath
 from posixpath import normpath
 from typing import Any
@@ -171,6 +172,22 @@ def _normalized_absolute_path(value: str) -> str:
     """Normalize POSIX destinations while collapsing repeated leading slashes."""
 
     return normpath("/" + value.lstrip("/"))
+
+
+def assert_no_credential_fingerprint_fields(value: Any) -> None:
+    """Reject verifier fingerprints anywhere in an Issue-delivery payload."""
+
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", str(key)).strip("_").lower()
+            if normalized_key == "fingerprint":
+                raise IssueDeliveryContractError(
+                    "Issue-delivery approval cannot contain credential fingerprints"
+                )
+            assert_no_credential_fingerprint_fields(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            assert_no_credential_fingerprint_fields(child)
 
 
 def _coalesce_aliases(
@@ -369,7 +386,12 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dispatch_plan_fields(
-    value: Any, *, issue_number: int, context_pack_id: str, channel: str
+    value: Any,
+    *,
+    issue_number: int,
+    context_pack_id: str,
+    channel: str,
+    repo_root: str,
 ) -> dict[str, Any]:
     """Validate the complete one-Issue frozen plan admitted by FCA-ID-A."""
 
@@ -381,6 +403,7 @@ def _dispatch_plan_fields(
             issue_number=issue_number,
             context_pack_id=context_pack_id,
             channel=channel,
+            repo_root=Path(repo_root),
         )
     except Exception as exc:
         raise IssueDeliveryContractError(
@@ -389,7 +412,9 @@ def _dispatch_plan_fields(
     return dict(plan)
 
 
-def _context_fields(value: Any, *, issue_number: int, channel: str) -> dict[str, Any]:
+def _context_fields(
+    value: Any, *, issue_number: int, channel: str, repo_root: str
+) -> dict[str, Any]:
     context = _mapping(value, "context")
     if "content_hash" not in context:
         raise IssueDeliveryContractError(
@@ -414,6 +439,7 @@ def _context_fields(value: Any, *, issue_number: int, channel: str) -> dict[str,
         issue_number=issue_number,
         context_pack_id=pack_id,
         channel=channel,
+        repo_root=repo_root,
     )
     if expected_plan_hash != canonical_hash(plan):
         raise IssueDeliveryContractError(
@@ -810,6 +836,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
 
     if not isinstance(value, Mapping):
         raise IssueDeliveryContractError("Issue-delivery manifest is required")
+    assert_no_credential_fingerprint_fields(value)
     raw = dict(value)
     try:
         if raw.get("contract_version") != CONTRACT_VERSION:
@@ -838,7 +865,10 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         )
         destination = _destination_fields(raw.get("destination"))
         context = _context_fields(
-            context_value, issue_number=issue["number"], channel=destination["channel"]
+            context_value,
+            issue_number=issue["number"],
+            channel=destination["channel"],
+            repo_root=destination["checkout"],
         )
         workflow = _workflow_fields(raw.get("workflow"))
         profile = _execution_profile_fields(raw.get("profile"))
@@ -1018,6 +1048,7 @@ __all__ = [
     "PERMITTED_EFFECTS",
     "RECORD_PREFIX",
     "RECORD_TYPE",
+    "assert_no_credential_fingerprint_fields",
     "REQUIRED_NON_EFFECTS",
     "REQUIRED_WORKFLOW_ARTIFACTS",
     "WORKFLOW_ENTRYPOINT",

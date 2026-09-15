@@ -80,6 +80,7 @@ from app.builderops.control_plane.issue_delivery import (
     OPERATION_TYPE as ISSUE_DELIVERY_OPERATION,
     approval_digest as issue_delivery_approval_digest,
     RECORD_TYPE as ISSUE_DELIVERY_RECORD_TYPE,
+    assert_no_credential_fingerprint_fields,
     idempotency_key as issue_delivery_idempotency_key,
     manifest_hash as issue_delivery_manifest_hash,
     normalize_manifest as normalize_issue_delivery_manifest,
@@ -719,6 +720,7 @@ def create_app(
     def _assert_issue_delivery_approval_integrity(payload: Mapping[str, Any]) -> None:
         """Authenticate the durable approval, including its grant timestamp."""
 
+        assert_no_credential_fingerprint_fields(payload)
         if payload.get("approval_manifest_hash") != issue_delivery_manifest_hash(payload):
             raise StateConflict("Issue-delivery approval manifest is corrupt")
         if payload.get("approval_digest") != issue_delivery_approval_digest(payload):
@@ -729,6 +731,7 @@ def create_app(
     ) -> dict[str, Any]:
         """Build one exact preview and bind only service-owned authority fields."""
 
+        assert_no_credential_fingerprint_fields(manifest_input)
         if any(
             field in manifest_input
             for field in (
@@ -776,6 +779,7 @@ def create_app(
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Validate an immutable preview and fresh current authority."""
 
+        assert_no_credential_fingerprint_fields(manifest_input)
         supplied_hash = manifest_input.get("approval_manifest_hash")
         if not isinstance(supplied_hash, str) or supplied_hash != issue_delivery_manifest_hash(manifest_input):
             raise StateConflict("Issue-delivery approval manifest changed")

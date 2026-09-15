@@ -1134,6 +1134,7 @@ def validate_issue_delivery_plan(
     issue_number: int,
     context_pack_id: str,
     channel: str = "dev",
+    repo_root: Path | None = None,
 ) -> Mapping[str, Any]:
     """Validate the complete, single-Issue output admitted by FCA-ID-A.
 
@@ -1337,7 +1338,7 @@ def validate_issue_delivery_plan(
         raise EpicDispatchError("Issue delivery runtime must bind the complete Codex target")
     try:
         CodexIssueSessionLauncher(
-            repo_root=Path.cwd(), builder_channel=channel
+            repo_root=(repo_root or Path.cwd()).resolve(), builder_channel=channel
         )._tcd_route(
             {"runtime": runtime}
         )
