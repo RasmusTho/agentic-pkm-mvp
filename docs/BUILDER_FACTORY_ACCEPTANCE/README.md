@@ -359,6 +359,19 @@ remain the serial destination/readback obligations. Each Issue binds its exact p
 and inline `Verify:` targets. The named test pointers below are required production-path
 production-path tests, not claims that tests exist or pass today.
 
+The credential-isolation prerequisite for FCA-ID-B now has repository support through a dormant
+Linux/systemd adapter around the existing Codex Issue-session launcher. A pinned host profile binds
+the exact distinct executor/worker principals (including an empty worker supplementary-group set),
+executable and clean-worktree identities, a private
+worker-owned `0700` model-login directory, fixed isolation properties, and direct-command hash.
+Immediately before entry, a
+fork/drop-GID/drop-UID probe must return only typed proof that the executor-owned GitHub effect
+credential is unreadable; its path and bytes are excluded from the child and receipt. Same-user,
+readable, missing, aliased, drifted, shell-mediated, and unsupported-host cases refuse with no
+legacy fallback. This prerequisite does not deliver FCA-ID-B: #5558, FCA-ID-B/C destination and
+readback work, bob activation, candidate trial, and owner outcome remain pending. No bob principal,
+credential, profile, service, or deployment is created or activated by this repository change.
+
 The same three slices cover parent evidence without another operation: A must prove exact or
 explicitly absent parent admission and reject missing/foreign targets when writeback is required;
 B must prove bounded receipt/child-ledger effects, preservation of the parent contract and other

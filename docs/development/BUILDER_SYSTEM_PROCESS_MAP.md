@@ -341,6 +341,21 @@ These are real controls but do not constitute uniform containment or repository-
 receipt-backed, with stronger sandbox/RBAC and egress controls where the risk justifies them. The
 target is not claimed as shipped.
 
+**Issue-delivery credential-isolation prerequisite:** repository support now includes the
+fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile.
+It re-resolves the exact executor and distinct unprivileged worker UID/GID with no supplementary
+groups, clean frozen worktree,
+private worker-owned `0700` model-auth identity, pinned Git/Codex/system executables, direct Codex
+command, and fixed systemd properties;
+then a forked child drops supplementary groups, GID, and UID and proves that the executor-owned
+GitHub effect credential cannot be opened immediately before a no-shell transient systemd entry.
+The unit has `NoNewPrivileges`, a closed environment, one exact working directory, and explicit
+worktree/model-state write apertures. Its receipt contains only identity hashes and typed live facts;
+the GitHub credential path and bytes never enter worker argv, environment, prompt, logs, or receipt.
+Unsupported or drifted hosts stop without a same-user fallback. This is repository-only enabling
+support: #5558, FCA-ID-B/C, bob activation, candidate trial, and owner outcome all remain pending,
+and no account, credential, service, or deployment is provisioned here.
+
 ### Exception and human-decision model
 
 The default response to a deviation is autonomous classification, repair, backoff, replan, or a
