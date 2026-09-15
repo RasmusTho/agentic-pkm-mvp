@@ -99,9 +99,14 @@ _TOP_LEVEL_ISSUE_ALIASES = frozenset(
     {
         "issue_number",
         "issue_node_id",
+        "node_id",
+        "title",
         "issue_title",
+        "state",
         "issue_state",
+        "body_hash",
         "issue_body_hash",
+        "acceptance_criteria_hash",
     }
 )
 _TOP_LEVEL_SOURCE_ALIASES = frozenset(
@@ -895,10 +900,10 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
         parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"])
         if parent.get("kind") == "issue" and (
-            parent.get("repository") == repository
-            and (
-                parent.get("number") == issue["number"]
-                or parent.get("node_id") == issue["node_id"]
+            parent.get("node_id") == issue["node_id"]
+            or (
+                parent.get("repository") == repository
+                and parent.get("number") == issue["number"]
             )
         ):
             raise IssueDeliveryContractError(

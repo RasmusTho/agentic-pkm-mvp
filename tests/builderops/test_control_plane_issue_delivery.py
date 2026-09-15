@@ -557,6 +557,17 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_issue_url["issue"]["url"] = "https://github.com/RasmusTho/agentic-pkm-mvp/issues/1"  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_issue_url)
+    for issue_alias, replacement in (
+        ("node_id", "I_other_issue"),
+        ("title", "another Issue"),
+        ("state", "closed"),
+        ("body_hash", "c" * 64),
+        ("acceptance_criteria_hash", "d" * 64),
+    ):
+        conflicting_issue_alias = deepcopy(manifest)
+        conflicting_issue_alias[issue_alias] = replacement
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=conflicting_issue_alias)
     missing_ready_label = deepcopy(manifest)
     missing_ready_label["issue"]["labels"] = ["type:task"]  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -782,6 +793,11 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     }
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=self_parent)
+    self_parent_same_node = deepcopy(self_parent)
+    self_parent_same_node["parent_evidence"]["number"] = 5399  # type: ignore[index]
+    self_parent_same_node["parent_evidence"]["node_id"] = manifest["issue"]["node_id"]  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=self_parent_same_node)
     foreign_parent_start = deepcopy(preview["manifest"])
     foreign_parent_start["parent_evidence"] = foreign_parent["parent_evidence"]
     foreign_parent_start["approval_manifest_hash"] = issue_delivery_manifest_hash(
