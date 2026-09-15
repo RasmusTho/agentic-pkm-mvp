@@ -174,7 +174,8 @@ Generic receipts contribute hashed observation references, never inferred verifi
 or owner acceptance. The verification-run lens remains unavailable without its own run contract.
 Task and receipt walks are bounded at 200 each; API reads use the source client's 15-second timeout
 with no retry in this request-scoped projection. This cap does not guarantee source quota capacity:
-the current fanout consumes three epoch/list requests plus each task and addressed receipt read.
+the task phase consumes three epoch/list requests plus each task; an addressed receipt phase adds
+each receipt read and one final receipt-epoch probe without reopening the admitted task snapshot.
 The default 120-request/minute source limit therefore withdraws a 118-task read even with no receipt
 reads; this P2 fanout limitation remains deferred, and source qualification must retain the actual
 quota/refusal evidence. A rate-limited read cannot claim completeness. GitHub check failures retain the existing partial
