@@ -21,6 +21,7 @@ from app.builderops.control_plane.api_models import (
     InquiryCommandStartRequest,
     InquiryCommandAuthorityRequest,
     IssueDeliveryAuthorityRequest,
+    IssueDeliveryOperationRecordRequest,
     IssueDeliveryPreviewRequest,
     IssueDeliveryStartRequest,
     LeaseClaimRequest,
@@ -63,7 +64,11 @@ from app.builderops.control_plane.models import (
     canonical_repository,
 )
 from app.builderops.control_plane.selection import database_environment, production_store
-from app.builderops.control_plane.store import _issue_delivery_admission_capability
+from app.builderops.control_plane.store import (
+    _issue_delivery_admission_capability,
+    _ISSUE_DELIVERY_OPERATION_RECORD_TYPE,
+    _issue_delivery_operation_capability,
+)
 from app.middleware.trace import TraceIdMiddleware
 from app.builderops.devui_conversation_port import canonical_context_pack_bytes, validate_context_pack_bytes
 from app.builderops.devui_model_inquiry_command import approval_manifest, build_command_proposal, canonical_hash, validate_approval_identity, validate_command_proposal
@@ -644,6 +649,9 @@ def create_app(
     issue_delivery_read_scope = _credential_dependency(
         credentials, rate_limiter, "issue_delivery:read"
     )
+    issue_delivery_execute = _credential_dependency(
+        credentials, rate_limiter, "issue_delivery:execute"
+    )
     issue_delivery_control = _credential_dependency(credentials, rate_limiter)
     # The actual production constructor has this complete concrete path. No
     # caller-supplied executor or no-op production port is accepted.
@@ -1197,6 +1205,370 @@ def create_app(
             "effects": [],
         }
 
+    def issue_delivery_operation_record_sync(
+        request: IssueDeliveryOperationRecordRequest, credential: Credential
+    ) -> dict[str, Any]:
+        """Commit one exact destination reservation/attempt/entry receipt.
+
+        This is intentionally a separate service path from generic record
+        writes.  The approved manifest is loaded from the service-owned
+        approval record and revalidated immediately before every destination
+        write; a caller cannot turn a stale approval or worker-provided copy
+        into launch authority.
+        """
+
+        def validate_operation_payload(
+            *,
+            kind: str,
+            state: str,
+            payload: Mapping[str, Any],
+            approved: Mapping[str, Any],
+            repository: str,
+            operation_key: str,
+            approval_id: str,
+            approval_manifest_hash: str,
+        ) -> None:
+            common = {
+                "schema",
+                "repository",
+                "operation_type",
+                "operation_key",
+                "approval_id",
+                "approval_manifest_hash",
+                "live_binding",
+                "receipt_hash",
+            }
+            specific = {
+                "reservation": {"destination", "proposed_run", "reserved_at"},
+                "attempt": {"reservation_receipt_hash", "attempt_id", "attempted_at"},
+                "entry": {"attempt_receipt_hash", "attempt_id", "session_id", "entered_at"},
+                "terminal": {
+                    "attempt_receipt_hash",
+                    "entry_receipt_hash",
+                    "session_id",
+                    "worker_receipt",
+                    "observed_at",
+                },
+            }
+            if set(payload) != common | specific[kind]:
+                raise IssueDeliveryContractError(
+                    "Issue-delivery operation receipt fields are not closed"
+                )
+            if (
+                payload["schema"] != f"builderops.issue-delivery-{kind}.v1"
+                or payload["repository"] != repository
+                or payload["operation_type"] != ISSUE_DELIVERY_OPERATION
+                or payload["operation_key"] != operation_key
+                or payload["approval_id"] != approval_id
+                or payload["approval_manifest_hash"] != approval_manifest_hash
+            ):
+                raise IssueDeliveryContractError(
+                    "Issue-delivery operation receipt binding is incomplete"
+                )
+            receipt_hash = payload["receipt_hash"]
+            if (
+                not isinstance(receipt_hash, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", receipt_hash)
+                or canonical_hash(
+                    {key: value for key, value in payload.items() if key != "receipt_hash"}
+                )
+                != receipt_hash
+            ):
+                raise IssueDeliveryContractError(
+                    "Issue-delivery operation receipt hash is invalid"
+                )
+            destination = approved.get("destination")
+            workflow = approved.get("workflow")
+            source = approved.get("source")
+            if not isinstance(destination, Mapping) or not isinstance(workflow, Mapping) or not isinstance(source, Mapping):
+                raise IssueDeliveryContractError(
+                    "Issue-delivery approval bindings are incomplete"
+                )
+            expected_live_binding = {
+                "checkout": str(Path(str(destination["checkout"])).resolve()),
+                "worktree": str(Path(str(destination["worktree"])).resolve()),
+                "branch": str(destination["branch"]),
+                "source_revision": str(source["revision"]),
+                "base_sha": str(destination["base_sha"]),
+                "workflow_hash": str(workflow["content_hash"]),
+                "workflow_artifacts": sorted(
+                    [
+                        {
+                            "path": str(artifact["path"]),
+                            "sha256": str(artifact["sha256"]),
+                        }
+                        for artifact in workflow["artifacts"]
+                    ],
+                    key=lambda item: item["path"],
+                ),
+            }
+            if payload["live_binding"] != expected_live_binding:
+                raise StateConflict(
+                    "Issue-delivery source or workflow binding changed after approval"
+                )
+            for timestamp_name in (
+                "reserved_at",
+                "attempted_at",
+                "entered_at",
+                "observed_at",
+            ):
+                if timestamp_name in payload:
+                    timestamp = payload[timestamp_name]
+                    try:
+                        parsed = datetime.fromisoformat(str(timestamp))
+                    except (TypeError, ValueError) as exc:
+                        raise IssueDeliveryContractError(
+                            "Issue-delivery receipt timestamp is invalid"
+                        ) from exc
+                    if parsed.tzinfo is None:
+                        raise IssueDeliveryContractError(
+                            "Issue-delivery receipt timestamp must be timezone-aware"
+                        )
+            if kind == "reservation":
+                if (
+                    payload["destination"] != destination
+                    or payload["proposed_run"] != {"run_id": destination["run_id"]}
+                ):
+                    raise StateConflict(
+                        "Issue-delivery reservation does not match its approval"
+                    )
+            elif kind == "attempt":
+                if (
+                    payload["attempt_id"] != f"{operation_key}:attempt"
+                    or not re.fullmatch(
+                        r"[0-9a-f]{64}", str(payload["reservation_receipt_hash"])
+                    )
+                ):
+                    raise IssueDeliveryContractError(
+                        "Issue-delivery attempt receipt is malformed"
+                    )
+            elif kind == "entry":
+                if (
+                    payload["attempt_id"] != f"{operation_key}:attempt"
+                    or not re.fullmatch(
+                        r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}",
+                        str(payload["session_id"]),
+                    )
+                    or not re.fullmatch(
+                        r"[0-9a-f]{64}", str(payload["attempt_receipt_hash"])
+                    )
+                ):
+                    raise IssueDeliveryContractError(
+                        "Issue-delivery entry receipt is malformed"
+                    )
+            else:
+                session_id = payload["session_id"]
+                if session_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", str(session_id)
+                ):
+                    raise IssueDeliveryContractError(
+                        "Issue-delivery terminal session id is malformed"
+                    )
+                if not re.fullmatch(
+                    r"[0-9a-f]{64}", str(payload["attempt_receipt_hash"])
+                ):
+                    raise IssueDeliveryContractError(
+                        "Issue-delivery terminal attempt binding is malformed"
+                    )
+                if state == "terminal":
+                    if not isinstance(payload["worker_receipt"], Mapping) or not isinstance(
+                        session_id, str
+                    ):
+                        raise IssueDeliveryContractError(
+                            "terminal receipt requires a worker and session"
+                        )
+                elif payload["worker_receipt"] is not None:
+                    raise IssueDeliveryContractError(
+                        "launch-unknown receipt cannot claim a worker outcome"
+                    )
+
+            if kind != "reservation":
+                predecessor_kind = "reservation" if kind == "attempt" else "attempt"
+                predecessor_id = f"issue-delivery-{predecessor_kind}:{operation_key}"
+                try:
+                    predecessor = store.get_record(repository, predecessor_id)
+                except KeyError as exc:
+                    raise StateConflict(
+                        f"Issue-delivery {predecessor_kind} receipt is required first"
+                    ) from exc
+                predecessor_payload = predecessor.get("payload")
+                if (
+                    predecessor.get("record_type")
+                    != _ISSUE_DELIVERY_OPERATION_RECORD_TYPE
+                    or predecessor.get("state")
+                    != {"reservation": "reserved", "attempt": "attempted"}[
+                        predecessor_kind
+                    ]
+                    or not isinstance(predecessor_payload, Mapping)
+                ):
+                    raise StateConflict(
+                        "Issue-delivery predecessor receipt is not authoritative"
+                    )
+                predecessor_hash = canonical_hash(
+                    {
+                        key: value
+                        for key, value in predecessor_payload.items()
+                        if key != "receipt_hash"
+                    }
+                )
+                expected_hash = (
+                    payload["reservation_receipt_hash"]
+                    if kind == "attempt"
+                    else payload["attempt_receipt_hash"]
+                )
+                if expected_hash != predecessor_hash:
+                    raise StateConflict(
+                        "Issue-delivery predecessor hash does not match"
+                    )
+            if kind == "terminal" and state == "terminal":
+                try:
+                    entry_record = store.get_record(
+                        repository, f"issue-delivery-entry:{operation_key}"
+                    )
+                except KeyError as exc:
+                    raise StateConflict(
+                        "Issue-delivery terminal receipt requires an entry"
+                    ) from exc
+                entry_payload = entry_record.get("payload")
+                if (
+                    entry_record.get("state") != "active"
+                    or not isinstance(entry_payload, Mapping)
+                    or entry_payload.get("session_id") != payload["session_id"]
+                    or payload["entry_receipt_hash"]
+                    != canonical_hash(
+                        {
+                            key: value
+                            for key, value in entry_payload.items()
+                            if key != "receipt_hash"
+                        }
+                    )
+                ):
+                    raise StateConflict(
+                        "Issue-delivery terminal entry predecessor does not match"
+                    )
+            elif kind == "terminal" and payload["entry_receipt_hash"] is not None:
+                raise IssueDeliveryContractError(
+                    "launch-unknown receipt cannot claim an unverified entry"
+                )
+
+        _enforce_repo_scope(credential, request.envelope.repository)
+        if request.envelope.scope != "issue-delivery-operation":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Issue-delivery operation scope is required",
+            )
+        repository = canonical_repository(request.envelope.repository)
+        if not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", request.operation_key
+        ):
+            raise IssueDeliveryContractError(
+                "Issue-delivery operation key is malformed"
+            )
+        if not re.fullmatch(
+            r"issue-delivery-(reservation|attempt|entry|terminal):[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}",
+            request.record_id,
+        ):
+            raise IssueDeliveryContractError("Issue-delivery operation record id is invalid")
+        if not re.fullmatch(r"[0-9a-f]{64}", request.approval_manifest_hash):
+            raise IssueDeliveryContractError(
+                "Issue-delivery operation manifest hash is invalid"
+            )
+        try:
+            row = store.get_record(repository, issue_delivery_record_id(request.approval_id))
+        except KeyError as exc:
+            raise StateConflict("Issue-delivery approval is not durably admitted") from exc
+        approved = dict(row.get("payload", {}))
+        if (
+            row.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
+            or row.get("state") != "approved"
+            or approved.get("approval_id") != request.approval_id
+            or approved.get("operation_key") != request.operation_key
+            or approved.get("approval_manifest_hash") != request.approval_manifest_hash
+        ):
+            raise StateConflict("Issue-delivery operation does not match its approval")
+        _assert_issue_delivery_approval_integrity(approved)
+        permission = approved.get("permission")
+        _assert_issue_delivery_permission_safe(permission)
+        owner_credential_id = (
+            permission.get("credential_id")
+            if isinstance(permission, Mapping)
+            else None
+        )
+        owner = (
+            credentials.current_credential(owner_credential_id)
+            if isinstance(owner_credential_id, str)
+            else None
+        )
+        if owner is None:
+            raise StateConflict("Issue-delivery approval owner is unavailable")
+        # This is the actual pre-effect permission/revocation/epoch/expiry and
+        # source/profile check.  It deliberately runs for reservation, attempt,
+        # entry and terminal evidence writes alike.
+        validate_issue_delivery_approval(approved, owner)
+        destination = approved.get("destination")
+        if not isinstance(destination, Mapping):
+            raise IssueDeliveryContractError("Issue-delivery destination is missing")
+        if destination.get("identity") != credential.principal:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Issue-delivery destination does not match credential principal",
+            )
+        payload = dict(request.payload)
+        if (
+            payload.get("operation_key") != request.operation_key
+            or payload.get("approval_id") != request.approval_id
+            or payload.get("approval_manifest_hash") != request.approval_manifest_hash
+            or payload.get("repository") != repository
+        ):
+            raise IssueDeliveryContractError(
+                "Issue-delivery operation payload binding is incomplete"
+            )
+        kind_match = re.match(
+            r"issue-delivery-(reservation|attempt|entry|terminal):(.+)$",
+            request.record_id,
+        )
+        assert kind_match is not None
+        kind, id_operation_key = kind_match.groups()
+        if id_operation_key != request.operation_key:
+            raise IssueDeliveryContractError(
+                "Issue-delivery operation record id is not bound to its operation"
+            )
+        expected_states = {
+            "reservation": "reserved",
+            "attempt": "attempted",
+            "entry": "active",
+            "terminal": "terminal",
+        }
+        if expected_states[kind] != request.state and not (
+            kind == "terminal" and request.state == "launch_unknown"
+        ):
+            raise IssueDeliveryContractError(
+                "Issue-delivery operation record state does not match its kind"
+            )
+        validate_operation_payload(
+            kind=kind,
+            state=request.state,
+            payload=request.payload,
+            approved=approved,
+            repository=repository,
+            operation_key=request.operation_key,
+            approval_id=request.approval_id,
+            approval_manifest_hash=request.approval_manifest_hash,
+        )
+        _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+        result = store.commit_issue_delivery_operation_record(
+            envelope=_envelope(request.envelope, credential),
+            record_id=request.record_id,
+            state=request.state,
+            payload=payload,
+            idempotency_key=request.idempotency_key,
+            operation_key=request.operation_key,
+            approval_id=request.approval_id,
+            approval_manifest_hash=request.approval_manifest_hash,
+            capability=_issue_delivery_operation_capability(),
+        )
+        return _authority_object_response(result)
+
     @application.post("/v1/issue-delivery/preview")
     @application.post("/v1/issues/command/preview")
     async def issue_delivery_preview(
@@ -1225,6 +1597,120 @@ def create_app(
     ) -> dict[str, Any]:
         try:
             return await run_in_threadpool(issue_delivery_start_sync, request, credential)
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.post("/v1/issue-delivery/operation-record")
+    @application.post("/v1/issues/command/operation-record")
+    async def issue_delivery_operation_record(
+        request: IssueDeliveryOperationRecordRequest,
+        credential: Credential = Depends(issue_delivery_execute),
+    ) -> dict[str, Any]:
+        try:
+            return await run_in_threadpool(
+                issue_delivery_operation_record_sync, request, credential
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    def issue_delivery_operation_record_read_sync(
+        record_id: str, repository: str, credential: Credential
+    ) -> dict[str, Any]:
+        """Read one destination receipt through its narrow execute grant.
+
+        The generic receipt route remains protected by ``receipts:read``.
+        Destination reconciliation must also work for the selected launcher,
+        whose credential is only granted ``issue_delivery:execute``.  This
+        route therefore exposes no collection or arbitrary-record capability:
+        it accepts only the finite FCA-ID-B record ids and verifies their
+        durable approval/destination binding before returning the receipt.
+        """
+
+        _enforce_repo_scope(credential, repository)
+        canonical = canonical_repository(repository)
+        if not re.fullmatch(
+            r"issue-delivery-(reservation|attempt|entry|terminal):[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}",
+            record_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Issue-delivery operation receipt not found",
+            )
+        try:
+            receipt = store.get_record(canonical, record_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Issue-delivery operation receipt not found",
+            ) from exc
+        payload = receipt.get("payload")
+        if (
+            receipt.get("record_type") != _ISSUE_DELIVERY_OPERATION_RECORD_TYPE
+            or not isinstance(payload, Mapping)
+            or payload.get("repository") != canonical
+            or payload.get("operation_type") != ISSUE_DELIVERY_OPERATION
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Issue-delivery operation receipt not found",
+            )
+        operation_key = payload.get("operation_key")
+        approval_id = payload.get("approval_id")
+        approval_hash = payload.get("approval_manifest_hash")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (operation_key, approval_id, approval_hash)
+        ):
+            raise StateConflict("Issue-delivery operation receipt binding is malformed")
+        if not isinstance(approval_id, str):
+            raise StateConflict("Issue-delivery operation approval id is malformed")
+        record_kind, id_operation_key = record_id.removeprefix(
+            "issue-delivery-"
+        ).split(":", 1)
+        expected_record_id = f"issue-delivery-{record_kind}:{operation_key}"
+        if expected_record_id != record_id or id_operation_key != operation_key:
+            raise StateConflict("Issue-delivery operation receipt id is not bound")
+        try:
+            approval_row = store.get_record(
+                canonical, issue_delivery_record_id(approval_id)
+            )
+        except KeyError as exc:
+            raise StateConflict("Issue-delivery approval is not durably admitted") from exc
+        approved = approval_row.get("payload")
+        destination = approved.get("destination") if isinstance(approved, Mapping) else None
+        if (
+            approval_row.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
+            or approval_row.get("state") != "approved"
+            or not isinstance(approved, Mapping)
+            or approved.get("repository") != canonical
+            or approved.get("approval_id") != approval_id
+            or approved.get("operation_key") != operation_key
+            or approved.get("approval_manifest_hash") != approval_hash
+            or not isinstance(destination, Mapping)
+            or destination.get("identity") != credential.principal
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Issue-delivery destination does not match credential principal",
+            )
+        _assert_issue_delivery_approval_integrity(approved)
+        _assert_issue_delivery_permission_safe(approved.get("permission"))
+        return dict(receipt)
+
+    @application.get("/v1/issue-delivery/operation-record/{record_id}")
+    @application.get("/v1/issues/command/operation-record/{record_id}")
+    async def issue_delivery_operation_record_read(
+        record_id: str,
+        repository: str,
+        credential: Credential = Depends(issue_delivery_execute),
+    ) -> dict[str, Any]:
+        try:
+            return await run_in_threadpool(
+                issue_delivery_operation_record_read_sync,
+                record_id,
+                repository,
+                credential,
+            )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
 

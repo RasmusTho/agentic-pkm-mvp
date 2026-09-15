@@ -734,13 +734,16 @@ stay with this authenticated service, `CredentialRegistry` and the existing Post
 record/transaction/receipt/outbox owner. The destination adapter reuses `dispatch_sessions` →
 `dispatch_issue_sessions` → `CodexIssueSessionLauncher`; it owns reservation/attempt/entry observations
 through that same service authority. No local epic run-state file or dispatcher lease becomes an
-approval or execution ledger. The existing launcher requests claim, edits, publication, governed
-merge and closure; it does not yet enforce an owner manifest at those boundaries or support stop.
+approval or execution ledger. FCA-ID-B now binds the adapter's five permitted effect gates to fresh
+service authority; the existing launcher still requests claim, edits, publication, governed merge and
+closure, while independent source readback and owner outcome remain later boundaries. Stop remains
+unsupported.
 
 FCA-ID-A, delivered by #5550, now supplies the repository-only Issue subtype with atomic immutable
 approval/readback admission, exact operation-key binding, fresh permission/epoch/expiry checks and
-separate destination read/execute grants. Destination reservation/attempt/entry, continuing
-effect-gate checks and independently sourced GitHub outcome readback remain missing production
+separate destination read/execute grants. FCA-ID-B, delivered by #5551, supplies authenticated
+destination reservation/attempt/entry and fresh effect-gate checks through the same transaction,
+receipt and outbox owner. Independently sourced GitHub outcome readback remains missing production
 support, assigned to the [three source-anchored slices](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices).
 The existing GitHub readers and closure owners supply PR/head/CI/review/merge/closure evidence;
 authenticated worker text and process exit supply no delivery verdict. FCA-09 separately owns

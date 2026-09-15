@@ -307,6 +307,21 @@ class StorePort(Protocol):
         issue_delivery_admission: object | None = None,
     ) -> AuthorityObjectResult: ...
 
+    def commit_issue_delivery_operation_record(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        record_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        operation_key: str,
+        approval_id: str,
+        approval_manifest_hash: str,
+        capability: object,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult: ...
+
     def get_owner_outcomes(
         self, repository: str, subject_ref: str, *, idempotency_key: str | None = None,
         grant_reader: Callable[[str, str], bool],

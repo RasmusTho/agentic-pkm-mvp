@@ -154,6 +154,27 @@ class IssueDeliveryAuthorityRequest(BaseModel):
         return value
 
 
+class IssueDeliveryOperationRecordRequest(BaseModel):
+    """Destination-owned receipt write for the FCA-ID-B operation adapter.
+
+    The destination never receives a generic ``records:write`` capability for
+    these records.  The service re-reads the committed Issue approval and
+    current execute grant before accepting the exact reservation/attempt/entry
+    binding below.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    envelope: AuthorityEnvelopeInput
+    record_id: str = Field(min_length=1, max_length=512)
+    state: Literal["reserved", "attempted", "active", "launch_unknown", "terminal"]
+    payload: dict[str, Any]
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    operation_key: str = Field(min_length=1, max_length=256)
+    approval_id: str = Field(min_length=1, max_length=256)
+    approval_manifest_hash: str = Field(min_length=64, max_length=64)
+
+
 class TaskClaimRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     task_id: str

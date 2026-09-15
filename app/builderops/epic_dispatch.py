@@ -7,7 +7,7 @@ import subprocess
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Protocol, cast
 
 from app.builderops.delivery_orchestration_contracts import canonical_hash
 from app.builderops.epic_run_state import validate_run_id
@@ -37,6 +37,9 @@ from app.builderops.execution_routing_receipts import (
 )
 from app.components.settings.providers_loader import ProviderCensus, load_provider_census
 from app.dispatcher.verification_consumer import _is_codex_usage_limit_event
+
+if TYPE_CHECKING:
+    from app.builderops.issue_delivery_operation import IssueDeliveryOperationAdapter
 
 SCHEMA_VERSION = 2
 DEFAULT_MAX_PARALLEL = 2
@@ -106,6 +109,8 @@ class IssueSessionLauncher(Protocol):
         context_pack: Mapping[str, Any],
         *,
         execution_routing: Mapping[str, Any] | None = None,
+        on_entry: Callable[[str], None] | None = None,
+        effect_gate: Callable[[str], Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]: ...
 
 
@@ -151,6 +156,7 @@ class CodexIssueSessionLauncher:
             / "slice-implementer.toml"
         )
         self.runner = runner or subprocess.run
+        self._stream_output = runner is None
         self.provider_census = load_provider_census(
             provider_census_path or _DECLARED_PROVIDER_CENSUS_PATH
         )
@@ -232,6 +238,8 @@ class CodexIssueSessionLauncher:
         context_pack: Mapping[str, Any],
         *,
         execution_routing: Mapping[str, Any] | None = None,
+        on_entry: Callable[[str], None] | None = None,
+        effect_gate: Callable[[str], Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]:
         prompt = self.prompt(context_pack)
         canary_target = None
@@ -239,20 +247,78 @@ class CodexIssueSessionLauncher:
             canary_target = ResolvedExecutionTarget.model_validate(
                 execution_routing.get("proposed_target")
             )
-        result = self.runner(
-            self.command(context_pack, execution_routing=execution_routing),
-            cwd=self.repo_root,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        if effect_gate is not None:
+            for effect in (
+                "repository_worktree",
+                "issue_claim",
+                "publication",
+                "review_merge",
+                "closure_reconciliation",
+            ):
+                effect_gate(effect)
+        command = self.command(context_pack, execution_routing=execution_routing)
+        entry_error: Exception | None = None
+        entry_notified = False
+
+        def notify_entry(candidate: str) -> None:
+            nonlocal entry_notified, entry_error
+            if entry_notified or on_entry is None:
+                return
+            entry_notified = True
+            try:
+                on_entry(candidate)
+            except Exception as exc:  # preserve the process for reconciliation
+                entry_error = exc
+
+        if self._stream_output:
+            process = subprocess.Popen(
+                command,
+                cwd=self.repo_root,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.write(prompt)
+            process.stdin.close()
+            output_lines: list[str] = []
+            for line in process.stdout:
+                output_lines.append(line)
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    isinstance(event, Mapping)
+                    and event.get("type") == "thread.started"
+                ):
+                    candidate = event.get("thread_id")
+                    if isinstance(candidate, str) and candidate.strip():
+                        notify_entry(candidate.strip())
+            stderr = process.stderr.read() if process.stderr is not None else ""
+            returncode = process.wait()
+            stdout = "".join(output_lines)
+        else:
+            result = self.runner(
+                command,
+                cwd=self.repo_root,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            returncode = result.returncode
+            stdout = result.stdout
+            stderr = result.stderr
         session_id: str | None = None
         worker_receipt: object | None = None
         terminal_error: str | None = None
         allocation_unavailable = False
         observed_input_tokens: int | None = None
-        for line in result.stdout.splitlines():
+        for line in stdout.splitlines():
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -263,6 +329,9 @@ class CodexIssueSessionLauncher:
                 candidate = event.get("thread_id")
                 if isinstance(candidate, str) and candidate.strip():
                     session_id = candidate.strip()
+                    notify_entry(session_id)
+                    if on_entry is not None:
+                        on_entry(session_id)
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
             if event.get("allocation_state") == "allocation_unavailable":
@@ -290,8 +359,13 @@ class CodexIssueSessionLauncher:
                         worker_receipt = _parse_worker_receipt(text)
         if allocation_unavailable:
             return {"allocation_state": "allocation_unavailable"}
-        if result.returncode != 0 or terminal_error is not None:
-            detail = result.stderr.strip() or terminal_error or "codex exec failed"
+        if entry_error is not None:
+            raise IssueSessionLaunchError(
+                "session entry could not be durably observed",
+                session_id=session_id,
+            ) from entry_error
+        if returncode != 0 or terminal_error is not None:
+            detail = stderr.strip() or terminal_error or "codex exec failed"
             raise IssueSessionLaunchError(
                 detail[-2_000:],
                 session_id=session_id,
@@ -671,6 +745,7 @@ def dispatch_issue_sessions(
     expected_plan_hash: str | None = None,
     canary_observed_at: str | None = None,
     receipt_store: ReceiptStore | None = None,
+    operation_adapter: "IssueDeliveryOperationAdapter | None" = None,
 ) -> dict[str, Any]:
     """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
 
@@ -689,6 +764,14 @@ def dispatch_issue_sessions(
             raise EpicDispatchError(
                 "frozen dispatch plan does not match the independently preserved hash"
             )
+    if operation_adapter is not None:
+        if _contains_canary_execution_routing(plan):
+            raise EpicDispatchError(
+                "Issue-delivery operation does not permit canary routing"
+            )
+        operation_adapter.bind_dispatch_plan(
+            plan, expected_plan_hash=expected_plan_hash
+        )
 
     run_id, ordered = _validated_session_contexts(plan)
     sessions: list[dict[str, Any]] = []
@@ -712,7 +795,10 @@ def dispatch_issue_sessions(
                     receipt_store=receipt_store,
                 )
             else:
-                launch_result = launcher.launch(context_pack)
+                if operation_adapter is not None:
+                    launch_result = operation_adapter.launch(context_pack)
+                else:
+                    launch_result = launcher.launch(context_pack)
                 canary_receipt = None
             if not isinstance(launch_result, Mapping):
                 raise IssueSessionLaunchError(
@@ -746,11 +832,16 @@ def dispatch_issue_sessions(
                 session_id=session_id,
             )
             final_state = worker_receipt["final_state"]
+            fresh_session = launch_result.get("fresh_session", True)
+            if type(fresh_session) is not bool:
+                raise IssueSessionLaunchError(
+                    "launch_result.fresh_session must be boolean when present"
+                )
             session_record: dict[str, Any] = {
                 "issue_number": issue_number,
                 "context_pack_id": context_pack_id,
                 "session_id": session_id,
-                "fresh_session": True,
+                "fresh_session": fresh_session,
                 "status": final_state,
                 "worker_receipt": worker_receipt,
             }
