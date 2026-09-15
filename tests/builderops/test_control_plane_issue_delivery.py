@@ -711,6 +711,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     shared_checkout["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
         shared_checkout["context"]["dispatch_plan"]  # type: ignore[union-attr]
     )
+    shared_checkout["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        shared_checkout["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
+    )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=shared_checkout)
     base_branch = deepcopy(manifest)
@@ -718,6 +721,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     base_branch["context"]["dispatch_plan"]["context_packs"][0]["branch_worktree_plan"]["branch"] = base_branch["destination"]["base_ref"]  # type: ignore[union-attr]
     base_branch["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
         base_branch["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    base_branch["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        base_branch["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=base_branch)
@@ -727,6 +733,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     normalized_shared_checkout["context"]["dispatch_plan"]["context_packs"][0]["branch_worktree_plan"]["worktree"] = "/workspaces/agentic-pkm-mvp/./"  # type: ignore[union-attr]
     normalized_shared_checkout["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
         normalized_shared_checkout["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    normalized_shared_checkout["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        normalized_shared_checkout["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=normalized_shared_checkout)
@@ -740,6 +749,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     descendant_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
         descendant_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
     )
+    descendant_worktree["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        descendant_worktree["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
+    )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=descendant_worktree)
     double_slash_worktree = deepcopy(manifest)
@@ -751,6 +763,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     ]["worktree"] = "//workspaces/agentic-pkm-mvp"
     double_slash_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
         double_slash_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    double_slash_worktree["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        double_slash_worktree["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=double_slash_worktree)
@@ -775,6 +790,9 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     ]["worktree"] = "/workspaces/agentic-pkm-mvp-sibling"
     sibling_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
         sibling_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    sibling_worktree["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        sibling_worktree["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
     )
     assert owner.issue_delivery_preview(manifest=sibling_worktree)["state"] == "previewed"
 
