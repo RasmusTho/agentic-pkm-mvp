@@ -181,16 +181,36 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
                     return True
                 break
     for index, token in enumerate(tokens):
-        if token != "gh" or index + 1 >= len(tokens) or tokens[index + 1] != "api":
+        if token != "gh":
             continue
+        api_index: int | None = None
+        cursor = index + 1
+        while cursor < len(tokens):
+            candidate = tokens[cursor]
+            if candidate == "api":
+                api_index = cursor
+                break
+            if candidate in {"--repo", "-R", "--hostname"}:
+                cursor += 2
+                continue
+            if candidate.startswith(("--repo=", "-R=", "--hostname=")):
+                cursor += 1
+                continue
+            if candidate.startswith("-"):
+                cursor += 1
+                continue
+            break
+        if api_index is None:
+            continue
+        api_tokens = tokens[api_index + 1 :]
         graphql = any(
             candidate == "graphql"
-            for candidate in tokens[index + 2 :]
+            for candidate in api_tokens
         )
         method = None
         has_body = False
         graphql_mutation = False
-        for candidate in tokens[index + 2 :]:
+        for candidate in api_tokens:
             if candidate.startswith("--method="):
                 method = candidate.split("=", 1)[1].lower()
             elif candidate in {"--method", "-X"}:
