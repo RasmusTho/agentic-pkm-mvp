@@ -166,20 +166,6 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
     command = _owner_boundary_command(event)
     if command is None:
         return False
-    lowered = command.lower()
-    # These entrypoints own their effect gate internally.  A worker may start
-    # them as a command, but the launcher must not second-guess their raw
-    # subprocesses from an item.started observation.
-    if any(
-        marker in lowered
-        for marker in (
-            "issue_pickup_claim",
-            "scripts/publication.py apply",
-            "scripts/closure.py",
-        )
-    ):
-        return False
-
     tokens = _shell_command_tokens(command)
     if tokens is None:
         return True
