@@ -181,8 +181,10 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
         return False
     if re.search(
         r"\bgit\b(?:(?!\b(?:push|commit|tag)\b).)*\b(?:push|commit|tag)\b|"
-        r"\bgh\s+issue\s+(?:comment|create|close|edit|reopen|lock|unlock|label|delete|transfer|pin|unpin)\b|"
-        r"\bgh\s+pr\s+(?:create|merge|close|edit|reopen|ready|unready)\b",
+        r"\bgh\b(?:(?!\b(?:issue|pr)\b).)*\bissue\s+"
+        r"(?:comment|create|close|edit|reopen|lock|unlock|label|delete|transfer|pin|unpin)\b|"
+        r"\bgh\b(?:(?!\b(?:issue|pr)\b).)*\bpr\s+"
+        r"(?:create|merge|close|edit|reopen|ready|unready)\b",
         lowered,
     ):
         return True
