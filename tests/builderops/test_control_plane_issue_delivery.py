@@ -477,6 +477,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     def fail_current_launcher_preflight(*_args, **_kwargs):
         raise AssertionError("readback must not rerun current launcher preflight")
 
+    original_launcher_init = CodexIssueSessionLauncher.__init__
     monkeypatch.setattr(CodexIssueSessionLauncher, "__init__", fail_current_launcher_preflight)
     stale_readback = reader.issue_delivery_authority(
         manifest=started["approval"], purpose="readback"
@@ -484,6 +485,11 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     assert stale_readback["purpose"] == "readback"
     assert "fingerprint" not in stale_readback["approval"]["permission"]
     assert owner_credential.fingerprint not in json.dumps(stale_readback, sort_keys=True)
+    monkeypatch.setattr(
+        CodexIssueSessionLauncher,
+        "__init__",
+        original_launcher_init,
+    )
     monkeypatch.setattr(store, "readiness", lambda: current_readiness)
 
     for field, replacement in (
