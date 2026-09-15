@@ -201,9 +201,13 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
                 has_body = True
             elif graphql and candidate.lower().startswith(("query=mutation", "mutation")):
                 graphql_mutation = True
-        if any("/issues" in candidate or "/pulls" in candidate for candidate in tokens[index + 2 :]):
-            if method in {"post", "put", "patch", "delete"} or has_body:
-                return True
+        # ``gh api`` is a raw external-mutation seam.  Do not try to keep a
+        # path allowlist here: refs, releases, settings, and other endpoints
+        # are just as consequential as Issues and PRs.  A mutating method or
+        # any request body is sufficient to make the command mutation-capable;
+        # only the existing owner wrappers may perform it.
+        if method in {"post", "put", "patch", "delete"} or has_body:
+            return True
         if graphql and graphql_mutation:
             return True
     return False

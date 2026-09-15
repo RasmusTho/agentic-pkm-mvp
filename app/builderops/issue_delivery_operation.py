@@ -307,6 +307,7 @@ class IssueDeliveryOperationAdapter:
         client: _OperationClient,
         launcher: IssueSessionLauncher | None = None,
         repo_root: Path | None = None,
+        approval_file: Path | None = None,
         now: Callable[[], str] = _utc_now,
         live_binding_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     ) -> None:
@@ -323,7 +324,21 @@ class IssueDeliveryOperationAdapter:
             )
         else:
             selected_root = Path.cwd()
-        self.launcher = launcher or CodexIssueSessionLauncher(repo_root=selected_root)
+        bound_launcher: IssueSessionLauncher
+        if launcher is None:
+            bound_launcher = CodexIssueSessionLauncher(
+                repo_root=selected_root,
+                effect_gate_approval_file=approval_file,
+            )
+        else:
+            bound_launcher = launcher
+            if approval_file is not None and isinstance(launcher, CodexIssueSessionLauncher):
+                bound_file = launcher.effect_gate_approval_file
+                if bound_file is None or bound_file.resolve() != approval_file.resolve():
+                    raise IssueDeliveryOperationRefused(
+                        "launcher approval binding differs from the committed approval"
+                    )
+        self.launcher = bound_launcher
         self.repo_root = selected_root.resolve()
         destination = self.approval["destination"]
         if self.repo_root != Path(destination["resolved_checkout"]):
@@ -360,13 +375,39 @@ class IssueDeliveryOperationAdapter:
         *,
         launcher: IssueSessionLauncher | None = None,
         repo_root: Path | None = None,
+        approval_file: Path | None = None,
     ) -> "IssueDeliveryOperationAdapter":
         return cls(
             approval,
             client=BuilderOpsControlPlaneClient(ClientConfig.from_env(), max_retries=0),
             launcher=launcher,
             repo_root=repo_root,
+            approval_file=approval_file,
         )
+
+    def _require_launcher_effect_binding(self) -> None:
+        """Fail closed when the real child launcher cannot export approval."""
+
+        if not isinstance(self.launcher, CodexIssueSessionLauncher):
+            return
+        approval_file = self.launcher.effect_gate_approval_file
+        if approval_file is None:
+            raise IssueDeliveryOperationRefused(
+                "Issue-delivery launcher must bind the committed approval file"
+            )
+        try:
+            document = json.loads(approval_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise IssueDeliveryOperationRefused(
+                "Issue-delivery launcher approval file is unavailable"
+            ) from exc
+        bound_approval = (
+            document.get("approval", document) if isinstance(document, Mapping) else None
+        )
+        if not isinstance(bound_approval, Mapping) or dict(bound_approval) != self.approval:
+            raise IssueDeliveryOperationRefused(
+                "Issue-delivery launcher approval file differs from the approved operation"
+            )
 
     @staticmethod
     def _validate_approval(approval: Mapping[str, Any]) -> dict[str, Any]:
@@ -1115,6 +1156,11 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationError(
                 "existing launch attempt has no observed entry; replacement launch is forbidden"
             )
+
+        # The concrete launcher clears inherited approval state before spawning
+        # the child.  Requiring its own committed approval binding here keeps
+        # owner wrappers fail-closed before any launch/receipt transition.
+        self._require_launcher_effect_binding()
 
         self.reserve()
         _attempt, owns_attempt = self._record_attempt()

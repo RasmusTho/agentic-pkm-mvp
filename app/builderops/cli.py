@@ -2518,6 +2518,7 @@ def dispatch_sessions(
                 client=control_plane_client,
                 launcher=launcher,
                 repo_root=repo_root,
+                approval_file=approval_file,
             )
         receipt_store = None
         if (

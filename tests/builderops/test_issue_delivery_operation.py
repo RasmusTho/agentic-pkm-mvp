@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 import subprocess
 from typing import Any, Mapping
@@ -20,6 +21,7 @@ from app.builderops.control_plane.issue_delivery import (
     manifest_hash,
     normalize_manifest,
 )
+from app.builderops.epic_dispatch import CodexIssueSessionLauncher
 from app.builderops.issue_delivery_operation import (
     IssueDeliveryOperationAdapter,
     IssueDeliveryOperationError,
@@ -474,6 +476,51 @@ def test_selected_launcher_reports_stop_unsupported() -> None:
         "stop_support": "unsupported",
         "stop_status": "unsupported",
     }
+
+
+def test_real_launcher_without_approval_binding_fails_before_launch(
+    tmp_path: Path,
+) -> None:
+    approval = _manifest(operation_key="operation-b-missing-launcher-binding")
+    approval["destination"]["checkout"] = str(tmp_path)  # type: ignore[index]
+    approval["destination"]["resolved_checkout"] = str(tmp_path)  # type: ignore[index]
+    approval["approval_manifest_hash"] = manifest_hash(approval)
+    client = _Client(approval)
+    launcher = CodexIssueSessionLauncher(
+        repo_root=tmp_path,
+        runner=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("launch must not run")),
+    )
+    adapter = IssueDeliveryOperationAdapter(
+        approval,
+        client=client,
+        launcher=launcher,
+        repo_root=tmp_path,
+        live_binding_reader=_approved_live_binding,
+    )
+    context = approval["context"]["dispatch_plan"]["context_packs"][0]
+    with pytest.raises(IssueDeliveryOperationRefused, match="approval file"):
+        adapter.launch(context)
+    assert client.records == {}
+
+
+def test_default_launcher_binds_the_committed_approval_file(tmp_path: Path) -> None:
+    approval = _manifest(operation_key="operation-b-default-launcher-binding")
+    approval["destination"]["checkout"] = str(tmp_path)  # type: ignore[index]
+    approval["destination"]["resolved_checkout"] = str(tmp_path)  # type: ignore[index]
+    approval["approval_manifest_hash"] = manifest_hash(approval)
+    approval_file = tmp_path / "approval.json"
+    approval_file.write_text(json.dumps(approval), encoding="utf-8")
+
+    adapter = IssueDeliveryOperationAdapter(
+        approval,
+        client=_Client(approval),
+        repo_root=tmp_path,
+        approval_file=approval_file,
+        live_binding_reader=_approved_live_binding,
+    )
+
+    assert isinstance(adapter.launcher, CodexIssueSessionLauncher)
+    assert adapter.launcher.effect_gate_approval_file == approval_file.resolve()
 
 
 @pytest.mark.pg

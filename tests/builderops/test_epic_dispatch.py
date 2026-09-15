@@ -2013,6 +2013,20 @@ def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
             "command": "/bin/zsh -lc \"gh api graphql -f query='mutation { closeIssue(id: \\\"x\\\") { issue { id } } }'\"",
         },
     }
+    raw_api_mutation = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh api repos/RasmusTho/agentic-pkm-mvp/git/refs --method POST",
+        },
+    }
+    raw_api_body = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh api repos/RasmusTho/agentic-pkm-mvp/releases -f tag_name=v1",
+        },
+    }
     owner_wrapper = {
         "type": "item.started",
         "item": {
@@ -2027,6 +2041,8 @@ def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
     assert _raw_mutation_command(shell_push) is True
     assert _raw_mutation_command(shell_close) is True
     assert _raw_mutation_command(graphql_mutation) is True
+    assert _raw_mutation_command(raw_api_mutation) is True
+    assert _raw_mutation_command(raw_api_body) is True
     assert _raw_mutation_command(owner_wrapper) is False
 
 
