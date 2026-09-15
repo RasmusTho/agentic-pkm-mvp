@@ -290,4 +290,5 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 ## 2026-09-15 — #5554 (dispatcher heartbeat renewal)
 **Source:** issue-to-code pre-implementation reassessment
 **Diverged:** The issue reported that heartbeats left lease expiry fixed, but `origin/main` already contained a renewal implementation from `c870752f2`; the remaining gap was the named reclaim-boundary regression coverage and explicit builder-agent wording.
-**Upstream artifact:** `AGENTS.md :: Dispatcher policy`, `.codex/skills/issue-to-code/SKILL.md :: Mid-work heartbeat`, and `tests/dispatcher/test_leases.py`
+**Upstream artifact:** `AGENTS.md :: Dispatcher policy`, `.codex/skills/issue-to-code/SKILL.md :: Dispatcher Integration`, and `tests/dispatcher/test_leases.py`
+**BuilderOps LearningSignal:** `lrn_20260915074421_cdd987a1`

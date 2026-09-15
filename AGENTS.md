@@ -148,12 +148,9 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
 
 The dispatcher is an optional collision guard, not lifecycle authority. Use only
 `scripts/issue_pickup_claim.sh` through `issue-to-code`; never reconstruct its claim/label handshake.
-GitHub Issue state, blocked-state, and review-handoff labels remain durable truth; Project Status is optional projection.
-
 During active work, `dispatcher heartbeat` runs about every 30 minutes and renews the current
-holder's unexpired lease from its persisted TTL. The renewal atomically updates the SQLite lease
-expiry and the task's `lease_expires_at` projection; a heartbeat never changes the default 90-minute
-TTL or permits a wrong holder or an already expired lease to renew.
+holder's unexpired lease from its persisted TTL. GitHub Issue state, blocked-state, and review-handoff
+labels remain durable truth; renewal atomically updates SQLite expiry and the task's `lease_expires_at` projection, while the default 90-minute TTL and holder/expiry validation remain unchanged.
 
 ## Builder-session closeout gate
 
