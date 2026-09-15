@@ -239,11 +239,18 @@ def _owner_boundary_target(
     )
     if repository is not None:
         target["repository"] = repository
-    issue_match = re.search(r"gh\s+issue\s+comment\s+(\d+)", command, re.IGNORECASE)
-    api_issue_match = re.search(r"/issues/(\d+)/comments(?:\b|/)", command, re.IGNORECASE)
+    issue_match = re.search(r"gh\s+issue\s+(?:comment|close)\s+(\d+)", command, re.IGNORECASE)
+    api_issue_match = re.search(r"/issues/(\d+)(?:\b|/)", command, re.IGNORECASE)
     issue = issue_match or api_issue_match
     if issue is not None:
         target["issue_number"] = int(issue.group(1))
+    elif "gh issue create" in command.lower() or (
+        "/issues" in command.lower() and "--method post" in command.lower()
+    ):
+        # Issue creation is outside FCA-ID-B's closed existing-resource
+        # targets.  Emit an intentionally incomplete target so the adapter
+        # rejects it at the boundary before the child can mutate GitHub.
+        target["issue_number"] = None
     return target or None
 
 

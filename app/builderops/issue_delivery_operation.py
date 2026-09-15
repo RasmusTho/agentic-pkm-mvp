@@ -426,6 +426,10 @@ class IssueDeliveryOperationAdapter:
             partial_resource_target = True
             raw_mutation_repository = raw_target.get("repository", expected["repository"])
             mutation_issue = raw_target.get("issue_number")
+            if "issue_number" not in raw_target:
+                raise IssueDeliveryOperationRefused(
+                    "effect target Issue is required for closure mutation"
+                )
             if isinstance(raw_mutation_repository, str):
                 mutation_repository = raw_mutation_repository
                 if type(mutation_issue) is int:

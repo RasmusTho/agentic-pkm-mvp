@@ -1986,6 +1986,13 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
             "command": "gh issue create --repo RasmusTho/agentic-pkm-mvp --title follow-up",
         },
     }
+    close = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "gh issue close 5551 --repo RasmusTho/agentic-pkm-mvp",
+        },
+    }
 
     assert _effect_for_owner_boundary_event(comment) == "closure_reconciliation"
     assert _owner_boundary_target(comment, "closure_reconciliation") == {
@@ -1995,6 +2002,11 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
     assert _effect_for_owner_boundary_event(follow_up) == "closure_reconciliation"
     assert _owner_boundary_target(follow_up, "closure_reconciliation") == {
         "repository": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": None,
+    }
+    assert _owner_boundary_target(close, "closure_reconciliation") == {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 5551,
     }
 
 

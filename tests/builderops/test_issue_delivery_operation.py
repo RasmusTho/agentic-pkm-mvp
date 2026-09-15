@@ -290,6 +290,11 @@ def test_closure_effect_binds_an_approved_parent_target() -> None:
                 "parent_issue_number": 5400,
             },
         )
+    with pytest.raises(IssueDeliveryOperationRefused, match="target Issue is required"):
+        adapter.authorize_effect(
+            "closure_reconciliation",
+            target={"repository": "RasmusTho/agentic-pkm-mvp"},
+        )
 
 
 def test_live_binding_rejects_a_retargeted_approved_checkout(tmp_path: Path) -> None:
