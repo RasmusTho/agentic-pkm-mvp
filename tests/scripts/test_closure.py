@@ -367,7 +367,11 @@ def test_closure_apply_revalidates_all_authority_before_exact_head_merge(tmp_pat
     fake.body += "changed"
     with pytest.raises(ClosureError, match="authority drift|Verify evidence"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
-    assert not any(call[-1].endswith("/merge") for call in fake.calls if call[:2] == ("gh", "api"))
+    assert not any(
+        any(part.endswith("/merge") for part in call) and "PUT" in call
+        for call in fake.calls
+        if call[:2] == ("gh", "api")
+    )
 
 
 def test_closure_apply_rejects_live_pr_head_branch_drift(tmp_path: Path) -> None:
@@ -376,7 +380,11 @@ def test_closure_apply_rejects_live_pr_head_branch_drift(tmp_path: Path) -> None
     plan["plan_sha256"] = closure_plan_hash(plan)
     with pytest.raises(ClosureError, match="body/head authority drifted"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
-    assert not any(call[-1].endswith("/merge") for call in fake.calls if call[:2] == ("gh", "api"))
+    assert not any(
+        any(part.endswith("/merge") for part in call) and "PUT" in call
+        for call in fake.calls
+        if call[:2] == ("gh", "api")
+    )
 
 
 def test_closure_apply_reads_back_merge_closure_and_bounded_cleanup(tmp_path: Path) -> None:

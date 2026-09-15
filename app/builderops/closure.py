@@ -1709,6 +1709,7 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
     if planned_dispatcher != dispatcher:
         raise ClosureError("drift", "dispatcher task or lease-holder drifted before merge")
     current = _snapshot(request, runner)
+    _validate_planned_pr(current["pr"], value, phase="pre-merge")
     _validate_planned_issue(current["issue"], value, phase="pre-merge")
     if current["head_sha"] != value["head_sha"] or current["issue_number"] != value["governing_issue"] or current["pr"].get("base", {}).get("sha") != value["base_sha"] or hashlib.sha256(str(current["pr"].get("body") or "").encode()).hexdigest() != value["body_sha256"] or hashlib.sha256(str(current["pr"].get("title") or "").encode()).hexdigest() != value["title_sha256"]:
         raise ClosureError("drift", "mutable PR or Issue authority drifted before merge")
