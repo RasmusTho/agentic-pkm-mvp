@@ -487,6 +487,15 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_artifact_hash["workflow"]["artifacts"][0]["sha256"] = "2" * 64  # type: ignore[index]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_artifact_hash)
+    conflicting_artifact_hash = deepcopy(manifest)
+    conflicting_artifact_hash["workflow"]["artifacts"][0]["hash"] = "2" * 64  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=conflicting_artifact_hash)
+    legacy_artifact_hash = deepcopy(manifest)
+    legacy_artifact = legacy_artifact_hash["workflow"]["artifacts"][0]  # type: ignore[index]
+    legacy_artifact["hash"] = legacy_artifact.pop("sha256")  # type: ignore[union-attr]
+    legacy_preview = owner.issue_delivery_preview(manifest=legacy_artifact_hash)
+    assert all("hash" not in artifact for artifact in legacy_preview["manifest"]["workflow"]["artifacts"])
 
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"].pop("expected_plan_hash")  # type: ignore[union-attr]
@@ -645,6 +654,12 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_profile["profile"]["verification_profile"]["criterion_hashes"] = {}  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
+    positional_criteria = deepcopy(manifest)
+    positional_criteria["profile"]["verification_profile"]["criterion_hashes"] = [  # type: ignore[union-attr]
+        "4" * 64
+    ]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=positional_criteria)
     invalid_profile_hash = deepcopy(manifest)
     invalid_profile_hash["profile"]["content_hash"] = "9" * 64  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):

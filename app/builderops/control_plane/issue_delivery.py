@@ -459,13 +459,10 @@ def _execution_profile_fields(value: Any) -> dict[str, Any]:
             normalized_criteria[criterion_id] = _sha(digest, "verification criterion hash")
         if len(normalized_criteria) != len(criterion_hashes):
             raise IssueDeliveryContractError("verification criterion ids must be unique")
-    elif isinstance(criterion_hashes, (list, tuple)) and criterion_hashes:
-        normalized_criteria = {
-            str(index): _sha(digest, "verification criterion hash")
-            for index, digest in enumerate(criterion_hashes, start=1)
-        }
     else:
-        raise IssueDeliveryContractError("verification criterion hashes are required")
+        raise IssueDeliveryContractError(
+            "verification criterion hashes must be a named object"
+        )
     profile_hash = _sha(profile.get("content_hash"), "execution profile hash")
     if verification_hash != canonical_hash(normalized_criteria):
         raise IssueDeliveryContractError(
@@ -558,14 +555,20 @@ def _workflow_fields(value: Any) -> dict[str, Any]:
     for artifact_raw in artifacts_raw:
         artifact = _mapping(artifact_raw, "workflow artifact")
         path = _text(artifact.get("path"), "workflow artifact path", limit=512)
-        digest = _sha(
-            artifact.get("sha256", artifact.get("hash")),
-            "workflow artifact hash",
+        _digest_present, digest_value = _coalesce_aliases(
+            artifact, ("sha256", "hash"), "workflow artifact hash"
         )
+        digest = _sha(digest_value, "workflow artifact hash")
         if path in paths:
             raise IssueDeliveryContractError("workflow artifacts must be unique")
         paths.add(path)
-        artifacts.append({**artifact, "path": path, "sha256": digest})
+        artifacts.append(
+            {
+                **_without_aliases(artifact, frozenset({"hash"})),
+                "path": path,
+                "sha256": digest,
+            }
+        )
     artifacts.sort(key=lambda item: item["path"])
     if paths != REQUIRED_WORKFLOW_ARTIFACTS:
         raise IssueDeliveryContractError("workflow artifact manifest is incomplete or unrelated")
