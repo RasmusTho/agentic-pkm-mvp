@@ -29,7 +29,10 @@ from app.builderops.control_plane.client import (
 from app.builderops.control_plane.models import AuthorityEnvelope, StateConflict
 from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.control_plane.service import create_app, issue_delivery_manifest_hash
-from app.builderops.control_plane.issue_delivery import canonical_hash
+from app.builderops.control_plane.issue_delivery import (
+    canonical_hash,
+    normalize_manifest as normalize_issue_delivery_manifest,
+)
 from app.builderops.epic_dispatch import CodexIssueSessionLauncher, HANDOFF_RECEIPT_SCHEMA
 
 pytestmark = pytest.mark.pg
@@ -494,8 +497,11 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     legacy_artifact_hash = deepcopy(manifest)
     legacy_artifact = legacy_artifact_hash["workflow"]["artifacts"][0]  # type: ignore[index]
     legacy_artifact["hash"] = legacy_artifact.pop("sha256")  # type: ignore[union-attr]
-    legacy_preview = owner.issue_delivery_preview(manifest=legacy_artifact_hash)
-    assert all("hash" not in artifact for artifact in legacy_preview["manifest"]["workflow"]["artifacts"])
+    normalized_legacy = normalize_issue_delivery_manifest(legacy_artifact_hash)
+    assert all(
+        "hash" not in artifact
+        for artifact in normalized_legacy["workflow"]["artifacts"]
+    )
 
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"].pop("expected_plan_hash")  # type: ignore[union-attr]
