@@ -19,6 +19,7 @@ from app.builderops.epic_dispatch import (
     IssueSessionLaunchError,
     _effect_for_owner_boundary_event,
     _owner_boundary_target,
+    _raw_mutation_command,
     build_dispatch_plan,
     dispatch_issue_sessions,
     frozen_dispatch_plan_hash,
@@ -1973,17 +1974,33 @@ def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:
 
 def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() -> None:
     comment = {
-        "type": "item.started",
-        "item": {
-            "type": "command_execution",
-            "command": "gh issue comment 5399 --repo RasmusTho/agentic-pkm-mvp --body receipt",
+        "type": "builderops.effect_boundary",
+        "effect": "closure_reconciliation",
+        "target": {
+            "repository": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 5399,
+            "worktree": "/worktrees/issue-5550",
+            "branch": "codex/5550-issue-delivery-approval",
+            "pr_number": 5557,
+            "pr_repository": "RasmusTho/agentic-pkm-mvp",
+            "pr_issue_number": 5550,
+            "pr_head_ref": "codex/5550-issue-delivery-approval",
+            "pr_base_ref": "main",
         },
     }
     follow_up = {
-        "type": "item.started",
-        "item": {
-            "type": "command_execution",
-            "command": "gh issue create --repo RasmusTho/agentic-pkm-mvp --title follow-up",
+        "type": "builderops.effect_boundary",
+        "effect": "closure_reconciliation",
+        "target": {
+            "repository": "RasmusTho/agentic-pkm-mvp",
+            "issue_number": 5550,
+            "worktree": "/worktrees/issue-5550",
+            "branch": "codex/5550-issue-delivery-approval",
+            "pr_number": 5557,
+            "pr_repository": "RasmusTho/agentic-pkm-mvp",
+            "pr_issue_number": 5550,
+            "pr_head_ref": "codex/5550-issue-delivery-approval",
+            "pr_base_ref": "main",
         },
     }
     close = {
@@ -1993,30 +2010,30 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
             "command": "gh issue close 5551 --repo RasmusTho/agentic-pkm-mvp",
         },
     }
+    alternate_push = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": 'git -C "$worktree" push origin HEAD',
+        },
+    }
 
     assert _effect_for_owner_boundary_event(comment) == "closure_reconciliation"
-    assert _owner_boundary_target(comment, "closure_reconciliation") == {
-        "repository": "RasmusTho/agentic-pkm-mvp",
-        "issue_number": 5399,
-    }
+    assert _owner_boundary_target(comment, "closure_reconciliation") == comment["target"]
     assert _effect_for_owner_boundary_event(follow_up) == "closure_reconciliation"
-    assert _owner_boundary_target(follow_up, "closure_reconciliation") == {
-        "repository": "RasmusTho/agentic-pkm-mvp",
-        "issue_number": None,
-    }
-    assert _owner_boundary_target(close, "closure_reconciliation") == {
-        "repository": "RasmusTho/agentic-pkm-mvp",
-        "issue_number": 5551,
-    }
+    assert _owner_boundary_target(follow_up, "closure_reconciliation") == follow_up["target"]
+    assert _effect_for_owner_boundary_event(close) is None
+    assert _raw_mutation_command(close) is True
+    assert _raw_mutation_command(alternate_push) is True
 
 
-def test_streamed_child_is_stopped_before_denied_raw_effect(
+def test_streamed_child_rejects_raw_effect_without_process_control(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = build_dispatch_plan(
         independent_issue_numbers=[5852],
-        run_id="stream-gate-denial-stop",
+    run_id="stream-gate-denial-refusal",
         candidates=[
             _candidate(
                 5852,
@@ -2032,15 +2049,6 @@ def test_streamed_child_is_stopped_before_denied_raw_effect(
             {
                 "type": "item.started",
                 "item": {"type": "command_execution", "command": "git push origin HEAD"},
-            }
-        ),
-        json.dumps(
-            {
-                "type": "item.started",
-                "item": {
-                    "type": "command_execution",
-                    "command": "gh issue comment 5399 --repo RasmusTho/agentic-pkm-mvp",
-                },
             }
         ),
     ]
@@ -2065,17 +2073,9 @@ def test_streamed_child_is_stopped_before_denied_raw_effect(
             self.stdout = _Lines([f"{line}\n" for line in events])
             self.stderr = _Lines([])
             self.returncode: int | None = None
-            self.terminated = False
 
         def poll(self) -> int | None:
             return self.returncode
-
-        def terminate(self) -> None:
-            self.terminated = True
-            self.returncode = -15
-
-        def kill(self) -> None:
-            self.returncode = -9
 
         def wait(self, timeout: float | None = None) -> int:
             del timeout
@@ -2093,17 +2093,24 @@ def test_streamed_child_is_stopped_before_denied_raw_effect(
     def gate(effect: str, **kwargs: object) -> Mapping[str, object]:
         target = kwargs.get("target")
         observed.append((effect, target if isinstance(target, dict) else None))
-        if effect == "publication":
-            raise RuntimeError("authority revoked")
         return {}
 
     launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
-    with pytest.raises(IssueSessionLaunchError, match="revalidated"):
+    with pytest.raises(IssueSessionLaunchError, match="raw or unclassified mutation"):
         launcher.launch(plan["context_packs"][0], effect_gate=gate)
 
-    assert process.terminated is True
-    assert observed == [("repository_worktree", None), ("publication", None)]
-    assert process.stdout.closed is True
+    assert observed == [
+        (
+            "repository_worktree",
+            {
+                "repository": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5852,
+                "checkout": str(tmp_path),
+                "worktree": str(tmp_path / "issue-5852"),
+                "branch": "codex/issue-5852",
+            },
+        )
+    ]
 
 
 def test_codex_issue_session_captures_exposed_token_usage_and_pack_bytes(

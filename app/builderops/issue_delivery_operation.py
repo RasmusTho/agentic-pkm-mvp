@@ -121,15 +121,74 @@ def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, An
         raise IssueDeliveryOperationRefused(
             "approved destination checkout is unavailable for live binding"
         )
-    git = subprocess.run(
-        ["git", "-C", str(checkout), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if git.returncode != 0 or git.stdout.strip() != str(destination["base_sha"]):
+    worktree = Path(str(destination["worktree"])).resolve()
+    if not worktree.is_dir():
+        raise IssueDeliveryOperationRefused(
+            "approved destination worktree is unavailable for live binding"
+        )
+
+    def git_value(path: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise IssueDeliveryOperationRefused(
+                "approved destination Git identity is unavailable for live binding"
+            )
+        return result.stdout.strip()
+
+    if git_value(checkout, "rev-parse", "HEAD") != str(destination["base_sha"]):
         raise IssueDeliveryOperationRefused(
             "destination checkout base changed after approval"
+        )
+    if Path(git_value(checkout, "rev-parse", "--show-toplevel")).resolve() != checkout:
+        raise IssueDeliveryOperationRefused(
+            "destination checkout repository identity changed after approval"
+        )
+    if Path(git_value(worktree, "rev-parse", "--show-toplevel")).resolve() != worktree:
+        raise IssueDeliveryOperationRefused(
+            "destination worktree repository identity changed after approval"
+        )
+    checkout_common = Path(git_value(checkout, "rev-parse", "--git-common-dir"))
+    worktree_common = Path(git_value(worktree, "rev-parse", "--git-common-dir"))
+    if not checkout_common.is_absolute():
+        checkout_common = checkout / checkout_common
+    if not worktree_common.is_absolute():
+        worktree_common = worktree / worktree_common
+    if checkout_common.resolve() != worktree_common.resolve():
+        raise IssueDeliveryOperationRefused(
+            "destination worktree Git common-dir changed after approval"
+        )
+    branch = git_value(worktree, "symbolic-ref", "--short", "HEAD")
+    if branch.removeprefix("refs/heads/") != str(destination["branch"]).removeprefix(
+        "refs/heads/"
+    ):
+        raise IssueDeliveryOperationRefused(
+            "destination worktree branch changed after approval"
+        )
+    remote = git_value(checkout, "remote", "get-url", "origin")
+    remote_match = re.search(
+        r"(?:github\.com[:/])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?$",
+        remote,
+        re.IGNORECASE,
+    )
+    if remote_match is None:
+        raise IssueDeliveryOperationRefused(
+            "destination repository remote identity is unavailable"
+        )
+    try:
+        remote_repository = canonical_repository(remote_match.group(1))
+        approved_repository = canonical_repository(str(approval["repository"]))
+    except (TypeError, ValueError, EnvelopeValidationError) as exc:
+        raise IssueDeliveryOperationRefused(
+            "destination repository remote identity is malformed"
+        ) from exc
+    if remote_repository != approved_repository:
+        raise IssueDeliveryOperationRefused(
+            "destination repository remote identity changed after approval"
         )
     workflow = approval["workflow"]
     artifacts = workflow["artifacts"]
@@ -415,7 +474,7 @@ class IssueDeliveryOperationAdapter:
         mutation_repository: str | None = None
         partial_resource_target = False
         raw_target = dict(target)
-        if effect == "closure_reconciliation" and set(raw_target).issubset(
+        if effect in {"issue_claim", "closure_reconciliation"} and set(raw_target).issubset(
             {"repository", "issue_number"}
         ) and raw_target:
             # Boundary classifiers may know only the exact GitHub mutation
@@ -428,7 +487,7 @@ class IssueDeliveryOperationAdapter:
             mutation_issue = raw_target.get("issue_number")
             if "issue_number" not in raw_target:
                 raise IssueDeliveryOperationRefused(
-                    "effect target Issue is required for closure mutation"
+                    "effect target Issue is required for mutation"
                 )
             if type(mutation_issue) is not int:
                 raise IssueDeliveryOperationRefused(
@@ -486,7 +545,7 @@ class IssueDeliveryOperationAdapter:
         if target.get("branch") != expected["branch"]:
             raise IssueDeliveryOperationRefused("effect target branch differs from approval")
         parent = self.approval.get("parent_evidence")
-        if effect == "closure_reconciliation":
+        if effect in {"issue_claim", "closure_reconciliation"}:
             if isinstance(parent, Mapping) and parent.get("kind") == "issue":
                 if "parent_repository" not in target or "parent_issue_number" not in target:
                     # Existing closure owner wrappers do not know the parent
@@ -518,7 +577,7 @@ class IssueDeliveryOperationAdapter:
                     ) from exc
                 effect_issue = mutation_target[1]
                 approved_targets = {(expected["repository"], expected["issue_number"])}
-                if isinstance(parent, Mapping) and parent.get("kind") == "issue":
+                if effect == "closure_reconciliation" and isinstance(parent, Mapping) and parent.get("kind") == "issue":
                     approved_targets.add((parent["repository"], parent["number"]))
                 if (
                     (canonical_mutation_repository, effect_issue) not in approved_targets
@@ -657,7 +716,14 @@ class IssueDeliveryOperationAdapter:
         target: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Recheck fresh permission before a real repository effect."""
-
+        if effect not in PERMITTED_EFFECTS:
+            raise IssueDeliveryOperationRefused(
+                f"effect is not permitted by the approved Issue operation: {effect}"
+            )
+        if target is None:
+            raise IssueDeliveryOperationRefused(
+                "effect target is required; targetless mutation is refused"
+            )
         return self._authority(effect, target=target)
 
     # Alias used by effect owners that call this a gate rather than an
@@ -763,7 +829,9 @@ class IssueDeliveryOperationAdapter:
             kind == "terminal" and state == "launch_unknown"
         ):
             raise IssueDeliveryOperationRefused("destination receipt state is invalid")
-        self._authority("repository_worktree" if kind in {"reservation", "attempt"} else "closure_reconciliation")
+        self._authority(
+            "repository_worktree" if kind in {"reservation", "attempt"} else "closure_reconciliation"
+        )
         payload = {
             "schema": f"builderops.issue-delivery-{kind}.v1",
             "repository": self.repository,

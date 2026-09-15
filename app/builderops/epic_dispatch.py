@@ -109,10 +109,6 @@ class IssueSessionLaunchError(RuntimeError):
         super().__init__(message)
 
 
-class _EffectGateDenied(RuntimeError):
-    """Internal signal used to stop a streamed child at a denied boundary."""
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -147,12 +143,11 @@ def _owner_boundary_command(event: Mapping[str, Any]) -> str | None:
 def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
     """Map a worker owner-boundary event to the finite approved effect set.
 
-    ``codex exec --json`` emits ``item.started`` before a command execution.
-    The launcher observes those events while the child is still running and
-    asks the authenticated destination adapter for a fresh gate before the
-    command can become the next lifecycle effect.  A worker may also emit the
-    explicit boundary event in its handoff protocol; unknown commands are not
-    guessed or granted by this adapter.
+    Owner wrappers emit this explicit event immediately before crossing their
+    effect.  Raw ``item.started`` command observations are deliberately not a
+    substitute: a command may already have crossed its external boundary by
+    the time it is observed, so the launcher rejects those mutations instead
+    of attempting a late gate or process-control workaround.
     """
 
     if event.get("type") == "builderops.effect_boundary":
@@ -162,96 +157,57 @@ def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
             if isinstance(effect, str) and effect in _ISSUE_DELIVERY_EFFECTS
             else None
         )
-    if event.get("type") != "item.started":
-        return None
+    return None
+
+
+def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
+    """Identify a direct external mutation that lacks an owner wrapper."""
+
     command = _owner_boundary_command(event)
     if command is None:
-        return None
+        return False
     lowered = command.lower()
-    if (
-        "issue_pickup_claim" in lowered
-        or "dispatcher claim" in lowered
-        or ("gh issue edit" in lowered and "agent:ready" in lowered)
+    # These entrypoints own their effect gate internally.  A worker may start
+    # them as a command, but the launcher must not second-guess their raw
+    # subprocesses from an item.started observation.
+    if any(
+        marker in lowered
+        for marker in (
+            "issue_pickup_claim",
+            "scripts/publication.py apply",
+            "scripts/closure.py",
+        )
     ):
-        return "issue_claim"
-    if (
-        "gh issue comment" in lowered
-        or ("/issues/" in lowered and "/comments" in lowered and "post" in lowered)
-        or "gh issue create" in lowered
-        or ("/issues" in lowered and "--method post" in lowered)
+        return False
+    if re.search(
+        r"\bgit\b(?:(?!\b(?:push|commit|tag)\b).)*\b(?:push|commit|tag)\b|"
+        r"\bgh\s+issue\s+(?:comment|create|close|edit|reopen|lock|unlock|label|delete|transfer|pin|unpin)\b|"
+        r"\bgh\s+pr\s+(?:create|merge|close|edit|reopen|ready|unready)\b",
+        lowered,
     ):
-        return "closure_reconciliation"
-    if (
-        "git push" in lowered
-        or "gh pr create" in lowered
-        or "scripts/publication.py apply" in lowered
+        return True
+    if "gh api" in lowered and re.search(
+        r"(?:--method|-x)\s*(?:post|put|patch|delete)\b", lowered
     ):
-        return "publication"
-    if (
-        "gh pr merge" in lowered
-        or "prepare_verified_issue_set_merge" in lowered
-        or ("/pulls/" in lowered and "/merge" in lowered)
-    ):
-        return "review_merge"
-    if (
-        "gh pr close" in lowered
-        or "gh issue close" in lowered
-        or "scripts/closure.py" in lowered
-        or "dispatcher complete" in lowered
-    ):
-        return "closure_reconciliation"
-    return None
+        return True
+    if "/issues" in lowered or "/pulls" in lowered:
+        return re.search(
+            r"(?:--method|-x)\s*(?:post|put|patch|delete)\b", lowered
+        ) is not None
+    return False
 
 
 def _owner_boundary_target(
     event: Mapping[str, Any], effect: str,
 ) -> dict[str, Any] | None:
-    """Extract a concrete GitHub mutation target when the worker exposes one.
+    """Return only the target explicitly emitted by the owning wrapper."""
 
-    The adapter's ordinary repository/Issue/branch target remains the default.
-    For a GitHub comment, the existing repository/Issue target fields identify
-    the exact resource touched, allowing the destination adapter to reject an
-    unapproved parent or repository.
-    """
-
-    if effect != "closure_reconciliation":
+    if effect not in _ISSUE_DELIVERY_EFFECTS:
         return None
-    item = event.get("item")
     explicit = event.get("target")
-    if not isinstance(explicit, Mapping) and isinstance(item, Mapping):
-        explicit = item.get("target")
-    if isinstance(explicit, Mapping):
-        return dict(explicit)
-    command = _owner_boundary_command(event)
-    if command is None:
+    if not isinstance(explicit, Mapping):
         return None
-    target: dict[str, Any] = {}
-    repo_match = re.search(
-        r"(?:--repo|-R)(?:=|\s+)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", command
-    )
-    api_repo_match = re.search(
-        r"(?:^|\s)(?:/)?repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", command
-    )
-    repository = (
-        repo_match.group(1)
-        if repo_match is not None
-        else api_repo_match.group(1) if api_repo_match is not None else None
-    )
-    if repository is not None:
-        target["repository"] = repository
-    issue_match = re.search(r"gh\s+issue\s+(?:comment|close)\s+(\d+)", command, re.IGNORECASE)
-    api_issue_match = re.search(r"/issues/(\d+)(?:\b|/)", command, re.IGNORECASE)
-    issue = issue_match or api_issue_match
-    if issue is not None:
-        target["issue_number"] = int(issue.group(1))
-    elif "gh issue create" in command.lower() or (
-        "/issues" in command.lower() and "--method post" in command.lower()
-    ):
-        # Issue creation is outside FCA-ID-B's closed existing-resource
-        # targets.  Emit an intentionally incomplete target so the adapter
-        # rejects it at the boundary before the child can mutate GitHub.
-        target["issue_number"] = None
-    return target or None
+    return dict(explicit)
 
 
 _CAPABILITY_FOR_MODEL_CLASS = {
@@ -376,8 +332,11 @@ class CodexIssueSessionLauncher:
             "worktree, and return only one JSON object matching the requested "
             "subagent_handoff_receipt; final_state=done is valid only after terminal delivery. "
             "Before each claim, publication, review/merge, or closure/reconciliation effect, "
-            "emit one builderops.effect_boundary JSON event naming that exact permitted effect; "
-            "the launcher rechecks current authority at that boundary. "
+            "the existing owner wrapper must emit one builderops.effect_boundary JSON event "
+            "naming that exact permitted effect and its concrete repository/Issue/worktree/branch "
+            "target (plus exact PR fields for review/merge or closure); the launcher rechecks "
+            "current authority at that boundary. Never perform the external mutation directly "
+            "from an unwrapped command or omit its target. "
             "This invocation is a fresh session; do not resume or reuse another Issue's session.\n"
             f"{serialized}\n"
         )
@@ -401,31 +360,38 @@ class CodexIssueSessionLauncher:
         # owner-boundary events below, immediately before accepting each
         # corresponding effect.  A single up-front sweep would incorrectly
         # turn a time-varying permission into launch authority.
-        if effect_gate is not None:
-            effect_gate("repository_worktree")
         command = self.command(context_pack, execution_routing=execution_routing)
         entry_error: Exception | None = None
         entry_notified = False
         effect_gate_error: Exception | None = None
-        streamed_gate_line_indexes: set[int] = set()
+        raw_mutation_error: Exception | None = None
         process: subprocess.Popen[str] | None = None
 
-        def stop_process_after_gate_denial() -> None:
-            """Bound the child before it can execute a denied raw effect."""
+        def context_target() -> dict[str, Any]:
+            issue = context_pack.get("issue_contract")
+            destination = context_pack.get("branch_worktree_plan")
+            if not isinstance(issue, Mapping) or not isinstance(destination, Mapping):
+                raise EpicDispatchError("context pack lacks an exact effect target")
+            repository = issue.get("repository")
+            issue_number = issue.get("number")
+            worktree = destination.get("worktree")
+            if (
+                not isinstance(repository, str)
+                or type(issue_number) is not int
+                or not isinstance(worktree, str)
+                or not isinstance(destination.get("branch"), str)
+            ):
+                raise EpicDispatchError("context pack effect target is incomplete")
+            return {
+                "repository": repository,
+                "issue_number": issue_number,
+                "checkout": str(self.repo_root),
+                "worktree": worktree,
+                "branch": destination["branch"],
+            }
 
-            if process is None or process.poll() is not None:
-                return
-            try:
-                process.terminate()
-                try:
-                    process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1)
-            except (OSError, subprocess.TimeoutExpired):
-                # The authority denial remains the source error.  Do not
-                # replace it with a best-effort process-control diagnostic.
-                return
+        if effect_gate is not None:
+            effect_gate("repository_worktree", target=context_target())
 
         def notify_entry(candidate: str) -> None:
             nonlocal entry_notified, entry_error
@@ -438,26 +404,36 @@ class CodexIssueSessionLauncher:
                 entry_error = exc
 
         def notify_effect_boundary(
-            event: Mapping[str, Any], *, stop_child_on_denial: bool = False
+            event: Mapping[str, Any],
         ) -> None:
-            nonlocal effect_gate_error
+            nonlocal effect_gate_error, raw_mutation_error
             if effect_gate is None:
                 return
             effect = _effect_for_owner_boundary_event(event)
+            if event.get("type") == "item.started":
+                if _raw_mutation_command(event) and raw_mutation_error is None:
+                    raw_mutation_error = RuntimeError(
+                        "raw external mutation requires an existing owner wrapper"
+                    )
+                return
             if effect is None:
+                if event.get("type") == "builderops.effect_boundary" and raw_mutation_error is None:
+                    raw_mutation_error = RuntimeError(
+                        "unrecognized effect boundary is not authorized"
+                    )
                 return
             target = _owner_boundary_target(event, effect)
+            if target is None:
+                if effect_gate_error is None:
+                    effect_gate_error = RuntimeError(
+                        "effect boundary must carry a concrete target"
+                    )
+                return
             try:
-                if target is None:
-                    effect_gate(effect)
-                else:
-                    effect_gate(effect, target=target)
+                effect_gate(effect, target=target)
             except Exception as exc:
                 if effect_gate_error is None:
                     effect_gate_error = exc
-                if stop_child_on_denial:
-                    stop_process_after_gate_denial()
-                    raise _EffectGateDenied from exc
 
         if self._stream_output:
             # Do not leak an outer Issue-delivery approval into a nested
@@ -493,35 +469,21 @@ class CodexIssueSessionLauncher:
 
             stderr_thread = Thread(target=drain_stderr, daemon=True)
             stderr_thread.start()
-            try:
-                for line in process.stdout:
-                    output_lines.append(line)
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if (
-                        isinstance(event, Mapping)
-                        and event.get("type") == "thread.started"
-                    ):
-                        candidate = event.get("thread_id")
-                        if isinstance(candidate, str) and candidate.strip():
-                            notify_entry(candidate.strip())
-                    if isinstance(event, Mapping):
-                        if _effect_for_owner_boundary_event(event) is not None:
-                            streamed_gate_line_indexes.add(len(output_lines) - 1)
-                        notify_effect_boundary(event, stop_child_on_denial=True)
-            except _EffectGateDenied:
-                # The gate callback already synchronously stopped the child;
-                # leave the boundary line in the receipt for reconciliation,
-                # but never consume later child output.
-                pass
-            finally:
-                if effect_gate_error is not None:
-                    try:
-                        process.stdout.close()
-                    except OSError:
-                        pass
+            for line in process.stdout:
+                output_lines.append(line)
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    isinstance(event, Mapping)
+                    and event.get("type") == "thread.started"
+                ):
+                    candidate = event.get("thread_id")
+                    if isinstance(candidate, str) and candidate.strip():
+                        notify_entry(candidate.strip())
+                if isinstance(event, Mapping):
+                    notify_effect_boundary(event)
             stderr_thread.join(timeout=5)
             stderr = "".join(stderr_lines)
             returncode = process.wait()
@@ -543,15 +505,14 @@ class CodexIssueSessionLauncher:
         terminal_error: str | None = None
         allocation_unavailable = False
         observed_input_tokens: int | None = None
-        for line_index, line in enumerate(stdout.splitlines()):
+        for line in stdout.splitlines():
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
             if not isinstance(event, Mapping):
                 continue
-            if line_index not in streamed_gate_line_indexes:
-                notify_effect_boundary(event)
+            notify_effect_boundary(event)
             if event.get("type") == "thread.started":
                 candidate = event.get("thread_id")
                 if isinstance(candidate, str) and candidate.strip():
@@ -589,6 +550,11 @@ class CodexIssueSessionLauncher:
                 "session entry could not be durably observed",
                 session_id=session_id,
             ) from entry_error
+        if raw_mutation_error is not None:
+            raise IssueSessionLaunchError(
+                "raw or unclassified mutation was refused; use its owner wrapper",
+                session_id=session_id,
+            ) from raw_mutation_error
         if effect_gate_error is not None:
             raise IssueSessionLaunchError(
                 "effect authority could not be revalidated at its owning boundary",

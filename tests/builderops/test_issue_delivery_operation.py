@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 from pathlib import Path
+import subprocess
 from typing import Any, Mapping
 
 import pytest
@@ -97,6 +99,14 @@ class _Launcher:
     ) -> Mapping[str, Any]:
         self.calls += 1
         if effect_gate is not None:
+            issue = _context_pack["issue_contract"]
+            destination = _context_pack["branch_worktree_plan"]
+            target = {
+                "repository": issue["repository"],
+                "issue_number": issue["number"],
+                "worktree": destination["worktree"],
+                "branch": destination["branch"],
+            }
             for effect in (
                 "repository_worktree",
                 "issue_claim",
@@ -104,7 +114,18 @@ class _Launcher:
                 "review_merge",
                 "closure_reconciliation",
             ):
-                effect_gate(effect)
+                effect_target = dict(target)
+                if effect in {"review_merge", "closure_reconciliation"}:
+                    effect_target.update(
+                        {
+                            "pr_number": 1,
+                            "pr_repository": issue["repository"],
+                            "pr_issue_number": issue["number"],
+                            "pr_head_ref": destination["branch"],
+                            "pr_base_ref": "main",
+                        }
+                    )
+                effect_gate(effect, target=effect_target)
         if on_entry is not None and self.session_id is not None:
             on_entry(self.session_id)
         if self.fail:
@@ -236,6 +257,12 @@ def test_delivery_effect_boundaries_recheck_authority() -> None:
     approval["approval_manifest_hash"] = manifest_hash(approval)
     client = _Client(approval)
     adapter = _adapter(client=client, launcher=_Launcher())
+    target = {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 5550,
+        "worktree": "/worktrees/issue-5550",
+        "branch": "codex/5550-issue-delivery-approval",
+    }
     for effect in (
         "repository_worktree",
         "issue_claim",
@@ -243,16 +270,23 @@ def test_delivery_effect_boundaries_recheck_authority() -> None:
         "review_merge",
         "closure_reconciliation",
     ):
-        assert adapter.authorize_effect(effect)["effect"] == effect
+        effect_target = dict(target)
+        if effect in {"review_merge", "closure_reconciliation"}:
+            effect_target.update(
+                {
+                    "pr_number": 1,
+                    "pr_repository": "RasmusTho/agentic-pkm-mvp",
+                    "pr_issue_number": 5550,
+                    "pr_head_ref": "codex/5550-issue-delivery-approval",
+                    "pr_base_ref": "main",
+                }
+            )
+        assert adapter.authorize_effect(effect, target=effect_target)["effect"] == effect
     assert len(client.authority_calls) == 5
 
-    target = {
-        "repository": "RasmusTho/agentic-pkm-mvp",
-        "issue_number": 5550,
-        "worktree": "/worktrees/issue-5550",
-        "branch": "codex/5550-issue-delivery-approval",
-    }
     assert adapter.authorize_effect("publication", target=target)["target"] == target
+    with pytest.raises(IssueDeliveryOperationRefused, match="target is required"):
+        adapter.authorize_effect("publication")
     with pytest.raises(IssueDeliveryOperationRefused, match="Issue differs"):
         adapter.authorize_effect(
             "publication", target={**target, "issue_number": 5551}
@@ -262,10 +296,10 @@ def test_delivery_effect_boundaries_recheck_authority() -> None:
 
     client.revoked = True
     with pytest.raises(IssueDeliveryOperationRefused, match="unavailable"):
-        adapter.authorize_effect("publication")
+        adapter.authorize_effect("publication", target=target)
 
     with pytest.raises(IssueDeliveryOperationRefused, match="not permitted"):
-        adapter.authorize_effect("deployment")
+        adapter.authorize_effect("deployment", target=target)
 
 
 def test_closure_effect_binds_an_approved_parent_target() -> None:
@@ -279,7 +313,18 @@ def test_closure_effect_binds_an_approved_parent_target() -> None:
     client = _Client(approval)
     adapter = _adapter(client=client, launcher=_Launcher())
 
-    authorized = adapter.authorize_effect("closure_reconciliation")
+    target = {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 5550,
+        "worktree": "/worktrees/issue-5550",
+        "branch": "codex/5550-issue-delivery-approval",
+        "pr_number": 1,
+        "pr_repository": "RasmusTho/agentic-pkm-mvp",
+        "pr_issue_number": 5550,
+        "pr_head_ref": "codex/5550-issue-delivery-approval",
+        "pr_base_ref": "main",
+    }
+    authorized = adapter.authorize_effect("closure_reconciliation", target=target)
     assert authorized["target"]["parent_repository"] == "RasmusTho/agentic-pkm-mvp"
     assert authorized["target"]["parent_issue_number"] == 5399
     with pytest.raises(IssueDeliveryOperationRefused, match="parent Issue differs"):
@@ -336,6 +381,74 @@ def test_live_binding_rejects_a_retargeted_approved_checkout(tmp_path: Path) -> 
     link.unlink()
     link.symlink_to(other_checkout, target_is_directory=True)
     with pytest.raises(IssueDeliveryOperationRefused, match="identity changed"):
+        _default_live_binding_reader(approval)
+
+
+@pytest.mark.parametrize("drift", ["common-dir", "repository", "branch"])
+def test_live_binding_rechecks_git_identity_and_branch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    checkout = tmp_path / "checkout"
+    worktree = tmp_path / "worktree"
+    checkout.mkdir()
+    worktree.mkdir()
+    artifact = checkout / "tracked.txt"
+    artifact.write_text("approved\n", encoding="utf-8")
+    common_dir = checkout / ".git"
+    other_common_dir = tmp_path / "other.git"
+    approved_branch = "codex/approved"
+
+    approval = {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "destination": {
+            "checkout": str(checkout),
+            "resolved_checkout": str(checkout),
+            "worktree": str(worktree),
+            "resolved_worktree": str(worktree),
+            "base_sha": "a" * 40,
+            "branch": approved_branch,
+        },
+        "workflow": {
+            "artifacts": [
+                {
+                    "path": "tracked.txt",
+                    "sha256": hashlib.sha256(b"approved\n").hexdigest(),
+                }
+            ],
+            "content_hash": "workflow",
+        },
+        "source": {"revision": "source"},
+    }
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        path = Path(argv[2])
+        args = argv[3:]
+        if args == ["rev-parse", "HEAD"]:
+            output = "a" * 40
+        elif args == ["rev-parse", "--show-toplevel"]:
+            output = str(path)
+        elif args == ["rev-parse", "--git-common-dir"]:
+            output = str(
+                other_common_dir
+                if drift == "common-dir" and path == checkout
+                else common_dir
+            )
+        elif args == ["symbolic-ref", "--short", "HEAD"]:
+            output = "codex/drifted" if drift == "branch" else approved_branch
+        elif args == ["remote", "get-url", "origin"]:
+            output = (
+                "https://github.com/other-owner/other-repo.git"
+                if drift == "repository"
+                else "https://github.com/RasmusTho/agentic-pkm-mvp.git"
+            )
+        else:
+            raise AssertionError(f"unexpected git probe: {argv}")
+        return subprocess.CompletedProcess(argv, 0, stdout=output + "\n", stderr="")
+
+    monkeypatch.setattr("app.builderops.issue_delivery_operation.subprocess.run", fake_run)
+    with pytest.raises(IssueDeliveryOperationRefused, match=drift):
         _default_live_binding_reader(approval)
 
 
