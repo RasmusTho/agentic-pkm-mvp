@@ -879,6 +879,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             or checkout_path == "/"
             or worktree_path == "/"
             or _is_same_or_descendant_path(worktree_path, checkout_path)
+            or _is_same_or_descendant_path(checkout_path, worktree_path)
         ):
             raise IssueDeliveryContractError(
                 "destination worktree must be isolated from the checkout and root"

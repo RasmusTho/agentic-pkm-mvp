@@ -728,6 +728,18 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=descendant_worktree)
+    overlapping_worktree = deepcopy(manifest)
+    overlapping_worktree["destination"]["checkout"] = (  # type: ignore[union-attr]
+        "/workspaces/agentic-pkm-mvp/subdir"
+    )
+    overlapping_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
+        "/workspaces/agentic-pkm-mvp"
+    )
+    overlapping_worktree["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        overlapping_worktree["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=overlapping_worktree)
     sibling_worktree = deepcopy(manifest)
     sibling_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
         "/workspaces/agentic-pkm-mvp-sibling"
