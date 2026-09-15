@@ -197,6 +197,15 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
                 method = "next"
             elif candidate.startswith("-X") and len(candidate) > 2:
                 method = candidate[2:].removeprefix("=").lower()
+            elif candidate.startswith("-") and not candidate.startswith("--"):
+                short_flags = candidate[1:]
+                method_index = short_flags.find("X")
+                if method_index >= 0:
+                    method = short_flags[method_index + 1 :].removeprefix("=").lower()
+                    if not method:
+                        method = "next"
+                if "f" in short_flags or "F" in short_flags:
+                    has_body = True
             elif method == "next":
                 method = candidate.lower()
             elif (
