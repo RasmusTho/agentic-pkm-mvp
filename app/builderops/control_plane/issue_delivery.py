@@ -91,6 +91,24 @@ _SERVER_FIELDS = frozenset(
     }
 )
 _NON_BINDING_FIELDS = frozenset({"approval_manifest_hash", "contract", "state", "approved_at"})
+_TOP_LEVEL_ISSUE_ALIASES = frozenset(
+    {
+        "issue_number",
+        "issue_node_id",
+        "issue_title",
+        "issue_state",
+        "issue_body_hash",
+    }
+)
+_TOP_LEVEL_SOURCE_ALIASES = frozenset(
+    {
+        "source_revision",
+        "source_revisions",
+        "source_refs",
+        "source_hash",
+        "source_content_hash",
+    }
+)
 
 
 class IssueDeliveryContractError(ValueError):
@@ -128,6 +146,26 @@ def _mapping(value: Any, name: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _coalesce_aliases(
+    value: Mapping[str, Any], aliases: tuple[str, ...], name: str
+) -> tuple[bool, Any]:
+    """Return one authority value and reject disagreeing compatibility aliases."""
+
+    present = [(key, value[key]) for key in aliases if key in value]
+    if not present:
+        return False, None
+    first = present[0][1]
+    if any(candidate != first for _key, candidate in present[1:]):
+        raise IssueDeliveryContractError(f"{name} aliases disagree")
+    return True, first
+
+
+def _without_aliases(value: Mapping[str, Any], aliases: frozenset[str]) -> dict[str, Any]:
+    """Drop legacy spellings after their values have been cross-checked."""
+
+    return {key: item for key, item in value.items() if key not in aliases}
+
+
 def _list_of_text(value: Any, name: str) -> list[str]:
     if not isinstance(value, (list, tuple)) or not value:
         raise IssueDeliveryContractError(f"{name} must be a non-empty list")
@@ -157,20 +195,42 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
             if key in value
         }
     issue = _mapping(raw, "issue")
-    number = issue.get("number", issue.get("issue_number"))
+    if value.get("issue") is not None:
+        for key in _TOP_LEVEL_ISSUE_ALIASES:
+            if key not in value:
+                continue
+            if key in issue and issue[key] != value[key]:
+                raise IssueDeliveryContractError(
+                    f"Issue field alias {key} disagrees with nested issue"
+                )
+            issue.setdefault(key, value[key])
+    present, number = _coalesce_aliases(
+        issue, ("number", "issue_number"), "Issue number"
+    )
+    if not present:
+        number = None
     if type(number) is not int or number < 1:
         raise IssueDeliveryContractError("exact numeric Issue identity is required")
-    node_id = issue.get("node_id", issue.get("issue_node_id"))
+    _present, node_id = _coalesce_aliases(
+        issue, ("node_id", "issue_node_id"), "Issue node identity"
+    )
     node_id = _text(node_id, "issue node identity")
     if _NODE_ID.fullmatch(node_id) is None:
         raise IssueDeliveryContractError("issue node identity is malformed")
-    title = _text(issue.get("title", issue.get("issue_title")), "issue title", limit=4096)
-    state = _text(issue.get("state", issue.get("issue_state")), "issue state", limit=32).lower()
+    _present, title = _coalesce_aliases(
+        issue, ("title", "issue_title"), "Issue title"
+    )
+    title = _text(title, "issue title", limit=4096)
+    _present, state = _coalesce_aliases(
+        issue, ("state", "issue_state"), "Issue state"
+    )
+    state = _text(state, "issue state", limit=32).lower()
     if state != "open":
         raise IssueDeliveryContractError("Issue-delivery admission requires an open Issue")
-    body_hash = _sha(
-        issue.get("body_hash", issue.get("issue_body_hash")), "Issue body hash"
+    _present, body_hash = _coalesce_aliases(
+        issue, ("body_hash", "issue_body_hash"), "Issue body hash"
     )
+    body_hash = _sha(body_hash, "Issue body hash")
     criteria_hash = _sha(
         issue.get("acceptance_criteria_hash"), "acceptance criteria hash"
     )
@@ -183,7 +243,7 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     if "agent:ready" not in normalized_labels:
         raise IssueDeliveryContractError("Issue-delivery admission requires the agent:ready label")
     return {
-        **issue,
+        **_without_aliases(issue, _TOP_LEVEL_ISSUE_ALIASES),
         "number": number,
         "node_id": node_id,
         "title": title,
@@ -211,9 +271,25 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
             if key in value
         }
     source = _mapping(raw, "source")
-    revision = source.get("revision", source.get("source_revision"))
-    if revision is None:
-        revisions = source.get("revisions", source.get("source_revisions"))
+    if value.get("source") is not None:
+        for key in _TOP_LEVEL_SOURCE_ALIASES:
+            if key not in value:
+                continue
+            if key in source and source[key] != value[key]:
+                raise IssueDeliveryContractError(
+                    f"source field alias {key} disagrees with nested source"
+                )
+            source.setdefault(key, value[key])
+    _present, revision = _coalesce_aliases(
+        source, ("revision", "source_revision"), "source revision"
+    )
+    _revisions_present, revisions = _coalesce_aliases(
+        source, ("revisions", "source_revisions"), "source revisions"
+    )
+    if _present and _revisions_present:
+        if not isinstance(revisions, (list, tuple)) or len(revisions) != 1 or revisions[0] != revision:
+            raise IssueDeliveryContractError("source revision aliases disagree")
+    elif not _present and _revisions_present:
         if isinstance(revisions, (list, tuple)) and len(revisions) == 1:
             revision = revisions[0]
     revision = _text(revision, "source revision", limit=64).lower()
@@ -221,7 +297,11 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
         raise IssueDeliveryContractError(
             "source revision must be one immutable 40-character Git commit"
         )
-    refs = source.get("refs", source.get("source_refs", []))
+    _refs_present, refs = _coalesce_aliases(
+        source, ("refs", "source_refs"), "source references"
+    )
+    if not _refs_present:
+        refs = []
     if refs:
         refs = _list_of_text(refs, "source references")
         for ref in refs:
@@ -236,14 +316,25 @@ def _source_fields(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError(
                 "Git source references must match the normalized source revision"
             )
-    content_hash = source.get(
-        "content_hash", source.get("source_hash", source.get("source_content_hash"))
+    _content_hash_present, content_hash = _coalesce_aliases(
+        source,
+        ("content_hash", "source_hash", "source_content_hash"),
+        "source content hash",
     )
     if content_hash is not None:
         content_hash = _sha(content_hash, "source content hash")
     if content_hash is None and not refs:
         raise IssueDeliveryContractError("source hash or source reference is required")
-    return {**source, "revision": revision, "refs": refs, **({"content_hash": content_hash} if content_hash else {})}
+    return {
+        **_without_aliases(
+            source,
+            _TOP_LEVEL_SOURCE_ALIASES
+            | frozenset({"revision", "revisions", "refs", "content_hash"}),
+        ),
+        "revision": revision,
+        "refs": refs,
+        **({"content_hash": content_hash} if content_hash else {}),
+    }
 
 
 def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str) -> dict[str, Any]:
@@ -265,14 +356,22 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
 
 
 def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
-    context = _hash_binding(value, "context")
+    context = _mapping(value, "context")
     if "content_hash" not in context:
         raise IssueDeliveryContractError(
             "context content hash must be declared at the top level"
         )
-    context_hash = _sha(context["content_hash"], "context hash")
-    pack_id = _text(context.get("pack_id", context.get("context_pack_id")), "context pack id")
-    plan = context.get("dispatch_plan", context.get("frozen_dispatch_plan"))
+    _present, context_hash_value = _coalesce_aliases(
+        context, ("content_hash", "hash", "context_hash"), "context hash"
+    )
+    context_hash = _sha(context_hash_value, "context hash")
+    _pack_present, pack_id = _coalesce_aliases(
+        context, ("pack_id", "context_pack_id"), "context pack id"
+    )
+    pack_id = _text(pack_id, "context pack id")
+    _plan_present, plan = _coalesce_aliases(
+        context, ("dispatch_plan", "frozen_dispatch_plan"), "dispatch plan"
+    )
     expected_plan_hash = _sha(
         context.get("expected_plan_hash"), "expected dispatch plan hash"
     )
@@ -287,7 +386,10 @@ def _context_fields(value: Any, *, issue_number: int) -> dict[str, Any]:
             "context hash does not bind the selected context pack"
         )
     return {
-        **context,
+        **_without_aliases(
+            context,
+            frozenset({"hash", "context_hash", "context_pack_id", "frozen_dispatch_plan"}),
+        ),
         "pack_id": pack_id,
         "content_hash": context_hash,
         "dispatch_plan": plan,
@@ -356,6 +458,25 @@ def _execution_profile_fields(value: Any) -> dict[str, Any]:
         raise IssueDeliveryContractError(
             "verification profile hash does not bind its criterion hashes"
         )
+    canonical_profile = {
+        "provider_census_hash": provider_census_hash,
+        "configuration_digest": configuration_digest,
+        "selection_intent": selection_intent,
+        "resolved": {
+            "capability": capability,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "carrier": carrier,
+        },
+        "verification_profile": {
+            "content_hash": verification_hash,
+            "criterion_hashes": normalized_criteria,
+        },
+    }
+    if profile_hash != canonical_hash(canonical_profile):
+        raise IssueDeliveryContractError(
+            "execution profile hash does not bind the closed execution profile"
+        )
     return {
         **profile,
         "content_hash": profile_hash,
@@ -396,29 +517,27 @@ def _hash_binding(value: Any, name: str) -> dict[str, Any]:
 
 def _workflow_fields(value: Any) -> dict[str, Any]:
     workflow = _mapping(value, "workflow")
-    version = _text(
-        workflow.get("version", workflow.get("contract_version")),
-        "workflow version",
+    _version_present, version = _coalesce_aliases(
+        workflow, ("version", "contract_version"), "workflow version"
     )
+    version = _text(version, "workflow version")
     if version != CONTRACT_VERSION:
         raise IssueDeliveryContractError("workflow version is not approved")
-    declared_hashes = [
-        workflow[key]
-        for key in ("content_hash", "workflow_hash")
-        if key in workflow
-    ]
-    if not declared_hashes:
+    _hash_present, declared_hash = _coalesce_aliases(
+        workflow, ("content_hash", "workflow_hash"), "workflow hash"
+    )
+    if not _hash_present:
         raise IssueDeliveryContractError("workflow hash is required")
-    workflow_hash = _sha(declared_hashes[0], "workflow hash")
-    if len(declared_hashes) > 1 and _sha(declared_hashes[1], "workflow hash") != workflow_hash:
-        raise IssueDeliveryContractError("workflow hash bindings disagree")
+    workflow_hash = _sha(declared_hash, "workflow hash")
     entrypoint = _text(workflow.get("entrypoint"), "workflow entrypoint", limit=1024)
     if entrypoint != WORKFLOW_ENTRYPOINT:
         raise IssueDeliveryContractError("workflow entrypoint is not approved")
     launcher = _text(workflow.get("launcher"), "workflow launcher", limit=1024)
     if launcher != WORKFLOW_LAUNCHER:
         raise IssueDeliveryContractError("workflow launcher is not approved")
-    artifacts_raw = workflow.get("artifacts", workflow.get("artifact_manifest"))
+    _artifacts_present, artifacts_raw = _coalesce_aliases(
+        workflow, ("artifacts", "artifact_manifest"), "workflow artifact manifest"
+    )
     if not isinstance(artifacts_raw, (list, tuple)) or not artifacts_raw:
         raise IssueDeliveryContractError("workflow artifact manifest is required")
     artifacts: list[dict[str, Any]] = []
@@ -440,7 +559,10 @@ def _workflow_fields(value: Any) -> dict[str, Any]:
     if workflow_hash != canonical_hash(artifacts):
         raise IssueDeliveryContractError("workflow hash does not bind its artifact manifest")
     return {
-        **workflow,
+        **_without_aliases(
+            workflow,
+            frozenset({"contract_version", "workflow_hash", "artifact_manifest"}),
+        ),
         "version": version,
         "content_hash": workflow_hash,
         "entrypoint": entrypoint,
@@ -452,11 +574,10 @@ def _workflow_fields(value: Any) -> dict[str, Any]:
 def _destination_fields(value: Any) -> dict[str, Any]:
     destination = _mapping(value, "destination")
     identity = _text(destination.get("identity"), "destination identity", limit=256)
-    run_id = _text(
-        destination.get("run_id", destination.get("proposed_run_id")),
-        "proposed run identity",
-        limit=256,
+    _run_present, run_id = _coalesce_aliases(
+        destination, ("run_id", "proposed_run_id"), "proposed run identity"
     )
+    run_id = _text(run_id, "proposed run identity", limit=256)
     required_text = {
         "host_identity": ("host_identity", "host"),
         "system_identity": ("system_identity", "system"),
@@ -468,13 +589,27 @@ def _destination_fields(value: Any) -> dict[str, Any]:
     }
     resolved: dict[str, str] = {}
     for normalized_name, aliases in required_text.items():
-        candidate = next((destination.get(alias) for alias in aliases if alias in destination), None)
+        _present, candidate = _coalesce_aliases(
+            destination, aliases, f"destination {normalized_name}"
+        )
         resolved[normalized_name] = _text(candidate, f"destination {normalized_name}", limit=1024)
     base_sha = _text(destination.get("base_sha"), "observed destination base SHA", limit=40).lower()
     if _GIT_SHA.fullmatch(base_sha) is None:
         raise IssueDeliveryContractError("observed destination base SHA must be a Git commit")
     return {
-        **destination,
+        **_without_aliases(
+            destination,
+            frozenset(
+                {
+                    "proposed_run_id",
+                    "host",
+                    "system",
+                    "checkout_path",
+                    "worktree_path",
+                    "branch_name",
+                }
+            ),
+        ),
         "identity": identity,
         "run_id": run_id,
         **resolved,
@@ -492,58 +627,98 @@ def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
     if parent_kind != "issue":
         raise IssueDeliveryContractError("parent evidence kind is unsupported")
 
-    repository = canonical_repository(
-        _text(parent.get("repository", parent.get("parent_repository")), "parent repository", limit=256)
+    _present, repository_value = _coalesce_aliases(
+        parent, ("repository", "parent_repository"), "parent repository"
     )
-    number = parent.get("number", parent.get("parent_issue_number"))
+    repository = canonical_repository(
+        _text(repository_value, "parent repository", limit=256)
+    )
+    _present, number = _coalesce_aliases(
+        parent, ("number", "parent_issue_number"), "parent Issue number"
+    )
     if type(number) is not int or number < 1:
         raise IssueDeliveryContractError("exact parent Issue number is required")
-    node_id = _text(
-        parent.get("node_id", parent.get("parent_node_id")),
-        "parent Issue node identity",
+    _present, node_id = _coalesce_aliases(
+        parent, ("node_id", "parent_node_id"), "parent Issue node identity"
     )
+    node_id = _text(node_id, "parent Issue node identity")
     if _NODE_ID.fullmatch(node_id) is None:
         raise IssueDeliveryContractError("parent Issue node identity is malformed")
 
     relationship = parent.get("relationship")
     if isinstance(relationship, Mapping):
         relationship = dict(relationship)
-        relation_kind = _text(
-            relationship.get("kind", relationship.get("type")),
-            "parent Issue relationship",
-            limit=64,
+        _present, relation_kind = _coalesce_aliases(
+            relationship, ("kind", "type"), "parent Issue relationship"
         )
-        related_issue_number = relationship.get(
-            "child_issue_number", relationship.get("issue_number")
+        relation_kind = _text(relation_kind, "parent Issue relationship", limit=64)
+        _relation_number_present, related_issue_number = _coalesce_aliases(
+            relationship,
+            ("child_issue_number", "issue_number"),
+            "parent child Issue number",
         )
-        authenticated = relationship.get("authenticated")
+        _authenticated_present, authenticated = _coalesce_aliases(
+            relationship, ("authenticated",), "parent relationship authentication"
+        )
+        _parent_number_present, parent_number = _coalesce_aliases(
+            parent,
+            ("child_issue_number", "issue_number"),
+            "parent child Issue number",
+        )
+        if _parent_number_present:
+            if _relation_number_present and parent_number != related_issue_number:
+                raise IssueDeliveryContractError("parent child Issue number aliases disagree")
+            related_issue_number = parent_number
+        _parent_auth_present, parent_auth = _coalesce_aliases(
+            parent,
+            ("relationship_authenticated", "authenticated"),
+            "parent relationship authentication",
+        )
+        if _parent_auth_present:
+            if _authenticated_present and parent_auth != authenticated:
+                raise IssueDeliveryContractError(
+                    "parent relationship authentication aliases disagree"
+                )
+            authenticated = parent_auth
     else:
         relation_kind = _text(relationship, "parent Issue relationship", limit=64)
-        related_issue_number = parent.get("child_issue_number", parent.get("issue_number"))
-        authenticated = parent.get("relationship_authenticated", parent.get("authenticated"))
+        _present, related_issue_number = _coalesce_aliases(
+            parent,
+            ("child_issue_number", "issue_number"),
+            "parent child Issue number",
+        )
+        _present, authenticated = _coalesce_aliases(
+            parent,
+            ("relationship_authenticated", "authenticated"),
+            "parent relationship authentication",
+        )
     if relation_kind not in {"parent", "parent-child", "child-of"}:
         raise IssueDeliveryContractError("parent Issue relationship is unsupported")
     if related_issue_number != issue_number or authenticated is not True:
         raise IssueDeliveryContractError("parent Issue relationship is not source-authenticated")
 
-    contract_version = _text(
-        parent.get("contract_version", parent.get("version")),
-        "parent contract version",
+    _present, contract_version = _coalesce_aliases(
+        parent, ("contract_version", "version"), "parent contract version"
     )
-    contract_hash = _sha(
-        parent.get("contract_hash", parent.get("content_hash")),
-        "parent contract hash",
+    contract_version = _text(contract_version, "parent contract version")
+    _present, contract_hash = _coalesce_aliases(
+        parent, ("contract_hash", "content_hash"), "parent contract hash"
     )
-    write_permission = _mapping(
-        parent.get("write_permission", parent.get("permission")),
-        "parent write permission",
+    contract_hash = _sha(contract_hash, "parent contract hash")
+    _present, write_permission_value = _coalesce_aliases(
+        parent, ("write_permission", "permission"), "parent write permission"
     )
-    permission_scope = _text(
-        write_permission.get("scope", write_permission.get("grant")),
+    write_permission = _mapping(write_permission_value, "parent write permission")
+    _present, permission_scope = _coalesce_aliases(
+        write_permission,
+        ("scope", "grant"),
         "parent write permission scope",
     )
-    writes = write_permission.get(
-        "effects", write_permission.get("writes", write_permission.get("targets"))
+    permission_scope = _text(permission_scope, "parent write permission scope")
+    _present, writes = _coalesce_aliases(
+        write_permission,
+        ("effects", "writes", "targets"),
+        "parent write permission targets",
     )
     if not isinstance(writes, (list, tuple)) or not writes:
         raise IssueDeliveryContractError("parent write permission targets are required")
@@ -551,7 +726,24 @@ def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
     required_writes = {"pr_receipt_comments", "child_generated_ledger_writeback"}
     if set(writes) != required_writes or permission_scope != "parent_evidence:write":
         raise IssueDeliveryContractError("parent write permission is not exact")
+    normalized_parent = _without_aliases(
+        parent,
+        frozenset(
+            {
+                "parent_repository",
+                "parent_issue_number",
+                "parent_node_id",
+                "child_issue_number",
+                "issue_number",
+                "relationship_authenticated",
+                "version",
+                "content_hash",
+                "permission",
+            }
+        ),
+    )
     return {
+        **normalized_parent,
         "kind": "issue",
         "repository": repository,
         "number": number,
@@ -563,7 +755,11 @@ def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
         },
         "contract_version": contract_version,
         "contract_hash": contract_hash,
-        "write_permission": {**write_permission, "scope": permission_scope, "effects": writes},
+        "write_permission": {
+            **_without_aliases(write_permission, frozenset({"grant", "writes", "targets"})),
+            "scope": permission_scope,
+            "effects": writes,
+        },
     }
 
 
@@ -688,6 +884,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError(
                 "owner profile principal bindings disagree"
             )
+        raw = _without_aliases(raw, _TOP_LEVEL_ISSUE_ALIASES | _TOP_LEVEL_SOURCE_ALIASES)
         result = {
             **raw,
             "contract_version": CONTRACT_VERSION,

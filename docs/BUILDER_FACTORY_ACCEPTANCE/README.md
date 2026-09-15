@@ -243,6 +243,7 @@ within its existing owner. Before Start, it must bind all of these values withou
   hashes, never a moving `main`, an example revision or a version label alone;
 - the closed execution profile: provider-census hash, configuration digest, provider-neutral
   `general_delivery` selection intent, resolved capability/model/reasoning/carrier,
+  top-level profile hash equal to the canonical closed profile content,
   verification-profile hash equal to the canonical criterion-hash map, and required criterion hashes. The
   context hash is top-level and equals the canonical selected context pack; Git source references
   equal the single immutable source revision, and the explicit non-effect list equals the complete

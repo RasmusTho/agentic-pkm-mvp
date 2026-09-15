@@ -255,6 +255,38 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "parent_closure": "prohibited-without-real-governed-parent",
         },
     }
+    verification_profile = {
+        "content_hash": canonical_hash(
+            {
+                "AC1": "4" * 64,
+                "AC2": "5" * 64,
+                "AC3": "6" * 64,
+                "AC4": "7" * 64,
+            }
+        ),
+        "criterion_hashes": {
+            "AC1": "4" * 64,
+            "AC2": "5" * 64,
+            "AC3": "6" * 64,
+            "AC4": "7" * 64,
+        },
+    }
+    profile = {
+        "content_hash": "",
+        "provider_census_hash": "1" * 64,
+        "configuration_digest": "2" * 64,
+        "selection_intent": "general_delivery",
+        "resolved": {
+            "capability": "luna",
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "xhigh",
+            "carrier": "codex",
+        },
+        "verification_profile": verification_profile,
+    }
+    profile["content_hash"] = canonical_hash(
+        {key: value for key, value in profile.items() if key != "content_hash"}
+    )
     return {
         "contract_version": "fca-issue-delivery.v1",
         "operation_type": "deliver_ready_issue",
@@ -301,34 +333,7 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "base_ref": "main",
             "base_sha": "e" * 40,
         },
-        "profile": {
-            "content_hash": "f" * 64,
-            "provider_census_hash": "1" * 64,
-            "configuration_digest": "2" * 64,
-            "selection_intent": "general_delivery",
-            "resolved": {
-                "capability": "luna",
-                "model": "gpt-5.6-luna",
-                "reasoning_effort": "xhigh",
-                "carrier": "codex",
-            },
-            "verification_profile": {
-                "content_hash": canonical_hash(
-                    {
-                        "AC1": "4" * 64,
-                        "AC2": "5" * 64,
-                        "AC3": "6" * 64,
-                        "AC4": "7" * 64,
-                    }
-                ),
-                "criterion_hashes": {
-                    "AC1": "4" * 64,
-                    "AC2": "5" * 64,
-                    "AC3": "6" * 64,
-                    "AC4": "7" * 64,
-                },
-            },
-        },
+        "profile": profile,
         "permitted_effects": [
             "repository_worktree",
             "issue_claim",
@@ -599,6 +604,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_profile["profile"]["verification_profile"]["criterion_hashes"] = {}  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_profile_hash = deepcopy(manifest)
+    invalid_profile_hash["profile"]["content_hash"] = "9" * 64  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile_hash)
     invalid_verification_hash = deepcopy(manifest)
     invalid_verification_hash["profile"]["verification_profile"]["criterion_hashes"]["AC1"] = "8" * 64  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -639,6 +648,20 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     mismatched_source_ref["source"]["refs"][1] = "git:" + "b" * 40  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=mismatched_source_ref)
+    for alias, replacement in (
+        ("source_revision", "b" * 40),
+        ("source_revisions", ["b" * 40]),
+        ("source_refs", ["git:" + "b" * 40]),
+    ):
+        conflicting_source_alias = deepcopy(manifest)
+        conflicting_source_alias["source"][alias] = replacement  # type: ignore[index]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=conflicting_source_alias)
+    conflicting_source_hash_alias = deepcopy(manifest)
+    conflicting_source_hash_alias["source"]["content_hash"] = "c" * 64  # type: ignore[index]
+    conflicting_source_hash_alias["source"]["source_hash"] = "d" * 64  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=conflicting_source_hash_alias)
 
     for non_effect in (
         "release_stable_movement",
