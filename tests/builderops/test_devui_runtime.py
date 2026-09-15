@@ -157,6 +157,11 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     class Store:
         def readiness(self):
             state.calls.append("status")
+            if state.mode == "receipt_timeout" and any(
+                isinstance(call, tuple) and call[0] == "get_receipt"
+                for call in state.calls
+            ):
+                time.sleep(0.15)
             return {"schema_version": 1, "authority_epoch": state.epoch}
 
         def list_tasks(self, repository, **kwargs):
@@ -191,6 +196,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
                 raise KeyError(record_id)
             if state.mode == "receipt_timeout":
                 time.sleep(0.15)
+            if state.mode == "receipt_epoch_changed":
+                state.epoch += 1
             return {
                 "repository": repository,
                 "record_id": record_id,
@@ -633,6 +640,52 @@ def test_managed_source_failure_matrix(managed_sources, case: str, monkeypatch) 
         assert _managed_source(payload, "github-live")["transport"]["outcome"] == "partial"
     if case in {"receipt_missing", "receipt_timeout"}:
         assert _managed_source(payload, "verification-runs")["transport"]["outcome"] == "partial"
+
+
+def test_managed_source_receipt_timeout_preserves_admitted_work_deterministically(
+    managed_sources,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.builderops.control_plane import client as source_client
+
+    source = managed_sources
+    monkeypatch.setattr(source_client, "_DEFAULT_TIMEOUT_SECONDS", 0.05)
+    source.mode = "receipt_timeout"
+
+    with source.client() as client:
+        response = client.get("/api/devui/overview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["display_label"] for item in payload["now"]] == ["Fixture work"]
+    assert _managed_source(payload, "dispatcher-store")["transport"]["outcome"] == "available"
+    assert _managed_source(payload, "verification-runs")["state"] == "unavailable"
+    assert _managed_source(payload, "verification-runs")["transport"]["outcome"] == "partial"
+    assert source.calls[:6] == [
+        "status",
+        ("list_tasks", "example/fixture"),
+        ("get_task", "example/fixture", "task-1"),
+        "status",
+        ("get_receipt", "example/fixture", "evidence-1"),
+        "status",
+    ]
+
+
+def test_managed_source_receipt_epoch_change_does_not_reopen_task_snapshot(
+    managed_sources,
+) -> None:
+    source = managed_sources
+    source.mode = "receipt_epoch_changed"
+
+    with source.client() as client:
+        payload = client.get("/api/devui/overview").json()
+
+    assert [item["display_label"] for item in payload["now"]] == ["Fixture work"]
+    assert _managed_source(payload, "dispatcher-store")["transport"]["outcome"] == "available"
+    receipts = _managed_source(payload, "verification-runs")
+    assert receipts["state"] == "unavailable"
+    assert receipts["transport"]["outcome"] == "mismatched"
+    assert receipts["transport"]["source_refs"] == []
 
 
 @pytest.mark.parametrize("task_count, available", [(117, True), (118, False)])

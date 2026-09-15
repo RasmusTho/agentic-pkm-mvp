@@ -296,6 +296,7 @@ def _api_reads(
             current: list[dict[str, Any]] = []
             seen: set[str] = set()
             receipt_reads = 0
+            receipt_targets: list[tuple[str, tuple[str, str, str | None]]] = []
             observed_rows = []
             for listed in rows:
                 _task(listed, repository=repo)
@@ -322,20 +323,7 @@ def _api_reads(
                         receipts["outcome"] = "partial"
                         break
                     receipt_reads += 1
-                    try:
-                        value = client.get_receipt(
-                            repository=repo,
-                            object_kind=address[0],
-                            object_id=address[1],
-                            task_id=address[2],
-                        )
-                        _reference(value, repository=repo)
-                        digest = hashlib.sha256(
-                            json.dumps(value, sort_keys=True).encode()
-                        ).hexdigest()
-                        receipts["source_refs"].append(reference + "#sha256=" + digest)
-                    except Exception:
-                        receipts["outcome"] = "partial"
+                    receipt_targets.append((reference, address))
             if client.status().get("authority_epoch") != config.authority_epoch:
                 raise StaleLeaseError("source epoch changed")
             api_read_complete, read_at = True, _now()
@@ -349,7 +337,34 @@ def _api_reads(
                 + hashlib.sha256(json.dumps(observed_rows, sort_keys=True).encode()).hexdigest()
             )
             work["outcome"] = "partial" if work["unprojected_task_refs"] else "available"
-            if receipts["outcome"] != "partial" and receipts["source_refs"]:
+
+            # Receipt provenance is an independent read phase. The task
+            # snapshot above is already epoch-bracketed and cannot be erased by
+            # a receipt timeout or its subsequent final probe.
+            for reference, address in receipt_targets:
+                try:
+                    value = client.get_receipt(
+                        repository=repo,
+                        object_kind=address[0],
+                        object_id=address[1],
+                        task_id=address[2],
+                    )
+                    _reference(value, repository=repo)
+                    digest = hashlib.sha256(
+                        json.dumps(value, sort_keys=True).encode()
+                    ).hexdigest()
+                    receipts["source_refs"].append(reference + "#sha256=" + digest)
+                except Exception:
+                    receipts["outcome"] = "partial"
+            if receipt_targets:
+                try:
+                    receipt_epoch = client.status().get("authority_epoch")
+                except Exception:
+                    receipts["outcome"] = "partial"
+                else:
+                    if receipt_epoch != config.authority_epoch:
+                        receipts["outcome"], receipts["source_refs"] = "mismatched", []
+            if receipts["outcome"] == "unavailable" and receipts["source_refs"]:
                 receipts["outcome"] = "available"
     except (ControlPlaneAuthError, ControlPlaneScopeError):
         work["outcome"] = "refused"
