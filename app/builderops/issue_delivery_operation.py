@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from collections.abc import Mapping
@@ -47,6 +48,57 @@ class IssueDeliveryOperationError(RuntimeError):
 
 class IssueDeliveryOperationRefused(IssueDeliveryOperationError):
     """A stale, changed, or unsupported operation cannot cross an effect gate."""
+
+
+def enforce_child_effect_gate(effect: str) -> None:
+    """Synchronously re-authorize a child-owned lifecycle effect.
+
+    The destination launcher exports only the non-secret path to the committed
+    approval.  Existing owner wrappers call this function immediately before
+    their first external mutation (and the closure executor calls it before
+    each command), so a worker cannot turn a stale parent preflight into
+    continuing authority.  With no exported approval this is a no-op for all
+    existing non-issue-delivery workflows.
+    """
+
+    approval_path = os.environ.get("BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE", "").strip()
+    if not approval_path:
+        return
+    if effect not in PERMITTED_EFFECTS:
+        raise IssueDeliveryOperationRefused(
+            f"effect is not permitted by the approved Issue operation: {effect}"
+        )
+    try:
+        document = json.loads(Path(approval_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IssueDeliveryOperationRefused(
+            "child Issue-delivery approval is unavailable"
+        ) from exc
+    approval = document.get("approval", document) if isinstance(document, Mapping) else None
+    if not isinstance(approval, Mapping):
+        raise IssueDeliveryOperationRefused("child Issue-delivery approval is malformed")
+    client = BuilderOpsControlPlaneClient(ClientConfig.from_env(), max_retries=0)
+    try:
+        destination = approval.get("destination")
+        checkout = (
+            Path(str(destination["checkout"]))
+            if isinstance(destination, Mapping) and destination.get("checkout")
+            else Path.cwd()
+        )
+        adapter = IssueDeliveryOperationAdapter(
+            approval,
+            client=client,
+            repo_root=checkout,
+        )
+        adapter.authorize_effect(effect)
+    except IssueDeliveryOperationError:
+        raise
+    except Exception as exc:
+        raise IssueDeliveryOperationRefused(
+            "child Issue-delivery authority is unavailable"
+        ) from exc
+    finally:
+        client.close()
 
 
 def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -814,4 +866,19 @@ __all__ = [
     "IssueDeliveryOperationAdapter",
     "IssueDeliveryOperationError",
     "IssueDeliveryOperationRefused",
+    "enforce_child_effect_gate",
 ]
+
+
+def _main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Recheck one Issue-delivery effect gate")
+    parser.add_argument("--effect", choices=sorted(PERMITTED_EFFECTS), required=True)
+    args = parser.parse_args()
+    enforce_child_effect_gate(args.effect)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

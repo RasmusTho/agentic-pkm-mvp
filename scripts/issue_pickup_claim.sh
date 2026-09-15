@@ -174,6 +174,10 @@ else
   fi
 fi
 
+if [[ -n "${BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE:-}" ]]; then
+  "$PYTHON_BIN" -m app.builderops.issue_delivery_operation --effect issue_claim
+fi
+
 replace_ready_label_with_in_progress() {
   # GitHub's per-label DELETE would leave a successful claim with no active
   # agent-state label. Read the current labels, then use the collection PUT

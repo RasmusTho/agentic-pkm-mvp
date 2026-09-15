@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tomllib
 from threading import Thread
@@ -155,17 +156,28 @@ def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
     else:
         return None
     lowered = command.lower()
-    if "issue_pickup_claim" in lowered or (
-        "gh issue edit" in lowered and "agent:ready" in lowered
+    if (
+        "issue_pickup_claim" in lowered
+        or "dispatcher claim" in lowered
+        or ("gh issue edit" in lowered and "agent:ready" in lowered)
     ):
         return "issue_claim"
-    if "git push" in lowered or "gh pr create" in lowered:
+    if (
+        "git push" in lowered
+        or "gh pr create" in lowered
+        or "scripts/publication.py apply" in lowered
+    ):
         return "publication"
-    if "gh pr merge" in lowered or "prepare_verified_issue_set_merge" in lowered:
+    if (
+        "gh pr merge" in lowered
+        or "prepare_verified_issue_set_merge" in lowered
+        or ("/pulls/" in lowered and "/merge" in lowered)
+    ):
         return "review_merge"
     if (
         "gh pr close" in lowered
         or "gh issue close" in lowered
+        or "scripts/closure.py" in lowered
         or "dispatcher complete" in lowered
     ):
         return "closure_reconciliation"
@@ -205,6 +217,7 @@ class CodexIssueSessionLauncher:
         provider_census_path: Path | None = None,
         builder_channel: str = "dev",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+        effect_gate_approval_file: Path | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.adapter_path = adapter_path or (
@@ -215,6 +228,11 @@ class CodexIssueSessionLauncher:
         )
         self.runner = runner or subprocess.run
         self._stream_output = runner is None
+        self.effect_gate_approval_file = (
+            effect_gate_approval_file.resolve()
+            if effect_gate_approval_file is not None
+            else None
+        )
         self.provider_census = load_provider_census(
             provider_census_path or _DECLARED_PROVIDER_CENSUS_PATH
         )
@@ -345,6 +363,12 @@ class CodexIssueSessionLauncher:
                     effect_gate_error = exc
 
         if self._stream_output:
+            child_env = None
+            if self.effect_gate_approval_file is not None:
+                child_env = os.environ.copy()
+                child_env[
+                    "BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE"
+                ] = str(self.effect_gate_approval_file)
             process = subprocess.Popen(
                 command,
                 cwd=self.repo_root,
@@ -353,6 +377,7 @@ class CodexIssueSessionLauncher:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=child_env,
             )
             assert process.stdin is not None
             assert process.stdout is not None

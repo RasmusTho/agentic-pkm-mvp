@@ -87,6 +87,9 @@ def _run(
     *,
     input_text: str | None = None,
 ) -> CommandResult:
+    from app.builderops.issue_delivery_operation import enforce_child_effect_gate
+
+    enforce_child_effect_gate("closure_reconciliation")
     result = executor.run(argv, cwd=cwd, input_text=input_text)
     if result.returncode:
         raise ClosureError("command-failed", "closure command failed", result)

@@ -267,6 +267,11 @@ def apply_publication_plan(
 
     runner = executor or SubprocessExecutor()
     normalized = _validated_plan(plan, expected_plan_sha256)
+    from app.builderops.issue_delivery_operation import enforce_child_effect_gate
+
+    def effect_gate() -> None:
+        enforce_child_effect_gate("publication")
+
     worktree = Path(normalized["worktree"])
     authority = _assert_authority_unchanged(runner, worktree, normalized)
     local_state, commit_sha = _observe_local_state(runner, worktree, normalized)
@@ -294,6 +299,7 @@ def apply_publication_plan(
         )
 
     if local_state != "committed":
+        effect_gate()
         _run_workspace_gate(runner, worktree, normalized)
         _assert_issue_unchanged(runner, worktree, normalized)
         state_before_stage, _ = _observe_local_state(runner, worktree, normalized)
@@ -347,6 +353,7 @@ def apply_publication_plan(
         )
 
     if remote_head is None:
+        effect_gate()
         reserve = runner.run(
             [
                 "gh",
@@ -403,6 +410,7 @@ def apply_publication_plan(
                 )
 
     if remote_head == base_sha:
+        effect_gate()
         push = runner.run(
             [
                 "git",
@@ -440,6 +448,7 @@ def apply_publication_plan(
         raise PublicationRefusal("unknown", "remote branch moved before PR creation")
     existing = _resolve_pr_history(normalized, prs, commit_sha)
     if existing is None:
+        effect_gate()
         create = runner.run(
             [
                 "gh",

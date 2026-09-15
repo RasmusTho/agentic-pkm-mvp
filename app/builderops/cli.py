@@ -2490,7 +2490,10 @@ def dispatch_sessions(
     plan = _load_json_object_file(plan_file, field="plan-file")
     control_plane_client = None
     try:
-        launcher = CodexIssueSessionLauncher(repo_root=repo_root)
+        launcher = CodexIssueSessionLauncher(
+            repo_root=repo_root,
+            effect_gate_approval_file=approval_file,
+        )
         operation_adapter = None
         if approval_file is not None:
             from app.builderops.control_plane.client import (
