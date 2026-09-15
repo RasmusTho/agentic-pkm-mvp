@@ -17,8 +17,6 @@ from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
     EpicDispatchError,
     IssueSessionLaunchError,
-    _effect_for_owner_boundary_event,
-    _owner_boundary_target,
     _raw_mutation_command,
     build_dispatch_plan,
     dispatch_issue_sessions,
@@ -1972,37 +1970,7 @@ def test_bounded_fast_shadow_preflight_cannot_override_candidate_risk() -> None:
         )
 
 
-def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() -> None:
-    comment = {
-        "type": "builderops.effect_boundary",
-        "effect": "closure_reconciliation",
-        "target": {
-            "repository": "RasmusTho/agentic-pkm-mvp",
-            "issue_number": 5399,
-            "worktree": "/worktrees/issue-5550",
-            "branch": "codex/5550-issue-delivery-approval",
-            "pr_number": 5557,
-            "pr_repository": "RasmusTho/agentic-pkm-mvp",
-            "pr_issue_number": 5550,
-            "pr_head_ref": "codex/5550-issue-delivery-approval",
-            "pr_base_ref": "main",
-        },
-    }
-    follow_up = {
-        "type": "builderops.effect_boundary",
-        "effect": "closure_reconciliation",
-        "target": {
-            "repository": "RasmusTho/agentic-pkm-mvp",
-            "issue_number": 5550,
-            "worktree": "/worktrees/issue-5550",
-            "branch": "codex/5550-issue-delivery-approval",
-            "pr_number": 5557,
-            "pr_repository": "RasmusTho/agentic-pkm-mvp",
-            "pr_issue_number": 5550,
-            "pr_head_ref": "codex/5550-issue-delivery-approval",
-            "pr_base_ref": "main",
-        },
-    }
+def test_owner_wrappers_and_raw_mutations_are_separated() -> None:
     close = {
         "type": "item.started",
         "item": {
@@ -2038,6 +2006,13 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
             "command": "/bin/zsh -lc 'gh issue close 5551 --repo RasmusTho/agentic-pkm-mvp'",
         },
     }
+    graphql_mutation = {
+        "type": "item.started",
+        "item": {
+            "type": "command_execution",
+            "command": "/bin/zsh -lc \"gh api graphql -f query='mutation { closeIssue(id: \\\"x\\\") { issue { id } } }'\"",
+        },
+    }
     owner_wrapper = {
         "type": "item.started",
         "item": {
@@ -2046,16 +2021,12 @@ def test_owner_post_merge_mutations_are_closure_boundaries_with_exact_targets() 
         },
     }
 
-    assert _effect_for_owner_boundary_event(comment) == "closure_reconciliation"
-    assert _owner_boundary_target(comment, "closure_reconciliation") == comment["target"]
-    assert _effect_for_owner_boundary_event(follow_up) == "closure_reconciliation"
-    assert _owner_boundary_target(follow_up, "closure_reconciliation") == follow_up["target"]
-    assert _effect_for_owner_boundary_event(close) is None
     assert _raw_mutation_command(close) is True
     assert _raw_mutation_command(alternate_push) is True
     assert _raw_mutation_command(alternate_close) is True
     assert _raw_mutation_command(shell_push) is True
     assert _raw_mutation_command(shell_close) is True
+    assert _raw_mutation_command(graphql_mutation) is True
     assert _raw_mutation_command(owner_wrapper) is False
 
 
@@ -2143,6 +2114,79 @@ def test_streamed_child_rejects_raw_effect_without_process_control(
             },
         )
     ]
+
+
+def test_streamed_launcher_does_not_reauthorize_buffered_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5853],
+        run_id="stream-single-gate",
+        candidates=[
+            _candidate(
+                5853,
+                risk="high",
+                files=["app/a.py"],
+                worktree=str(tmp_path / "issue-5853"),
+            )
+        ],
+    )
+    events = [
+        json.dumps({"type": "thread.started", "thread_id": "session-5853"}),
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": json.dumps(_worker_receipt(5853)),
+                },
+            }
+        ),
+    ]
+
+    class _Lines:
+        def __init__(self, values: list[str]) -> None:
+            self.values = values
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter(self.values)
+
+        def write(self, _value: str) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class _Process:
+        def __init__(self) -> None:
+            self.stdin = _Lines([])
+            self.stdout = _Lines([f"{line}\n" for line in events])
+            self.stderr = _Lines([])
+            self.returncode: int | None = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            self.returncode = 0
+            return self.returncode
+
+    process = _Process()
+    monkeypatch.setattr(
+        "app.builderops.epic_dispatch.subprocess.Popen",
+        lambda *args, **kwargs: process,
+    )
+    observed: list[str] = []
+
+    def gate(effect: str, **_kwargs: object) -> Mapping[str, object]:
+        observed.append(effect)
+        return {}
+
+    result = CodexIssueSessionLauncher(repo_root=tmp_path).launch(
+        plan["context_packs"][0], effect_gate=gate
+    )
+
+    assert result["session_id"] == "session-5853"
+    assert observed == ["repository_worktree"]
 
 
 def test_codex_issue_session_captures_exposed_token_usage_and_pack_bytes(

@@ -56,16 +56,6 @@ _DECLARED_PROVIDER_CENSUS_PATH = (
     / "models"
     / "providers.yaml"
 )
-_ISSUE_DELIVERY_EFFECTS = frozenset(
-    {
-        "repository_worktree",
-        "issue_claim",
-        "publication",
-        "review_merge",
-        "closure_reconciliation",
-    }
-)
-
 HANDOFF_RECEIPT_SCHEMA: dict[str, Any] = {
     "schema_version": SCHEMA_VERSION,
     "schema_name": "subagent_handoff_receipt",
@@ -140,26 +130,6 @@ def _owner_boundary_command(event: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _effect_for_owner_boundary_event(event: Mapping[str, Any]) -> str | None:
-    """Map a worker owner-boundary event to the finite approved effect set.
-
-    Owner wrappers emit this explicit event immediately before crossing their
-    effect.  Raw ``item.started`` command observations are deliberately not a
-    substitute: a command may already have crossed its external boundary by
-    the time it is observed, so the launcher rejects those mutations instead
-    of attempting a late gate or process-control workaround.
-    """
-
-    if event.get("type") == "builderops.effect_boundary":
-        effect = event.get("effect")
-        return (
-            effect
-            if isinstance(effect, str) and effect in _ISSUE_DELIVERY_EFFECTS
-            else None
-        )
-    return None
-
-
 def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
     """Identify a direct external mutation that lacks an owner wrapper."""
 
@@ -213,8 +183,13 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
     for index, token in enumerate(tokens):
         if token != "gh" or index + 1 >= len(tokens) or tokens[index + 1] != "api":
             continue
+        graphql = any(
+            candidate == "graphql"
+            for candidate in tokens[index + 2 :]
+        )
         method = None
         has_body = False
+        graphql_mutation = False
         for candidate in tokens[index + 2 :]:
             if candidate.startswith("--method="):
                 method = candidate.split("=", 1)[1].lower()
@@ -224,9 +199,13 @@ def _raw_mutation_command(event: Mapping[str, Any]) -> bool:
                 method = candidate.lower()
             elif candidate in {"-f", "-F", "--field", "--raw-field", "--input"}:
                 has_body = True
+            elif graphql and candidate.lower().startswith(("query=mutation", "mutation")):
+                graphql_mutation = True
         if any("/issues" in candidate or "/pulls" in candidate for candidate in tokens[index + 2 :]):
             if method in {"post", "put", "patch", "delete"} or has_body:
                 return True
+        if graphql and graphql_mutation:
+            return True
     return False
 
 
@@ -250,19 +229,6 @@ def _shell_command_tokens(command: str) -> list[str] | None:
             return None
         expanded.extend(nested)
     return expanded
-
-
-def _owner_boundary_target(
-    event: Mapping[str, Any], effect: str,
-) -> dict[str, Any] | None:
-    """Return only the target explicitly emitted by the owning wrapper."""
-
-    if effect not in _ISSUE_DELIVERY_EFFECTS:
-        return None
-    explicit = event.get("target")
-    if not isinstance(explicit, Mapping):
-        return None
-    return dict(explicit)
 
 
 _CAPABILITY_FOR_MODEL_CLASS = {
@@ -387,11 +353,10 @@ class CodexIssueSessionLauncher:
             "worktree, and return only one JSON object matching the requested "
             "subagent_handoff_receipt; final_state=done is valid only after terminal delivery. "
             "Before each claim, publication, review/merge, or closure/reconciliation effect, "
-            "the existing owner wrapper must emit one builderops.effect_boundary JSON event "
-            "naming that exact permitted effect and its concrete repository/Issue/worktree/branch "
-            "target (plus exact PR fields for review/merge or closure); the launcher rechecks "
-            "current authority at that boundary. Never perform the external mutation directly "
-            "from an unwrapped command or omit its target. "
+            "invoke the existing owner wrapper, which synchronously rechecks current authority "
+            "against the exact repository/Issue/worktree/branch target (plus exact PR fields "
+            "for review/merge or closure) immediately before its mutation. Never perform the "
+            "external mutation directly from an unwrapped or targetless command. "
             "This invocation is a fresh session; do not resume or reuse another Issue's session.\n"
             f"{serialized}\n"
         )
@@ -418,7 +383,6 @@ class CodexIssueSessionLauncher:
         command = self.command(context_pack, execution_routing=execution_routing)
         entry_error: Exception | None = None
         entry_notified = False
-        effect_gate_error: Exception | None = None
         raw_mutation_error: Exception | None = None
         process: subprocess.Popen[str] | None = None
 
@@ -458,37 +422,15 @@ class CodexIssueSessionLauncher:
             except Exception as exc:  # preserve the process for reconciliation
                 entry_error = exc
 
-        def notify_effect_boundary(
-            event: Mapping[str, Any],
-        ) -> None:
-            nonlocal effect_gate_error, raw_mutation_error
+        def notify_raw_mutation(event: Mapping[str, Any]) -> None:
+            nonlocal raw_mutation_error
             if effect_gate is None:
                 return
-            effect = _effect_for_owner_boundary_event(event)
             if event.get("type") == "item.started":
                 if _raw_mutation_command(event) and raw_mutation_error is None:
                     raw_mutation_error = RuntimeError(
                         "raw external mutation requires an existing owner wrapper"
                     )
-                return
-            if effect is None:
-                if event.get("type") == "builderops.effect_boundary" and raw_mutation_error is None:
-                    raw_mutation_error = RuntimeError(
-                        "unrecognized effect boundary is not authorized"
-                    )
-                return
-            target = _owner_boundary_target(event, effect)
-            if target is None:
-                if effect_gate_error is None:
-                    effect_gate_error = RuntimeError(
-                        "effect boundary must carry a concrete target"
-                    )
-                return
-            try:
-                effect_gate(effect, target=target)
-            except Exception as exc:
-                if effect_gate_error is None:
-                    effect_gate_error = exc
 
         if self._stream_output:
             # Do not leak an outer Issue-delivery approval into a nested
@@ -538,7 +480,7 @@ class CodexIssueSessionLauncher:
                     if isinstance(candidate, str) and candidate.strip():
                         notify_entry(candidate.strip())
                 if isinstance(event, Mapping):
-                    notify_effect_boundary(event)
+                    notify_raw_mutation(event)
             stderr_thread.join(timeout=5)
             stderr = "".join(stderr_lines)
             returncode = process.wait()
@@ -567,7 +509,8 @@ class CodexIssueSessionLauncher:
                 continue
             if not isinstance(event, Mapping):
                 continue
-            notify_effect_boundary(event)
+            if not self._stream_output:
+                notify_raw_mutation(event)
             if event.get("type") == "thread.started":
                 candidate = event.get("thread_id")
                 if isinstance(candidate, str) and candidate.strip():
@@ -610,11 +553,6 @@ class CodexIssueSessionLauncher:
                 "raw or unclassified mutation was refused; use its owner wrapper",
                 session_id=session_id,
             ) from raw_mutation_error
-        if effect_gate_error is not None:
-            raise IssueSessionLaunchError(
-                "effect authority could not be revalidated at its owning boundary",
-                session_id=session_id,
-            ) from effect_gate_error
         if returncode != 0 or terminal_error is not None:
             detail = stderr.strip() or terminal_error or "codex exec failed"
             raise IssueSessionLaunchError(

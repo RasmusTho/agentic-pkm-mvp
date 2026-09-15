@@ -297,10 +297,10 @@ The adapter exposes fresh BuilderOps effect gates for the five permitted effect 
 service rechecks permission, expiry, authority epoch, source, workflow, profile, and destination
 identity at each destination receipt write. Admission also freezes the resolved checkout and
 worktree identities; a later symlink retarget is a destination drift, not a new approved target.
-The existing owner wrappers emit the explicit effect-boundary event with a complete repository,
-Issue, worktree/branch and (where applicable) PR target before each external mutation. Raw or
-unclassified mutation commands are refused; the launcher does not attempt a late observation or
-process-control stop.
+The existing owner wrappers synchronously invoke their effect gate with a complete repository,
+Issue, worktree/branch and (where applicable) PR target immediately before each external
+mutation. Raw or unclassified mutation commands are refused; the launcher does not attempt a
+late observation or process-control stop.
 Local run state remains coordination-only. FCA-ID-B
 does not provide independent GitHub/CI/PR/source readback, live activation, deployment, candidate
 trial, owner acceptance, or parent closure authority; those remain explicit FCA-ID-C/M2 evidence
