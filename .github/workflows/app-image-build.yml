@@ -14,6 +14,8 @@ on:
       - 'Dockerfile.builderops.dockerignore'
       - 'Dockerfile.builderops-postgres'
       - 'docker-compose.builderops.yml'
+      - 'docs/settings/models/providers.yaml'
+      - '.codex/agents/slice-implementer.toml'
       - 'scripts/builderops/**'
       - 'requirements.txt'
       - 'requirements-builderops.txt'

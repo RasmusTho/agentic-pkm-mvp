@@ -387,6 +387,16 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     assert preview["manifest"]["owner_principal"] == "owner:human"
     assert preview["manifest"]["authority_epoch"] == 1
 
+    forged_receipt_ref = deepcopy(preview["manifest"])
+    forged_receipt_ref["approval_receipt_ref"] = (
+        "builderops:record:rasmustho/agentic-pkm-mvp:issue-delivery-approval:forged"
+    )
+    forged_receipt_ref["approval_manifest_hash"] = issue_delivery_manifest_hash(
+        forged_receipt_ref
+    )
+    with pytest.raises(ControlPlaneConflictError):
+        owner.issue_delivery_start(decision="start", manifest=forged_receipt_ref)
+
     held = owner.issue_delivery_start(decision="hold", manifest=preview["manifest"])
     assert held["state"] == "held"
     assert held["effects"] == []

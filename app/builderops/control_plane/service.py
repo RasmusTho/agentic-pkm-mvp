@@ -83,6 +83,7 @@ from app.builderops.control_plane.issue_delivery import (
     idempotency_key as issue_delivery_idempotency_key,
     manifest_hash as issue_delivery_manifest_hash,
     normalize_manifest as normalize_issue_delivery_manifest,
+    receipt_ref as issue_delivery_receipt_ref,
     record_id as issue_delivery_record_id,
 )
 
@@ -761,8 +762,8 @@ def create_app(
                 "owner_principal": credential.principal,
                 "permission": permission,
                 "authority_epoch": int(store.readiness()["authority_epoch"]),
-                "approval_receipt_ref": (
-                    "builderops:record:" + repository + ":" + issue_delivery_record_id(normalized["approval_id"])
+                "approval_receipt_ref": issue_delivery_receipt_ref(
+                    repository, normalized["approval_id"]
                 ),
                 "previewed_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -790,6 +791,20 @@ def create_app(
             )
             if isinstance(parent_repository, str) and parent_repository.strip():
                 _enforce_repo_scope(credential, canonical_repository(parent_repository.strip()))
+        # Authenticate the owner profile before deeper contract normalization.
+        # A caller cannot turn a foreign owner into a generic 400 by also
+        # changing a dependent profile hash; identity remains a typed scope
+        # decision on every Start path.
+        raw_owner_profile = manifest_input.get("owner_profile")
+        if isinstance(raw_owner_profile, Mapping):
+            raw_profile_principal = raw_owner_profile.get(
+                "principal", raw_owner_profile.get("owner_principal")
+            )
+            if isinstance(raw_profile_principal, str) and raw_profile_principal != credential.principal:
+                raise HTTPException(
+                    status_code=403,
+                    detail="owner profile does not match authenticated owner",
+                )
         manifest = normalize_issue_delivery_manifest(manifest_input)
         if manifest.get("owner_principal") != credential.principal:
             raise HTTPException(status_code=403, detail="Issue-delivery approval owner mismatch")
@@ -800,6 +815,11 @@ def create_app(
         ):
             raise HTTPException(status_code=403, detail="owner profile does not match authenticated owner")
         repository = manifest["repository"]
+        expected_receipt_ref = issue_delivery_receipt_ref(
+            repository, manifest["approval_id"]
+        )
+        if manifest.get("approval_receipt_ref") != expected_receipt_ref:
+            raise StateConflict("Issue-delivery approval receipt reference is not service-owned")
         _enforce_repo_scope(credential, repository)
         parent_evidence = manifest.get("parent_evidence")
         if isinstance(parent_evidence, Mapping) and parent_evidence.get("kind") == "issue":

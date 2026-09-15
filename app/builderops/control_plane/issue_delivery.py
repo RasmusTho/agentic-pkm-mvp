@@ -942,6 +942,17 @@ def record_id(approval_id: str) -> str:
     return RECORD_PREFIX + approval_id
 
 
+def receipt_ref(repository: str, approval_id: str) -> str:
+    """Return the service-owned durable receipt reference for an approval."""
+
+    return (
+        "builderops:record:"
+        + canonical_repository(repository)
+        + ":"
+        + record_id(approval_id)
+    )
+
+
 def idempotency_key(operation_key: str) -> str:
     return IDEMPOTENCY_PREFIX + operation_key
 
@@ -963,6 +974,7 @@ __all__ = [
     "REQUIRED_WORKFLOW_ARTIFACTS",
     "WORKFLOW_ENTRYPOINT",
     "WORKFLOW_LAUNCHER",
+    "receipt_ref",
     "canonical_hash",
     "approval_digest",
     "idempotency_key",
