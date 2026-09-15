@@ -174,15 +174,56 @@ def _normalized_absolute_path(value: str) -> str:
     return normpath("/" + value.lstrip("/"))
 
 
+def _resolved_absolute_path(value: str) -> str:
+    """Resolve existing symlink parents before checking destination overlap."""
+
+    try:
+        return str(Path(_normalized_absolute_path(value)).resolve(strict=False))
+    except (OSError, RuntimeError) as exc:
+        raise IssueDeliveryContractError(
+            "destination paths cannot be resolved safely"
+        ) from exc
+
+
 def assert_no_credential_fingerprint_fields(value: Any) -> None:
     """Reject verifier fingerprints anywhere in an Issue-delivery payload."""
 
     if isinstance(value, Mapping):
         for key, child in value.items():
             normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", str(key)).strip("_").lower()
-            if normalized_key == "fingerprint":
+            verifier_alias = (
+                "fingerprint" in normalized_key
+                or normalized_key in {
+                "auth_digest",
+                "auth_hash",
+                "auth_token",
+                "authorization",
+                "authorization_token",
+                "bearer",
+                "bearer_token",
+                "credential",
+                "credential_digest",
+                "credential_hash",
+                "password",
+                "owner_digest",
+                "owner_hash",
+                "owner_token",
+                "private_key",
+                "secret",
+                "secret_digest",
+                "secret_hash",
+                "session_cookie",
+                "session_token",
+                "token",
+                "token_digest",
+                    "token_hash",
+                    "token_verifier",
+                    "verifier",
+                }
+            )
+            if verifier_alias:
                 raise IssueDeliveryContractError(
-                    "Issue-delivery approval cannot contain credential fingerprints"
+                    "Issue-delivery approval cannot contain credential verifier aliases"
                 )
             assert_no_credential_fingerprint_fields(child)
     elif isinstance(value, (list, tuple)):
@@ -777,6 +818,10 @@ def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
         parent, ("write_permission", "permission"), "parent write permission"
     )
     write_permission = _mapping(write_permission_value, "parent write permission")
+    if not set(write_permission).issubset({"scope", "grant", "writes", "targets"}):
+        raise IssueDeliveryContractError(
+            "parent write permission contains unknown fields"
+        )
     _present, permission_scope = _coalesce_aliases(
         write_permission,
         ("scope", "grant"),
@@ -907,8 +952,8 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError(
                 "destination identity must match the frozen dispatch plan"
             )
-        checkout_path = _normalized_absolute_path(destination["checkout"])
-        worktree_path = _normalized_absolute_path(destination["worktree"])
+        checkout_path = _resolved_absolute_path(destination["checkout"])
+        worktree_path = _resolved_absolute_path(destination["worktree"])
         if (
             not destination["checkout"].startswith("/")
             or not destination["worktree"].startswith("/")

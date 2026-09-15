@@ -232,7 +232,9 @@ within its existing owner. Before Start, it must bind all of these values withou
   plus one proposed run identity allocated without effects for the preview. Start approves that
   exact identity, cross-checked against the full Issue contract and frozen dispatch plan; the
   worktree cannot equal the checkout or filesystem root, and the branch cannot equal the base ref.
-  Only after approval commits may the destination durably reserve it. A Codex
+  Admission resolves existing filesystem symlink parents before this overlap check; FCA-ID-B must
+  re-resolve the checkout/worktree identities immediately before any effect because the filesystem
+  may change after approval. Only after approval commits may the destination durably reserve it. A Codex
   session ID is attached only when observed;
 - exact entrypoint `app/builderops/epic_dispatch.py::dispatch_issue_sessions` with
   `CodexIssueSessionLauncher.launch`, workflow contract `fca-issue-delivery.v1`, immutable source

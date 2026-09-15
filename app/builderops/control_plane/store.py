@@ -37,6 +37,13 @@ from app.builderops.control_plane.models import (
 _ISSUE_DELIVERY_IDEMPOTENCY_PREFIX = "issue-delivery:"
 _ISSUE_DELIVERY_SCOPE = "issue-delivery-approval"
 _ISSUE_DELIVERY_RECORD_TYPE = "IssueDeliveryApproval"
+_ISSUE_DELIVERY_ADMISSION_CAPABILITY = object()
+
+
+def _issue_delivery_admission_capability() -> object:
+    """Return the in-process capability held by the owner-admission service."""
+
+    return _ISSUE_DELIVERY_ADMISSION_CAPABILITY
 
 
 def _guard_idempotency_namespace(
@@ -991,6 +998,7 @@ class PostgresBuilderOpsStore:
         expected_states: tuple[str, ...] | None = None,
         fault_at: str | None = None,
         owner_outcome: OwnerOutcomeAdmission | None = None,
+        issue_delivery_admission: object | None = None,
     ) -> AuthorityObjectResult:
         from app.builderops.owner_fact_producers import OwnerFactRefusal
 
@@ -1002,6 +1010,12 @@ class PostgresBuilderOpsStore:
         )
         if record_type == "IssueDeliveryApproval" and envelope.scope != "issue-delivery-approval":
             raise StateConflict("Issue-delivery approvals require exact owner admission")
+        if record_type == _ISSUE_DELIVERY_RECORD_TYPE and (
+            issue_delivery_admission is not _ISSUE_DELIVERY_ADMISSION_CAPABILITY
+        ):
+            raise StateConflict(
+                "Issue-delivery approvals require the service admission capability"
+            )
         if owner_outcome is not None:
             return _commit_owner_outcome(self, envelope=envelope, admission=owner_outcome,
                                         idempotency_key=idempotency_key, fault_at=fault_at)

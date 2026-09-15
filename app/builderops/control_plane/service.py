@@ -63,6 +63,7 @@ from app.builderops.control_plane.models import (
     canonical_repository,
 )
 from app.builderops.control_plane.selection import database_environment, production_store
+from app.builderops.control_plane.store import _issue_delivery_admission_capability
 from app.middleware.trace import TraceIdMiddleware
 from app.builderops.devui_conversation_port import canonical_context_pack_bytes, validate_context_pack_bytes
 from app.builderops.devui_model_inquiry_command import approval_manifest, build_command_proposal, canonical_hash, validate_approval_identity, validate_command_proposal
@@ -613,6 +614,7 @@ def create_app(
     rate_limiter = CredentialRateLimiter(
         int(os.getenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", "120"))
     )
+    issue_delivery_admission = _issue_delivery_admission_capability()
     health_service = health or HealthService(
         store,
         credentials,
@@ -1161,6 +1163,7 @@ def create_app(
                 state="approved",
                 payload=payload,
                 idempotency_key=key,
+                issue_delivery_admission=issue_delivery_admission,
             )
         except IdempotencyConflict as commit_conflict:
             # Two identical Starts can both pass the read-before-write checks.

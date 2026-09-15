@@ -369,7 +369,7 @@ def _client(store: PostgresBuilderOpsStore, registry: CredentialRegistry, token:
     )
 
 
-def test_issue_approval_production_admission(store, registry, monkeypatch) -> None:
+def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path) -> None:
     owner = _client(store, registry, "owner-token")
     reader = _client(store, registry, "reader-token")
     executor_low = _client(store, registry, "executor-low-token")
@@ -378,6 +378,22 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     inquiry = _client(store, registry, "inquiry-token")
     generic = _client(store, registry, "generic-token")
     manifest = _manifest()
+
+    with pytest.raises(StateConflict, match="service admission capability"):
+        store.commit_record(
+            envelope=AuthorityEnvelope(
+                repository=REPOSITORY,
+                scope="issue-delivery-approval",
+                stack="builderops-control-plane",
+                actor="owner:human",
+                source_refs=("forged",),
+            ),
+            record_id="issue-delivery-approval:forged",
+            record_type="IssueDeliveryApproval",
+            state="approved",
+            payload={},
+            idempotency_key="issue-delivery:forged",
+        )
 
     unsupported_repository = deepcopy(manifest)
     unsupported_repository["repository"] = "OtherOrg/other-repository"
@@ -446,6 +462,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_start(decision="start", manifest=fingerprint_start)
+    verifier_alias = deepcopy(manifest)
+    verifier_alias["context"]["provenance"] = {"token_verifier": "a" * 64}  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=verifier_alias)
 
     replay = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
     assert replay["state"] == "approved"
@@ -803,6 +823,24 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     )
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=overlapping_worktree)
+    actual_checkout = tmp_path / "checkout"
+    actual_checkout.mkdir()
+    symlinked_checkout = tmp_path / "checkout-link"
+    symlinked_checkout.symlink_to(actual_checkout, target_is_directory=True)
+    symlink_overlap = deepcopy(manifest)
+    symlink_overlap["destination"]["checkout"] = str(actual_checkout)  # type: ignore[union-attr]
+    symlink_overlap["destination"]["worktree"] = str(symlinked_checkout)  # type: ignore[union-attr]
+    symlink_overlap["context"]["dispatch_plan"]["context_packs"][0][  # type: ignore[union-attr]
+        "branch_worktree_plan"
+    ]["worktree"] = str(symlinked_checkout)
+    symlink_overlap["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        symlink_overlap["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    symlink_overlap["context"]["content_hash"] = canonical_hash(  # type: ignore[union-attr]
+        symlink_overlap["context"]["dispatch_plan"]["context_packs"][0]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=symlink_overlap)
     sibling_worktree = deepcopy(manifest)
     sibling_worktree["destination"]["worktree"] = (  # type: ignore[union-attr]
         "/workspaces/agentic-pkm-mvp-sibling"
@@ -874,6 +912,12 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     }
     with pytest.raises((ControlPlaneProtocolError, ControlPlaneScopeError)):
         owner.issue_delivery_preview(manifest=foreign_parent)
+    unknown_parent_permission = deepcopy(manifest)
+    unknown_parent_permission["parent_evidence"] = deepcopy(foreign_parent["parent_evidence"])
+    unknown_parent_permission["parent_evidence"]["repository"] = REPOSITORY  # type: ignore[index]
+    unknown_parent_permission["parent_evidence"]["write_permission"]["extra"] = "unexpected"  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=unknown_parent_permission)
 
     incomplete_parent = deepcopy(manifest)
     incomplete_parent["parent_evidence"] = {"kind": "issue"}
