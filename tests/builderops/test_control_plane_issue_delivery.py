@@ -395,6 +395,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     started = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
     assert started["state"] == "approved"
     assert started["approval"]["approval_manifest_hash"] == preview["manifest"]["approval_manifest_hash"]
+    assert isinstance(started["approval"].get("approval_digest"), str)
     assert "fingerprint" not in started["approval"]["permission"]
     assert started["receipt"]["receipt_sequence"] > 0
 
@@ -413,6 +414,19 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     owner_credential = registry.current_credential("owner")
     assert owner_credential is not None
     assert owner_credential.fingerprint not in json.dumps(readback, sort_keys=True)
+
+    original_get_record = store.get_record
+
+    def tamper_approval_timestamp(repository: str, record_id: str):  # type: ignore[no-untyped-def]
+        row = dict(original_get_record(repository, record_id))
+        row["payload"] = dict(row["payload"])
+        row["payload"]["approved_at"] = "2026-01-01T00:00:00+00:00"
+        return row
+
+    monkeypatch.setattr(store, "get_record", tamper_approval_timestamp)
+    with pytest.raises(ControlPlaneConflictError):
+        reader.issue_delivery_readback(repository=REPOSITORY, approval_id="approval-5550")
+    monkeypatch.setattr(store, "get_record", original_get_record)
 
     # A principal-wide grant lookup must not let a read-only credential borrow
     # its sibling's execute grant.  The high-privilege credential is allowed
@@ -472,6 +486,11 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     invalid_context_hash["context"]["content_hash"] = "c" * 64  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_context_hash)
+    conflicting_context_alias = deepcopy(manifest)
+    conflicting_context_alias["context_pack"] = deepcopy(manifest["context"])
+    conflicting_context_alias["context_pack"]["pack_id"] = "other-context"  # type: ignore[index]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=conflicting_context_alias)
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["selected_count"] = 2  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
@@ -517,6 +536,14 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     missing_ready_label["issue"]["labels"] = ["type:task"]  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=missing_ready_label)
+    for conflicting_label in ("agent:blocked", "agent:needs-human"):
+        conflicting_lifecycle_label = deepcopy(manifest)
+        conflicting_lifecycle_label["issue"]["labels"] = [  # type: ignore[union-attr]
+            "agent:ready",
+            conflicting_label,
+        ]
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=conflicting_lifecycle_label)
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["run_id"] = "run/5550"  # type: ignore[union-attr]
     invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]

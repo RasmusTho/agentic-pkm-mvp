@@ -78,6 +78,7 @@ from app.builderops.control_plane.issue_delivery import (
     CONTRACT_VERSION as ISSUE_DELIVERY_CONTRACT,
     IssueDeliveryContractError,
     OPERATION_TYPE as ISSUE_DELIVERY_OPERATION,
+    approval_digest as issue_delivery_approval_digest,
     RECORD_TYPE as ISSUE_DELIVERY_RECORD_TYPE,
     idempotency_key as issue_delivery_idempotency_key,
     manifest_hash as issue_delivery_manifest_hash,
@@ -714,6 +715,14 @@ def create_app(
         if isinstance(permission, Mapping) and "fingerprint" in permission:
             raise StateConflict("Issue-delivery approval contains a credential verifier")
 
+    def _assert_issue_delivery_approval_integrity(payload: Mapping[str, Any]) -> None:
+        """Authenticate the durable approval, including its grant timestamp."""
+
+        if payload.get("approval_manifest_hash") != issue_delivery_manifest_hash(payload):
+            raise StateConflict("Issue-delivery approval manifest is corrupt")
+        if payload.get("approval_digest") != issue_delivery_approval_digest(payload):
+            raise StateConflict("Issue-delivery approval digest is corrupt")
+
     def issue_delivery_manifest(
         manifest_input: Mapping[str, Any], credential: Credential
     ) -> dict[str, Any]:
@@ -823,13 +832,15 @@ def create_app(
     def issue_delivery_approval_payload(
         manifest: Mapping[str, Any], *, approved_at: str
     ) -> dict[str, Any]:
-        return {
+        payload = {
             **dict(manifest),
             "contract": ISSUE_DELIVERY_CONTRACT,
             "state": "approved",
             "approved_at": approved_at,
             "approval_receipt_ref": manifest["approval_receipt_ref"],
         }
+        payload["approval_digest"] = issue_delivery_approval_digest(payload)
+        return payload
 
     def issue_delivery_readback(repository: str, approval_id: str) -> dict[str, Any]:
         canonical = canonical_repository(repository)
@@ -839,8 +850,7 @@ def create_app(
         if row.get("state") != "approved":
             raise StateConflict("Issue-delivery approval is not approved")
         payload = dict(row["payload"])
-        if payload.get("approval_manifest_hash") != issue_delivery_manifest_hash(payload):
-            raise StateConflict("Issue-delivery approval manifest is corrupt")
+        _assert_issue_delivery_approval_integrity(payload)
         permission = payload.get("permission")
         _assert_issue_delivery_permission_safe(permission)
         operation_key = payload.get("operation_key")
@@ -1071,6 +1081,7 @@ def create_app(
                 or existing_payload.get("operation_key") != manifest["operation_key"]
             ):
                 raise StateConflict("Issue-delivery approval is immutable")
+            _assert_issue_delivery_approval_integrity(existing_payload)
             _assert_issue_delivery_permission_safe(existing_payload.get("permission"))
             replay = store.replay(repository, key)
             if replay is None:
@@ -1239,12 +1250,11 @@ def create_app(
                     or approved.get("operation_key") != operation_key
                     or approved.get("approval_manifest_hash")
                     != supplied.get("approval_manifest_hash")
-                    or approved.get("approval_manifest_hash")
-                    != issue_delivery_manifest_hash(approved)
                 ):
                     raise StateConflict(
                         "Issue-delivery approval does not match durable admission"
                     )
+                _assert_issue_delivery_approval_integrity(approved)
                 _assert_issue_delivery_permission_safe(approved.get("permission"))
                 return {
                     "approval": approved,
@@ -1267,9 +1277,9 @@ def create_app(
                 or approved.get("approval_id") != normalized["approval_id"]
                 or approved.get("operation_key") != normalized["operation_key"]
                 or approved.get("approval_manifest_hash") != supplied.get("approval_manifest_hash")
-                or approved.get("approval_manifest_hash") != issue_delivery_manifest_hash(approved)
             ):
                 raise StateConflict("Issue-delivery approval does not match durable admission")
+            _assert_issue_delivery_approval_integrity(approved)
             owner_permission = approved.get("permission")
             _assert_issue_delivery_permission_safe(owner_permission)
             if request.purpose == "execute":

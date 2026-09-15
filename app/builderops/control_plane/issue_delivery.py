@@ -87,10 +87,14 @@ _SERVER_FIELDS = frozenset(
         "approved_at",
         "previewed_at",
         "approval_manifest_hash",
+        "approval_digest",
         "state",
     }
 )
-_NON_BINDING_FIELDS = frozenset({"approval_manifest_hash", "contract", "state", "approved_at"})
+_NON_BINDING_FIELDS = frozenset(
+    {"approval_manifest_hash", "approval_digest", "contract", "state", "approved_at"}
+)
+_TOP_LEVEL_CONTEXT_ALIASES = frozenset({"context_pack", "context_pack_ref"})
 _TOP_LEVEL_ISSUE_ALIASES = frozenset(
     {
         "issue_number",
@@ -242,6 +246,10 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     normalized_labels = [_text(label, "Issue label", limit=256) for label in labels]
     if "agent:ready" not in normalized_labels:
         raise IssueDeliveryContractError("Issue-delivery admission requires the agent:ready label")
+    if {"agent:blocked", "agent:needs-human"}.intersection(normalized_labels):
+        raise IssueDeliveryContractError(
+            "Issue-delivery admission rejects blocked or needs-human labels"
+        )
     return {
         **_without_aliases(issue, _TOP_LEVEL_ISSUE_ALIASES),
         "number": number,
@@ -789,10 +797,12 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError("expiry must be timezone-aware")
         issue = _issue_fields(raw)
         source = _source_fields(raw)
-        context = _context_fields(
-            raw.get("context", raw.get("context_pack", raw.get("context_pack_ref"))),
-            issue_number=issue["number"],
+        _context_present, context_value = _coalesce_aliases(
+            raw,
+            ("context", "context_pack", "context_pack_ref"),
+            "context binding",
         )
+        context = _context_fields(context_value, issue_number=issue["number"])
         workflow = _workflow_fields(raw.get("workflow"))
         destination = _destination_fields(raw.get("destination"))
         profile = _execution_profile_fields(raw.get("profile"))
@@ -884,7 +894,12 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError(
                 "owner profile principal bindings disagree"
             )
-        raw = _without_aliases(raw, _TOP_LEVEL_ISSUE_ALIASES | _TOP_LEVEL_SOURCE_ALIASES)
+        raw = _without_aliases(
+            raw,
+            _TOP_LEVEL_ISSUE_ALIASES
+            | _TOP_LEVEL_SOURCE_ALIASES
+            | _TOP_LEVEL_CONTEXT_ALIASES,
+        )
         result = {
             **raw,
             "contract_version": CONTRACT_VERSION,
@@ -915,6 +930,14 @@ def manifest_hash(value: Mapping[str, Any]) -> str:
     return canonical_hash({key: item for key, item in value.items() if key not in _NON_BINDING_FIELDS})
 
 
+def approval_digest(value: Mapping[str, Any]) -> str:
+    """Hash the complete durable approval, including its grant timestamp."""
+
+    return canonical_hash(
+        {key: item for key, item in value.items() if key != "approval_digest"}
+    )
+
+
 def record_id(approval_id: str) -> str:
     return RECORD_PREFIX + approval_id
 
@@ -941,6 +964,7 @@ __all__ = [
     "WORKFLOW_ENTRYPOINT",
     "WORKFLOW_LAUNCHER",
     "canonical_hash",
+    "approval_digest",
     "idempotency_key",
     "manifest_hash",
     "normalize_manifest",
