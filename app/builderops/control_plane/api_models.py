@@ -248,6 +248,33 @@ class OutboxClaimInput(BaseModel):
     expires_at: datetime
 
 
+class OutboxEffectEligibilityRequest(BaseModel):
+    """Read-only revalidation of one exact executor-owned outbox fence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    envelope: AuthorityEnvelopeInput
+    claim: OutboxClaimInput
+
+
+class OutboxEffectEligibilityResponse(BaseModel):
+    """Minimal non-secret fence identity returned by fresh revalidation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository: str
+    operation_key: str
+    worker_id: str
+    fencing_token: int = Field(ge=1)
+    intent_lsn: str
+    claim_lsn: str
+    receipt_sequence: int = Field(ge=1)
+    expires_at: datetime
+    task_id: str
+    effect_type: str
+    effect_eligible: bool
+
+
 class OutboxUnknownRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     claim: OutboxClaimInput
@@ -322,6 +349,8 @@ __all__ = [
     "LeaseInput",
     "OutboxClaimRequest",
     "OutboxClaimInput",
+    "OutboxEffectEligibilityRequest",
+    "OutboxEffectEligibilityResponse",
     "OutboxRecoverRequest",
     "OutboxReconcileRequest",
     "OutboxUnknownRequest",

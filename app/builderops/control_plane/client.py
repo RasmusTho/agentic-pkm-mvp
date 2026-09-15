@@ -596,6 +596,23 @@ class BuilderOpsControlPlaneClient:
             },
         )
 
+    def revalidate_outbox_effect(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        claim: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Freshly validate one exact outbox fence without mutating it."""
+
+        return self._request(
+            "POST",
+            f"/{API_VERSION}/executor/outbox/effect-eligible",
+            json_body={
+                "envelope": dict(envelope),
+                "claim": dict(claim),
+            },
+        )
+
     def recover_outbox(
         self,
         *,

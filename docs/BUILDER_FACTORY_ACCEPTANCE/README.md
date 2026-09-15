@@ -115,7 +115,7 @@ operations that use DDO.
 | Store an inquiry authority record | `POST /v1/inquiries` → `commit_inquiry` → `store.commit_record`; client `BuilderOpsControlPlaneClient.create_inquiry` | Accepts a caller-supplied `inquiry_id` and record idempotency key. It stores a `ModelInquiry` record; it does not invoke the sanctioned launcher or reserve an operation key against a future inquiry. Its commit receipt proves that record write only. |
 | Launch the first inquiry | [Start Model Inquiry](../../.codex/skills/start-model-inquiry/SKILL.md), through the fixed `Tailscale_macmini` host alias and sanctioned `$HOME/.local/bin/yggdrasil-model-inquiry` launcher on the bound host | The existing skill owns route proof, lock, staging, single invocation and cleanup. Neither the service adapter nor DevUI may reproduce those internals. FCP-04 supplies the concrete facade/protocol, reservation, authenticated readback and reserved-ID propagation. Runtime Start requires the operator-owned wrapper to advertise that exact protocol and current scoped permissions; manual-only wrappers refuse. |
 | Produce inquiry execution/readback evidence | The configured launcher's existing artifact-first Model Inquiry service/runner: `ModelInquiryService.start`, `trace`, `commit_run_terminal_receipt`, `write_human_readable_report`, and `ModelInquiryRunner._finalize_terminal` | FCP-04 adds immutable approval/key-to-inquiry reservation, pre-invocation attempt and atomic entry in these existing artifacts, plus exact authenticated terminal/readback evidence. An inquiry start artifact records artifact creation; a terminal artifact records the workflow outcome, not an externally requested process stop. |
-| Execute one separately approved Issue workflow | Existing `CodexIssueSessionLauncher` and `issue-to-code` → `publish-pr` → `verification-and-closure` owners | The [first Issue operation](#first-approved-issue-delivery-operation) defines the finite extension; its admission/destination/readback adapters remain unimplemented. Inquiry approval grants none of its effects. Existing merge/executor and deployment fences remain binding. |
+| Execute one separately approved Issue workflow | Existing `CodexIssueSessionLauncher` and `issue-to-code` → `publish-pr` → `verification-and-closure` owners | The [first Issue operation](#first-approved-issue-delivery-operation) defines the finite extension. FCA-ID-A admission plus the distinct-principal worker boundary and protected host effect-executor prerequisites have repository support; #5551 destination reservation/entry integration and #5552 independent readback remain unimplemented. Inquiry approval grants none of its effects. Existing merge/executor and deployment fences remain binding. |
 | Render preview, progress and result | DevUI's separately authenticated action region, including #4697's bounded inquiry adapter | A derived projection of the above sources. Browser state, model text, a generated fixture and an HTTP acknowledgement never supply admission, launch, terminality or owner acceptance. |
 
 ### Immutable approval manifest and operation permissions
@@ -359,8 +359,9 @@ remain the serial destination/readback obligations. Each Issue binds its exact p
 and inline `Verify:` targets. The named test pointers below are required production-path
 production-path tests, not claims that tests exist or pass today.
 
-The credential-isolation prerequisite for FCA-ID-B now has repository support through a dormant
-Linux/systemd adapter around the existing Codex Issue-session launcher. A pinned host profile binds
+The credential-isolation and protected-effect prerequisites for FCA-ID-B now have repository
+support through a dormant Linux/systemd adapter around the existing Codex Issue-session launcher
+and the host-only `IssueDeliveryHostExecutor`. A pinned host profile binds
 the exact distinct executor/worker principals (including an empty worker supplementary-group set),
 content/mode/ownership executable identities, a clean-worktree identity and its exact linked
 per-worktree/common Git administration directories, a private worker-owned `0700` model-login
@@ -375,12 +376,31 @@ directories are explicit read-only paths, and their identities, typed metadata d
 executable facts are revalidated and receipt-bound without persisting their paths. Same-user,
 uneditable worktree, writable Git metadata, readable/missing/aliased credential, primary checkout,
 drifted, shell-mediated, and unsupported-host cases refuse with no legacy fallback. This
-prerequisite does not deliver FCA-ID-B: #5558, FCA-ID-B/C destination and readback work, bob
-activation, candidate trial, and owner outcome remain pending. No bob principal, credential,
-profile, ACL, service, or deployment is created or activated by this repository change. The future
-host-profile producer owns recursive worktree content permission while local Git
-stage/commit/ref/object mutation and publication remain host-executor effects for #5558. The adapter
-proves those boundaries or stops, without granting a Git/common/worktree-parent aperture.
+worker boundary is not same-user environment cleanup: the worker has a distinct UID/GID, no
+supplementary groups, no repository effect identity, and no write path to linked-worktree or common
+Git metadata. The host prepares and freezes the exact checkout/worktree/branch/base/origin and Git
+directory identities before child construction. A content-only worker may propose only a strict
+typed claim/publication/merge/closure/parent-evidence request. The host executor then re-reads the
+exact approval, destination, source/profile/target and protected credential manifest immediately
+before the effect, resolves the opaque repository-scoped credential only after those gates, and
+persists the effect intent through the existing authenticated BuilderOps PostgreSQL
+task/transaction/outbox owner. After credential resolution and immediately before transport, an
+authenticated read-only executor endpoint reuses the outbox store's database-clock eligibility
+check and binds the exact worker, fencing token, intent/claim LSNs, receipt, expiry, task and effect;
+a stale or recovered fence cannot invoke the effect. After any possibly applied transport call the
+host records unknown and obtains the separate Issue-delivery read grant before authoritative source
+readback. A recovered attempt receives a distinct readback-only fence and is never required or
+permitted to be `effect_eligible`. Typed receipts bind hash identities while excluding raw
+credentials and local paths.
+
+These repository prerequisites still do not deliver FCA-ID-B: #5551 must integrate destination
+reservation, attempt and observed entry into the production dispatch chain, and #5552/FCA-ID-C must
+provide independent Issue/PR outcome projection. FCA-ID-B/C completion, bob activation/profile and
+credential provisioning, deployment, candidate trial, and owner outcome therefore remain pending.
+No bob principal, credential, profile, ACL, service, or deployment is created or activated here.
+The future host-profile producer owns recursive worktree content permission; local
+stage/commit/ref/object mutation and publication remain protected host-executor effects, without a
+Git/common/worktree-parent aperture for the worker.
 
 The same three slices cover parent evidence without another operation: A must prove exact or
 explicitly absent parent admission and reject missing/foreign targets when writeback is required;

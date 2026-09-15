@@ -33,6 +33,8 @@ REQUIRED_WORKFLOW_ARTIFACTS = frozenset(
     {
         "app/builderops/cli.py",
         "app/builderops/epic_dispatch.py",
+        "app/builderops/issue_delivery_effect_executor.py",
+        "app/builderops/issue_delivery_worker_isolation.py",
         ".codex/agents/slice-implementer.toml",
         ".codex/skills/issue-to-code/SKILL.md",
         ".codex/skills/publish-pr/SKILL.md",

@@ -212,7 +212,7 @@ Shortcuts are proportionate, not authority bypasses:
 
 | L2 ID | Child subprocess | Required output and boundary |
 | --- | --- | --- |
-| **V3.1 Claim and execute the bounded change** | Acquire the one active claim, register isolated worktree identity, load bounded context, implement within scope, and maintain lease/receipts. | Local change and focused validation evidence bound to the Issue and worktree. |
+| **V3.1 Claim and execute the bounded change** | Acquire the one active claim, register isolated worktree identity, load bounded context, implement within scope, and maintain lease/receipts. The dormant Issue-delivery support separates the distinct-principal content worker from a protected host executor for Git/GitHub lifecycle effects. | Local change and focused validation evidence bound to the Issue and worktree. The protected executor is repository support only until #5551 integrates reservation, attempt, entry and effect calls into the production dispatch chain. |
 | **V3.2 Reconstruct, resume, and revalidate interrupted work** | On interruption, read resumable orchestration state first, then reconstruct Issue/claim/worktree/branch/HEAD/PR/evidence state; revalidate stale anchors and leases; resume only unchanged authority or perform governed stale-lease takeover/release. | A refreshed, generation-safe execution context or a truthful technical/authority block; chat continuity never authorizes resume. |
 | **V3.3 Publish and integrate the proposed change** | Apply branch-truth and publication gates, open/update the PR, run CI, and repair contract, drift, or integration failures while respecting shared-resource and review/CI backpressure. The normal new single-Issue Tier 1/2 `main` path may use the local hash-bound `scripts/publication.py plan/apply` adapter: it binds strict fetch/push repository identity and live base authority, then advances `absent -> base-reserved -> exact-commit -> exact-PR` without force. Every unsupported or high-risk case routes through `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`. | Current-head PR that is ready for the applicable verification path or truthfully blocked. `builder.publication-plan.v1` and `builder.publication-receipt.v1` are reconstructable exact-readback evidence, not a durable run journal, merge/closure authority, or DDO child. |
 | **V3.4 Verify, accept, merge, and close** | Resolve delivery tier, prove exact-head ACs/checks, run full-path independent review when required, perform the current governed explicit merge/readback, close Issue/claim, and classify owner-doc impact. The ordinary new single-Issue Tier 1/2 light path may use `scripts/closure.py plan/apply`: a hash-bound read-only plan and exact-head merge/readback adapter that refuses all exception routes. | Accepted merge and closure evidence; `builder.closure-plan.v1` / receipt are reconstructable effect evidence, not durable orchestration or UI control. Technical verification remains distinct from owner/product validation. Disabled GitHub auto-merge is not the merge mechanism. |
@@ -341,8 +341,9 @@ These are real controls but do not constitute uniform containment or repository-
 receipt-backed, with stronger sandbox/RBAC and egress controls where the risk justifies them. The
 target is not claimed as shipped.
 
-**Issue-delivery credential-isolation prerequisite:** repository support now includes the
-fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile.
+**Issue-delivery worker and protected-effect prerequisites:** repository support now includes the
+fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile
+and the host-only `IssueDeliveryHostExecutor`.
 It re-resolves the exact executor and distinct unprivileged worker UID/GID with no supplementary
 groups, clean frozen worktree, its exact linked per-worktree and common Git administration
 directories, private worker-owned `0700` model-auth
@@ -358,13 +359,25 @@ common Git directories are explicit read-only paths, so it grants no Git-metadat
 binds both Git-directory identities, the typed metadata-denial fact, and executable
 content/mode/ownership identities using only hashes and typed live facts;
 the GitHub credential path and bytes never enter worker argv, environment, prompt, logs, or receipt.
-Unsupported or drifted hosts stop without a same-user fallback. This is repository-only enabling
-support: #5558, FCA-ID-B/C, bob activation, candidate trial, and owner outcome all remain pending,
-and no account, credential, ACL, service, or deployment is provisioned here. The future host-profile
-producer is responsible for recursively granting the already-provisioned worker only worktree
-content permissions. Local stage/commit/ref/object mutation and publication stay host-executor
-effects for #5558; this dormant adapter only refuses absent content access or writable Git metadata
-and never provisions bob or widens a Git/common/worktree-parent aperture.
+Unsupported or drifted hosts stop without a same-user fallback. The worker is a distinct UID/GID
+with no supplementary groups, ambient repository effect identity, or Git-metadata write path; its
+closed prompt is an additional contract, not the security boundary. Before child entry the host
+creates and freezes the exact destination. Strict typed lifecycle-effect requests are then admitted
+only by the host executor after fresh approval/destination/source/profile/target/protected-manifest
+checks. It resolves the opaque repository credential last, writes intent through the existing
+authenticated BuilderOps PostgreSQL task/transaction/outbox, then revalidates the exact live
+worker/fence/LSN/receipt/expiry/task/effect identity against the database clock immediately before
+transport. It treats every possibly applied transport result as unknown and requires the separate
+Issue-delivery read grant before authoritative readback. Expired or process-lost attempts recover
+under a distinct readback-only fence with `effect_eligible: false`, so reconciliation can proceed
+after revocation without authorizing another external effect. Non-secret receipts contain hash
+identities, never raw credentials or local paths.
+
+This is repository-only enabling support: #5551 still owns production dispatch reservation,
+attempt/entry and effect integration, while #5552/FCA-ID-C owns independent outcome readback.
+FCA-ID-B/C completion, bob activation/profile and credential provisioning, deployment, candidate
+trial, and owner outcome remain pending. No account, credential, ACL, service, or deployment is
+provisioned here, and the worker receives no Git/common/worktree-parent aperture.
 
 ### Exception and human-decision model
 
