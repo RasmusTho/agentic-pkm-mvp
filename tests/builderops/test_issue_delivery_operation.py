@@ -13,7 +13,11 @@ from app.builderops.control_plane.client import (
     ControlPlaneNotFoundError,
     ControlPlaneUnavailableError,
 )
-from app.builderops.control_plane.issue_delivery import manifest_hash
+from app.builderops.control_plane.issue_delivery import (
+    IssueDeliveryContractError,
+    manifest_hash,
+    normalize_manifest,
+)
 from app.builderops.issue_delivery_operation import (
     IssueDeliveryOperationAdapter,
     IssueDeliveryOperationError,
@@ -320,6 +324,20 @@ def test_live_binding_rejects_a_retargeted_approved_checkout(tmp_path: Path) -> 
     link.symlink_to(other_checkout, target_is_directory=True)
     with pytest.raises(IssueDeliveryOperationRefused, match="identity changed"):
         _default_live_binding_reader(approval)
+
+
+def test_admission_freezes_resolved_destination_identity() -> None:
+    raw = _manifest(operation_key="operation-b-frozen-path")
+    raw["destination"].pop("resolved_checkout")  # type: ignore[union-attr]
+    raw["destination"].pop("resolved_worktree")  # type: ignore[union-attr]
+    normalized = normalize_manifest(raw)
+    assert normalized["destination"]["resolved_checkout"] == "/workspaces/agentic-pkm-mvp"
+    assert normalized["destination"]["resolved_worktree"] == "/worktrees/issue-5550"
+
+    conflicting = _manifest(operation_key="operation-b-conflicting-path")
+    conflicting["destination"]["resolved_checkout"] = "/other-checkout"  # type: ignore[union-attr]
+    with pytest.raises(IssueDeliveryContractError, match="approved path"):
+        normalize_manifest(conflicting)
 
 
 def test_selected_launcher_reports_stop_unsupported() -> None:
