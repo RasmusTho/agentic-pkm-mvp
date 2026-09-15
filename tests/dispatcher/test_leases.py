@@ -80,7 +80,9 @@ def test_claim_missing_task_rejected(store: SqliteStore) -> None:
         claim(store, "nonexistent", "agent-1", ttl_minutes=60)
 
 
-def test_heartbeat_renews_lease_and_task_expiry(store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_heartbeat_renews_lease_expiry(
+    store: SqliteStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
     task = _task()
     store.upsert_task(task)
 
@@ -99,8 +101,47 @@ def test_heartbeat_renews_lease_and_task_expiry(store: SqliteStore, monkeypatch:
     persisted_lease = store.get_lease(lease.lease_id)
     assert persisted_task is not None
     assert persisted_lease is not None
+    assert persisted_lease.ttl_seconds == 3600
     assert persisted_task.lease_expires_at == updated_lease.expires_at
     assert persisted_lease.expires_at == updated_lease.expires_at
+
+
+def test_heartbeat_renewal_controls_reclaim_boundary(
+    store: SqliteStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Timely renewal moves the reclaim boundary, while expiry remains reclaimable."""
+    task = _task()
+    store.upsert_task(task)
+
+    clock = iter(
+        [
+            "2026-04-25T10:00:00+00:00",  # claim: original expiry 10:01
+            "2026-04-25T10:00:30+00:00",  # heartbeat: renewed expiry 10:01:30
+            "2026-04-25T10:01:00+00:00",  # heartbeat: renewed expiry 10:02
+            "2026-04-25T10:01:01+00:00",  # original boundary: still active
+            "2026-04-25T10:02:01+00:00",  # renewed expiry: observation
+            "2026-04-25T10:02:01+00:00",  # renewed expiry: reclaim
+        ]
+    )
+    monkeypatch.setattr("app.dispatcher.leases._utc_now", lambda: next(clock))
+
+    _, lease = claim(store, "task-1", "agent-1", ttl_minutes=1)
+    heartbeat(store, "task-1", "agent-1")
+    renewed = heartbeat(store, "task-1", "agent-1")
+
+    assert lease.expires_at == "2026-04-25T10:01:00+00:00"
+    assert renewed.expires_at == "2026-04-25T10:02:00+00:00"
+    assert reclaim_expired_leases(store, actor="dispatcher-gc") == []
+    active_task = store.get_task("task-1")
+    assert active_task is not None
+    assert active_task.lease_id == lease.lease_id
+    assert active_task.lease_expires_at == renewed.expires_at
+
+    assert reclaim_expired_leases(store, actor="dispatcher-gc") == ["task-1"]
+    reclaimed_task = store.get_task("task-1")
+    assert reclaimed_task is not None
+    assert reclaimed_task.lease_id is None
+    assert reclaimed_task.status == "ready"
 
 
 def test_heartbeat_wrong_agent_rejected(store: SqliteStore) -> None:

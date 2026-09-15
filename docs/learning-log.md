@@ -286,3 +286,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent, and the documented CLI selects a local SQLite store that this run is not authorized to use. No store write was attempted; convert this entry to a LearningSignal when the admitted source is available. PR #5509 repairs the named source pointers and records both P1 findings before a fresh independent review.
 
 --- retro 2026-09-14: applied 2/2 proposals ---
+
+## 2026-09-15 — #5554 (dispatcher heartbeat renewal)
+**Source:** issue-to-code pre-implementation reassessment
+**Diverged:** The issue reported that heartbeats left lease expiry fixed, but `origin/main` already contained a renewal implementation from `c870752f2`; the remaining gap was the named reclaim-boundary regression coverage and explicit builder-agent wording.
+**Upstream artifact:** `AGENTS.md :: Dispatcher policy`, `.codex/skills/issue-to-code/SKILL.md :: Mid-work heartbeat`, and `tests/dispatcher/test_leases.py`
