@@ -1253,7 +1253,7 @@ def validate_issue_delivery_plan(
         raise EpicDispatchError("Issue delivery context pack identity is incomplete")
     issue_contract = context_pack.get("issue_contract")
     if not isinstance(issue_contract, Mapping) or not {
-        "number", "title", "url", "scope"
+        "repository", "number", "title", "url", "scope"
     }.issubset(issue_contract) or issue_contract.get("number") != expected_issue:
         raise EpicDispatchError("Issue delivery context pack contract is incomplete")
     if decision_runtime != context_pack.get("runtime"):
@@ -1665,6 +1665,7 @@ def _build_context_pack(
         "context_pack_id": context_pack_id,
         "dispatch_slot": dispatch_slot,
         "issue_contract": {
+            "repository": candidate["repository"],
             "number": candidate["issue_number"],
             "title": candidate["title"],
             "url": candidate["url"],

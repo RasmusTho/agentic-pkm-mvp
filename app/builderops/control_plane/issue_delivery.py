@@ -170,6 +170,14 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     criteria_hash = _sha(
         issue.get("acceptance_criteria_hash"), "acceptance criteria hash"
     )
+    issue_url = _text(issue.get("url"), "Issue URL", limit=1024)
+    issue_scope = _text(issue.get("scope"), "Issue scope", limit=8192)
+    labels = issue.get("labels")
+    if not isinstance(labels, (list, tuple)) or not labels:
+        raise IssueDeliveryContractError("immutable Issue labels are required")
+    normalized_labels = [_text(label, "Issue label", limit=256) for label in labels]
+    if "agent:ready" not in normalized_labels:
+        raise IssueDeliveryContractError("Issue-delivery admission requires the agent:ready label")
     return {
         **issue,
         "number": number,
@@ -178,6 +186,9 @@ def _issue_fields(value: Mapping[str, Any]) -> dict[str, Any]:
         "state": state,
         "body_hash": body_hash,
         "acceptance_criteria_hash": criteria_hash,
+        "url": issue_url,
+        "scope": issue_scope,
+        "labels": normalized_labels,
     }
 
 
@@ -566,6 +577,24 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         resolved = profile["resolved"]
         dispatch_plan = context["dispatch_plan"]
         branch_worktree_plan = selected_context["branch_worktree_plan"]
+        context_issue = selected_context["issue_contract"]
+        expected_issue_url = (
+            f"https://github.com/{repository}/issues/{issue['number']}"
+        )
+        context_repository = canonical_repository(
+            _text(context_issue.get("repository"), "context Issue repository")
+        )
+        if (
+            context_repository != repository
+            or context_issue.get("number") != issue["number"]
+            or context_issue.get("title") != issue["title"]
+            or not isinstance(context_issue.get("url"), str)
+            or context_issue["url"].casefold() != expected_issue_url.casefold()
+            or context_issue.get("scope") != issue["scope"]
+        ):
+            raise IssueDeliveryContractError(
+                "frozen dispatch Issue contract does not match the approved Issue"
+            )
         if (
             destination["run_id"] != dispatch_plan["run_id"]
             or destination["branch"] != branch_worktree_plan["branch"]

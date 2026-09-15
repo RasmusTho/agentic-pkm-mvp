@@ -183,6 +183,7 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
                 "context_pack_id": "context-5550",
                 "dispatch_slot": 1,
                 "issue_contract": {
+                    "repository": REPOSITORY,
                     "number": 5550,
                     "title": "task: admit exact one-Issue delivery approval",
                     "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/5550",
@@ -261,6 +262,9 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "number": 5550,
             "node_id": "I_kwDOQEip6s8AAAACdXiyQA",
             "title": "task: admit exact one-Issue delivery approval",
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/5550",
+            "scope": "one addressed Ready Issue",
+            "labels": ["agent:ready"],
             "state": "open",
             "body_hash": "a" * 64,
             "acceptance_criteria_hash": "b" * 64,
@@ -448,6 +452,25 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
         )
         with pytest.raises(ControlPlaneProtocolError):
             owner.issue_delivery_preview(manifest=incomplete_context)
+    for context_issue_field, replacement in (
+        ("repository", "OtherOrg/other-repository"),
+        ("title", "another Issue"),
+        ("url", "https://github.com/RasmusTho/agentic-pkm-mvp/issues/1"),
+        ("scope", "another scope"),
+    ):
+        mismatched_context_issue = deepcopy(manifest)
+        mismatched_context_issue["context"]["dispatch_plan"]["context_packs"][0]["issue_contract"][  # type: ignore[union-attr]
+            context_issue_field
+        ] = replacement
+        mismatched_context_issue["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+            mismatched_context_issue["context"]["dispatch_plan"]  # type: ignore[union-attr]
+        )
+        with pytest.raises(ControlPlaneProtocolError):
+            owner.issue_delivery_preview(manifest=mismatched_context_issue)
+    missing_ready_label = deepcopy(manifest)
+    missing_ready_label["issue"]["labels"] = ["type:task"]  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=missing_ready_label)
     invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["run_id"] = "run/5550"  # type: ignore[union-attr]
     invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]

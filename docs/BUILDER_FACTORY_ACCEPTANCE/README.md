@@ -204,7 +204,8 @@ support is assigned below; a prompt asking the model to obey a manifest is insuf
 **Exact approval.** Extend the [FCA-08 manifest](#immutable-approval-manifest-and-operation-permissions)
 within its existing owner. Before Start, it must bind all of these values without defaults:
 
-- `repository`, numeric Issue identity and node identity, caller-bound Issue body/AC hashes, one
+- `repository`, numeric Issue identity, node identity, immutable canonical Issue URL/scope and
+  `agent:ready` label binding, caller-bound Issue body/AC hashes, one
   immutable 40-character Git commit source revision, proposal/context-pack hash, and a complete
   one-Issue frozen dispatch plan with its independently retained `expected_plan_hash`. The plan
   contains the planner's bound scope or `epic_issue_number`, run-state observation, validation
@@ -226,7 +227,7 @@ within its existing owner. Before Start, it must bind all of these values withou
 - one destination identity: authenticated executor principal, host/system identity, channel,
   canonical repository checkout, dedicated worktree/branch, target base ref and observed base SHA,
   plus one proposed run identity allocated without effects for the preview. Start approves that
-  exact identity, cross-checked against the frozen dispatch plan; only after approval commits may
+  exact identity, cross-checked against the full Issue contract and frozen dispatch plan; only after approval commits may
   the destination durably reserve it. A Codex
   session ID is attached only when observed;
 - exact entrypoint `app/builderops/epic_dispatch.py::dispatch_issue_sessions` with
