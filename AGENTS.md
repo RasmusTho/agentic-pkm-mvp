@@ -146,7 +146,7 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
 
 ## Dispatcher policy
 
-The dispatcher is an optional collision guard, not lifecycle authority. Use only
+The dispatcher is an optional collision guard, not lifecycle authority; Project Status is optional projection. Use only
 `scripts/issue_pickup_claim.sh` through `issue-to-code`; never reconstruct its claim/label handshake.
 During active work, `dispatcher heartbeat` runs about every 30 minutes and renews the current
 holder's unexpired lease from its persisted TTL. GitHub Issue state, blocked-state, and review-handoff
