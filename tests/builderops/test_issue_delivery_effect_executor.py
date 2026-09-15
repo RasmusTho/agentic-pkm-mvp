@@ -1624,7 +1624,7 @@ def test_unit_host_prepares_and_freezes_destination_before_entry(
             "remote",
             "set-url",
             "origin",
-            "https://github.com/RasmusTho/bifrost.git",
+            "https://github.com/example/issue-delivery-mismatch.git",
         ],
         check=True,
     )
