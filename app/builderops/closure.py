@@ -87,13 +87,44 @@ def _run(
     *,
     input_text: str | None = None,
 ) -> CommandResult:
-    from app.builderops.issue_delivery_operation import enforce_child_effect_gate
-
-    enforce_child_effect_gate("closure_reconciliation")
     result = executor.run(argv, cwd=cwd, input_text=input_text)
     if result.returncode:
         raise ClosureError("command-failed", "closure command failed", result)
     return result
+
+
+def _delivery_effect_gate(
+    effect: str,
+    *,
+    repository: str,
+    issue_number: int,
+    worktree: Path,
+    branch: str,
+    pr_number: int | None = None,
+) -> None:
+    """Re-authorize one concrete closure mutation when delivery is active."""
+
+    from app.builderops.issue_delivery_operation import enforce_child_effect_gate
+
+    target: dict[str, Any] = {
+        "repository": repository,
+        "issue_number": issue_number,
+        "worktree": str(worktree.resolve()),
+        "branch": branch,
+    }
+    if effect in {"review_merge", "closure_reconciliation"}:
+        if pr_number is None:
+            raise ClosureError("unsupported", "closure effect gate requires an exact PR target")
+        target.update(
+            {
+                "pr_number": pr_number,
+                "pr_repository": repository,
+                "pr_issue_number": issue_number,
+                "pr_head_ref": branch,
+                "pr_base_ref": "main",
+            }
+        )
+    enforce_child_effect_gate(effect, target=target)
 
 
 def _api(
@@ -986,6 +1017,7 @@ def _dispatcher_reclaim(
     repository: str,
     issue_number: int,
     pr_number: int,
+    branch: str,
 ) -> dict[str, str]:
     task_id = dispatcher.get("task_id")
     holder = dispatcher.get("lease_holder")
@@ -999,6 +1031,14 @@ def _dispatcher_reclaim(
         or not old_lease_id
     ):
         raise ClosureError("incomplete", "dispatcher planned lease identity is malformed")
+    _delivery_effect_gate(
+        "closure_reconciliation",
+        repository=repository,
+        issue_number=issue_number,
+        worktree=cwd,
+        branch=branch,
+        pr_number=pr_number,
+    )
     result = _run(
         executor,
         cwd,
@@ -1484,6 +1524,7 @@ def build_closure_plan(request: ClosureRequest, *, executor: CommandExecutor | N
     plan = {
         "schema": PLAN_SCHEMA, "repository": request.repository, "worktree": str(request.worktree.resolve()),
         "pr_number": request.pr_number, "base_sha": before["pr"]["base"].get("sha"), "head_sha": before["head_sha"],
+        "branch": str(before["pr"]["head"].get("ref") or ""),
         "title_sha256": hashlib.sha256(str(before["pr"].get("title") or "").encode()).hexdigest(),
         "body_sha256": hashlib.sha256(str(before["pr"].get("body") or "").encode()).hexdigest(),
         "pr_body_revision": before["pr_contract"]["body_revision_updated_at"],
@@ -1534,6 +1575,7 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
     if (
         value.get("tier") not in (1, 2)
         or value.get("final_review_rounds") != 0
+        or not isinstance(value.get("branch"), str)
         or value.get("closing_issues") != [value.get("governing_issue")]
         or not isinstance(closing_issue, Mapping)
         or closing_issue.get("number") != value.get("governing_issue")
@@ -1576,6 +1618,16 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
 
 def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, executor: CommandExecutor | None = None) -> dict[str, Any]:
     value = _validated(plan, expected_plan_sha256); runner = executor or SubprocessExecutor(); cwd = Path(value["worktree"])
+
+    def effect_gate(effect: str) -> None:
+        _delivery_effect_gate(
+            effect,
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            worktree=cwd,
+            branch=str(value["branch"]),
+            pr_number=int(value["pr_number"]),
+        )
     dispatcher = value["post_merge"].get("dispatcher") or {}
     task_id = dispatcher.get("task_id") if isinstance(dispatcher, Mapping) else None
     coordination = value["coordination"]
@@ -1689,6 +1741,7 @@ def apply_closure_plan(plan: Mapping[str, Any], *, expected_plan_sha256: str, ex
                 "drift", "dispatcher task or lease-holder drifted immediately before merge"
             )
     merge = value["merge"]
+    effect_gate("review_merge")
     result = runner.run(["gh", "api", "--hostname", GITHUB_HOST, "--method", "PUT", f"repos/{value['repository']}/pulls/{value['pr_number']}/merge", "-f", f"sha={value['head_sha']}", "-f", f"merge_method={merge['method']}", "-f", f"commit_title={merge['commit_title']}", "-f", f"commit_message={merge['commit_message']}"], cwd=cwd)
     if result.returncode:
         try:
@@ -1766,6 +1819,7 @@ def _complete_dispatcher_after_merge(
             repository=str(value["repository"]),
             issue_number=int(value["governing_issue"]),
             pr_number=int(value["pr_number"]),
+            branch=str(value["branch"]),
         )
         state = _dispatcher_completion(
             runner,
@@ -1776,6 +1830,14 @@ def _complete_dispatcher_after_merge(
             pr_number=int(value["pr_number"]),
         )
     if state["status"] == "claimed":
+        _delivery_effect_gate(
+            "closure_reconciliation",
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            worktree=cwd,
+            branch=str(value["branch"]),
+            pr_number=int(value["pr_number"]),
+        )
         completed = runner.run(
             [
                 sys.executable,
@@ -1912,6 +1974,14 @@ def _finish_cleanup_effects(
     )
     for label in removable_labels:
         refresh_guard()
+        _delivery_effect_gate(
+            "closure_reconciliation",
+            repository=str(value["repository"]),
+            issue_number=int(value["governing_issue"]),
+            worktree=cwd,
+            branch=str(value["branch"]),
+            pr_number=int(value["pr_number"]),
+        )
         result = runner.run(
             [
                 "gh",

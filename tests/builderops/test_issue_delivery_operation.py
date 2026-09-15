@@ -235,6 +235,20 @@ def test_delivery_effect_boundaries_recheck_authority() -> None:
         assert adapter.authorize_effect(effect)["effect"] == effect
     assert len(client.authority_calls) == 5
 
+    target = {
+        "repository": "RasmusTho/agentic-pkm-mvp",
+        "issue_number": 5550,
+        "worktree": "/worktrees/issue-5550",
+        "branch": "codex/5550-issue-delivery-approval",
+    }
+    assert adapter.authorize_effect("publication", target=target)["target"] == target
+    with pytest.raises(IssueDeliveryOperationRefused, match="Issue differs"):
+        adapter.authorize_effect(
+            "publication", target={**target, "issue_number": 5551}
+        )
+    with pytest.raises(IssueDeliveryOperationRefused, match="PR binding is incomplete"):
+        adapter.authorize_effect("review_merge", target=target)
+
     client.revoked = True
     with pytest.raises(IssueDeliveryOperationRefused, match="unavailable"):
         adapter.authorize_effect("publication")

@@ -269,8 +269,15 @@ def apply_publication_plan(
     normalized = _validated_plan(plan, expected_plan_sha256)
     from app.builderops.issue_delivery_operation import enforce_child_effect_gate
 
+    effect_target = {
+        "repository": normalized["repository"],
+        "issue_number": int(normalized["governing_issue"]["number"]),
+        "worktree": str(Path(normalized["worktree"]).resolve()),
+        "branch": normalized["git"]["branch"],
+    }
+
     def effect_gate() -> None:
-        enforce_child_effect_gate("publication")
+        enforce_child_effect_gate("publication", target=effect_target)
 
     worktree = Path(normalized["worktree"])
     authority = _assert_authority_unchanged(runner, worktree, normalized)
@@ -305,11 +312,13 @@ def apply_publication_plan(
         state_before_stage, _ = _observe_local_state(runner, worktree, normalized)
         if state_before_stage not in {"uncommitted", "staged"}:
             raise PublicationRefusal("drift", "local state changed before staging")
+        effect_gate()
         stage = runner.run(["git", "add", "--", *normalized["git"]["intended_paths"]], cwd=worktree)
         if stage.returncode != 0:
             raise PublicationCommandError(stage)
         _assert_staged_plan(runner, worktree, normalized)
         _assert_issue_unchanged(runner, worktree, normalized)
+        effect_gate()
         commit = runner.run(["git", "commit", "-m", normalized["commit"]["message"]], cwd=worktree)
         if commit.returncode != 0:
             try:

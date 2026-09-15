@@ -31,7 +31,7 @@ from app.builderops.control_plane.issue_delivery import (
     canonical_hash,
     manifest_hash,
 )
-from app.builderops.control_plane.models import canonical_repository
+from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
 from app.builderops.epic_dispatch import (
     CodexIssueSessionLauncher,
     IssueSessionLauncher,
@@ -50,13 +50,15 @@ class IssueDeliveryOperationRefused(IssueDeliveryOperationError):
     """A stale, changed, or unsupported operation cannot cross an effect gate."""
 
 
-def enforce_child_effect_gate(effect: str) -> None:
+def enforce_child_effect_gate(
+    effect: str,
+    target: Mapping[str, Any] | None = None,
+) -> None:
     """Synchronously re-authorize a child-owned lifecycle effect.
 
     The destination launcher exports only the non-secret path to the committed
     approval.  Existing owner wrappers call this function immediately before
-    their first external mutation (and the closure executor calls it before
-    each command), so a worker cannot turn a stale parent preflight into
+    their external mutation, so a worker cannot turn a stale parent preflight into
     continuing authority.  With no exported approval this is a no-op for all
     existing non-issue-delivery workflows.
     """
@@ -90,7 +92,7 @@ def enforce_child_effect_gate(effect: str) -> None:
             client=client,
             repo_root=checkout,
         )
-        adapter.authorize_effect(effect)
+        adapter.authorize_effect(effect, target=target)
     except IssueDeliveryOperationError:
         raise
     except Exception as exc:
@@ -310,7 +312,7 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationRefused("Issue-delivery identity is malformed")
         try:
             canonical_repository(str(value["repository"]))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, EnvelopeValidationError) as exc:
             raise IssueDeliveryOperationRefused(
                 "Issue-delivery repository identity is malformed"
             ) from exc
@@ -348,11 +350,114 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationRefused("Issue-delivery effect grant is incomplete")
         return value
 
-    def _authority(self, effect: str) -> dict[str, Any]:
+    def _default_effect_target(self, effect: str) -> dict[str, Any]:
+        destination = self.approval["destination"]
+        issue = self.approval["issue"]
+        target: dict[str, Any] = {
+            "repository": self.repository,
+            "issue_number": issue["number"],
+            "checkout": str(Path(str(destination["checkout"])).resolve()),
+            "worktree": str(Path(str(destination["worktree"])).resolve()),
+            "branch": destination["branch"],
+        }
+        return target
+
+    def _validate_effect_target(
+        self,
+        effect: str,
+        target: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Bind a concrete owner effect to the approved Issue destination."""
+
+        expected = self._default_effect_target(effect)
+        if target is None:
+            return expected
+        if not isinstance(target, Mapping):
+            raise IssueDeliveryOperationRefused("effect target binding is malformed")
+        allowed = {
+            "repository",
+            "issue_number",
+            "checkout",
+            "worktree",
+            "branch",
+            "pr_number",
+            "pr_repository",
+            "pr_issue_number",
+            "pr_head_ref",
+            "pr_base_ref",
+        }
+        if set(target) - allowed:
+            raise IssueDeliveryOperationRefused("effect target binding contains unrelated fields")
+        try:
+            target_repository = canonical_repository(str(target.get("repository")))
+        except (TypeError, ValueError, EnvelopeValidationError) as exc:
+            raise IssueDeliveryOperationRefused(
+                "effect target repository is malformed"
+            ) from exc
+        if target_repository != expected["repository"]:
+            raise IssueDeliveryOperationRefused("effect target repository differs from approval")
+        if type(target.get("issue_number")) is not int or target["issue_number"] != expected["issue_number"]:
+            raise IssueDeliveryOperationRefused("effect target Issue differs from approval")
+        if "checkout" in target:
+            value = target["checkout"]
+            if (
+                not isinstance(value, str)
+                or Path(value).resolve() != Path(expected["checkout"]).resolve()
+            ):
+                raise IssueDeliveryOperationRefused(
+                    "effect target checkout differs from approval"
+                )
+        for field in ("worktree",):
+            value = target.get(field)
+            if not isinstance(value, str) or Path(value).resolve() != Path(expected[field]).resolve():
+                raise IssueDeliveryOperationRefused(
+                    f"effect target {field} differs from approval"
+                )
+        if target.get("branch") != expected["branch"]:
+            raise IssueDeliveryOperationRefused("effect target branch differs from approval")
+        if effect in {"review_merge", "closure_reconciliation"}:
+            pr_fields = {
+                "pr_number",
+                "pr_repository",
+                "pr_issue_number",
+                "pr_head_ref",
+                "pr_base_ref",
+            }
+            if not pr_fields.issubset(target):
+                raise IssueDeliveryOperationRefused(
+                    "effect target PR binding is incomplete"
+                )
+            try:
+                target_pr_repository = canonical_repository(str(target["pr_repository"]))
+            except (TypeError, ValueError, EnvelopeValidationError) as exc:
+                raise IssueDeliveryOperationRefused(
+                    "effect target PR repository is malformed"
+                ) from exc
+            if (
+                type(target["pr_number"]) is not int
+                or target["pr_number"] <= 0
+                or target_pr_repository != expected["repository"]
+                or type(target["pr_issue_number"]) is not int
+                or target["pr_issue_number"] != expected["issue_number"]
+                or target["pr_head_ref"] != expected["branch"]
+                or target["pr_base_ref"] != self.approval["destination"]["base_ref"]
+            ):
+                raise IssueDeliveryOperationRefused(
+                    "effect target PR differs from approved destination"
+                )
+        return dict(target)
+
+    def _authority(
+        self,
+        effect: str,
+        *,
+        target: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if effect not in PERMITTED_EFFECTS:
             raise IssueDeliveryOperationRefused(
                 f"effect is not permitted by the approved Issue operation: {effect}"
             )
+        target_binding = self._validate_effect_target(effect, target)
         try:
             reply = self.client.issue_delivery_authority(
                 manifest=self.approval, purpose="execute"
@@ -378,6 +483,7 @@ class IssueDeliveryOperationAdapter:
             "observed_at": reply["observed_at"],
             "approval_manifest_hash": self.approval_manifest_hash,
             "live_binding": live_binding,
+            "target": target_binding,
         }
 
     def _live_binding(self) -> dict[str, Any]:
@@ -407,10 +513,15 @@ class IssueDeliveryOperationAdapter:
             )
         return expected
 
-    def authorize_effect(self, effect: str) -> dict[str, Any]:
+    def authorize_effect(
+        self,
+        effect: str,
+        *,
+        target: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Recheck fresh permission before a real repository effect."""
 
-        return self._authority(effect)
+        return self._authority(effect, target=target)
 
     # Alias used by effect owners that call this a gate rather than an
     # authorization check.
@@ -875,8 +986,41 @@ def _main() -> int:
 
     parser = argparse.ArgumentParser(description="Recheck one Issue-delivery effect gate")
     parser.add_argument("--effect", choices=sorted(PERMITTED_EFFECTS), required=True)
+    parser.add_argument("--target-json", help="JSON object identifying the concrete effect target")
+    parser.add_argument("--repository")
+    parser.add_argument("--issue-number", type=int)
+    parser.add_argument("--worktree")
+    parser.add_argument("--branch")
     args = parser.parse_args()
-    enforce_child_effect_gate(args.effect)
+    target: Mapping[str, Any] | None = None
+    if args.target_json is not None:
+        if any(
+            value is not None
+            for value in (args.repository, args.issue_number, args.worktree, args.branch)
+        ):
+            raise SystemExit("--target-json cannot be combined with scalar target options")
+        try:
+            parsed = json.loads(args.target_json)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"--target-json must be valid JSON: {exc}") from exc
+        if not isinstance(parsed, Mapping):
+            raise SystemExit("--target-json must contain an object")
+        target = parsed
+    elif any(
+        value is not None
+        for value in (args.repository, args.issue_number, args.worktree, args.branch)
+    ):
+        if None in (args.repository, args.issue_number, args.worktree, args.branch):
+            raise SystemExit(
+                "--repository, --issue-number, --worktree, and --branch are required together"
+            )
+        target = {
+            "repository": args.repository,
+            "issue_number": args.issue_number,
+            "worktree": args.worktree,
+            "branch": args.branch,
+        }
+    enforce_child_effect_gate(args.effect, target=target)
     return 0
 
 

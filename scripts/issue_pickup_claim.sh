@@ -174,9 +174,18 @@ else
   fi
 fi
 
-if [[ -n "${BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE:-}" ]]; then
-  "$PYTHON_BIN" -m app.builderops.issue_delivery_operation --effect issue_claim
-fi
+issue_claim_gate() {
+  if [[ -n "${BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE:-}" ]]; then
+    "$PYTHON_BIN" -m app.builderops.issue_delivery_operation \
+      --effect issue_claim \
+      --repository "$REPO" \
+      --issue-number "$ISSUE_NUMBER" \
+      --worktree "$EXPECTED_WORKTREE" \
+      --branch "$EXPECTED_BRANCH"
+  fi
+}
+
+issue_claim_gate
 
 replace_ready_label_with_in_progress() {
   # GitHub's per-label DELETE would leave a successful claim with no active
@@ -222,6 +231,7 @@ PY
     return 1
   fi
 
+  issue_claim_gate
   gh api --method PUT \
     "repos/$REPO/issues/$ISSUE_NUMBER/labels" \
     --input - <<<"$label_payload" >/dev/null
@@ -258,6 +268,7 @@ PY
 
 if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
   claim_json=""
+  issue_claim_gate
   if ! claim_json="$("$PYTHON_BIN" -m app.dispatcher claim "$TASK_ID" --agent "$AGENT_ID" --ttl-minutes "$TTL_MINUTES" --json)"; then
     # Provider-wide partial-sync metadata cannot prove why this exact task is
     # absent: the kill switch still runs the essential agent:ready scan. Keep
@@ -343,6 +354,7 @@ PY
 fi
 
 claimant_receipt="Pickup intent receipt: agent=$AGENT_ID session=$SESSION_ID branch=$EXPECTED_BRANCH worktree=$EXPECTED_WORKTREE coordination_mode=$RECEIPT_COORDINATION_MODE fallback_reason=$RECEIPT_FALLBACK_REASON issue=$ISSUE_NUMBER"
+issue_claim_gate
 comment_json="$(
   gh api --method POST \
     "repos/$REPO/issues/$ISSUE_NUMBER/comments" \

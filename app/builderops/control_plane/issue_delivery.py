@@ -34,6 +34,8 @@ REQUIRED_WORKFLOW_ARTIFACTS = frozenset(
         "app/builderops/cli.py",
         "app/builderops/epic_dispatch.py",
         "app/builderops/issue_delivery_operation.py",
+        "app/builderops/publication.py",
+        "app/builderops/closure.py",
         "scripts/issue_pickup_claim.sh",
         "scripts/publication.py",
         "scripts/closure.py",

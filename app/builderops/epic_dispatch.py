@@ -363,9 +363,13 @@ class CodexIssueSessionLauncher:
                     effect_gate_error = exc
 
         if self._stream_output:
-            child_env = None
+            # Do not leak an outer Issue-delivery approval into a nested
+            # launcher.  A child is bound only when this launcher itself was
+            # constructed with the committed approval; otherwise its owner
+            # wrappers must run without Issue-delivery authority.
+            child_env = os.environ.copy()
+            child_env.pop("BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE", None)
             if self.effect_gate_approval_file is not None:
-                child_env = os.environ.copy()
                 child_env[
                     "BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE"
                 ] = str(self.effect_gate_approval_file)
