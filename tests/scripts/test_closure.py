@@ -137,7 +137,7 @@ class Fake:
                     "body": self.body,
                     "updated_at": PR_UPDATED,
                     "base": {"ref": "main", "sha": "c" * 40, "repo": {"full_name": REPO}},
-                    "head": {"sha": HEAD, "repo": {"full_name": REPO}},
+                    "head": {"ref": "codex/issue-5245-light-closure", "sha": HEAD, "repo": {"full_name": REPO}},
                 },
             )
             if self.claim_dispatcher_during_pr_readback and not self.merged:
@@ -366,6 +366,15 @@ def test_closure_apply_revalidates_all_authority_before_exact_head_merge(tmp_pat
     fake = Fake(tmp_path); plan = build_closure_plan(request(tmp_path), executor=fake)
     fake.body += "changed"
     with pytest.raises(ClosureError, match="authority drift|Verify evidence"):
+        apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
+    assert not any(call[-1].endswith("/merge") for call in fake.calls if call[:2] == ("gh", "api"))
+
+
+def test_closure_apply_rejects_live_pr_head_branch_drift(tmp_path: Path) -> None:
+    fake = Fake(tmp_path); plan = build_closure_plan(request(tmp_path), executor=fake)
+    plan["branch"] = "codex/unapproved-source-branch"
+    plan["plan_sha256"] = closure_plan_hash(plan)
+    with pytest.raises(ClosureError, match="body/head authority drifted"):
         apply_closure_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=fake)
     assert not any(call[-1].endswith("/merge") for call in fake.calls if call[:2] == ("gh", "api"))
 

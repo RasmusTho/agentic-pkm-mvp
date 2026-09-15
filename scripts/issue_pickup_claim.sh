@@ -231,7 +231,9 @@ PY
     return 1
   fi
 
-  issue_claim_gate
+  if ! issue_claim_gate; then
+    return 1
+  fi
   gh api --method PUT \
     "repos/$REPO/issues/$ISSUE_NUMBER/labels" \
     --input - <<<"$label_payload" >/dev/null

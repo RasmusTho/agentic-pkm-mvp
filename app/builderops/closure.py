@@ -1555,6 +1555,9 @@ def _validate_planned_pr(
         or base.get("repo", {}).get("full_name") != plan.get("repository")
         or not isinstance(head, Mapping)
         or head.get("repo", {}).get("full_name") != plan.get("repository")
+        or not isinstance(plan.get("branch"), str)
+        or not plan.get("branch")
+        or head.get("ref") != plan.get("branch")
         or head.get("sha") != plan.get("head_sha")
         or hashlib.sha256(str(pr.get("body") or "").encode()).hexdigest() != plan.get("body_sha256")
         or hashlib.sha256(str(pr.get("title") or "").encode()).hexdigest() != plan.get("title_sha256")
@@ -1576,6 +1579,7 @@ def _validated(plan: Mapping[str, Any], expected: str) -> dict[str, Any]:
         value.get("tier") not in (1, 2)
         or value.get("final_review_rounds") != 0
         or not isinstance(value.get("branch"), str)
+        or not value.get("branch")
         or value.get("closing_issues") != [value.get("governing_issue")]
         or not isinstance(closing_issue, Mapping)
         or closing_issue.get("number") != value.get("governing_issue")
