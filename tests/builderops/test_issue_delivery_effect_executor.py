@@ -649,6 +649,7 @@ def _production_registry(tmp_path: Path) -> CredentialRegistry:
                 "issue_delivery:execute",
                 "issue_delivery:read",
                 "outbox:write",
+                "receipts:read",
                 "status:read",
                 "tasks:write",
             ],
