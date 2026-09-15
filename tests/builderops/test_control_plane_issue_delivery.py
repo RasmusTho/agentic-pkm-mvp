@@ -360,6 +360,13 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_plan)
     invalid_plan = deepcopy(manifest)
+    invalid_plan["context"]["dispatch_plan"]["run_id"] = "run/5550"  # type: ignore[union-attr]
+    invalid_plan["context"]["expected_plan_hash"] = canonical_hash(  # type: ignore[union-attr]
+        invalid_plan["context"]["dispatch_plan"]  # type: ignore[union-attr]
+    )
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_plan)
+    invalid_plan = deepcopy(manifest)
     invalid_plan["context"]["dispatch_plan"]["decisions"][0]["execution_routing"] = {  # type: ignore[union-attr]
         "mode": "canary"
     }
@@ -376,6 +383,10 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
     invalid_profile = deepcopy(manifest)
+    invalid_profile["profile"]["resolved"]["carrier"] = "claude"  # type: ignore[union-attr]
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_profile)
+    invalid_profile = deepcopy(manifest)
     invalid_profile["profile"]["verification_profile"]["criterion_hashes"] = {}  # type: ignore[union-attr]
     with pytest.raises(ControlPlaneProtocolError):
         owner.issue_delivery_preview(manifest=invalid_profile)
@@ -383,8 +394,29 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     for revision in ("main", "main:a5f0e10b666e74c4b8de36a67563a99e30ee801d", "HEAD"):
         invalid_source = deepcopy(manifest)
         invalid_source["source"]["revision"] = revision  # type: ignore[union-attr]
-        with pytest.raises(ControlPlaneProtocolError):
-            owner.issue_delivery_preview(manifest=invalid_source)
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=invalid_source)
+
+    foreign_parent = deepcopy(manifest)
+    foreign_parent["parent_evidence"] = {
+        "kind": "issue",
+        "repository": "OtherOrg/other-repository",
+        "number": 5399,
+        "node_id": "I_foreign_parent",
+        "relationship": {
+            "kind": "parent",
+            "child_issue_number": 5550,
+            "authenticated": True,
+        },
+        "contract_version": "fca-parent.v1",
+        "contract_hash": "8" * 64,
+        "write_permission": {
+            "scope": "parent_evidence:write",
+            "effects": ["pr_receipt_comments", "child_generated_ledger_writeback"],
+        },
+    }
+    with pytest.raises(ControlPlaneProtocolError):
+        owner.issue_delivery_preview(manifest=foreign_parent)
 
     incomplete_parent = deepcopy(manifest)
     incomplete_parent["parent_evidence"] = {"kind": "issue"}

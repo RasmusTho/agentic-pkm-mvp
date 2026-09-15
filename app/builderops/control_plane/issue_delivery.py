@@ -63,6 +63,7 @@ NON_EFFECTS = REQUIRED_NON_EFFECTS | OPTIONAL_NON_EFFECTS
 
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SELECTION_INTENTS = frozenset(
     {"coordination", "general_delivery", "strong_reasoning", "verification"}
 )
@@ -70,7 +71,7 @@ _CAPABILITIES = frozenset({"spark", "luna", "terra", "sol"})
 _REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 )
-_CARRIERS = frozenset({"codex", "claude"})
+_CARRIERS = frozenset({"codex"})
 _NODE_ID = re.compile(r"^[A-Za-z0-9_:-]{1,256}$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$")
 _SERVER_FIELDS = frozenset(
@@ -233,6 +234,9 @@ def _dispatch_plan_fields(value: Any, *, issue_number: int, context_pack_id: str
         raise IssueDeliveryContractError("frozen dispatch plan schema version is unsupported")
     if plan.get("source") != "builderops.epic_dispatch.dry_run":
         raise IssueDeliveryContractError("frozen dispatch plan must come from the dry-run planner")
+    run_id = _text(plan.get("run_id"), "frozen dispatch run id", limit=256)
+    if _RUN_ID.fullmatch(run_id) is None:
+        raise IssueDeliveryContractError("frozen dispatch run id is not launcher-compatible")
     decisions = plan.get("decisions")
     context_packs = plan.get("context_packs")
     if not isinstance(decisions, list) or not isinstance(context_packs, list):

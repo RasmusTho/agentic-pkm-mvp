@@ -724,6 +724,12 @@ def create_app(
         normalized = normalize_issue_delivery_manifest(manifest_input)
         repository = normalized["repository"]
         _enforce_repo_scope(credential, repository)
+        parent_evidence = normalized.get("parent_evidence")
+        if isinstance(parent_evidence, Mapping) and parent_evidence.get("kind") == "issue":
+            parent_repository = parent_evidence.get("repository")
+            if not isinstance(parent_repository, str):
+                raise IssueDeliveryContractError("parent evidence repository is required")
+            _enforce_repo_scope(credential, parent_repository)
         permission = issue_delivery_permission(credential, repository)
         owner_profile = normalized.get("owner_profile")
         if isinstance(owner_profile, Mapping):
