@@ -1122,6 +1122,7 @@ jobs:
               # FCA-05 authority/correction and production read transport need
               # real PostgreSQL; the not-pg lane cannot execute these ACs.
               - 'app/builderops/control_plane/**'
+              - 'app/builderops/epic_dispatch.py'
               - 'app/builderops/owner_fact_producers.py'
               - 'app/builderops/devui_owner_facts.py'
               - 'app/builderops/devui_focus_inputs.py'
@@ -1130,6 +1131,7 @@ jobs:
               - 'app/builderops/devui_sources.py'
               - 'tests/builderops/test_owner_fact_producers.py'
               - 'tests/api/test_devui_owner_facts.py'
+              - 'tests/builderops/test_control_plane_issue_delivery.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5

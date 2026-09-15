@@ -1385,6 +1385,11 @@ def create_app(
             raise HTTPException(status_code=403, detail="owner asks require source admission")
         if request.record_type == "ModelInquiryApproval" or request.record_id.startswith("inquiry-approval:"):
             raise HTTPException(status_code=403, detail="inquiry approvals require owner command admission")
+        if request.idempotency_key.startswith("issue-delivery:"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Issue-delivery idempotency keys require exact owner admission",
+            )
         if (
             request.record_type == ISSUE_DELIVERY_RECORD_TYPE
             or request.record_id.startswith("issue-delivery-approval:")

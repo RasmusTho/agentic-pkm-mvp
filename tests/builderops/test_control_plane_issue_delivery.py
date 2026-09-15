@@ -645,6 +645,20 @@ def test_issue_approval_production_admission(store, registry, monkeypatch) -> No
     for client in (inquiry, generic):
         with pytest.raises(ControlPlaneScopeError):
             client.issue_delivery_preview(manifest=manifest)
+    with pytest.raises(ControlPlaneScopeError):
+        generic.commit_record(
+            envelope={
+                "repository": REPOSITORY,
+                "scope": "generic-record",
+                "stack": "builderops-control-plane",
+                "source_refs": ["test:issue-5550"],
+            },
+            record_id="generic-record:issue-delivery-prefix",
+            record_type="BuilderOpsReceipt",
+            state="active",
+            payload={"kind": "generic"},
+            idempotency_key="issue-delivery:operation-prefix-reservation",
+        )
 
     changed_source = dict(preview["manifest"])
     changed_source["source"] = {**changed_source["source"], "revision": "main:changed"}
