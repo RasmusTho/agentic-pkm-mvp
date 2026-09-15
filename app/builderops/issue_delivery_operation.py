@@ -602,8 +602,23 @@ class IssueDeliveryOperationAdapter:
         }
 
     def _live_binding(self) -> dict[str, Any]:
+        destination = self.approval["destination"]
+        for raw_name, frozen_name in (
+            ("checkout", "resolved_checkout"),
+            ("worktree", "resolved_worktree"),
+        ):
+            try:
+                current_identity = Path(str(destination[raw_name])).resolve()
+            except (OSError, RuntimeError) as exc:
+                raise IssueDeliveryOperationRefused(
+                    f"approved destination {raw_name} cannot be resolved"
+                ) from exc
+            if current_identity != Path(str(destination[frozen_name])):
+                raise IssueDeliveryOperationRefused(
+                    f"approved destination {raw_name} identity changed after approval"
+                )
         observed = self.live_binding_reader(self.approval)
-        expected_destination = self.approval["destination"]
+        expected_destination = destination
         expected_workflow = self.approval["workflow"]
         observed_artifacts: list[dict[str, str]] = [
             {
