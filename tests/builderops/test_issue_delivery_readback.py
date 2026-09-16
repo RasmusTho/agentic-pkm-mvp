@@ -1,0 +1,607 @@
+"""FCA-ID-C production readback contracts for Issue delivery (#5552)."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+
+import pytest
+
+from app.builderops import cockpit_github_plane
+from app.builderops.devui_focus_inputs import read_focus_inputs
+from app.builderops.devui_focus import compose_focus_view
+from app.builderops.devui_overview import compose_overview_view
+from app.builderops.devui_overview_inputs import derive_overview_inputs
+from app.builderops.devui_sources import _task
+from app.builderops.issue_delivery_readback import (
+    IssueDeliveryReadbackRefused,
+    admit_issue_delivery_task,
+    compose_issue_delivery_readback,
+)
+
+
+REPOSITORY = "rasmustho/agentic-pkm-mvp"
+ISSUE = 5552
+BODY = """## Context
+Bounded FCA-ID-C slice.
+
+## Scope
+- Add independent delivery readback.
+
+## Source Anchors
+- `docs/CONCEPTS/FEATURE_CANDIDATE_ACCEPTANCE/README.md#fca-id-c`
+
+## SBS Impact
+- No SBS impact.
+
+## Constraints
+- Reuse the existing TaskRecord and Issue-delivery authorities.
+
+## Acceptance Criteria
+- [ ] Read back delivery.
+  Verify: tests/builderops/test_issue_delivery_readback.py::test_production_issue_task_envelope_reaches_overview
+
+## Out of Scope
+- Deployment and owner acceptance.
+
+## Suggested Validation
+- Run the declared focused test.
+
+## Source Docs
+- `docs/CONCEPTS/FEATURE_CANDIDATE_ACCEPTANCE/README.md`
+"""
+BODY_HASH = hashlib.sha256(BODY.encode()).hexdigest()
+AC_TEXT = (
+    "- [ ] Read back delivery.\n"
+    "  Verify: tests/builderops/test_issue_delivery_readback.py::"
+    "test_production_issue_task_envelope_reaches_overview\n\n"
+)
+AC_HASH = hashlib.sha256(AC_TEXT.encode()).hexdigest()
+SOURCE_SHA = "a" * 40
+HEAD_SHA = "b" * 40
+MERGE_SHA = "c" * 40
+APPROVAL_HASH = "d" * 64
+PR_TITLE = "Deliver FCA-ID-C readback"
+PR_BODY = f"Fixes #{ISSUE}"
+PR_TITLE_HASH = hashlib.sha256(PR_TITLE.encode()).hexdigest()
+PR_BODY_HASH = hashlib.sha256(PR_BODY.encode()).hexdigest()
+
+
+def _approval() -> dict:
+    return {
+        "contract_version": "builderops.issue-delivery.v1",
+        "approval_id": "approval-5552",
+        "approval_manifest_hash": APPROVAL_HASH,
+        "authority_epoch": 7,
+        "operation_key": "operation-5552",
+        "repository": REPOSITORY,
+        "issue": {
+            "number": ISSUE,
+            "node_id": "I_5552",
+            "state": "open",
+            "body_hash": BODY_HASH,
+            "acceptance_criteria_hash": AC_HASH,
+        },
+        "source": {"revision": SOURCE_SHA},
+        "destination": {
+            "branch": "codex/5552-issue-delivery-readback",
+            "base_ref": "main",
+            "base_sha": SOURCE_SHA,
+        },
+    }
+
+
+def _approval_readback() -> dict:
+    approval = _approval()
+    return {
+        "state": "approved",
+        "approval_id": approval["approval_id"],
+        "approval": approval,
+        "manifest": approval,
+        "operation": {
+            "operation_key": approval["operation_key"],
+            "repository": REPOSITORY,
+            "issue_number": ISSUE,
+        },
+        "receipt": {"approval_manifest_hash": APPROVAL_HASH},
+    }
+
+
+def _issue(*, state: str = "open", updated_at: str = "2026-09-16T12:00:00Z") -> dict:
+    return {
+        "number": ISSUE,
+        "node_id": "I_5552",
+        "state": state,
+        "title": "task: independently read back Issue delivery and candidate",
+        "body": BODY,
+        "labels": [{"name": "agent:ready"}],
+        "html_url": f"https://github.com/{REPOSITORY}/issues/{ISSUE}",
+        "url": f"https://api.github.com/repos/{REPOSITORY}/issues/{ISSUE}",
+        "repository_url": f"https://api.github.com/repos/{REPOSITORY}",
+        "created_at": "2026-09-16T10:00:00Z",
+        "updated_at": updated_at,
+    }
+
+
+class _TaskClient:
+    authority_epoch = 7
+
+    def __init__(self) -> None:
+        self.row: dict | None = None
+
+    def issue_delivery_readback(self, *, repository: str, approval_id: str) -> dict:
+        assert (repository, approval_id) == (REPOSITORY, "approval-5552")
+        return deepcopy(_approval_readback())
+
+    def transition_task(self, **request: object) -> dict:
+        assert request["to_state"] == "ready"
+        self.row = {
+            "repository": REPOSITORY,
+            "task_id": request["task_id"],
+            "state": "ready",
+            "version": 1,
+            "updated_at": "2026-09-16T12:00:01+00:00",
+            "lease": None,
+            "payload": deepcopy(request["request"]),
+            "authority_envelope": {
+                **deepcopy(request["envelope"]),
+                "actor": "builderops:test",
+                "schema_version": 1,
+            },
+        }
+        return {
+            "result": {
+                "repository": REPOSITORY,
+                "task_id": request["task_id"],
+                "state": "ready",
+                "receipt_sequence": 1,
+                "recovery_lsn": "0/1",
+                "operation_key": None,
+                "replayed": False,
+            }
+        }
+
+    def get_task(self, *, repository: str, task_id: str) -> dict:
+        assert repository == REPOSITORY
+        assert self.row is not None and self.row["task_id"] == task_id
+        return deepcopy(self.row)
+
+    def status(self) -> dict:
+        return {"authority_epoch": self.authority_epoch}
+
+
+def _provider(item: dict) -> dict:
+    captured = "2026-09-16T12:00:02+00:00"
+    return {
+        "provider": "builderops_cockpit",
+        "status": "available",
+        "authority": "read_time_join",
+        "captured_at": captured,
+        "payload": {
+            "authority": "read_time_join",
+            "generated_at": captured,
+            "claim": {"kind": "counted", "text": "working", "as_of": captured},
+            "sources": [{
+                "name": "dispatcher-store", "state": "fresh", "configured": True,
+                "last_successful_read": captured,
+            }],
+            "bands": [{"key": "working", "countable": True, "count": 1, "items": [item]}],
+        },
+    }
+
+
+def _composition() -> dict:
+    return {
+        "contract_version": "devui.composition.v1",
+        "authority": "projection_only",
+        "captured_at": "2026-09-16T12:00:02+00:00",
+        "providers": {
+            "work": {
+                "provider": "builderops_cockpit",
+                "status": "available",
+                "authority": "read_time_join",
+                "captured_at": "2026-09-16T12:00:02+00:00",
+                "snapshot": {"watermark": "work:5552"},
+                "completeness": {"claim": {"kind": "counted"}},
+            }
+        },
+    }
+
+
+def _effects() -> list[dict]:
+    return [
+        {"operation_key": "1" * 64, "status": "succeeded", "payload": {
+            "request_sha256": "1" * 64, "effect_slot_sha256": "4" * 64,
+            "effect_kind": "publication", "target": {
+            "kind": "publication", "issue_number": ISSUE, "branch": "codex/5552-issue-delivery-readback",
+            "base_ref": "main", "base_sha": SOURCE_SHA, "head_sha": HEAD_SHA,
+            "title_sha256": PR_TITLE_HASH, "body_sha256": PR_BODY_HASH,
+        }}},
+        {"operation_key": "2" * 64, "status": "succeeded", "payload": {
+            "request_sha256": "2" * 64, "effect_slot_sha256": "5" * 64,
+            "effect_kind": "merge", "target": {
+            "kind": "merge", "issue_number": ISSUE, "pr_number": 6001,
+            "branch": "codex/5552-issue-delivery-readback", "base_ref": "main",
+            "base_sha": SOURCE_SHA, "head_sha": HEAD_SHA,
+        }}},
+        {"operation_key": "3" * 64, "status": "succeeded", "payload": {
+            "request_sha256": "3" * 64, "effect_slot_sha256": "6" * 64,
+            "effect_kind": "closure", "target": {
+            "kind": "closure", "issue_number": ISSUE, "pr_number": 6001,
+            "merge_commit_sha": MERGE_SHA, "expected_issue_state": "open",
+        }}},
+    ]
+
+
+def _github(*, head_sha: str = HEAD_SHA, issue_state: str = "closed") -> dict:
+    return {
+        "repository": REPOSITORY,
+        "observed_at": "2026-09-16T12:02:00+00:00",
+        "issue": {
+            **_issue(state=issue_state),
+            "body_hash": BODY_HASH,
+            "acceptance_criteria_hash": AC_HASH,
+            "closed_at": "2026-09-16T12:01:00Z" if issue_state == "closed" else None,
+            "closed_by": {"login": "merge-owner"} if issue_state == "closed" else None,
+        },
+        "pull_request": {
+            "number": 6001, "node_id": "PR_6001", "state": "closed", "merged": True,
+            "merged_at": "2026-09-16T12:00:30Z",
+            "title_sha256": PR_TITLE_HASH, "body_sha256": PR_BODY_HASH,
+            "governing_issue": ISSUE,
+            "head_ref": "codex/5552-issue-delivery-readback", "head_sha": head_sha,
+            "base_ref": "main", "base_sha": SOURCE_SHA, "merge_commit_sha": MERGE_SHA,
+        },
+        "required_gates": {
+            "state": "success", "head_sha": head_sha,
+            "policy_sha256": "7" * 64,
+            "observed_at": "2026-09-16T12:02:00+00:00",
+        },
+        "reviews": {
+            "state": "approved", "head_sha": head_sha,
+            "observed_at": "2026-09-16T12:02:00+00:00",
+        },
+    }
+
+
+def _operation(*, worker_receipt: dict | None = None) -> dict:
+    return {
+        "state": "terminal",
+        "operation_key": "operation-5552",
+        "worker_receipt": worker_receipt or {"claimed_success": True},
+        "host_effect_refs": [
+            {"operation_key": str(index) * 64, "request_sha256": str(index) * 64,
+             "effect_slot_sha256": str(index + 3) * 64}
+            for index in range(1, 4)
+        ],
+    }
+
+
+def _binding(*, status: str = "current", source_sha: str = HEAD_SHA) -> dict:
+    return {
+        "repository": REPOSITORY,
+        "subject_ref": f"github:{REPOSITORY}#{ISSUE}",
+        "source_revision": source_sha,
+        "readiness_status": status,
+        "candidate_ref": {"source_sha": source_sha, "devui_image_digest": "sha256:" + "e" * 64,
+                          "devui_config_fingerprint": "f" * 64},
+        "environment_ref": {"vmid": 102, "name": "bob-1", "component_id": "devui"},
+        "readiness_receipt_ref": {"id": "receipt:health", "sha256": "1" * 64,
+                                  "source_owner": "builderops_deployment_owner"},
+        "acceptance_profile_ref": {"id": "profile:devui-trial", "version": "1", "sha256": "2" * 64,
+                                   "source_owner": "builderops_vm102_receipt_source"},
+        "binding_hash": "3" * 64,
+        "observed_at": "2026-09-16T12:00:03+00:00",
+    }
+
+
+def _projection(**changes: object) -> dict:
+    values = {
+        "task": None,
+        "approval_readback": _approval_readback(),
+        "operation": _operation(),
+        "host_effects": _effects(),
+        "github_evidence": _github(),
+        "owner_binding": _binding(),
+    }
+    values.update(changes)
+    return compose_issue_delivery_readback(**values)
+
+
+def test_issue_delivery_admission_builds_exact_task_contract() -> None:
+    client = _TaskClient()
+    row = admit_issue_delivery_task(
+        client=client,
+        repository=REPOSITORY,
+        approval_id="approval-5552",
+        issue_reader=lambda _repo, _number: _issue(),
+        observed_at="2026-09-16T12:00:00+00:00",
+    )
+    projection = _projection(task=row)
+    item = _task(row, repository=REPOSITORY)
+    assert item is not None
+    item.update(
+        issue_delivery_readback=projection,
+        why_now="Issue delivery is active.",
+    )
+
+    overview = derive_overview_inputs(
+        work_provider=_provider(item),
+    )
+    focus = read_focus_inputs(
+        f"github:{REPOSITORY}#{ISSUE}",
+        repository=REPOSITORY,
+        issue_reader=lambda _repo, _number: _issue(),
+        issue_delivery_reader=lambda _subject: projection,
+    )
+
+    assert row["version"] == row["payload"]["issue_delivery"]["task_record_version"] == 1
+    assert overview["now"][0]["delivery_facts"]["delivery"]["state"] == "evidenced"
+    assert overview["now"][0]["delivery_facts"]["ready_to_try"]["state"] == "evidenced"
+    assert any(
+        str(item.get("claim_id", "")).startswith("issue-delivery:")
+        for item in focus["evidence"]
+    )
+    composed_overview = compose_overview_view(
+        composition=_composition(), candidates=overview
+    )
+    composed_focus = compose_focus_view(
+        **focus,
+        now=lambda: datetime(2026, 9, 16, 12, 0, 4, tzinfo=timezone.utc),
+    )
+    assert composed_overview["now"]
+    assert composed_focus["state"] == "focus_partial"
+
+    generic_item = deepcopy(item)
+    generic_item.pop("issue_delivery_readback")
+    generic = derive_overview_inputs(work_provider=_provider(generic_item))["now"][0]
+    assert "delivery_facts" not in generic
+    mismatched = deepcopy(projection)
+    mismatched["subject_ref"] = f"github:{REPOSITORY}#9999"
+    assert derive_overview_inputs(
+        work_provider=_provider(item),
+        issue_delivery_provider={f"github:{REPOSITORY}#{ISSUE}": mismatched},
+    ) == {"now": []}
+
+    reads = 0
+    def drifting_issue(_repo: str, _number: int) -> dict:
+        nonlocal reads
+        reads += 1
+        value = _issue()
+        if reads == 2:
+            value["title"] = "changed during admission"
+        return value
+
+    with pytest.raises(IssueDeliveryReadbackRefused, match="admission readback"):
+        admit_issue_delivery_task(
+            client=_TaskClient(),
+            repository=REPOSITORY,
+            approval_id="approval-5552",
+            issue_reader=drifting_issue,
+            observed_at="2026-09-16T12:00:00+00:00",
+        )
+
+    class RevokedDuringAdmission(_TaskClient):
+        reads = 0
+
+        def issue_delivery_readback(self, *, repository: str, approval_id: str) -> dict:
+            result = super().issue_delivery_readback(
+                repository=repository, approval_id=approval_id
+            )
+            self.reads += 1
+            if self.reads == 2:
+                result["state"] = "invalidated"
+            return result
+
+    with pytest.raises(IssueDeliveryReadbackRefused, match="admission readback"):
+        admit_issue_delivery_task(
+            client=RevokedDuringAdmission(),
+            repository=REPOSITORY,
+            approval_id="approval-5552",
+            issue_reader=lambda _repo, _number: _issue(),
+            observed_at="2026-09-16T12:00:00+00:00",
+        )
+
+
+@pytest.mark.pg
+def test_production_issue_task_envelope_reaches_overview(
+    issue_delivery_production_harness,
+) -> None:
+    harness = issue_delivery_production_harness()
+    approval = harness.approval
+    issue = approval["issue"]
+    number = int(issue["number"])
+    repository = str(approval["repository"])
+    task_id = f"issue-delivery-{approval['approval_id']}"
+    payload = {
+        "repo": repository,
+        "task_id": task_id,
+        "issue_number": number,
+        "title": "Production Issue-delivery readback",
+        "status": "ready",
+        "why_now": "Issue delivery is active.",
+        "created_at": "2026-09-16T12:00:00+00:00",
+        "updated_at": "2026-09-16T12:00:00+00:00",
+        "sync_state": {"labels": ["agent:ready"]},
+        "issue_delivery": {
+            "contract": "fca-issue-delivery-task.v1",
+            "task_record_version": 1,
+            "approval_id": approval["approval_id"],
+            "approval_manifest_hash": approval["approval_manifest_hash"],
+            "operation_key": approval["operation_key"],
+            "authority_epoch": approval["authority_epoch"],
+            "issue_node_id": issue["node_id"],
+            "issue_body_hash": issue["body_hash"],
+            "acceptance_criteria_hash": issue["acceptance_criteria_hash"],
+            "source_revision": approval["source"]["revision"],
+        },
+    }
+    envelope = {
+        "repository": repository,
+        "scope": f"issue:{number}",
+        "stack": "builderops-issue-delivery",
+        "source_refs": [f"builderops:issue-delivery:{approval['approval_id']}"],
+    }
+    harness.host.transition_task(
+        envelope=envelope,
+        task_id=task_id,
+        to_state="ready",
+        idempotency_key=f"issue-delivery-admission:{approval['approval_id']}",
+        request=payload,
+    )
+    row = harness.host.get_task(repository=repository, task_id=task_id)
+    item = _task(row, repository=repository)
+    assert item is not None
+    subject = f"github:{repository}#{number}"
+    projection = deepcopy(_projection())
+    projection.update(subject_ref=subject, issue_number=number, task_record_version=1)
+    projection["evidence"][0]["evidence_id"] = f"issue-delivery:{number}:{HEAD_SHA}"
+    projection["evidence"][0]["source_ref"].update(
+        source_id=f"{repository}#{number}:pr-6001",
+        locator=f"https://github.com/{repository}/pull/6001",
+    )
+    projection["delivery_facts"]["delivery"].update(
+        evidence_id=projection["evidence"][0]["evidence_id"],
+        source_ref=deepcopy(projection["evidence"][0]["source_ref"]),
+    )
+    item["issue_delivery_readback"] = projection
+
+    overview = derive_overview_inputs(work_provider=_provider(item))
+    focus_issue = _issue()
+    focus_issue.update(
+        number=number,
+        node_id=issue["node_id"],
+        html_url=f"https://github.com/{repository}/issues/{number}",
+        url=f"https://api.github.com/repos/{repository}/issues/{number}",
+        repository_url=f"https://api.github.com/repos/{repository}",
+    )
+    focus = read_focus_inputs(
+        subject,
+        repository=repository,
+        issue_reader=lambda _repo, _number: focus_issue,
+        issue_delivery_reader=lambda _subject: projection,
+    )
+
+    assert row["version"] == row["payload"]["issue_delivery"]["task_record_version"] == 1
+    assert overview["now"][0]["delivery_facts"]["delivery"]["state"] == "evidenced"
+    assert any(
+        str(evidence.get("claim_id", "")).startswith("issue-delivery:")
+        for evidence in focus["evidence"]
+    )
+
+
+def test_production_readback_uses_independent_github_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    def paged(_owner: str, _name: str, endpoint: str, **_kwargs: object) -> list[dict]:
+        if endpoint == "pulls":
+            return [{"number": 6001, "body": PR_BODY, "head": {
+                "ref": "codex/5552-issue-delivery-readback",
+            }}]
+        if endpoint == "pulls/6001/reviews":
+            return [{
+                "id": 1, "state": "APPROVED", "commit_id": HEAD_SHA,
+                "submitted_at": "2026-09-16T12:01:00Z", "user": {"login": "reviewer"},
+            }]
+        raise AssertionError(endpoint)
+
+    def run(args: list[str]) -> dict:
+        endpoint = args[1]
+        if endpoint.endswith(f"issues/{ISSUE}"):
+            return _github()["issue"]
+        if endpoint.endswith("pulls/6001"):
+            return {
+                "number": 6001, "node_id": "PR_6001", "state": "closed", "merged": True,
+                "merged_at": "2026-09-16T12:00:30Z",
+                "title": PR_TITLE, "body": PR_BODY,
+                "head": {"ref": "codex/5552-issue-delivery-readback", "sha": HEAD_SHA},
+                "base": {"ref": "main", "sha": SOURCE_SHA},
+                "merge_commit_sha": MERGE_SHA,
+            }
+        if endpoint.endswith(f"commits/{HEAD_SHA}/check-runs"):
+            return {"check_runs": [{
+                "id": 2, "name": "Unit tests (not pg)", "head_sha": HEAD_SHA,
+                "status": "completed", "conclusion": "success", "app": {"id": 7},
+            }]}
+        if endpoint.endswith(f"commits/{HEAD_SHA}/status"):
+            return {"statuses": []}
+        if endpoint.endswith("branches/main/protection"):
+            return {"required_status_checks": {"contexts": [], "checks": []}}
+        if endpoint.endswith(REPOSITORY):
+            return {"default_branch": "main"}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(cockpit_github_plane, "_paged_rest", paged)
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", run)
+    parsed = cockpit_github_plane.read_issue_delivery_github(
+        REPOSITORY, ISSUE, branch="codex/5552-issue-delivery-readback"
+    )
+
+    delivered = _projection(
+        operation=_operation(worker_receipt={"forged": "success"}),
+        github_evidence=parsed,
+    )
+    assert delivered["state"] == "delivered"
+
+    def neutral_required_gate(args: list[str]) -> dict:
+        response = run(args)
+        if args[1].endswith(f"commits/{HEAD_SHA}/check-runs"):
+            response = deepcopy(response)
+            response["check_runs"][0]["conclusion"] = "neutral"
+        return response
+
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", neutral_required_gate)
+    incomplete = cockpit_github_plane.read_issue_delivery_github(
+        REPOSITORY, ISSUE, branch="codex/5552-issue-delivery-readback"
+    )
+    assert incomplete["required_gates"]["state"] == "incomplete"
+    with pytest.raises(IssueDeliveryReadbackRefused, match="reviewed merge"):
+        _projection(github_evidence=incomplete)
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", run)
+
+    with pytest.raises(IssueDeliveryReadbackRefused, match="GitHub evidence"):
+        _projection(github_evidence=None)
+    with pytest.raises(IssueDeliveryReadbackRefused, match="head"):
+        _projection(github_evidence=_github(head_sha="9" * 40))
+    with pytest.raises(IssueDeliveryReadbackRefused, match="closure"):
+        _projection(github_evidence=_github(issue_state="open"))
+    with pytest.raises(IssueDeliveryReadbackRefused, match="host effect"):
+        _projection(host_effects=_effects()[:-1])
+
+    changed_head = False
+
+    def late_head(args: list[str]) -> dict:
+        nonlocal changed_head
+        response = run(args)
+        if args[1].endswith("pulls/6001"):
+            if changed_head:
+                response = deepcopy(response)
+                response["head"]["sha"] = "9" * 40
+            changed_head = True
+        return response
+
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", late_head)
+    with pytest.raises(cockpit_github_plane.GithubReadError, match="changed during"):
+        cockpit_github_plane.read_issue_delivery_github(
+            REPOSITORY, ISSUE, branch="codex/5552-issue-delivery-readback"
+        )
+
+    assert _projection() == _projection()  # reconnect/readback is deterministic
+
+
+def test_issue_delivery_candidate_profile_linkage() -> None:
+    current = _projection()
+    assert current["candidate"]["ready_to_try"] is True
+    assert current["candidate"]["source_revision"] == HEAD_SHA
+    assert current["candidate"]["acceptance_profile_ref"]["id"] == "profile:devui-trial"
+    assert "owner_outcome" not in current
+    assert current["delivery_facts"]["ready_to_try"]["state"] == "evidenced"
+
+    for binding in (
+        _binding(status="withdrawn"),
+        _binding(source_sha="8" * 40),
+        None,
+    ):
+        projection = _projection(owner_binding=binding)
+        assert projection["candidate"]["ready_to_try"] is False
+        assert "ready_to_try" not in projection["delivery_facts"]
+        assert "owner_outcome" not in projection

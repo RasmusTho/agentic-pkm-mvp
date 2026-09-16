@@ -12,6 +12,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import subprocess
@@ -652,6 +653,7 @@ def read_focus_inputs(
     repository: str | None = None,
     issue_reader: Callable[[str, str], Any] | None = None,
     owner_fact_reader: Callable[[], dict[str, Any]] | None = None,
+    issue_delivery_reader: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Return detached composer inputs for exactly one stable governed subject."""
 
@@ -664,7 +666,51 @@ def read_focus_inputs(
         inputs = _read_issue_inputs(
             subject_id, match, repository=repository, issue_reader=issue_reader
         )
-        return append_focus_owner_facts(inputs, owner_fact_reader() if owner_fact_reader else read_owner_fact_transport(repository=repository))
+        inputs = append_focus_owner_facts(inputs, owner_fact_reader() if owner_fact_reader else read_owner_fact_transport(repository=repository))
+        delivery = issue_delivery_reader(subject_id) if issue_delivery_reader else None
+        if delivery is not None:
+            if (
+                not isinstance(delivery, dict)
+                or delivery.get("contract") != "fca-issue-delivery-readback.v1"
+                or delivery.get("state") != "delivered"
+                or delivery.get("subject_ref") != subject_id
+                or not isinstance(delivery.get("evidence"), list)
+                or not delivery["evidence"]
+                or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("source_ref"), dict)
+                    for item in delivery["evidence"]
+                )
+            ):
+                raise FocusInputError("Issue-delivery readback is incompatible with selected subject")
+            focus_evidence = [
+                {
+                    "claim_id": item["evidence_id"],
+                    "claim": item["claim"],
+                    "source_ref": deepcopy(item["source_ref"]),
+                    "availability": item["availability"],
+                    "freshness": item["freshness"],
+                    "coverage": item["completeness"],
+                    "cardinality": item["cardinality"],
+                    "linkage": item["linkage"],
+                    "captured_at": item["captured_at"],
+                    "read_watermark": item.get("read_watermark"),
+                    "limitation": item.get("limitation"),
+                }
+                for item in delivery["evidence"]
+            ]
+            inputs["evidence"].extend(focus_evidence)
+            source_ref = delivery["evidence"][0].get("source_ref") if delivery["evidence"] else None
+            inputs["limitations"].append(
+                {
+                    "kind": "issue_delivery_scope",
+                    "reason": "Repository delivery and readiness do not establish owner trial or acceptance.",
+                    "source_ref": deepcopy(source_ref),
+                    "evidence_state": "partial",
+                    "linkage": "linked",
+                }
+            )
+        return inputs
     raise FocusInputError("selected subject is unsupported")
 
 

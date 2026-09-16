@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -769,7 +770,7 @@ def _build_item(
         else None
     )
 
-    return {
+    result = {
         "id": task["task_id"],
         "issue_number": issue_number,
         "repo": task.get("repo"),
@@ -808,6 +809,9 @@ def _build_item(
         "risk_meter": risk_meter(flaws),
         "updated_at": task.get("updated_at"),
     }
+    if isinstance(task.get("issue_delivery_readback"), dict):
+        result["issue_delivery_readback"] = deepcopy(task["issue_delivery_readback"])
+    return result
 
 
 def _github_facts(

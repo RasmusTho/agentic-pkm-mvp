@@ -1135,6 +1135,7 @@ jobs:
               - 'tests/builderops/test_control_plane_issue_delivery.py'
               - 'tests/builderops/test_issue_delivery_effect_executor.py'
               - 'tests/builderops/test_issue_delivery_operation.py'
+              - 'tests/builderops/test_issue_delivery_readback.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -1221,6 +1222,7 @@ jobs:
             tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries \
             tests/builderops/test_issue_delivery_effect_executor.py \
             tests/builderops/test_issue_delivery_operation.py \
+            tests/builderops/test_issue_delivery_readback.py \
             --tb=short \
             | tee pytest-index-pg.log
 
