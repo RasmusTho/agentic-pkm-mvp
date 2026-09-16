@@ -21,6 +21,12 @@ ENV VCS_REF=$VCS_REF \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# Host-owned BuilderOps secrets are root:101 mode 0640. Claim the established
+# non-root runtime identity before packages can allocate incidental system IDs;
+# an unavailable UID/GID must fail the image build instead of drifting silently.
+RUN addgroup --system --gid 101 builderops \
+    && adduser --system --uid 100 --ingroup builderops --home /nonexistent builderops
+
 # The existing Cockpit source owns gh REST timeout/pagination and credentials.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gh openssh-client \
@@ -69,9 +75,7 @@ task = issue_source_task(issue, repository="example/fixture", number=1,
                          observed_at=stamp, authority_epoch=1)
 assert task["task_id"] == "github-example--fixture-issue-1" and task["status"] == "ready"
 PY
-RUN pip install --no-cache-dir --no-deps . \
-    && addgroup --system builderops \
-    && adduser --system --ingroup builderops --home /nonexistent builderops
+RUN pip install --no-cache-dir --no-deps .
 
 USER builderops
 EXPOSE 8000

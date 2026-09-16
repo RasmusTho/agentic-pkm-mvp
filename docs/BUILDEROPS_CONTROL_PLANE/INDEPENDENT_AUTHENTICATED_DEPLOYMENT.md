@@ -19,6 +19,13 @@ or make a backup/restore claim.
 
 BuilderOps operational state is rebuilt from repository source, exact attested images, pinned configuration, and secret custody. The deployed Compose and candidate image paths include no WAL-G, recovery target, recovery egress, archived-WAL pipeline, backup service, or restore command. A future backup capability requires a separate owner decision and bounded delivery; its absence cannot block deployment, migration, readiness, candidate attestation, rollout, or closure.
 
+The control-plane image fixes its non-root `builderops` identity at UID `100` and GID `101` before
+installing OS packages. BuilderOps host secrets consumed by that image remain root-owned, group `101`
+and mode `0640`; they are not made world-readable or reassigned to an incidental package-created
+group. An unavailable fixed UID/GID fails the image build. The PR/main image probe executes the built
+image and requires `100:101`, preserving the same secret reader across candidate activation and
+rollback instead of relying on Debian package-install order.
+
 PostgreSQL has `archive_mode = off` and an empty `archive_command`. The local guard rejects archive drift, WAL growth, and disk pressure. It never deletes `pg_wal`, invokes `pg_resetwal`, or treats a reset/cleanup tool as a rebuild substitute.
 
 For first database initialization only, deployment preflights the exact regular host source `${BUILDEROPS_SECRET_ROOT}/database-app-password` as root-owned mode `0400` or `0600`. The PostgreSQL image then reads only the fixed Compose secret path `/run/secrets/builderops_database_app_password` and copies that single app-role password into a `postgres`-owned tmpfs file. `init_roles.sh` reads and removes that staged file before the service starts. No other secret is staged or made readable to the init script, and neither the original secret nor its value enters an environment variable, image layer, durable file, log, or another service.
