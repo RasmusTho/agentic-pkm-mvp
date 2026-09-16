@@ -23,6 +23,7 @@ from app.builderops.control_plane.api_models import (
     IssueDeliveryAuthorityRequest,
     IssueDeliveryPreviewRequest,
     IssueDeliveryStartRequest,
+    IssueDeliveryOperationRecordRequest,
     LeaseClaimRequest,
     LeaseInput,
     OutboxClaimRequest,
@@ -65,7 +66,10 @@ from app.builderops.control_plane.models import (
     canonical_repository,
 )
 from app.builderops.control_plane.selection import database_environment, production_store
-from app.builderops.control_plane.store import _issue_delivery_admission_capability
+from app.builderops.control_plane.store import (
+    _issue_delivery_admission_capability,
+    _issue_delivery_operation_capability,
+)
 from app.middleware.trace import TraceIdMiddleware
 from app.builderops.devui_conversation_port import canonical_context_pack_bytes, validate_context_pack_bytes
 from app.builderops.devui_model_inquiry_command import approval_manifest, build_command_proposal, canonical_hash, validate_approval_identity, validate_command_proposal
@@ -84,6 +88,7 @@ from app.builderops.control_plane.issue_delivery import (
     approval_digest as issue_delivery_approval_digest,
     RECORD_TYPE as ISSUE_DELIVERY_RECORD_TYPE,
     assert_no_credential_fingerprint_fields,
+    destination_resource_key,
     idempotency_key as issue_delivery_idempotency_key,
     manifest_hash as issue_delivery_manifest_hash,
     normalize_manifest as normalize_issue_delivery_manifest,
@@ -109,6 +114,22 @@ _ALLOWED_SECRET_METADATA_KEYS = frozenset(
         "token_length",
     }
 )
+
+
+def _worker_supplies_issue_delivery_host_effect_field(value: Any) -> bool:
+    """Keep host-owned effect evidence out of worker diagnostics."""
+
+    if isinstance(value, Mapping):
+        return any(
+            key in {"effect_receipts", "host_effect_refs"}
+            or _worker_supplies_issue_delivery_host_effect_field(child)
+            for key, child in value.items()
+        )
+    if isinstance(value, list):
+        return any(_worker_supplies_issue_delivery_host_effect_field(item) for item in value)
+    return False
+
+
 # Structural authority fields whose names collide with the credential-key
 # heuristic (``fencing_token`` ends in ``_token``) but which are never secrets.
 # The exemption is scoped to BOTH the FULL ancestor path from the request
@@ -617,6 +638,7 @@ def create_app(
         int(os.getenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", "120"))
     )
     issue_delivery_admission = _issue_delivery_admission_capability()
+    issue_delivery_operation = _issue_delivery_operation_capability()
     health_service = health or HealthService(
         store,
         credentials,
@@ -1362,6 +1384,283 @@ def create_app(
             }
         except Exception as exc:
             raise _control_plane_error(exc) from exc
+
+    async def issue_delivery_operation_record_sync(
+        request: IssueDeliveryOperationRecordRequest, credential: Credential
+    ) -> dict[str, Any]:
+        """Revalidate and commit one destination-owned lifecycle receipt."""
+
+        _enforce_repo_scope(credential, request.envelope.repository)
+        if request.envelope.scope != "issue-delivery-operation":
+            raise HTTPException(status_code=403, detail="Issue-delivery operation scope is required")
+        match = re.fullmatch(
+            r"issue-delivery-(reservation|attempt|entry|terminal):([A-Za-z0-9][A-Za-z0-9_.:@-]{0,255})",
+            request.record_id,
+        )
+        if match is None or match.group(2) != request.operation_key:
+            raise StateConflict("Issue-delivery operation record identity is invalid")
+        kind = match.group(1)
+        required_scope = "issue_delivery:execute"
+        if required_scope not in credential.scopes:
+            raise HTTPException(status_code=403, detail=f"{required_scope} grant required")
+        expected_idempotency = f"issue-delivery-operation:{kind}:{request.operation_key}"
+        if request.idempotency_key != expected_idempotency:
+            raise StateConflict("Issue-delivery operation idempotency identity is invalid")
+        repository = canonical_repository(request.envelope.repository)
+        try:
+            row = store.get_record(repository, issue_delivery_record_id(request.approval_id))
+        except KeyError as exc:
+            raise StateConflict("Issue-delivery approval is not durably admitted") from exc
+        approved = dict(row.get("payload", {}))
+        if (
+            row.get("record_type") != ISSUE_DELIVERY_RECORD_TYPE
+            or row.get("state") != "approved"
+            or approved.get("repository") != repository
+            or approved.get("approval_id") != request.approval_id
+            or approved.get("operation_key") != request.operation_key
+            or approved.get("approval_manifest_hash") != request.approval_manifest_hash
+        ):
+            raise StateConflict("Issue-delivery operation does not match its approval")
+        _assert_issue_delivery_approval_integrity(approved)
+        _assert_issue_delivery_permission_safe(approved.get("permission"))
+        permission = approved.get("permission")
+        owner_id = permission.get("credential_id") if isinstance(permission, Mapping) else None
+        owner = (
+            credentials.current_credential(owner_id)
+            if kind in {"reservation", "attempt"} and isinstance(owner_id, str)
+            else None
+        )
+        if kind in {"reservation", "attempt"} and owner is None:
+            raise StateConflict("Issue-delivery approval owner is unavailable")
+        # Reservation and pre-launch attempt are effects and require a fresh
+        # unexpired execute grant.  Entry/terminal are observations of a
+        # process that may outlive that grant; their immutable approval and
+        # predecessor hashes remain authenticated, but expiry/revocation must
+        # not erase the crash evidence needed for reconciliation.
+        if kind in {"reservation", "attempt"}:
+            assert owner is not None
+            validate_issue_delivery_approval(approved, owner)
+        # Observation records intentionally use only this immutable, already
+        # admitted payload and their predecessor hashes.  Re-normalizing here
+        # would re-resolve mutable symlinks and could turn truthful crash
+        # evidence into a destination-drift failure.
+        destination = approved.get("destination")
+        if not isinstance(destination, Mapping) or destination.get("identity") != credential.principal:
+            raise HTTPException(status_code=403, detail="Issue-delivery destination does not match credential principal")
+        payload = dict(request.payload)
+        expected_common = {
+            "schema", "repository", "operation_type", "operation_key",
+            "approval_id", "approval_manifest_hash", "live_binding", "receipt_hash",
+        }
+        expected_specific = {
+            "reservation": {"destination", "destination_resource_key", "issue_number", "proposed_run", "reserved_at"},
+            "attempt": {"reservation_receipt_hash", "attempt_id", "attempted_at"},
+            "entry": {"attempt_receipt_hash", "attempt_id", "session_id", "entered_at"},
+            "terminal": {"attempt_receipt_hash", "entry_receipt_hash", "session_id", "worker_receipt", "host_effect_refs", "observed_at"},
+        }[kind]
+        if set(payload) != expected_common | expected_specific:
+            raise StateConflict("Issue-delivery operation receipt fields are not closed")
+        if (
+            payload.get("schema") != f"builderops.issue-delivery-{kind}.v1"
+            or payload.get("repository") != repository
+            or payload.get("operation_type") != ISSUE_DELIVERY_OPERATION
+            or payload.get("operation_key") != request.operation_key
+            or payload.get("approval_id") != request.approval_id
+            or payload.get("approval_manifest_hash") != request.approval_manifest_hash
+            or not isinstance(payload.get("receipt_hash"), str)
+            or canonical_hash({key: value for key, value in payload.items() if key != "receipt_hash"}) != payload.get("receipt_hash")
+        ):
+            raise StateConflict("Issue-delivery operation receipt binding is invalid")
+        workflow = approved.get("workflow")
+        source = approved.get("source")
+        if not isinstance(destination, Mapping) or not isinstance(workflow, Mapping) or not isinstance(source, Mapping):
+            raise StateConflict("Issue-delivery approval bindings are incomplete")
+        expected_live_binding: dict[str, Any] = {
+            "checkout": str(destination["resolved_checkout"]),
+            "worktree": str(destination["resolved_worktree"]),
+            "branch": str(destination["branch"]),
+            "source_revision": str(source["revision"]),
+            "base_sha": str(destination["base_sha"]),
+            "workflow_hash": str(workflow["content_hash"]),
+            "workflow_artifacts": sorted(
+                [
+                    {"path": str(artifact["path"]), "sha256": str(artifact["sha256"])}
+                    for artifact in workflow["artifacts"]
+                ],
+                key=lambda item: item["path"],
+            ),
+        }
+        if kind in {"reservation", "attempt"}:
+            expected_live_binding.update(
+                {
+                    "current_issue": {
+                        "number": approved["issue"]["number"],
+                        "node_id": approved["issue"]["node_id"],
+                        "state": "open",
+                        "body_hash": approved["issue"]["body_hash"],
+                        "acceptance_criteria_hash": approved["issue"]["acceptance_criteria_hash"],
+                    },
+                    "current_source": {
+                        "revision": source["revision"],
+                        "refs": list(source.get("refs", [])),
+                    },
+                    "current_profile": dict(approved["profile"]),
+                }
+            )
+        if payload.get("live_binding") != expected_live_binding:
+            raise StateConflict("Issue-delivery source or workflow binding changed after approval")
+        for field in ("reserved_at", "attempted_at", "entered_at", "observed_at"):
+            if field in payload:
+                try:
+                    timestamp = datetime.fromisoformat(str(payload[field]).replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise StateConflict("Issue-delivery receipt timestamp is invalid") from exc
+                if timestamp.tzinfo is None:
+                    raise StateConflict("Issue-delivery receipt timestamp must be timezone-aware")
+        if kind == "reservation":
+            expected_resource_key = destination_resource_key(
+                repository, approved["issue"]["number"], destination
+            )
+            if (
+                payload.get("destination") != destination
+                or payload.get("issue_number") != approved["issue"]["number"]
+                or payload.get("destination_resource_key") != expected_resource_key
+                or payload.get("proposed_run") != {"run_id": destination.get("run_id")}
+            ):
+                raise StateConflict("Issue-delivery reservation does not match its approval")
+        elif kind == "attempt":
+            if payload.get("attempt_id") != f"{request.operation_key}:attempt" or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("reservation_receipt_hash"))):
+                raise StateConflict("Issue-delivery attempt receipt is malformed")
+        elif kind == "entry":
+            if payload.get("attempt_id") != f"{request.operation_key}:attempt" or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", str(payload.get("session_id"))) or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attempt_receipt_hash"))):
+                raise StateConflict("Issue-delivery entry receipt is malformed")
+        else:
+            session_id = payload.get("session_id")
+            if session_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", str(session_id)):
+                raise StateConflict("Issue-delivery terminal session id is malformed")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attempt_receipt_hash"))):
+                raise StateConflict("Issue-delivery terminal attempt binding is malformed")
+            if request.state == "terminal" and (not isinstance(payload.get("worker_receipt"), Mapping) or not isinstance(session_id, str)):
+                raise StateConflict("terminal receipt requires a worker and session")
+            if request.state == "launch_unknown" and payload.get("worker_receipt") is not None:
+                raise StateConflict("launch-unknown receipt cannot claim a worker outcome")
+            if _worker_supplies_issue_delivery_host_effect_field(payload.get("worker_receipt")):
+                raise StateConflict(
+                    "worker receipt must not supply protected host effect fields"
+                )
+            refs = payload.get("host_effect_refs")
+            if not isinstance(refs, list) or len(refs) > 5:
+                raise StateConflict("Issue-delivery host effect references are malformed")
+            seen_refs: set[tuple[str, str, str]] = set()
+            effect_types = {
+                "claim": "github.issue-delivery.claim.v1",
+                "publication": "github.issue-delivery.publication.v1",
+                "merge": "github.issue-delivery.merge.v1",
+                "closure": "github.issue-delivery.closure.v1",
+                "parent_evidence": "github.issue-delivery.parent-evidence.v1",
+            }
+            for ref in refs:
+                if not isinstance(ref, Mapping) or set(ref) != {
+                    "operation_key", "request_sha256", "effect_slot_sha256"
+                }:
+                    raise StateConflict("Issue-delivery host effect reference is malformed")
+                operation_key = ref.get("operation_key")
+                request_sha256 = ref.get("request_sha256")
+                effect_slot_sha256 = ref.get("effect_slot_sha256")
+                if not (
+                    isinstance(operation_key, str)
+                    and isinstance(request_sha256, str)
+                    and isinstance(effect_slot_sha256, str)
+                    and all(
+                        re.fullmatch(r"[0-9a-f]{64}", value)
+                        for value in (operation_key, request_sha256, effect_slot_sha256)
+                    )
+                ):
+                    raise StateConflict("Issue-delivery host effect reference is malformed")
+                ref_identity = (operation_key, request_sha256, effect_slot_sha256)
+                if ref_identity in seen_refs:
+                    raise StateConflict("Issue-delivery host effect reference is malformed")
+                seen_refs.add(ref_identity)
+                try:
+                    outbox_status = store.outbox_status(repository, operation_key)
+                    intent = store.outbox_intent(repository, operation_key)
+                except KeyError as exc:
+                    raise StateConflict(
+                        "Issue-delivery host effect reference is unavailable"
+                    ) from exc
+                effect_payload = intent.get("payload") if isinstance(intent, Mapping) else None
+                if not isinstance(effect_payload, Mapping):
+                    raise StateConflict("Issue-delivery host effect reference is foreign or changed")
+                effect_kind = effect_payload.get("effect_kind")
+                if not isinstance(effect_kind, str) or effect_kind not in effect_types:
+                    raise StateConflict("Issue-delivery host effect reference is foreign or changed")
+                if (
+                    outbox_status not in {"pending", "claimed", "unknown", "succeeded"}
+                    or effect_payload.get("contract")
+                    != "builderops.issue-delivery-effect.v1"
+                    or effect_payload.get("request_sha256") != request_sha256
+                    or effect_payload.get("effect_slot_sha256") != effect_slot_sha256
+                    or effect_payload.get("approval_id") != request.approval_id
+                    or effect_payload.get("approved_operation_key") != request.operation_key
+                    or effect_payload.get("repository") != repository
+                    or effect_payload.get("issue_number") != approved["issue"]["number"]
+                    or effect_payload.get("run_id") != destination["run_id"]
+                    or intent.get("task_id")
+                    != f"issue-delivery-effect:{effect_slot_sha256}"
+                    or intent.get("effect_type") != effect_types[effect_kind]
+                ):
+                    raise StateConflict("Issue-delivery host effect reference is foreign or changed")
+        _assert_durable_payload_safe(request.model_dump(mode="json"), credentials)
+        try:
+            result = await run_in_threadpool(
+                store.commit_issue_delivery_operation_record,
+                envelope=_envelope(request.envelope, credential),
+                record_id=request.record_id,
+                state=request.state,
+                payload=payload,
+                idempotency_key=request.idempotency_key,
+                operation_key=request.operation_key,
+                approval_id=request.approval_id,
+                approval_manifest_hash=request.approval_manifest_hash,
+                record_kind=kind,
+                capability=issue_delivery_operation,
+            )
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+        return _authority_object_response(result)
+
+    @application.post("/v1/issue-delivery/operation-record")
+    @application.post("/v1/issues/command/operation-record")
+    async def issue_delivery_operation_record(
+        request: IssueDeliveryOperationRecordRequest,
+        credential: Credential = Depends(issue_delivery_control),
+    ) -> dict[str, Any]:
+        try:
+            return await issue_delivery_operation_record_sync(request, credential)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise _control_plane_error(exc) from exc
+
+    @application.get("/v1/issue-delivery/operation-record/{record_id:path}")
+    @application.get("/v1/issues/command/operation-record/{record_id:path}")
+    async def issue_delivery_operation_record_read(
+        record_id: str,
+        repository: str,
+        credential: Credential = Depends(issue_delivery_control),
+    ) -> dict[str, Any]:
+        _enforce_repo_scope(credential, repository)
+        if not ({"issue_delivery:execute", "issue_delivery:read"} & set(credential.scopes)):
+            raise HTTPException(status_code=403, detail="issue_delivery read or execute grant required")
+        if not re.fullmatch(r"issue-delivery-(reservation|attempt|entry|terminal):[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", record_id):
+            raise HTTPException(status_code=400, detail="Issue-delivery operation record identity is invalid")
+        try:
+            record = await run_in_threadpool(store.get_record, canonical_repository(repository), record_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Issue-delivery operation receipt not found") from exc
+        if record.get("record_type") != "BuilderOpsReceipt":
+            raise HTTPException(status_code=404, detail="Issue-delivery operation receipt not found")
+        return dict(record)
 
     @application.get("/v1/issue-delivery/{approval_id}")
     @application.get("/v1/issues/command/{approval_id}")

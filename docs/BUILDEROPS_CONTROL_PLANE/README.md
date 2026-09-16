@@ -732,19 +732,20 @@ The [first approved Issue-delivery operation](../BUILDER_FACTORY_ACCEPTANCE/READ
 now defines the finite M2 extension under FCA-08. Its
 [admission/readback responsibilities](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-admission-and-readback)
 stay with this authenticated service, `CredentialRegistry` and the existing PostgreSQL
-record/transaction/receipt/outbox owner. #5551's future destination adapter reuses
-`dispatch_sessions` → `dispatch_issue_sessions` → `CodexIssueSessionLauncher`; it owns
-reservation/attempt/entry observations through that same service authority. Until it exists, the
-raw `dispatch-sessions` CLI refuses before child entry. No local epic run-state file or dispatcher
-lease becomes an approval or execution ledger. The existing launcher requests claim, edits,
-publication, governed merge and closure; it does not yet enforce an owner manifest at those
-boundaries or support stop.
+record/transaction/receipt/outbox owner. The #5551 repository-only FCA-ID-B candidate reuses
+`dispatch_sessions` → `dispatch_issue_sessions` → `CodexIssueSessionLauncher`; its detailed
+contract is the approved operation above. It supplies authenticated reservation, attempt and entry
+observations, replay, and protected-effect integration through that same service authority. No
+local epic run-state file or dispatcher lease becomes an approval or execution ledger. The existing
+launcher requests claim, edits, publication, governed merge and closure; it does not obtain owner
+manifest or effect authority from worker text, and unsupported stop remains refused.
 
-FCA-ID-A, delivered by #5550, now supplies the repository-only Issue subtype with atomic immutable
+FCA-ID-A, delivered by #5550, supplies the repository-only Issue subtype with atomic immutable
 approval/readback admission, exact operation-key binding, fresh permission/epoch/expiry checks and
-separate destination read/execute grants. Destination reservation/attempt/entry, continuing
-effect-gate checks and independently sourced GitHub outcome readback remain missing production
-support, assigned to the [three source-anchored slices](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices).
+separate destination read/execute grants. FCA-ID-B provides the repository-only
+reservation/attempt/entry, replay and protected-effect boundary. Independently sourced FCA-ID-C
+outcome readback, host activation, deployment, credential provisioning, candidate trial and owner
+outcome remain pending in the [three source-anchored slices](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices).
 The existing GitHub readers and closure owners supply PR/head/CI/review/merge/closure evidence;
 authenticated worker text and process exit supply no delivery verdict. FCA-09 separately owns
 candidate/profile-bound human trial/acceptance. This contract publication neither activates the

@@ -231,6 +231,63 @@ class BuilderOpsControlPlaneClient:
             pin_epoch=False,
         )
 
+    def issue_delivery_operation_record(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        record_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        operation_key: str,
+        approval_id: str,
+        approval_manifest_hash: str,
+        path: str = "/v1/issue-delivery/operation-record",
+    ) -> dict[str, Any]:
+        """Commit one execute-authorized destination lifecycle receipt.
+
+        Entry and terminal observations deliberately remain unpinned to a later
+        authority epoch so the destination can record an already-observed run.
+        """
+
+        return self._request(
+            "POST",
+            path,
+            json_body={
+                "envelope": dict(envelope),
+                "record_id": record_id,
+                "state": state,
+                "payload": dict(payload),
+                "idempotency_key": idempotency_key,
+                "operation_key": operation_key,
+                "approval_id": approval_id,
+                "approval_manifest_hash": approval_manifest_hash,
+            },
+            # Process entry/terminal observations must survive authority-epoch
+            # changes after launch.  The service still checks immutable
+            # approval/predecessor hashes, while reservation/attempt writes
+            # remain epoch-pinned and execute-authorized.
+            pin_epoch=not record_id.startswith(
+                ("issue-delivery-entry:", "issue-delivery-terminal:")
+            ),
+        )
+
+    def issue_delivery_operation_record_read(
+        self,
+        *,
+        repository: str,
+        record_id: str,
+        path: str = "/v1/issue-delivery/operation-record",
+    ) -> dict[str, Any]:
+        """Read one destination-owned receipt using its narrow grant."""
+
+        return self._request(
+            "GET",
+            f"{path}/{record_id}",
+            params={"repository": repository},
+            pin_epoch=False,
+        )
+
     # Friendly aliases retain the existing client's verb-first naming style
     # for callers that use ``preview_issue_delivery``/``start_issue_delivery``.
     preview_issue_delivery = issue_delivery_preview

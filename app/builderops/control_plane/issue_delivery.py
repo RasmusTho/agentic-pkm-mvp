@@ -704,6 +704,15 @@ def _destination_fields(value: Any) -> dict[str, Any]:
             destination, aliases, f"destination {normalized_name}"
         )
         resolved[normalized_name] = _text(candidate, f"destination {normalized_name}", limit=1024)
+    # Freeze filesystem identity during owner admission.  The raw path remains
+    # the launcher argument, while these resolved values prevent a later
+    # symlink-parent retarget from silently changing the approved destination.
+    for raw_name, frozen_name in (("checkout", "resolved_checkout"), ("worktree", "resolved_worktree")):
+        resolved_path = _resolved_absolute_path(resolved[raw_name])
+        supplied_path = destination.get(frozen_name)
+        if supplied_path is not None and supplied_path != resolved_path:
+            raise IssueDeliveryContractError(f"destination {frozen_name} does not match its approved path")
+        resolved[frozen_name] = resolved_path
     base_sha = _text(destination.get("base_sha"), "observed destination base SHA", limit=40).lower()
     if _GIT_SHA.fullmatch(base_sha) is None:
         raise IssueDeliveryContractError("observed destination base SHA must be a Git commit")
@@ -1082,6 +1091,41 @@ def idempotency_key(operation_key: str) -> str:
     return IDEMPOTENCY_PREFIX + operation_key
 
 
+def destination_resource_key(
+    repository: str, issue_number: int, destination: Mapping[str, Any]
+) -> str:
+    """Identify one Issue destination independently of mutable approval facts.
+
+    ``base_ref``, ``base_sha``, approval/run identifiers, and host labels are
+    deliberately excluded: changing any of those values must not let a second
+    unresolved operation acquire the same checkout/worktree/branch destination.
+    """
+
+    checkout = destination.get("resolved_checkout")
+    if not isinstance(checkout, str) or not checkout:
+        checkout = str(Path(str(destination.get("checkout"))).resolve())
+    worktree = destination.get("resolved_worktree")
+    if not isinstance(worktree, str) or not worktree:
+        worktree = str(Path(str(destination.get("worktree"))).resolve())
+    return canonical_hash(
+        {
+            "repository": canonical_repository(repository),
+            "issue_number": issue_number,
+            "destination": {
+                # The physical paths/branch are the resource.  Approval,
+                # run, host and base-commit labels are mutable facts and must
+                # not provide a second slot for the same destination.
+                # Normalized approvals carry immutable resolved paths.  Do
+                # not resolve them again during replay/observation after a
+                # mutable symlink parent may have changed.
+                "checkout": checkout,
+                "worktree": worktree,
+                "branch": destination.get("branch"),
+            },
+        }
+    )
+
+
 def strip_server_fields(value: Mapping[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if key not in _SERVER_FIELDS}
 
@@ -1105,6 +1149,7 @@ __all__ = [
     "approval_digest",
     "idempotency_key",
     "manifest_hash",
+    "destination_resource_key",
     "normalize_manifest",
     "record_id",
     "strip_server_fields",

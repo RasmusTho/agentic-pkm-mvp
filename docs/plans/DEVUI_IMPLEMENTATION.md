@@ -136,8 +136,9 @@ retains its no-code/no-GitHub-effect boundary. Full DDO completion is not a univ
 
 The Issue operation reuses the existing single-Issue Codex launcher and owning delivery skills.
 Its [implementation sequence](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices)
-is authenticated admission (FCA-ID-A is delivered by #5550) → destination reservation/launch and effect gates → independent
-source readback and candidate/profile composition. These are pre-merge repository slices; create
+is authenticated admission (FCA-ID-A is delivered by #5550) → destination reservation/launch and effect gates
+(FCA-ID-B is delivered by #5551) → independent source readback and candidate/profile composition.
+These are pre-merge repository slices; create
 their Issues only after #5531's source authority merges. The destination's live activation,
 exact deployment and the M1 read-only pilot are separate evidence boundaries. Supervised M2
 execution and visible manual handoffs are allowed; repository delivery is not actual FCA-09 owner

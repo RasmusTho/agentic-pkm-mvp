@@ -106,6 +106,8 @@ class IssueSessionLauncher(Protocol):
         context_pack: Mapping[str, Any],
         *,
         execution_routing: Mapping[str, Any] | None = None,
+        on_entry: Callable[[str], None] | None = None,
+        effect_gate: Callable[..., Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]: ...
 
 
@@ -143,6 +145,8 @@ class CodexIssueSessionLauncher:
         builder_channel: str = "dev",
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
         precreated_worktree_only: bool = False,
+        effect_gate_approval_file: Path | None = None,
+        effect_gate_checkout_root: Path | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.adapter_path = adapter_path or (
@@ -153,6 +157,16 @@ class CodexIssueSessionLauncher:
         )
         self.runner = runner or subprocess.run
         self.precreated_worktree_only = precreated_worktree_only
+        self.effect_gate_approval_file = (
+            effect_gate_approval_file.resolve()
+            if effect_gate_approval_file is not None
+            else None
+        )
+        self.effect_gate_checkout_root = (
+            effect_gate_checkout_root.resolve()
+            if effect_gate_checkout_root is not None
+            else self.repo_root
+        )
         self.provider_census = load_provider_census(
             provider_census_path or _DECLARED_PROVIDER_CENSUS_PATH
         )
@@ -244,41 +258,61 @@ class CodexIssueSessionLauncher:
         context_pack: Mapping[str, Any],
         *,
         execution_routing: Mapping[str, Any] | None = None,
+        on_entry: Callable[[str], None] | None = None,
+        effect_gate: Callable[..., Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]:
+        if effect_gate is not None:
+            issue = context_pack.get("issue_contract")
+            destination = context_pack.get("branch_worktree_plan")
+            if not isinstance(issue, Mapping) or not isinstance(destination, Mapping):
+                raise EpicDispatchError("context pack lacks an exact repository/worktree target")
+            effect_gate(
+                "repository_worktree",
+                target={
+                    "repository": issue.get("repository"),
+                    "issue_number": issue.get("number"),
+                    "checkout": str(self.effect_gate_checkout_root),
+                    "worktree": destination.get("worktree"),
+                    "branch": destination.get("branch"),
+                },
+            )
         prompt = self.prompt(context_pack)
         canary_target = None
         if execution_routing is not None:
             canary_target = ResolvedExecutionTarget.model_validate(
                 execution_routing.get("proposed_target")
             )
-        result = self.runner(
-            self.command(context_pack, execution_routing=execution_routing),
-            cwd=self.repo_root,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
         session_id: str | None = None
         worker_receipt: object | None = None
         terminal_error: str | None = None
         allocation_unavailable = False
         observed_input_tokens: int | None = None
-        for line in result.stdout.splitlines():
+
+        def observe_event_line(line: str) -> None:
+            """Process one event before a blocking launcher returns."""
+
+            nonlocal session_id, worker_receipt, terminal_error
+            nonlocal allocation_unavailable, observed_input_tokens
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                return
             if not isinstance(event, Mapping):
-                continue
+                return
             if event.get("type") == "thread.started":
                 candidate = event.get("thread_id")
                 if isinstance(candidate, str) and candidate.strip():
-                    session_id = candidate.strip()
+                    candidate = candidate.strip()
+                    if session_id is None:
+                        session_id = candidate
+                        if on_entry is not None:
+                            on_entry(session_id)
             if event.get("type") in {"turn.failed", "error"}:
                 terminal_error = json.dumps(event, sort_keys=True)
             if event.get("allocation_state") == "allocation_unavailable":
-                allocation_unavailable = canary_target is not None and canary_target.capability == "spark"
+                allocation_unavailable = (
+                    canary_target is not None and canary_target.capability == "spark"
+                )
             if (
                 canary_target is not None
                 and canary_target.capability == "spark"
@@ -300,6 +334,31 @@ class CodexIssueSessionLauncher:
                     text = item.get("text")
                     if isinstance(text, str) and text.strip():
                         worker_receipt = _parse_worker_receipt(text)
+        runner_kwargs: dict[str, Any] = {
+            "cwd": self.repo_root,
+            "input": prompt,
+            "capture_output": True,
+            "text": True,
+            "check": False,
+        }
+        if self.effect_gate_approval_file is not None:
+            # Export only the non-secret approval path. Child-owned wrappers
+            # can recheck the durable grant immediately before their effect;
+            # the child never receives a bearer credential through this path.
+            runner_env = {
+                "BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE": str(
+                    self.effect_gate_approval_file
+                )
+            }
+            runner_kwargs["env"] = runner_env
+        if getattr(self.runner, "supports_streaming", False):
+            runner_kwargs["on_stdout_line"] = observe_event_line
+        result = self.runner(
+            self.command(context_pack, execution_routing=execution_routing),
+            **runner_kwargs,
+        )
+        for line in result.stdout.splitlines():
+            observe_event_line(line)
         if allocation_unavailable:
             return {"allocation_state": "allocation_unavailable"}
         if result.returncode != 0 or terminal_error is not None:
@@ -684,7 +743,16 @@ def dispatch_issue_sessions(
     canary_observed_at: str | None = None,
     receipt_store: ReceiptStore | None = None,
 ) -> dict[str, Any]:
-    """Execute a frozen dispatch plan serially, with one fresh session per Issue."""
+    """Execute a frozen plan serially, preserving adapter replay observations."""
+
+    bind_plan = getattr(launcher, "bind_dispatch_plan", None)
+    if callable(bind_plan):
+        try:
+            bind_plan(plan, expected_plan_hash=expected_plan_hash)
+        except Exception as exc:
+            raise EpicDispatchError(
+                "authenticated Issue-delivery launcher rejected the dispatch plan"
+            ) from exc
 
     routing_present = _contains_execution_routing(plan)
     if routing_present and expected_plan_hash is None:
@@ -757,15 +825,32 @@ def dispatch_issue_sessions(
                 launch_result.get("worker_receipt"),
                 session_id=session_id,
             )
+            fresh_session = launch_result.get("fresh_session", True)
+            if type(fresh_session) is not bool:
+                raise IssueSessionLaunchError(
+                    "launch_result.fresh_session must be a boolean",
+                    session_id=session_id,
+                )
             final_state = worker_receipt["final_state"]
             session_record: dict[str, Any] = {
                 "issue_number": issue_number,
                 "context_pack_id": context_pack_id,
                 "session_id": session_id,
-                "fresh_session": True,
+                "fresh_session": fresh_session,
                 "status": final_state,
                 "worker_receipt": worker_receipt,
             }
+            # The operation adapter separately produces these bounded,
+            # host-validated references.  Preserve that field verbatim; it
+            # must never be reconstructed from worker diagnostics here.
+            if "host_effect_refs" in launch_result:
+                host_effect_refs = launch_result["host_effect_refs"]
+                if not isinstance(host_effect_refs, list) or len(host_effect_refs) > 5:
+                    raise IssueSessionLaunchError(
+                        "launch_result.host_effect_refs must be a bounded list",
+                        session_id=session_id,
+                    )
+                session_record["host_effect_refs"] = host_effect_refs
             if canary_receipt is not None:
                 session_record["execution_routing_canary_receipt"] = canary_receipt
             sessions.append(session_record)

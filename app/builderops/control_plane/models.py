@@ -344,6 +344,22 @@ class StorePort(Protocol):
 
     def get_record(self, repository: str, record_id: str) -> Mapping[str, Any]: ...
 
+    def commit_issue_delivery_operation_record(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        record_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        operation_key: str,
+        approval_id: str,
+        approval_manifest_hash: str,
+        record_kind: str,
+        capability: object | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult: ...
+
     def get_issue_delivery_by_operation_key(
         self, repository: str, operation_key: str
     ) -> Mapping[str, Any] | None: ...
