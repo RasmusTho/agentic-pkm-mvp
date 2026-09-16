@@ -1067,6 +1067,9 @@ def test_unknown_effect_requires_readback_before_retry(
     assert ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
 
+    # The forced max clock proves exactly one expired-fence recovery above.
+    # Restore normal time before proving that its fresh token is reused.
+    ledger.clock = lambda: datetime.now(timezone.utc)
     recovered_again = executor.execute(request)
     assert recovered_again.outcome == "unknown"
     assert (
