@@ -184,10 +184,13 @@ replacement must validate the complete frozen plan before execution, run each se
 new Codex session, and stop before later Issues when one session fails or returns `blocked`,
 `needs-human`, or `handoff`. It never accepts a worker's self-reported terminal `done`: only
 verification-and-closure's live GitHub/Git/CI readback may establish completed delivery. Each
-candidate must name an explicit absolute worktree path; the worker creates or enters that dedicated
-worktree and self-claims through `issue-to-code`. The coordinator does not preclaim, mutate GitHub
-lifecycle state, merge, or close; the issue agent loads `publish-pr` and
-`verification-and-closure` at those workflow boundaries and remains the sole lifecycle owner.
+candidate must name an explicit absolute worktree path. The future host destination adapter must
+reserve, prepare, register, and freeze that worktree and perform the admitted claim before child
+entry. The distinct-principal content worker may edit only the prepared content aperture and
+propose strict typed lifecycle effects; it neither self-claims nor owns Git/GitHub publication,
+merge, closure, or parent-evidence authority. The protected host executor performs each separately
+approved effect through the existing `issue-to-code`, `publish-pr`, and
+`verification-and-closure` owners and their fresh gates.
 
 The command is intentionally Codex-only and serial. It is the simplest executable bridge from the
 existing context-pack planner, not a second durable orchestrator. DDO-04's provider-neutral
