@@ -1532,6 +1532,7 @@ class BuilderOpsIssueDeliveryEffectLedger:
             claim_ttl_seconds=claim_ttl_seconds,
         )
         self._claims: dict[str, Mapping[str, Any]] = {}
+        self._claim_recovery_kinds: dict[str, str] = {}
 
     @staticmethod
     def _task_id(effect_slot_sha256: str) -> str:
@@ -1649,19 +1650,24 @@ class BuilderOpsIssueDeliveryEffectLedger:
         ):
             raise ValueError("BuilderOps returned foreign effect claim")
         self._claims[operation_key] = dict(claim)
+        self._claim_recovery_kinds[operation_key] = "original_attempt"
         return claim
 
     def claim_for_readback(self, operation_key: str) -> Mapping[str, Any]:
         status = self.status(operation_key)
         claim = self._claims.get(operation_key)
-        recovery_kind = "original_attempt"
+        recovery_kind = self._claim_recovery_kinds.get(
+            operation_key, "original_attempt"
+        )
         if claim is not None and not self._claim_is_current(claim):
             self._claims.pop(operation_key, None)
+            self._claim_recovery_kinds.pop(operation_key, None)
             claim = None
         if claim is None:
             claim = dict(self.outbox.recover(operation_key))
             self._claims[operation_key] = claim
             recovery_kind = "recovered_attempt"
+            self._claim_recovery_kinds[operation_key] = recovery_kind
         normalized = {key: claim[key] for key in _READBACK_CLAIM_FIELDS if key in claim}
         normalized.setdefault("effect_type", status.get("effect_type"))
         normalized.setdefault("payload", status.get("payload"))
@@ -1723,6 +1729,7 @@ class BuilderOpsIssueDeliveryEffectLedger:
             evidence=evidence,
         )
         self._claims.pop(str(claim["operation_key"]), None)
+        self._claim_recovery_kinds.pop(str(claim["operation_key"]), None)
         return result
 
 

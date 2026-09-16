@@ -302,11 +302,12 @@ class BuilderOpsOutboxExecutor:
     def mark_unknown(
         self, claim: Mapping[str, object], *, detail: str
     ) -> Mapping[str, object]:
-        return self.client.mark_outbox_unknown(
+        committed = self.client.mark_outbox_unknown(
             envelope=self.envelope,
             claim=self._claim_identity(claim),
             detail=detail,
         )
+        return {**claim, **committed}
 
     def reconcile(
         self,

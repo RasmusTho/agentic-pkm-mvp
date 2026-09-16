@@ -1357,7 +1357,7 @@ def test_unknown_effect_requires_readback_before_retry(
     credentials = harness.credentials
     transport = harness.transport
     transport.raise_on_apply = True
-    transport.readbacks = ["unknown", "not_applied"]
+    transport.readbacks = ["unknown", "not_applied", "not_applied"]
     executor = harness.executor
 
     original_mark_unknown = client.mark_outbox_unknown
@@ -1423,6 +1423,15 @@ def test_unknown_effect_requires_readback_before_retry(
     recovered = fresh_executor.execute(request)
     assert recovered.outcome == "unknown"
     assert recovered.readback["retry_refused"] == "prior-dispatch-may-still-complete"
+    assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
+    assert transport.apply_calls == credentials.calls == 1
+
+    recovered_again = fresh_executor.execute(request)
+    assert recovered_again.outcome == "unknown"
+    assert (
+        recovered_again.readback["retry_refused"]
+        == "prior-dispatch-may-still-complete"
+    )
     assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
 
