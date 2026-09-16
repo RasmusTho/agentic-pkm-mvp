@@ -10,6 +10,14 @@ on:
       - 'app/web/**'
       - 'tests/companion_ui/**'
       - '.github/workflows/browser-runtime.yml'
+  pull_request:
+    paths:
+      - 'companion-ui/**'
+      - 'app/api/**'
+      - 'app/builderops/**'
+      - 'app/web/**'
+      - 'tests/companion_ui/**'
+      - '.github/workflows/browser-runtime.yml'
   workflow_dispatch:
 
 concurrency:

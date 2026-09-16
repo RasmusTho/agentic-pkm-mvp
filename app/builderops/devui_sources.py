@@ -641,76 +641,12 @@ def read_managed_issue(config: SourceConfiguration, repository: str, number: str
     return issue
 
 
-def _read_managed_issue_delivery(
-    config: SourceConfiguration, subject: str
-) -> dict[str, Any] | None:
-    """Read one strict delivery projection; absence and mismatch stay unavailable."""
-
-    match = re.fullmatch(
-        r"github:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)", subject
-    )
-    if (
-        match is None
-        or not config.repository
-        or canonical_repository(match[1]) != config.repository
-        or not config.authority_epoch
-        or not config.github_enabled
-        or config.github_config_dir is None
-        or not config.github_config_dir.is_dir()
-        or not config.api_environment.get("BUILDEROPS_API_URL")
-        or not (
-            config.api_environment.get("BUILDEROPS_API_TOKEN")
-            or config.api_environment.get("BUILDEROPS_API_TOKEN_FILE")
-        )
-    ):
-        return None
-    try:
-        with BuilderOpsControlPlaneClient(
-            ClientConfig.from_env(config.api_environment), max_retries=0
-        ) as client:
-            if client.status().get("authority_epoch") != config.authority_epoch:
-                return None
-            matches: list[dict[str, Any]] = []
-            rows = client.list_tasks(repository=config.repository)
-            if len(rows) > _MAX_TASKS:
-                return None
-            for listed in rows:
-                payload = listed.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                binding = payload.get("issue_delivery")
-                if (
-                    isinstance(binding, dict)
-                    and binding.get("contract") == ISSUE_DELIVERY_TASK_CONTRACT
-                    and payload.get("issue_number") == int(match[2])
-                ):
-                    row = client.get_task(
-                        repository=config.repository, task_id=str(listed.get("task_id"))
-                    )
-                    _task(row, repository=config.repository)
-                    if row.get("version") != listed.get("version") or row.get("payload") != listed.get("payload"):
-                        return None
-                    matches.append(row)
-            if len(matches) != 1 or client.status().get("authority_epoch") != config.authority_epoch:
-                return None
-            return read_issue_delivery_projection(
-                client=client,
-                task=matches[0],
-                github_reader=cockpit_github_plane.read_issue_delivery_github,
-            )
-    except Exception:
-        # The visual read path must not reinterpret auth, source drift, a
-        # partial lifecycle, or a transport failure as delivered.
-        return None
-
-
 def read_managed_focus(config: SourceConfiguration, subject: str) -> dict[str, Any]:
     """Read only the addressed Issue via the same admitted gh REST owner."""
     from app.builderops.devui_owner_facts import read_owner_fact_transport
 
     return read_focus_inputs(subject, repository=config.repository, issue_reader=lambda repository, number: read_managed_issue(config, repository, number),
-        owner_fact_reader=lambda: read_owner_fact_transport(repository=config.repository, environment=config.api_environment, authority_epoch=config.authority_epoch),
-        issue_delivery_reader=lambda selected: _read_managed_issue_delivery(config, selected))
+        owner_fact_reader=lambda: read_owner_fact_transport(repository=config.repository, environment=config.api_environment, authority_epoch=config.authority_epoch))
 
 
 def revalidate_inquiry_sources(config: SourceConfiguration, *, repository: str, context_pack: dict[str, Any]) -> dict[str, Any]:
