@@ -603,8 +603,8 @@ def _first_read_record(evidence: Mapping[str, Any], prerequisites: Mapping[str, 
     inspected = journey["inspected_documents"]
     _first_require(isinstance(inspected, list) and bool(inspected) and all(_first_text(path) for path in inspected),
                    "inspected document references are invalid")
-    _first_require(required_docs.issubset(installed["documents"])
-                   and required_docs.issubset(journey["inspected_documents"]), "selected Issue documents are unavailable or uninspected")
+    _first_require(set(installed["documents"]) == required_docs
+                   and required_docs.issubset(journey["inspected_documents"]), "selected Issue documents are unavailable, unbounded, or uninspected")
     _first_require(installed["origin"] in {"http://127.0.0.1:8113", "http://localhost:8113"}
                    and browser["origin"] == journey["origin"] == installed["origin"]
                    and browser["candidate_sha"] == journey["candidate_sha"] == candidate["source_sha"], "journey origin or candidate differs")

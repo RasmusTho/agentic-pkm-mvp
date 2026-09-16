@@ -895,7 +895,7 @@ def test_first_read_observation_validates_independent_source_evidence(source_doc
     assert build_first_read_observation(**inputs)["verdict"] == "refused"
 
 
-@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "plain_document_missing", "plain_document_uninspected", "document_malformed", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins", *_FIRST_READ_INVALID_NESTED_FIELDS])
+@pytest.mark.parametrize("failure", ["response", "request", "wire", "wire_digest", "wire_number_type", "source_number_type", "native_number_type", "native_epoch_type", "source", "native", "epoch", "grant", "stale", "future", "order", "candidate", "assets", "documents", "extra_document", "plain_document_missing", "plain_document_uninspected", "document_malformed", "secret", "partial", "effects", "owner", "superseded", "activation", "inventory", "browser", "rollback", "rollback_pins", *_FIRST_READ_INVALID_NESTED_FIELDS])
 def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(failure):
     from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, validate_first_read_observation
 
@@ -957,6 +957,8 @@ def test_first_read_observation_refuses_invalid_inputs_and_full_chain_reuse(fail
         evidence["installed"]["assets"] = {}
     elif failure == "documents":
         evidence["installed"]["documents"] = {}
+    elif failure == "extra_document":
+        evidence["installed"]["documents"]["docs/UNRELATED.md"] = "d" * 64
     elif failure in {"plain_document_missing", "plain_document_uninspected", "document_malformed"}:
         pass  # The independently bound Issue now requires every listed document.
     elif failure == "secret":
