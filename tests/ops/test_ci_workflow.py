@@ -272,18 +272,26 @@ def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_m
     browser = BROWSER_WORKFLOW.read_text(encoding="utf-8")
     image = IMAGE_WORKFLOW.read_text(encoding="utf-8")
     import_linter = IMPORT_LINTER_WORKFLOW.read_text(encoding="utf-8")
+    browser_triggers = browser[: browser.index("concurrency:")]
+    browser_pull_request = browser_triggers[
+        browser_triggers.index("  pull_request:") : browser_triggers.index(
+            "  workflow_dispatch:"
+        )
+    ]
 
     assert "paths:" in browser
     assert "branches: [main]" in browser
-    assert "pull_request:" not in browser
+    assert "pull_request:" in browser_triggers
+    assert "paths:" in browser_pull_request
     assert "'companion-ui/**'" in browser
+    assert "'companion-ui/**'" in browser_pull_request
     assert "paths:" in image
     assert "'Dockerfile'" in image
     assert "paths:" in import_linter
     assert "'app/**'" in import_linter
 
 
-def test_browser_runtime_supports_exact_ref_dispatch_without_pull_request_trigger() -> None:
+def test_browser_runtime_supports_exact_ref_dispatch_with_pull_request_qualification() -> None:
     browser = _browser_text()
     triggers = browser[: browser.index("concurrency:")]
     checkout = _workflow_step(browser, "Checkout", "Setup Python")
@@ -291,7 +299,7 @@ def test_browser_runtime_supports_exact_ref_dispatch_without_pull_request_trigge
     assert "push:" in triggers
     assert "branches: [main]" in triggers
     assert "workflow_dispatch:" in triggers
-    assert "pull_request:" not in triggers
+    assert "pull_request:" in triggers
     assert "ref: ${{ github.sha }}" in checkout
 
     job = _browser_job()
