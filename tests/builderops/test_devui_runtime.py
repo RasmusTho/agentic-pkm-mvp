@@ -1211,7 +1211,9 @@ def test_managed_shell_api_and_asset_inventory_bind_one_candidate(managed_source
             (source.root / "assets/extra.js").unlink(missing_ok=True)
             _package_managed_shell(source.root) if mutation != "missing" else None
             (source.root / "manifest.json").write_text(json.dumps(original))
-def _install_first_read_observation(source, monkeypatch, *, retain=True):
+def _install_first_read_observation(
+    source, monkeypatch, *, retain=True, bounded_documents=False, document_failure=None
+):
     import copy
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client_cli import issue_source_task
@@ -1233,13 +1235,30 @@ def _install_first_read_observation(source, monkeypatch, *, retain=True):
     evidence["operator"]["activation_sha256"] = canonical_digest(prerequisites["activation"])
     evidence["selection"]["merged_main_sha"] = candidate["source_sha"]
     evidence["installed"]["candidate_identity"] = copy.deepcopy(candidate)
-    evidence["installed"]["documents"] = {key: value for key, value in json.loads((source.root / "manifest.json").read_text())["files"].items() if not key.startswith("assets/")}
+    manifest_files = json.loads((source.root / "manifest.json").read_text())["files"]
+    evidence["installed"]["documents"] = {
+        key: value for key, value in manifest_files.items() if not key.startswith("assets/")
+    }
     issue = evidence["github"]["payload"]
     # Existing managed fixture documents are candidate-baked and exercised by
     # the real source reader; adapt only the external Issue bytes to those refs.
     doc = next(key for key in evidence["installed"]["documents"] if key.startswith("docs/") and key.endswith(".md"))
     issue["body"] = issue["body"].replace("docs/AGENT_ISSUE_DISPATCHER.md", doc)
     evidence["journey"]["inspected_documents"] = [doc]
+    if bounded_documents:
+        evidence["installed"]["documents"] = {doc: manifest_files[doc]}
+    if document_failure == "missing":
+        missing = "docs/FIXTURE/MISSING.md"
+        issue["body"] = issue["body"].replace(doc, missing)
+        evidence["journey"]["inspected_documents"] = [missing]
+        evidence["installed"]["documents"] = {missing: "b" * 64}
+    elif document_failure == "asset":
+        asset = "assets/devui.css"
+        issue["body"] = issue["body"].replace(doc, asset)
+        evidence["journey"]["inspected_documents"] = [asset]
+        evidence["installed"]["documents"] = {asset: manifest_files[asset]}
+    elif document_failure == "digest":
+        evidence["installed"]["documents"] = {doc: "b" * 64}
     task = issue_source_task(issue, repository="example/fixture", number=501,
                             observed_at=evidence["exchange"]["observed_at"], authority_epoch=source.epoch)
     evidence["source"]["authority_epoch"] = evidence["exchange"]["authority_epoch"] = source.epoch
@@ -1316,3 +1335,75 @@ def test_first_read_observation_preserves_admission_and_authority_boundaries(man
         source.auth.write_text(json.dumps({"credentials": [source.credential]}))
         assert client.get("/api/devui/overview").headers["x-devui-first-read-observation"] == "refused"
         assert all(method == "GET" for method, _ in source.http_calls)
+
+
+def test_first_read_observation_binds_bounded_documents_to_full_candidate(
+    managed_sources, monkeypatch
+):
+    import hashlib
+
+    source = managed_sources
+    secret_named = source.root / "docs" / "LOCAL_SECRET_PROVISIONING.md"
+    secret_named.write_text("Public operating documentation, not secret material.\n")
+    manifest_path = source.root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"][str(secret_named.relative_to(source.root))] = hashlib.sha256(
+        secret_named.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    with source.client() as client:
+        _, folder = _install_first_read_observation(
+            source, monkeypatch, bounded_documents=True
+        )
+        observation = json.loads((folder / "observation.json").read_text())
+        assert len(observation["documents"]) == 1
+        response = client.get("/api/devui/overview")
+        assert response.status_code == 200
+        assert response.headers["x-devui-first-read-observation"] == "available"
+
+
+@pytest.mark.parametrize("document_failure", ["missing", "asset", "digest"])
+def test_first_read_observation_refuses_unbound_bounded_documents(
+    managed_sources, monkeypatch, document_failure
+):
+    source = managed_sources
+    with source.client() as client:
+        _, folder = _install_first_read_observation(
+            source,
+            monkeypatch,
+            bounded_documents=True,
+            document_failure=document_failure,
+        )
+        retained = {
+            name: (folder / name).read_bytes()
+            for name in ("inputs.json", "observation.json")
+        }
+        for name in retained:
+            (folder / name).unlink()
+        source.calls.clear()
+        source.http_calls.clear()
+        source.addressed_tasks.clear()
+        source.gh_calls.write_text("")
+        assert client.get("/api/devui/overview").status_code == 200
+        baseline = (
+            list(source.calls),
+            list(source.http_calls),
+            list(source.addressed_tasks),
+            source.gh_calls.read_text(),
+        )
+        for name, contents in retained.items():
+            (folder / name).write_bytes(contents)
+        source.calls.clear()
+        source.http_calls.clear()
+        source.addressed_tasks.clear()
+        source.gh_calls.write_text("")
+        response = client.get("/api/devui/overview")
+        assert response.status_code == 200
+        assert response.headers["x-devui-first-read-observation"] == "refused"
+        assert (
+            source.calls,
+            source.http_calls,
+            source.addressed_tasks,
+            source.gh_calls.read_text(),
+        ) == baseline

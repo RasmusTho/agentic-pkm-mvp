@@ -370,8 +370,10 @@ Every Source Docs entry, whether a plain path, backticked path or relative Markd
 resolve to a candidate manifest document inspected during the journey; malformed entries refuse.
 The closed schema fixes the output shape. The existing read-only receipt mount retains
 `first-read/inputs.json` and `first-read/observation.json`. The separately named reader re-derives
-that observation and checks actual candidate assets/documents and live Issue/task/epoch/grants on
-every admitted managed-read GET. Diagnostic `/healthz` and `/version` responses do not consult
+that observation, fully validates the image-baked candidate inventory and content, binds the
+retained Issue-required document subset to exact entries in that manifest, and checks live
+Issue/task/epoch/grants on every admitted managed-read GET. The bounded receipt does not duplicate
+the full candidate document manifest. Diagnostic `/healthz` and `/version` responses do not consult
 observation sources or assert a first-read observation. Missing evidence leaves the initial journey accessible and its observation
 refused. Owner acknowledgement and retention follow that journey.
 

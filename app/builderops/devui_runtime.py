@@ -158,9 +158,23 @@ def create_app(configuration: RuntimeConfiguration) -> FastAPI:
             candidate.update(source_sha=configuration.source_sha, devui_image_digest=configuration.image_digest,
                              control_plane_image_digest=configuration.image_digest,
                              devui_config_fingerprint=configuration.config_fingerprint)
+            retained_documents = observation.get("documents")
+            manifest_files = manifest.get("files")
+            if (
+                not isinstance(retained_documents, dict)
+                or not retained_documents
+                or not isinstance(manifest_files, dict)
+                or any(
+                    not isinstance(name, str)
+                    or name.startswith("assets/")
+                    or manifest_files.get(name) != digest
+                    for name, digest in retained_documents.items()
+                )
+            ):
+                raise ValueError("first-read documents differ from candidate manifest")
             return {"candidate_identity": candidate, "origin": str(request.base_url).rstrip("/"),
                     "repository": config.repository, "assets": ASSET_SHA256,
-                    "documents": {name: digest for name, digest in manifest["files"].items() if not name.startswith("assets/")},
+                    "documents": retained_documents,
                     "source": {"repository": config.repository, "authority_epoch": config.authority_epoch,
                                "grants": ["receipts:read", "status:read"]}}
 
