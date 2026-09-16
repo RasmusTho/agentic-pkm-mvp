@@ -15,7 +15,6 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_standalone_root
-pytest_plugins = ("tests.builderops.test_issue_delivery_effect_executor",)
 
 from app.builderops.control_plane.client import ControlPlaneAuthError, ControlPlaneNotFoundError, ControlPlaneUnavailableError
 from app.builderops.control_plane.issue_delivery import (
@@ -40,7 +39,7 @@ from app.builderops.issue_delivery_effect_executor import (
 )
 from app.builderops.issue_delivery_worker_isolation import _run_streaming_process
 from tests.builderops.test_control_plane_issue_delivery import _manifest
-from tests.builderops.test_issue_delivery_effect_executor import _ProductionHarness
+from tests.builderops.issue_delivery_production_harness import _ProductionHarness
 
 
 def _binding(approval: Mapping[str, Any]) -> dict[str, Any]:
