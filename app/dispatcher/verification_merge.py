@@ -209,7 +209,7 @@ class OutboxExecutorAuthority(Protocol):
 
     def mark_unknown(
         self, claim: Mapping[str, object], *, detail: str
-    ) -> None: ...
+    ) -> Mapping[str, object]: ...
 
     def reconcile(
         self,
@@ -301,8 +301,8 @@ class BuilderOpsOutboxExecutor:
 
     def mark_unknown(
         self, claim: Mapping[str, object], *, detail: str
-    ) -> None:
-        self.client.mark_outbox_unknown(
+    ) -> Mapping[str, object]:
+        return self.client.mark_outbox_unknown(
             envelope=self.envelope,
             claim=self._claim_identity(claim),
             detail=detail,

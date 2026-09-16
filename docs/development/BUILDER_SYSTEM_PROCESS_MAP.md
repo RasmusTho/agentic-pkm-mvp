@@ -371,11 +371,14 @@ only by the host executor after fresh approval/destination/source/profile/target
 checks. It resolves the opaque repository credential last, writes intent through the existing
 authenticated BuilderOps PostgreSQL task/transaction/outbox, then revalidates the exact live
 worker/fence/LSN/receipt/expiry/task/effect identity against the database clock immediately before
-transport. It treats every possibly applied transport result as unknown and requires the separate
-Issue-delivery read grant before authoritative readback. Expired or process-lost attempts recover
-under a distinct readback-only fence with `effect_eligible: false`, so reconciliation can proceed
-after revocation without authorizing another external effect. Non-secret receipts contain hash
-identities, never raw credentials or local paths.
+transport. One approval/run and semantic effect target owns one unresolved slot. The executor
+atomically consumes the exact live fence into durable `unknown` before transport and requires the
+matching commit receipt, closing the eligibility-to-call recovery race without a process-local
+lock. It requires the separate Issue-delivery read grant before authoritative readback. Expired or
+process-lost attempts recover under a distinct readback-only fence with `effect_eligible: false`;
+positive readback may settle the effect, while negative or ambiguous recovered readback remains
+`unknown` and cannot authorize retry while the prior committed dispatcher might still complete.
+Non-secret receipts contain hash identities, never raw credentials or local paths.
 
 This is repository-only enabling support: #5551 still owns production dispatch reservation,
 attempt/entry and effect integration, while #5552/FCA-ID-C owns independent outcome readback.

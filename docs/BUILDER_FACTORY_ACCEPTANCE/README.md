@@ -389,14 +389,17 @@ typed claim/publication/merge/closure/parent-evidence request. The host executor
 exact approval, destination, source/profile/target and protected credential manifest immediately
 before the effect, resolves the opaque repository-scoped credential only after those gates, and
 persists the effect intent through the existing authenticated BuilderOps PostgreSQL
-task/transaction/outbox owner. After credential resolution and immediately before transport, an
-authenticated read-only executor endpoint reuses the outbox store's database-clock eligibility
-check and binds the exact worker, fencing token, intent/claim LSNs, receipt, expiry, task and effect;
-a stale or recovered fence cannot invoke the effect. After any possibly applied transport call the
-host records unknown and obtains the separate Issue-delivery read grant before authoritative source
-readback. A recovered attempt receives a distinct readback-only fence and is never required or
-permitted to be `effect_eligible`. Typed receipts bind hash identities while excluding raw
-credentials and local paths.
+task/transaction/outbox owner. One approval/run and semantic effect target owns one stable slot;
+changed mutable request content cannot allocate a parallel operation while that slot is unresolved.
+After credential resolution the executor revalidates the exact worker, fencing token,
+intent/claim LSNs, receipt, expiry, task and effect against the database clock, then atomically and
+idempotently consumes that exact fence into durable `unknown` before transport. Only the matching
+commit receipt permits the call, so recovery between eligibility and dispatch cannot authorize a
+stale process. Authoritative source readback uses the separate Issue-delivery read grant. A
+recovered attempt receives a distinct readback-only fence and is never `effect_eligible`; positive
+readback may settle it, while negative or ambiguous readback remains `unknown` and cannot reopen
+retry while the prior committed dispatcher might still complete. Typed receipts bind hash
+identities while excluding raw credentials and local paths.
 
 These repository prerequisites still do not deliver FCA-ID-B: #5551 must integrate destination
 reservation, attempt and observed entry into the production dispatch chain, and #5552/FCA-ID-C must

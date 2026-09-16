@@ -451,6 +451,49 @@ class IssueDeliveryEffectRequest(_StrictModel):
     def content_sha256(self) -> str:
         return _canonical_hash(self.model_dump(mode="json"))
 
+    @property
+    def effect_slot_sha256(self) -> str:
+        """Stable slot for one approved semantic effect.
+
+        Mutable effect content stays bound by ``content_sha256`` in the durable
+        payload, but cannot allocate a second operation while an earlier
+        attempt for the same approved target remains unresolved.
+        """
+
+        target = self.target.model_dump(mode="json")
+        semantic_fields = {
+            "claim": ("issue_number", "issue_node_id"),
+            "publication": ("issue_number", "branch", "base_ref", "base_sha"),
+            "merge": (
+                "issue_number",
+                "pr_number",
+                "branch",
+                "base_ref",
+                "base_sha",
+            ),
+            "closure": ("issue_number", "pr_number"),
+            "parent_evidence": (
+                "repository",
+                "issue_number",
+                "issue_node_id",
+                "child_issue_number",
+                "parent_contract_sha256",
+                "relationship_sha256",
+                "evidence_kind",
+            ),
+        }[self.effect_kind]
+        return _canonical_hash(
+            {
+                "approval_id": self.approval_id,
+                "approved_operation_key": self.approved_operation_key,
+                "run_id": self.run_id,
+                "repository": self.repository,
+                "destination_identity_sha256": self.destination.frozen_identity_sha256,
+                "effect_kind": self.effect_kind,
+                "target": {field: target[field] for field in semantic_fields},
+            }
+        )
+
 
 class EffectAuthorityReadback(_StrictModel):
     request_sha256: str = Field(pattern=_HEX_64)
@@ -542,12 +585,14 @@ class IssueDeliveryEffectTransport(Protocol):
 
 
 class IssueDeliveryEffectLedger(Protocol):
-    def operation_key(self, *, request_sha256: str, effect_type: str) -> str: ...
+    def operation_key(
+        self, *, effect_slot_sha256: str, effect_type: str
+    ) -> str: ...
 
     def begin(
         self,
         *,
-        request_sha256: str,
+        effect_slot_sha256: str,
         effect_type: str,
         payload: Mapping[str, Any],
     ) -> str: ...
@@ -568,7 +613,9 @@ class IssueDeliveryEffectLedger(Protocol):
         self, claim: Mapping[str, Any]
     ) -> Mapping[str, Any]: ...
 
-    def mark_unknown(self, claim: Mapping[str, Any], *, detail: str) -> None: ...
+    def mark_unknown(
+        self, claim: Mapping[str, Any], *, detail: str
+    ) -> Mapping[str, Any]: ...
 
     def reconcile(
         self,
@@ -620,7 +667,7 @@ class IssueDeliveryHostExecutor:
         frozen = self._request_destination(request)
         effect_type = _EFFECT_TYPES[request.effect_kind]
         operation_key = self.ledger.operation_key(
-            request_sha256=request.content_sha256,
+            effect_slot_sha256=request.effect_slot_sha256,
             effect_type=effect_type,
         )
         status = self.ledger.status(operation_key)
@@ -641,7 +688,7 @@ class IssueDeliveryHostExecutor:
         payload = self._effect_payload(request, first_manifest)
         if state == "missing":
             operation_key = self.ledger.begin(
-                request_sha256=request.content_sha256,
+                effect_slot_sha256=request.effect_slot_sha256,
                 effect_type=effect_type,
                 payload=payload,
             )
@@ -688,47 +735,47 @@ class IssueDeliveryHostExecutor:
             payload,
             repository=request.repository,
         )
+        if not self._commit_dispatch(claim, operation_key):
+            return self._receipt(
+                "unknown",
+                operation_key,
+                request,
+                {"outcome": "unknown", "readback": "dispatch-fence-unavailable"},
+            )
         try:
             self.transport.apply(request, credential)
-            detail = "effect transport returned; source readback required"
-        except Exception as exc:
-            detail = f"effect outcome unknown: {type(exc).__name__}"
-        return self._mark_unknown_and_readback(
-            claim,
-            operation_key,
-            request,
-            detail=detail,
-        )
+        except Exception:
+            pass
+        return self._readback_and_reconcile(operation_key, request)
 
-    def _mark_unknown_and_readback(
+    def _commit_dispatch(
         self,
         claim: Mapping[str, Any],
         operation_key: str,
-        request: IssueDeliveryEffectRequest,
-        *,
-        detail: str,
-    ) -> IssueDeliveryEffectReceipt:
+    ) -> bool:
+        """Durably consume the exact fence before any external effect call."""
+
         try:
-            self.ledger.mark_unknown(claim, detail=detail)
+            committed = self.ledger.mark_unknown(
+                claim,
+                detail="effect dispatch committed; source readback required",
+            )
         except Exception:
-            # This is a retry of the local, fenced state transition only.  It
-            # never calls the external effect transport again.  Read status
-            # before and after so a lost response converges on durable unknown.
-            status = self.ledger.status(operation_key)
-            if status.get("status") == "claimed":
-                try:
-                    self.ledger.mark_unknown(claim, detail=detail)
-                except Exception:
-                    pass
-            status = self.ledger.status(operation_key)
-            if status.get("status") != "unknown":
-                return self._receipt(
-                    "unknown",
-                    operation_key,
-                    request,
-                    {"outcome": "unknown", "readback": "durable-fence-unavailable"},
+            # Only the same authenticated transition may be retried after a
+            # lost response. The ledger never treats an unrelated recovered
+            # ``unknown`` row as proof that this dispatcher committed.
+            try:
+                committed = self.ledger.mark_unknown(
+                    claim,
+                    detail="effect dispatch committed; source readback required",
                 )
-        return self._readback_and_reconcile(operation_key, request)
+            except Exception:
+                return False
+        try:
+            self._validate_dispatch_commit(committed, claim, operation_key)
+        except ValueError:
+            return False
+        return True
 
     def _reconcile_existing(
         self,
@@ -787,6 +834,16 @@ class IssueDeliveryHostExecutor:
         if readback.outcome == "unknown":
             return self._receipt("unknown", operation_key, request, evidence)
         applied = readback.outcome == "applied"
+        if not applied and claim.get("recovery_kind") == "recovered_attempt":
+            return self._receipt(
+                "unknown",
+                operation_key,
+                request,
+                {
+                    **evidence,
+                    "retry_refused": "prior-dispatch-may-still-complete",
+                },
+            )
         self.ledger.reconcile(
             claim,
             observed_applied=applied,
@@ -1029,6 +1086,7 @@ class IssueDeliveryHostExecutor:
         payload = {
             "contract": CONTRACT,
             "request_sha256": request.content_sha256,
+            "effect_slot_sha256": request.effect_slot_sha256,
             "approval_id": request.approval_id,
             "approved_operation_key": request.approved_operation_key,
             "repository": request.repository,
@@ -1089,6 +1147,7 @@ class IssueDeliveryHostExecutor:
             or not isinstance(payload, Mapping)
             or payload.get("contract") != CONTRACT
             or payload.get("request_sha256") != request.content_sha256
+            or payload.get("effect_slot_sha256") != request.effect_slot_sha256
             or payload.get("approval_id") != request.approval_id
             or payload.get("approved_operation_key") != request.approved_operation_key
             or payload.get("repository") != request.repository
@@ -1116,8 +1175,8 @@ class IssueDeliveryHostExecutor:
         if (
             status.get("operation_key") != operation_key
             or status.get("effect_type") != effect_type
-            or status.get("request_sha256", request.content_sha256)
-            != request.content_sha256
+            or status.get("effect_slot_sha256", request.effect_slot_sha256)
+            != request.effect_slot_sha256
             or not isinstance(status.get("payload"), Mapping)
             or dict(status["payload"]) != dict(payload)
         ):
@@ -1218,6 +1277,18 @@ class IssueDeliveryHostExecutor:
             or dict(claim["payload"]) != dict(payload)
         ):
             raise ValueError("Issue-delivery readback fence is not exact")
+
+    @staticmethod
+    def _validate_dispatch_commit(
+        committed: Mapping[str, Any],
+        original: Mapping[str, Any],
+        operation_key: str,
+    ) -> None:
+        if committed.get("status") != "unknown":
+            raise ValueError("Issue-delivery dispatch commit is not durable")
+        for field in _EFFECT_CLAIM_IDENTITY_FIELDS:
+            if committed.get(field) != original.get(field):
+                raise ValueError("Issue-delivery dispatch commit fence changed")
 
     def _record_known_no_effect(
         self,
@@ -1463,14 +1534,16 @@ class BuilderOpsIssueDeliveryEffectLedger:
         self._claims: dict[str, Mapping[str, Any]] = {}
 
     @staticmethod
-    def _task_id(request_sha256: str) -> str:
-        return f"issue-delivery-effect:{request_sha256}"
+    def _task_id(effect_slot_sha256: str) -> str:
+        return f"issue-delivery-effect:{effect_slot_sha256}"
 
-    def operation_key(self, *, request_sha256: str, effect_type: str) -> str:
+    def operation_key(
+        self, *, effect_slot_sha256: str, effect_type: str
+    ) -> str:
         return _canonical_hash(
             {
                 "repository": self.repository,
-                "idempotency_key": f"delivery-effect-intent:{request_sha256}",
+                "idempotency_key": f"delivery-effect-intent:{effect_slot_sha256}",
                 "effect_type": effect_type,
             }
         )
@@ -1479,14 +1552,14 @@ class BuilderOpsIssueDeliveryEffectLedger:
         self,
         *,
         task_id: str,
-        request_sha256: str,
+        effect_slot_sha256: str,
     ) -> Mapping[str, Any]:
         initial = {
             "contract": CONTRACT,
             "approval_id": self.approval_id,
             "run_id": self.run_id,
             "repository": self.repository,
-            "request_sha256": request_sha256,
+            "effect_slot_sha256": effect_slot_sha256,
         }
         try:
             self.client.get_task(repository=self.repository, task_id=task_id)
@@ -1495,13 +1568,13 @@ class BuilderOpsIssueDeliveryEffectLedger:
                 envelope=self.envelope,
                 task_id=task_id,
                 to_state="ready",
-                idempotency_key=f"delivery-effect-ingest:{request_sha256}",
+                idempotency_key=f"delivery-effect-ingest:{effect_slot_sha256}",
                 request=initial,
             )
         claimed = self.client.claim_task(
             envelope=self.envelope,
             task_id=task_id,
-            idempotency_key=f"delivery-effect-claim:{request_sha256}",
+            idempotency_key=f"delivery-effect-claim:{effect_slot_sha256}",
             request=initial,
         )
         lease = claimed.get("lease")
@@ -1512,15 +1585,15 @@ class BuilderOpsIssueDeliveryEffectLedger:
     def begin(
         self,
         *,
-        request_sha256: str,
+        effect_slot_sha256: str,
         effect_type: str,
         payload: Mapping[str, Any],
     ) -> str:
         operation_key = self.operation_key(
-            request_sha256=request_sha256,
+            effect_slot_sha256=effect_slot_sha256,
             effect_type=effect_type,
         )
-        task_id = self._task_id(request_sha256)
+        task_id = self._task_id(effect_slot_sha256)
         existing = self.status(operation_key)
         if existing.get("status") != "missing":
             if (
@@ -1532,19 +1605,19 @@ class BuilderOpsIssueDeliveryEffectLedger:
             return operation_key
         lease = self._ensure_task_claim(
             task_id=task_id,
-            request_sha256=request_sha256,
+            effect_slot_sha256=effect_slot_sha256,
         )
         task = self.client.get_task(repository=self.repository, task_id=task_id)
         result = self.client.transition_task(
             envelope=self.envelope,
             task_id=task_id,
             to_state="claimed",
-            idempotency_key=f"delivery-effect-intent:{request_sha256}",
+            idempotency_key=f"delivery-effect-intent:{effect_slot_sha256}",
             request={
                 "contract": CONTRACT,
                 "approval_id": self.approval_id,
                 "run_id": self.run_id,
-                "request_sha256": request_sha256,
+                "effect_slot_sha256": effect_slot_sha256,
                 "effect_type": effect_type,
             },
             outbox={"effect_type": effect_type, "payload": dict(payload)},
@@ -1617,8 +1690,10 @@ class BuilderOpsIssueDeliveryEffectLedger:
             now = now.replace(tzinfo=timezone.utc)
         return expiry > now.astimezone(timezone.utc)
 
-    def mark_unknown(self, claim: Mapping[str, Any], *, detail: str) -> None:
-        self.outbox.mark_unknown(claim, detail=detail)
+    def mark_unknown(
+        self, claim: Mapping[str, Any], *, detail: str
+    ) -> Mapping[str, Any]:
+        return self.outbox.mark_unknown(claim, detail=detail)
 
     def reconcile(
         self,
@@ -1634,6 +1709,14 @@ class BuilderOpsIssueDeliveryEffectLedger:
             raise ValueError(
                 "Issue-delivery reconciliation requires readback-only fence"
             )
+        if (
+            not observed_applied
+            and claim.get("recovery_kind") == "recovered_attempt"
+        ):
+            return {
+                "status": "unknown",
+                "retry_refused": "prior-dispatch-may-still-complete",
+            }
         result = self.outbox.reconcile(
             claim,
             observed_applied=observed_applied,

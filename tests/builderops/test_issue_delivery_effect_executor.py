@@ -36,6 +36,7 @@ from app.builderops.issue_delivery_effect_executor import (
     EffectReadback,
     FrozenIssueDeliveryDestination,
     GitIssueDeliveryDestination,
+    IssueDeliveryEffectReceipt,
     IssueDeliveryEffectRequest,
     IssueDeliveryHostExecutor,
     PreparedIssueDeliveryWorker,
@@ -460,17 +461,23 @@ class _Ledger:
         self.lose_next_unknown_write = False
         self.effect_revalidation_override: Mapping[str, Any] | None = None
 
-    def operation_key(self, *, request_sha256: str, effect_type: str) -> str:
-        assert request_sha256 and effect_type
+    def operation_key(
+        self, *, effect_slot_sha256: str, effect_type: str
+    ) -> str:
+        assert effect_slot_sha256 and effect_type
         return "outbox-operation"
 
     def begin(
-        self, *, request_sha256: str, effect_type: str, payload: Mapping[str, Any]
+        self,
+        *,
+        effect_slot_sha256: str,
+        effect_type: str,
+        payload: Mapping[str, Any],
     ) -> str:
         self.intent = {
-            "request_sha256": request_sha256,
+            "effect_slot_sha256": effect_slot_sha256,
             "effect_type": effect_type,
-            "task_id": f"issue-delivery-effect:{request_sha256}",
+            "task_id": f"issue-delivery-effect:{effect_slot_sha256}",
             "payload": dict(payload),
         }
         self.state = "pending"
@@ -528,12 +535,15 @@ class _Ledger:
             "recovery_kind": "recovered_attempt",
         }
 
-    def mark_unknown(self, claim: Mapping[str, Any], *, detail: str) -> None:
+    def mark_unknown(
+        self, claim: Mapping[str, Any], *, detail: str
+    ) -> Mapping[str, Any]:
         assert claim["effect_eligible"] is True and detail
+        self.state = "unknown"
         if self.lose_next_unknown_write:
             self.lose_next_unknown_write = False
             raise TimeoutError("unknown transition response lost")
-        self.state = "unknown"
+        return {**claim, "status": "unknown"}
 
     def reconcile(
         self,
@@ -1005,7 +1015,7 @@ def test_revocation_and_target_drift_fail_closed(
     assert drifted.transport.apply_calls == drifted.credentials.calls == 0
     assert drifted.ledger.status(
         drifted.ledger.operation_key(
-            request_sha256=drifted.request.content_sha256,
+            effect_slot_sha256=drifted.request.effect_slot_sha256,
             effect_type="github.issue-delivery.claim.v1",
         )
     )["status"] == "pending"
@@ -1150,12 +1160,22 @@ def test_unit_unknown_effect_requires_readback_before_retry(tmp_path: Path) -> N
         / "issue_delivery_worker_isolation.py",
     )
     second = fresh_executor.execute(request)
-    assert second.outcome == "retry_after_readback"
-    assert ledger.state == "pending"
+    assert second.outcome == "unknown"
+    assert second.readback["retry_refused"] == "prior-dispatch-may-still-complete"
+    assert ledger.state == "unknown"
     assert ledger.recovery_claims == 2
     assert transport.apply_calls == 1
     assert credentials.calls == 1
     assert authority.reads[-1] == "readback"
+
+    changed_request = request.model_copy(
+        update={"approval": {**request.approval, "request_note": "changed"}}
+    )
+    assert changed_request.effect_slot_sha256 == request.effect_slot_sha256
+    assert changed_request.content_sha256 != request.content_sha256
+    with pytest.raises(ValueError, match="foreign or changed"):
+        fresh_executor.execute(changed_request)
+    assert transport.apply_calls == 1
 
     (
         denied_executor,
@@ -1201,7 +1221,7 @@ def test_issue_delivery_ledger_reuses_outbox_with_bounded_scope() -> None:
 def test_issue_delivery_ledger_bootstraps_task_through_authenticated_service(
     tmp_path: Path,
 ) -> None:
-    request_sha256 = "a" * 64
+    effect_slot_sha256 = "a" * 64
 
     class BootstrapStore:
         def __init__(self) -> None:
@@ -1273,15 +1293,15 @@ def test_issue_delivery_ledger_bootstraps_task_through_authenticated_service(
     )
 
     lease = ledger._ensure_task_claim(  # noqa: SLF001 - exact service boundary regression
-        task_id=ledger._task_id(request_sha256),
-        request_sha256=request_sha256,
+        task_id=ledger._task_id(effect_slot_sha256),
+        effect_slot_sha256=effect_slot_sha256,
     )
 
     assert lease["holder"] == "destination:shared"
     assert store.calls == [
         "get_task",
-        f"commit_transition:delivery-effect-ingest:{request_sha256}",
-        f"claim_task:delivery-effect-claim:{request_sha256}",
+        f"commit_transition:delivery-effect-ingest:{effect_slot_sha256}",
+        f"claim_task:delivery-effect-claim:{effect_slot_sha256}",
     ]
 
 
@@ -1401,8 +1421,9 @@ def test_unknown_effect_requires_readback_before_retry(
         transport=transport,
     )
     recovered = fresh_executor.execute(request)
-    assert recovered.outcome == "retry_after_readback"
-    assert fresh_ledger.status(first.operation_key)["status"] == "pending"
+    assert recovered.outcome == "unknown"
+    assert recovered.readback["retry_refused"] == "prior-dispatch-may-still-complete"
+    assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
 
     with psycopg.connect(issue_delivery_pg_store.dsn) as conn:
@@ -1414,30 +1435,45 @@ def test_unknown_effect_requires_readback_before_retry(
         receipt_events = conn.execute(
             "SELECT event_type FROM builderops_receipts "
             "WHERE repository = %s AND task_id = %s ORDER BY receipt_sequence",
-            (REPOSITORY, f"issue-delivery-effect:{request.content_sha256}"),
+            (REPOSITORY, f"issue-delivery-effect:{request.effect_slot_sha256}"),
         ).fetchall()
     assert row == (1, 3)
     assert [event[0] for event in receipt_events].count("outbox.recovered") == 2
-    assert any(event[0] == "outbox.reconciled.pending" for event in receipt_events)
+    assert not any(event[0] == "outbox.reconciled.pending" for event in receipt_events)
 
-    # Stall an old process before the final fence check, then expire, recover,
-    # and negatively reconcile its attempt.  When resumed, the old process
-    # must observe the new DB fence and never invoke the external transport.
+    # Stall after the final eligibility read but before the durable dispatch
+    # commit. Expiry/recovery must supersede that exact fence, and a recovered
+    # negative readback must not reopen the slot while the old process could
+    # still resume and issue the external effect.
     race = issue_delivery_production_harness()
-    stalled_ledger = BuilderOpsIssueDeliveryEffectLedger(
+
+    class BlockingDispatchLedger(BuilderOpsIssueDeliveryEffectLedger):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.dispatch_entered = Event()
+            self.dispatch_release = Event()
+
+        def mark_unknown(
+            self, claim: Mapping[str, Any], *, detail: str
+        ) -> Mapping[str, Any]:
+            self.dispatch_entered.set()
+            if not self.dispatch_release.wait(timeout=10):
+                raise TimeoutError("test dispatch fence was not released")
+            return super().mark_unknown(claim, detail=detail)
+
+    stalled_ledger = BlockingDispatchLedger(
         race.client,
         repository=REPOSITORY,
         run_id=race.request.run_id,
         approval_id=race.request.approval_id,
         worker_id="issue-delivery-host",
     )
-    blocked_credentials = _BlockingCredentials()
     stale_transport = _Transport()
     stalled_executor = IssueDeliveryHostExecutor(
         authority=race.client,
         ledger=stalled_ledger,
         repository_authority=_RepositoryAuthority(),
-        credentials=blocked_credentials,
+        credentials=race.credentials,
         destination=race.destination,
         frozen_destination=race.frozen,
         worker_isolation=race.isolation,
@@ -1453,9 +1489,9 @@ def test_unknown_effect_requires_readback_before_retry(
 
     thread = Thread(target=run_stalled_executor, daemon=True)
     thread.start()
-    assert blocked_credentials.entered.wait(timeout=10)
+    assert stalled_ledger.dispatch_entered.wait(timeout=10)
     race_operation_key = stalled_ledger.operation_key(
-        request_sha256=race.request.content_sha256,
+        effect_slot_sha256=race.request.effect_slot_sha256,
         effect_type="github.issue-delivery.claim.v1",
     )
     with psycopg.connect(race.store.dsn) as conn:
@@ -1474,7 +1510,7 @@ def test_unknown_effect_requires_readback_before_retry(
     )
     recovery_claim = recovery_ledger.claim_for_readback(race_operation_key)
     assert recovery_claim["effect_eligible"] is False
-    recovery_ledger.reconcile(
+    recovery_result = recovery_ledger.reconcile(
         recovery_claim,
         observed_applied=False,
         evidence={
@@ -1483,12 +1519,16 @@ def test_unknown_effect_requires_readback_before_retry(
             "source": "github-authoritative-readback",
         },
     )
-    blocked_credentials.release.set()
+    assert recovery_result == {
+        "status": "unknown",
+        "retry_refused": "prior-dispatch-may-still-complete",
+    }
+    stalled_ledger.dispatch_release.set()
     thread.join(timeout=10)
     assert not thread.is_alive()
     assert len(stalled_result) == 1
-    assert isinstance(stalled_result[0], ValueError)
-    assert "not exact authority" in str(stalled_result[0])
+    assert isinstance(stalled_result[0], IssueDeliveryEffectReceipt)
+    assert stalled_result[0].outcome == "unknown"
     assert stale_transport.apply_calls == 0
 
     with psycopg.connect(race.store.dsn) as conn:
@@ -1497,7 +1537,7 @@ def test_unknown_effect_requires_readback_before_retry(
             "WHERE repository = %s AND operation_key = %s",
             (REPOSITORY, race_operation_key),
         ).fetchone()
-    assert race_row == ("pending", 2)
+    assert race_row == ("unknown", 2)
 
 
 def test_unit_revocation_and_target_drift_fail_closed(tmp_path: Path) -> None:

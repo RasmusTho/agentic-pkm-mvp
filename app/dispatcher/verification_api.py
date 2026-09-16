@@ -82,7 +82,7 @@ class VerificationEffectOutbox(Protocol):
 
     def mark_unknown(
         self, claim: Mapping[str, object], *, detail: str
-    ) -> None: ...
+    ) -> Mapping[str, object]: ...
 
     def reconcile(
         self,

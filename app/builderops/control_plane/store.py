@@ -2675,24 +2675,51 @@ class PostgresBuilderOpsStore:
             and row["claim_expires_at"] > row["database_now"]
         )
 
-    def mark_effect_unknown(self, claim: OutboxClaim, *, detail: str) -> None:
+    def mark_effect_unknown(
+        self, claim: OutboxClaim, *, detail: str
+    ) -> dict[str, object]:
         with self._connect() as conn:
             row = conn.execute(
-                "UPDATE builderops_outbox SET status = 'unknown', unknown_detail = %s, updated_at = clock_timestamp() "
-                "WHERE repository = %s AND operation_key = %s AND status = 'claimed' "
-                "AND worker_id = %s AND claim_fencing_token = %s "
-                "AND claim_expires_at > clock_timestamp() "
-                "RETURNING operation_key",
-                (
-                    detail,
-                    claim.repository,
-                    claim.operation_key,
-                    claim.worker_id,
-                    claim.fencing_token,
-                ),
+                "SELECT status, worker_id, claim_fencing_token, "
+                "intent_lsn::text AS intent_lsn, claim_lsn::text AS claim_lsn, "
+                "claim_receipt_sequence, claim_expires_at, "
+                "clock_timestamp() AS database_now FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                (claim.repository, claim.operation_key),
             ).fetchone()
-            if row is None:
+            exact_identity = bool(
+                row is not None
+                and row["worker_id"] == claim.worker_id
+                and int(row["claim_fencing_token"]) == claim.fencing_token
+                and row["intent_lsn"] == claim.intent_lsn
+                and row["claim_lsn"] == claim.claim_lsn
+                and int(row["claim_receipt_sequence"]) == claim.receipt_sequence
+                and row["claim_expires_at"] == claim.expires_at
+            )
+            if not exact_identity or row is None:
                 raise StaleFencingToken("outbox claim is stale")
+            if row["status"] == "claimed":
+                if row["claim_expires_at"] <= row["database_now"]:
+                    raise StaleFencingToken("outbox claim is stale")
+                conn.execute(
+                    "UPDATE builderops_outbox SET status = 'unknown', "
+                    "unknown_detail = %s, updated_at = clock_timestamp() "
+                    "WHERE repository = %s AND operation_key = %s",
+                    (detail, claim.repository, claim.operation_key),
+                )
+            elif row["status"] != "unknown":
+                raise StaleFencingToken("outbox claim is stale")
+        return {
+            "status": "unknown",
+            "repository": claim.repository,
+            "operation_key": claim.operation_key,
+            "worker_id": claim.worker_id,
+            "fencing_token": claim.fencing_token,
+            "intent_lsn": claim.intent_lsn,
+            "claim_lsn": claim.claim_lsn,
+            "receipt_sequence": claim.receipt_sequence,
+            "expires_at": claim.expires_at.isoformat(),
+        }
 
     def reconcile_outbox(
         self,

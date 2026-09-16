@@ -2080,14 +2080,14 @@ def create_app(
                 claim.operation_key,
             )
             _enforce_outbox_principal(intent, credential)
-            await run_in_threadpool(
+            committed = await run_in_threadpool(
                 store.mark_effect_unknown,
                 claim,
                 detail=request.detail,
             )
         except Exception as exc:
             raise _control_plane_error(exc) from exc
-        return {"status": "unknown"}
+        return committed
 
     @application.post("/v1/executor/outbox/recover")
     async def recover_outbox(
