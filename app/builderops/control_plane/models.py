@@ -382,7 +382,9 @@ class StorePort(Protocol):
         claim_ttl_seconds: int = 300,
     ) -> OutboxClaim: ...
 
-    def mark_effect_unknown(self, claim: OutboxClaim, *, detail: str) -> None: ...
+    def mark_effect_unknown(
+        self, claim: OutboxClaim, *, detail: str
+    ) -> dict[str, object]: ...
 
     def reconcile_outbox(
         self,

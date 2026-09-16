@@ -209,7 +209,7 @@ class OutboxExecutorAuthority(Protocol):
 
     def mark_unknown(
         self, claim: Mapping[str, object], *, detail: str
-    ) -> None: ...
+    ) -> Mapping[str, object]: ...
 
     def reconcile(
         self,
@@ -242,12 +242,19 @@ class BuilderOpsOutboxExecutor:
         repository: str,
         worker_id: str,
         source_ref: str = "github-issue:3603",
+        scope: str = "verification-executor",
+        claim_ttl_seconds: int = 300,
     ) -> None:
+        if not scope.strip():
+            raise ValueError("outbox executor scope must not be empty")
+        if claim_ttl_seconds <= 0:
+            raise ValueError("outbox executor claim TTL must be positive")
         self.client = client
         self.worker_id = worker_id
+        self.claim_ttl_seconds = claim_ttl_seconds
         self.envelope = {
             "repository": RepoRef.parse(repository).canonical,
-            "scope": "verification-executor",
+            "scope": scope,
             "stack": "builderops-control-plane",
             "source_refs": [source_ref],
             "schema_version": 1,
@@ -258,6 +265,7 @@ class BuilderOpsOutboxExecutor:
             envelope=self.envelope,
             operation_key=operation_key,
             worker_id=self.worker_id,
+            claim_ttl_seconds=self.claim_ttl_seconds,
         )
 
     def recover(self, operation_key: str) -> Mapping[str, object]:
@@ -265,6 +273,13 @@ class BuilderOpsOutboxExecutor:
             envelope=self.envelope,
             operation_key=operation_key,
             worker_id=self.worker_id,
+            claim_ttl_seconds=self.claim_ttl_seconds,
+        )
+
+    def revalidate_effect(self, claim: Mapping[str, object]) -> Mapping[str, object]:
+        return self.client.revalidate_outbox_effect(
+            envelope=self.envelope,
+            claim=self._claim_identity(claim),
         )
 
     def status(self, operation_key: str) -> Mapping[str, object]:
@@ -286,12 +301,13 @@ class BuilderOpsOutboxExecutor:
 
     def mark_unknown(
         self, claim: Mapping[str, object], *, detail: str
-    ) -> None:
-        self.client.mark_outbox_unknown(
+    ) -> Mapping[str, object]:
+        committed = self.client.mark_outbox_unknown(
             envelope=self.envelope,
             claim=self._claim_identity(claim),
             detail=detail,
         )
+        return {**claim, **committed}
 
     def reconcile(
         self,

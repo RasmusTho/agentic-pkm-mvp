@@ -212,7 +212,7 @@ Shortcuts are proportionate, not authority bypasses:
 
 | L2 ID | Child subprocess | Required output and boundary |
 | --- | --- | --- |
-| **V3.1 Claim and execute the bounded change** | Acquire the one active claim, register isolated worktree identity, load bounded context, implement within scope, and maintain lease/receipts. | Local change and focused validation evidence bound to the Issue and worktree. |
+| **V3.1 Claim and execute the bounded change** | Acquire the one active claim, register isolated worktree identity, load bounded context, implement within scope, and maintain lease/receipts. The dormant Issue-delivery support separates the distinct-principal content worker from a protected host executor for Git/GitHub lifecycle effects. | Local change and focused validation evidence bound to the Issue and worktree. The protected executor is repository support only until #5551 integrates reservation, attempt, entry and effect calls into the production dispatch chain. |
 | **V3.2 Reconstruct, resume, and revalidate interrupted work** | On interruption, read resumable orchestration state first, then reconstruct Issue/claim/worktree/branch/HEAD/PR/evidence state; revalidate stale anchors and leases; resume only unchanged authority or perform governed stale-lease takeover/release. | A refreshed, generation-safe execution context or a truthful technical/authority block; chat continuity never authorizes resume. |
 | **V3.3 Publish and integrate the proposed change** | Apply branch-truth and publication gates, open/update the PR, run CI, and repair contract, drift, or integration failures while respecting shared-resource and review/CI backpressure. The normal new single-Issue Tier 1/2 `main` path may use the local hash-bound `scripts/publication.py plan/apply` adapter: it binds strict fetch/push repository identity and live base authority, then advances `absent -> base-reserved -> exact-commit -> exact-PR` without force. Every unsupported or high-risk case routes through `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`. | Current-head PR that is ready for the applicable verification path or truthfully blocked. `builder.publication-plan.v1` and `builder.publication-receipt.v1` are reconstructable exact-readback evidence, not a durable run journal, merge/closure authority, or DDO child. |
 | **V3.4 Verify, accept, merge, and close** | Resolve delivery tier, prove exact-head ACs/checks, run full-path independent review when required, perform the current governed explicit merge/readback, close Issue/claim, and classify owner-doc impact. The ordinary new single-Issue Tier 1/2 light path may use `scripts/closure.py plan/apply`: a hash-bound read-only plan and exact-head merge/readback adapter that refuses all exception routes. | Accepted merge and closure evidence; `builder.closure-plan.v1` / receipt are reconstructable effect evidence, not durable orchestration or UI control. Technical verification remains distinct from owner/product validation. Disabled GitHub auto-merge is not the merge mechanism. |
@@ -341,8 +341,13 @@ These are real controls but do not constitute uniform containment or repository-
 receipt-backed, with stronger sandbox/RBAC and egress controls where the risk justifies them. The
 target is not claimed as shipped.
 
-**Issue-delivery credential-isolation prerequisite:** repository support now includes the
-fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile.
+**Issue-delivery worker and protected-effect prerequisites:** repository support now includes the
+fail-closed `LinuxSystemdCodexIssueSessionLauncher` adapter for an already provisioned host profile
+and the host-only `IssueDeliveryHostExecutor`.
+The legacy `epic-run-state dispatch-sessions` CLI now refuses before frozen-plan parsing, launcher
+construction, or child entry; it does not route to those dormant components until #5551 provides
+the destination-owned reservation, attempt, entry, and replay adapter. #5558 therefore delivers
+protected-executor repository support, not FCA-ID-B completion.
 It re-resolves the exact executor and distinct unprivileged worker UID/GID with no supplementary
 groups, clean frozen worktree, its exact linked per-worktree and common Git administration
 directories, private worker-owned `0700` model-auth
@@ -358,13 +363,29 @@ common Git directories are explicit read-only paths, so it grants no Git-metadat
 binds both Git-directory identities, the typed metadata-denial fact, and executable
 content/mode/ownership identities using only hashes and typed live facts;
 the GitHub credential path and bytes never enter worker argv, environment, prompt, logs, or receipt.
-Unsupported or drifted hosts stop without a same-user fallback. This is repository-only enabling
-support: #5558, FCA-ID-B/C, bob activation, candidate trial, and owner outcome all remain pending,
-and no account, credential, ACL, service, or deployment is provisioned here. The future host-profile
-producer is responsible for recursively granting the already-provisioned worker only worktree
-content permissions. Local stage/commit/ref/object mutation and publication stay host-executor
-effects for #5558; this dormant adapter only refuses absent content access or writable Git metadata
-and never provisions bob or widens a Git/common/worktree-parent aperture.
+Unsupported or drifted hosts stop without a same-user fallback. The worker is a distinct UID/GID
+with no supplementary groups, ambient repository effect identity, or Git-metadata write path; its
+closed prompt is an additional contract, not the security boundary. Before child entry the host
+creates and freezes the exact destination. Strict typed lifecycle-effect requests are then admitted
+only by the host executor after fresh approval/destination/source/profile/target/protected-manifest
+checks. It resolves the opaque repository credential last, writes intent through the existing
+authenticated BuilderOps PostgreSQL task/transaction/outbox, then revalidates the exact live
+worker/fence/LSN/receipt/expiry/task/effect identity against the database clock immediately before
+transport. One approval/run and semantic effect target owns one unresolved slot. The executor
+atomically consumes the exact live fence into durable `unknown` before transport and requires the
+matching commit receipt, closing the eligibility-to-call recovery race without a process-local
+lock. It requires the separate Issue-delivery read grant before authoritative readback. Expired or
+process-lost attempts recover under a distinct readback-only fence with `effect_eligible: false`;
+positive readback may settle a committed dispatch, while negative or ambiguous readback remains
+`unknown` and cannot authorize retry because an admitted transport may still complete. Only an
+explicit pre-transport refusal may reconcile `not_applied` to pending.
+Non-secret receipts contain hash identities, never raw credentials or local paths.
+
+This is repository-only enabling support: #5551 still owns production dispatch reservation,
+attempt/entry and effect integration, while #5552/FCA-ID-C owns independent outcome readback.
+FCA-ID-B/C completion, bob activation/profile and credential provisioning, deployment, candidate
+trial, and owner outcome remain pending. No account, credential, ACL, service, or deployment is
+provisioned here, and the worker receives no Git/common/worktree-parent aperture.
 
 ### Exception and human-decision model
 
@@ -891,11 +912,11 @@ existing owning workflows.
 
 Persisted and dry-run epic run-state is evidence only. It cannot authorize parent closure, GitHub
 mutation, dispatcher lifecycle changes, CI, review, merge, or worker execution. Fast-lane Verify
-evidence must exercise the production dispatch-plan and dispatch-sessions paths with persisted
-state, proving that they emit no GitHub mutations or coordinator claims and that a worker cannot
-self-attest terminal delivery. Persisted run-state, including reusable constraints, is excluded
-from worker context entirely; the production session validator also rejects an injected run-state
-key before launch. Those actions remain with their live owning workflows.
+evidence must exercise the production dispatch-plan and fail-closed dispatch-sessions paths with
+persisted state, proving that they emit no GitHub mutations, coordinator claims, or child entry.
+Persisted run-state, including reusable constraints, is excluded from worker context entirely; the
+future production session validator also rejects an injected run-state key before launch. Those
+actions remain with their live owning workflows.
 
 ### Execution Routing target contract
 
@@ -995,13 +1016,15 @@ may be indexed by evidence-only epic run-state. The incumbent launch still runs,
 now resolves that incumbent tier through the same declared configuration rather than a hard-coded
 model table.
 
-Before a shadow-routed frozen plan can reach `dispatch-sessions`, its canonical plan hash must be
-observed and preserved outside the plan JSON and supplied as `--expected-plan-hash`. Dispatch then
+After #5551 restores an authenticated shadow-routed dispatch path, a frozen plan can reach
+`dispatch-sessions` only when its canonical plan hash is observed and preserved outside the plan
+JSON and supplied as `--expected-plan-hash`. Dispatch then
 checks that independent freeze root before replaying request -> pure route decision -> configured
 target -> canonical shadow attempt against the frozen Issue, incumbent runtime, context, authority,
 and verification hashes. Missing or changed freeze evidence refuses the routed launch; a consumer
 must never recompute the expected value from the persisted plan at dispatch time. Non-routed
-general delivery keeps its existing compatibility path.
+general delivery keeps its existing compatibility path after the same #5551 adapter; until then the
+legacy CLI is unavailable.
 
 Fallback/canary attempt contracts preserve the exact context-pack, authority, and verification
 hashes while deriving a new attempt identity and binding the triggering attempt. A Spark capacity

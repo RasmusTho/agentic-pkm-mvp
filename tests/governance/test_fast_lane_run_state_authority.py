@@ -84,8 +84,8 @@ def _handoff_receipt(issue_number: int, *, final_state: str = "handoff") -> dict
     }
 
 
-def test_persisted_run_state_is_not_authority(tmp_path: Path) -> None:
-    """The real CLI path carries local evidence but leaves live actions to the worker."""
+def test_persisted_run_state_cannot_start_the_unavailable_delivery_worker(tmp_path: Path) -> None:
+    """The real CLI rejects local evidence before a legacy worker can start."""
 
     run_id = "persisted-evidence"
     state = create_independent_issue_run_state(
@@ -128,10 +128,11 @@ def test_persisted_run_state_is_not_authority(tmp_path: Path) -> None:
 
     plan_file = tmp_path / "plan.json"
     plan_file.write_text(json.dumps(plan), encoding="utf-8")
-    launcher = _RecordingLauncher(
-        {"session_id": "session-5024", "worker_receipt": _handoff_receipt(5024)}
-    )
-    with patch("app.builderops.cli.CodexIssueSessionLauncher", return_value=launcher):
+    with patch("app.builderops.cli._load_json_object_file") as load_plan, patch(
+        "app.builderops.epic_dispatch.CodexIssueSessionLauncher"
+    ) as launcher, patch(
+        "app.builderops.epic_dispatch.dispatch_issue_sessions"
+    ) as dispatch:
         sessions = _run_builderops(
             [
                 "epic-run-state",
@@ -144,12 +145,11 @@ def test_persisted_run_state_is_not_authority(tmp_path: Path) -> None:
             ]
         )
 
-    assert sessions.exit_code == 0, sessions.output
-    receipt = json.loads(sessions.output)
-    assert len(launcher.calls) == 1
-    assert receipt["stopped_reason"] == "worker-handoff"
-    assert receipt["github_mutations"] == []
-    assert receipt["coordinator_claims"] == []
+    assert sessions.exit_code != 0
+    assert "unavailable until #5551" in sessions.output
+    load_plan.assert_not_called()
+    launcher.assert_not_called()
+    dispatch.assert_not_called()
 
 
 def test_run_state_cannot_bypass_live_authority(tmp_path: Path) -> None:

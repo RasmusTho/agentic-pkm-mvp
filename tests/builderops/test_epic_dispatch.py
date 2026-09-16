@@ -2014,29 +2014,15 @@ def test_codex_issue_session_captures_exposed_token_usage_and_pack_bytes(
     ]
 
 
-def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(
+def test_dispatch_sessions_cli_fails_closed_before_legacy_child_entry(
     tmp_path: Path,
 ) -> None:
-    plan = build_dispatch_plan(
-        independent_issue_numbers=[5901],
-        run_id="cli-sessions",
-        candidates=[_candidate(5901, risk="high", files=["app/a.py"])],
-    )
     plan_file = tmp_path / "plan.json"
-    plan_file.write_text(json.dumps(plan), encoding="utf-8")
-    launcher = _RecordingSessionLauncher(
-        [
-            {
-                "session_id": "session-5901",
-                "worker_receipt": _worker_receipt(5901),
-            }
-        ]
-    )
+    plan_file.write_text("not a plan", encoding="utf-8")
 
-    with patch(
-        "app.builderops.cli.CodexIssueSessionLauncher",
-        return_value=launcher,
-    ):
+    with patch("app.builderops.cli._load_json_object_file") as load_plan, patch(
+        "app.builderops.epic_dispatch.CodexIssueSessionLauncher"
+    ) as launcher, patch("app.builderops.epic_dispatch.dispatch_issue_sessions") as dispatch:
         result = _run_builderops(
             [
                 "epic-run-state",
@@ -2049,16 +2035,14 @@ def test_dispatch_sessions_cli_emits_receipt_without_github_mutations(
             ]
         )
 
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.output)
-    assert receipt["status"] == "stopped"
-    assert receipt["stopped_reason"] == "worker-handoff"
-    assert receipt["sessions"][0]["session_id"] == "session-5901"
-    assert receipt["github_mutations"] == []
-    assert receipt["coordinator_claims"] == []
+    assert result.exit_code != 0
+    assert "unavailable until #5551" in result.output
+    load_plan.assert_not_called()
+    launcher.assert_not_called()
+    dispatch.assert_not_called()
 
 
-def test_dispatch_sessions_cli_requires_external_hash_for_routed_plan(
+def test_dispatch_sessions_cli_refuses_a_routed_plan_before_session_launch(
     tmp_path: Path,
 ) -> None:
     candidate = _candidate(
@@ -2081,49 +2065,28 @@ def test_dispatch_sessions_cli_requires_external_hash_for_routed_plan(
     )
     plan_file = tmp_path / "routed-plan.json"
     plan_file.write_text(json.dumps(plan), encoding="utf-8")
-    launcher = _RecordingSessionLauncher(
-        [
-            {
-                "session_id": "session-5902",
-                "worker_receipt": _worker_receipt(5902),
-            }
-        ]
-    )
 
-    with patch(
-        "app.builderops.cli.CodexIssueSessionLauncher",
-        return_value=launcher,
-    ):
-        with patch("app.builderops.cli._store") as store:
-            missing_hash = _run_builderops(
-                [
-                    "epic-run-state",
-                    "dispatch-sessions",
-                    "--plan-file",
-                    str(plan_file),
-                    "--repo-root",
-                    str(tmp_path),
-                    "--json",
-                ]
-            )
-        store.assert_not_called()
-        with patch("app.builderops.cli._store") as store:
-            accepted = _run_builderops(
-                [
-                    "epic-run-state",
-                    "dispatch-sessions",
-                    "--plan-file",
-                    str(plan_file),
-                    "--repo-root",
-                    str(tmp_path),
-                    "--expected-plan-hash",
-                    frozen_dispatch_plan_hash(plan),
-                    "--json",
-                ]
-            )
-        store.assert_not_called()
+    with patch("app.builderops.cli._load_json_object_file") as load_plan, patch(
+        "app.builderops.epic_dispatch.CodexIssueSessionLauncher"
+    ) as launcher, patch(
+        "app.builderops.epic_dispatch.dispatch_issue_sessions"
+    ) as dispatch:
+        result = _run_builderops(
+            [
+                "epic-run-state",
+                "dispatch-sessions",
+                "--plan-file",
+                str(plan_file),
+                "--repo-root",
+                str(tmp_path),
+                "--expected-plan-hash",
+                frozen_dispatch_plan_hash(plan),
+                "--json",
+            ]
+        )
 
-    assert missing_hash.exit_code != 0
-    assert "independently preserved plan hash" in missing_hash.output
-    assert accepted.exit_code == 0, accepted.output
-    assert json.loads(accepted.output)["sessions"][0]["status"] == "handoff"
+    assert result.exit_code != 0
+    assert "unavailable until #5551" in result.output
+    load_plan.assert_not_called()
+    launcher.assert_not_called()
+    dispatch.assert_not_called()

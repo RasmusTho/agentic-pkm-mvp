@@ -133,6 +133,14 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
     artifacts = [
         {"path": "app/builderops/cli.py", "sha256": "1" * 64},
         {"path": "app/builderops/epic_dispatch.py", "sha256": "1" * 64},
+        {
+            "path": "app/builderops/issue_delivery_effect_executor.py",
+            "sha256": "1" * 64,
+        },
+        {
+            "path": "app/builderops/issue_delivery_worker_isolation.py",
+            "sha256": "1" * 64,
+        },
         {"path": ".codex/agents/slice-implementer.toml", "sha256": "1" * 64},
         {"path": ".codex/skills/issue-to-code/SKILL.md", "sha256": "1" * 64},
         {"path": ".codex/skills/publish-pr/SKILL.md", "sha256": "1" * 64},
