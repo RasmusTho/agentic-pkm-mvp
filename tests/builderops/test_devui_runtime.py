@@ -1212,7 +1212,7 @@ def test_managed_shell_api_and_asset_inventory_bind_one_candidate(managed_source
             _package_managed_shell(source.root) if mutation != "missing" else None
             (source.root / "manifest.json").write_text(json.dumps(original))
 def _install_first_read_observation(
-    source, monkeypatch, *, retain=True, bounded_documents=False, document_failure=None
+    source, monkeypatch, *, retain=True, bounded_documents=True, document_failure=None
 ):
     import copy
     from app.builderops import cockpit_github_plane
