@@ -834,14 +834,14 @@ class IssueDeliveryHostExecutor:
         if readback.outcome == "unknown":
             return self._receipt("unknown", operation_key, request, evidence)
         applied = readback.outcome == "applied"
-        if not applied and claim.get("recovery_kind") == "recovered_attempt":
+        if not applied:
             return self._receipt(
                 "unknown",
                 operation_key,
                 request,
                 {
                     **evidence,
-                    "retry_refused": "prior-dispatch-may-still-complete",
+                    "retry_refused": "committed-dispatch-may-still-complete",
                 },
             )
         self.ledger.reconcile(
@@ -1715,13 +1715,11 @@ class BuilderOpsIssueDeliveryEffectLedger:
             raise ValueError(
                 "Issue-delivery reconciliation requires readback-only fence"
             )
-        if (
-            not observed_applied
-            and claim.get("recovery_kind") == "recovered_attempt"
-        ):
+        known_no_effect = evidence.get("transport_invoked") is False
+        if not observed_applied and not known_no_effect:
             return {
                 "status": "unknown",
-                "retry_refused": "prior-dispatch-may-still-complete",
+                "retry_refused": "committed-dispatch-may-still-complete",
             }
         result = self.outbox.reconcile(
             claim,

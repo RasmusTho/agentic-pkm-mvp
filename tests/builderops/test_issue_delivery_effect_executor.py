@@ -1161,7 +1161,7 @@ def test_unit_unknown_effect_requires_readback_before_retry(tmp_path: Path) -> N
     )
     second = fresh_executor.execute(request)
     assert second.outcome == "unknown"
-    assert second.readback["retry_refused"] == "prior-dispatch-may-still-complete"
+    assert second.readback["retry_refused"] == "committed-dispatch-may-still-complete"
     assert ledger.state == "unknown"
     assert ledger.recovery_claims == 2
     assert transport.apply_calls == 1
@@ -1430,7 +1430,7 @@ def test_unknown_effect_requires_readback_before_retry(
     assert recovered_again.outcome == "unknown"
     assert (
         recovered_again.readback["retry_refused"]
-        == "prior-dispatch-may-still-complete"
+        == "committed-dispatch-may-still-complete"
     )
     assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
@@ -1449,6 +1449,48 @@ def test_unknown_effect_requires_readback_before_retry(
     assert row == (1, 3)
     assert [event[0] for event in receipt_events].count("outbox.recovered") == 2
     assert not any(event[0] == "outbox.reconciled.pending" for event in receipt_events)
+
+    # A second execute sharing the original ledger can read back while the
+    # admitted transport is still in flight. Its negative observation must
+    # not reopen pending or permit a second transport.
+    concurrent = issue_delivery_production_harness()
+    transport_entered = Event()
+    transport_release = Event()
+
+    def block_transport() -> None:
+        transport_entered.set()
+        if not transport_release.wait(timeout=10):
+            raise TimeoutError("test transport was not released")
+
+    concurrent.transport.on_apply = block_transport
+    concurrent.transport.readbacks = ["not_applied", "applied"]
+    concurrent_result: list[object] = []
+
+    def run_concurrent_executor() -> None:
+        try:
+            concurrent_result.append(concurrent.executor.execute(concurrent.request))
+        except Exception as exc:
+            concurrent_result.append(exc)
+
+    concurrent_thread = Thread(target=run_concurrent_executor, daemon=True)
+    concurrent_thread.start()
+    assert transport_entered.wait(timeout=10)
+    negative_while_inflight = concurrent.executor.execute(concurrent.request)
+    assert negative_while_inflight.outcome == "unknown"
+    assert (
+        negative_while_inflight.readback["retry_refused"]
+        == "committed-dispatch-may-still-complete"
+    )
+    assert concurrent.ledger.status(negative_while_inflight.operation_key)["status"] == "unknown"
+    assert concurrent.transport.apply_calls == 1
+
+    transport_release.set()
+    concurrent_thread.join(timeout=10)
+    assert not concurrent_thread.is_alive()
+    assert len(concurrent_result) == 1
+    assert isinstance(concurrent_result[0], IssueDeliveryEffectReceipt)
+    assert concurrent_result[0].outcome == "applied"
+    assert concurrent.transport.apply_calls == 1
 
     # Stall after the final eligibility read but before the durable dispatch
     # commit. Expiry/recovery must supersede that exact fence, and a recovered
@@ -1530,7 +1572,7 @@ def test_unknown_effect_requires_readback_before_retry(
     )
     assert recovery_result == {
         "status": "unknown",
-        "retry_refused": "prior-dispatch-may-still-complete",
+        "retry_refused": "committed-dispatch-may-still-complete",
     }
     stalled_ledger.dispatch_release.set()
     thread.join(timeout=10)

@@ -376,8 +376,9 @@ atomically consumes the exact live fence into durable `unknown` before transport
 matching commit receipt, closing the eligibility-to-call recovery race without a process-local
 lock. It requires the separate Issue-delivery read grant before authoritative readback. Expired or
 process-lost attempts recover under a distinct readback-only fence with `effect_eligible: false`;
-positive readback may settle the effect, while negative or ambiguous recovered readback remains
-`unknown` and cannot authorize retry while the prior committed dispatcher might still complete.
+positive readback may settle a committed dispatch, while negative or ambiguous readback remains
+`unknown` and cannot authorize retry because an admitted transport may still complete. Only an
+explicit pre-transport refusal may reconcile `not_applied` to pending.
 Non-secret receipts contain hash identities, never raw credentials or local paths.
 
 This is repository-only enabling support: #5551 still owns production dispatch reservation,

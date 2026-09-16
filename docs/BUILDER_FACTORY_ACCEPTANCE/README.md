@@ -397,8 +397,9 @@ idempotently consumes that exact fence into durable `unknown` before transport. 
 commit receipt permits the call, so recovery between eligibility and dispatch cannot authorize a
 stale process. Authoritative source readback uses the separate Issue-delivery read grant. A
 recovered attempt receives a distinct readback-only fence and is never `effect_eligible`; positive
-readback may settle it, while negative or ambiguous readback remains `unknown` and cannot reopen
-retry while the prior committed dispatcher might still complete. Typed receipts bind hash
+readback may settle a committed dispatch, while negative or ambiguous readback remains `unknown`
+and cannot reopen retry because an admitted transport may still complete. Only the explicit
+pre-transport refusal path may reconcile `not_applied` back to pending. Typed receipts bind hash
 identities while excluding raw credentials and local paths.
 
 These repository prerequisites still do not deliver FCA-ID-B: #5551 must integrate destination
