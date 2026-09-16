@@ -743,8 +743,10 @@ manifest or effect authority from worker text, and unsupported stop remains refu
 FCA-ID-A, delivered by #5550, supplies the repository-only Issue subtype with atomic immutable
 approval/readback admission, exact operation-key binding, fresh permission/epoch/expiry checks and
 separate destination read/execute grants. FCA-ID-B provides the repository-only
-reservation/attempt/entry, replay and protected-effect boundary. Independently sourced FCA-ID-C
-outcome readback, host activation, deployment, credential provisioning, candidate trial and owner
+reservation/attempt/entry, replay and protected-effect boundary. #5552 supplies FCA-ID-C repository
+readback through the existing native task API, bounded GitHub REST readers, exact host-effect
+receipts and DevUI projection; missing or contradictory evidence withdraws the claim. Host
+activation, deployment, credential provisioning, one real delivery, candidate trial and owner
 outcome remain pending in the [three source-anchored slices](../BUILDER_FACTORY_ACCEPTANCE/README.md#issue-delivery-implementation-slices).
 The existing GitHub readers and closure owners supply PR/head/CI/review/merge/closure evidence;
 authenticated worker text and process exit supply no delivery verdict. FCA-09 separately owns

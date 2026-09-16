@@ -25,6 +25,7 @@ own the dispatcher's pull-sync mirror and are out of scope here (#4440/#4441).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -44,6 +45,7 @@ __all__ = [
     "GithubReadError",
     "GithubReader",
     "default_github_reader",
+    "read_issue_delivery_github",
     "fetch_github_live",
     "parse_governing_issue",
 ]
@@ -59,6 +61,7 @@ _BRANCHES_PAGE_SIZE = 100
 _BRANCHES_MAX_PAGES = 10
 
 _GH_TIMEOUT_SECONDS = 20
+_REQUIRED_VERIFICATION_CHECK = "Unit tests (not pg)"
 
 _GOVERNING_ISSUE_RE = re.compile(r"(?im)^governing-issue:\s*#(\d+)\s*$")
 _CLOSING_KEYWORD_RE = re.compile(
@@ -353,6 +356,272 @@ def default_github_reader(repo: str) -> GithubLiveSnapshot:
         branches=branches,
         check_read_failures=frozenset(check_read_failures),
     )
+
+
+def read_issue_delivery_github(
+    repo: str, issue_number: int, *, branch: str
+) -> dict[str, Any]:
+    """Read one closed Issue delivery through bounded, independent REST calls.
+
+    This is intentionally separate from the open-work snapshot above.  It
+    reads the exact Issue, its governing PR, the delivered head's checks, and
+    reviews on every call; no worker receipt or control-plane claim is used as
+    a substitute for GitHub state.
+    """
+
+    owner, separator, name = repo.partition("/")
+    if not separator or not owner or not name or type(issue_number) is not int or issue_number < 1:
+        raise GithubReadError("exact repository and Issue are required")
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    issue = _run_gh(["api", f"repos/{owner}/{name}/issues/{issue_number}"])
+    if not isinstance(issue, dict) or issue.get("pull_request"):
+        raise GithubReadError("addressed GitHub Issue is unavailable")
+    pulls = _paged_rest(
+        owner,
+        name,
+        "pulls",
+        page_size=_PULLS_PAGE_SIZE,
+        max_pages=_PULLS_MAX_PAGES,
+        extra_fields=("state=all", f"head={owner}:{branch}"),
+    )
+    matches = [
+        row
+        for row in pulls
+        if parse_governing_issue(row.get("body")) == issue_number
+        and isinstance(row.get("head"), dict)
+        and row["head"].get("ref") == branch
+    ]
+    if len(matches) != 1 or type(matches[0].get("number")) is not int:
+        raise GithubReadError("exact governing pull request is unavailable or ambiguous")
+    pr_number = int(matches[0]["number"])
+    pull = _run_gh(["api", f"repos/{owner}/{name}/pulls/{pr_number}"])
+    if not isinstance(pull, dict):
+        raise GithubReadError("pull-request readback is malformed")
+    pull_title = pull.get("title")
+    pull_body = pull.get("body")
+    if not isinstance(pull_title, str) or not pull_title.strip() or not isinstance(pull_body, str):
+        raise GithubReadError("pull-request source text is malformed")
+    head = pull.get("head")
+    base = pull.get("base")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    if not isinstance(head_sha, str) or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+        raise GithubReadError("pull-request head is malformed")
+
+    check_payload = _run_gh(
+        ["api", f"repos/{owner}/{name}/commits/{head_sha}/check-runs", "--method", "GET", "-F", "filter=latest"]
+    )
+    status_payload = _run_gh(["api", f"repos/{owner}/{name}/commits/{head_sha}/status"])
+    repository = _run_gh(["api", f"repos/{owner}/{name}"])
+    default_branch = repository.get("default_branch") if isinstance(repository, dict) else None
+    if not isinstance(default_branch, str) or not default_branch:
+        raise GithubReadError("GitHub default branch is unavailable")
+    if not isinstance(base, dict) or base.get("ref") != default_branch:
+        raise GithubReadError("pull request does not target the protected default branch")
+    protection = _run_gh(
+        ["api", f"repos/{owner}/{name}/branches/{default_branch}/protection"]
+    )
+    reviews = _paged_rest(
+        owner,
+        name,
+        f"pulls/{pr_number}/reviews",
+        page_size=100,
+        max_pages=10,
+    )
+    check_runs = check_payload.get("check_runs") if isinstance(check_payload, dict) else None
+    statuses = status_payload.get("statuses") if isinstance(status_payload, dict) else None
+    if not isinstance(check_runs, list) or not isinstance(statuses, list):
+        raise GithubReadError("GitHub required-gate evidence is malformed")
+    successful_checks = {
+        (
+            str(row.get("name")),
+            row.get("app", {}).get("id") if isinstance(row.get("app"), dict) else None,
+        )
+        for row in check_runs
+        if isinstance(row, dict)
+        and row.get("head_sha") == head_sha
+        and row.get("status") == "completed"
+        and row.get("conclusion") == "success"
+    }
+    all_checks_green = bool(check_runs) and all(
+        isinstance(row, dict)
+        and row.get("head_sha") == head_sha
+        and row.get("status") == "completed"
+        and row.get("conclusion") in {"success", "neutral", "skipped"}
+        for row in check_runs
+    )
+    successful_statuses = {
+        str(row.get("context"))
+        for row in statuses
+        if isinstance(row, dict) and row.get("sha") == head_sha and row.get("state") == "success"
+    }
+    required_document = (
+        protection.get("required_status_checks") if isinstance(protection, dict) else None
+    )
+    required: set[tuple[str, int | None]] = {
+        (_REQUIRED_VERIFICATION_CHECK, None)
+    }
+    if isinstance(required_document, dict):
+        contexts = required_document.get("contexts", [])
+        checks = required_document.get("checks", [])
+        if not isinstance(contexts, list) or not isinstance(checks, list):
+            raise GithubReadError("GitHub required-check policy is malformed")
+        for context in contexts:
+            if not isinstance(context, str) or not context:
+                raise GithubReadError("GitHub required-check policy is malformed")
+            required.add((context, None))
+        for check in checks:
+            if (
+                not isinstance(check, dict)
+                or not isinstance(check.get("context"), str)
+                or not check["context"]
+                or (
+                    check.get("app_id") is not None
+                    and type(check.get("app_id")) is not int
+                )
+            ):
+                raise GithubReadError("GitHub required-check policy is malformed")
+            required.add((check["context"], check.get("app_id")))
+    # The not-pg suite is the repository's invariant behavioral gate even when
+    # branch protection is temporarily misconfigured. Required checks must be
+    # successful; neutral/skipped is tolerated only for non-required checks.
+    gates_state = "success" if all_checks_green and all(
+        (check_name, app_id) in successful_checks
+        or (
+            app_id is None
+            and (
+                check_name in successful_statuses
+                or any(
+                    observed_name == check_name
+                    for observed_name, _check_app in successful_checks
+                )
+            )
+        )
+        for check_name, app_id in required
+    ) else "incomplete"
+    latest_by_actor: dict[str, dict[str, Any]] = {}
+    for row in reviews:
+        actor = row.get("user") if isinstance(row, dict) else None
+        login = actor.get("login") if isinstance(actor, dict) else None
+        state = row.get("state") if isinstance(row, dict) else None
+        submitted_at = row.get("submitted_at") if isinstance(row, dict) else None
+        if (
+            not isinstance(login, str)
+            or not login
+            or not isinstance(state, str)
+            or not state
+            or not isinstance(submitted_at, str)
+            or not submitted_at
+        ):
+            raise GithubReadError("GitHub review evidence is malformed")
+        # A later COMMENTED review does not revoke an earlier approval. Only
+        # decisive states replace the actor's current review disposition.
+        if state in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+            previous = latest_by_actor.get(login)
+            if previous is None or submitted_at > str(previous["submitted_at"]):
+                latest_by_actor[login] = row
+    review_policy = (
+        protection.get("required_pull_request_reviews")
+        if isinstance(protection, dict)
+        else None
+    )
+    required_approvals = (
+        review_policy.get("required_approving_review_count", 1)
+        if isinstance(review_policy, dict)
+        else 1
+    )
+    if type(required_approvals) is not int or required_approvals < 0:
+        raise GithubReadError("GitHub review policy is malformed")
+    required_approvals = max(1, required_approvals)
+    approved = sum(
+        row.get("state") == "APPROVED" and row.get("commit_id") == head_sha
+        for row in latest_by_actor.values()
+    ) >= required_approvals and not any(
+        row.get("state") == "CHANGES_REQUESTED" for row in latest_by_actor.values()
+    )
+    body = issue.get("body")
+    ac = (
+        re.search(r"^## Acceptance Criteria\s*\n(.*?)(?=^## |\Z)", body, re.MULTILINE | re.DOTALL)
+        if isinstance(body, str)
+        else None
+    )
+    if ac is None:
+        raise GithubReadError("GitHub Issue acceptance criteria are unavailable")
+    final_pull = _run_gh(["api", f"repos/{owner}/{name}/pulls/{pr_number}"])
+    final_issue = _run_gh(["api", f"repos/{owner}/{name}/issues/{issue_number}"])
+    if not isinstance(final_pull, dict) or not isinstance(final_issue, dict):
+        raise GithubReadError("GitHub source changed during delivery readback")
+
+    def stable_pull_fields(value: dict[str, Any]) -> tuple[Any, ...]:
+        value_head = value.get("head")
+        value_base = value.get("base")
+        return (
+            value.get("number"),
+            value.get("node_id"),
+            value.get("title"),
+            value.get("body"),
+            value.get("state"),
+            value.get("merged"),
+            value.get("merged_at"),
+            value.get("merge_commit_sha"),
+            value_head.get("ref") if isinstance(value_head, dict) else None,
+            value_head.get("sha") if isinstance(value_head, dict) else None,
+            value_base.get("ref") if isinstance(value_base, dict) else None,
+            value_base.get("sha") if isinstance(value_base, dict) else None,
+        )
+
+    def stable_issue_fields(value: dict[str, Any]) -> tuple[Any, ...]:
+        closed_by = value.get("closed_by")
+        return (
+            value.get("number"),
+            value.get("node_id"),
+            value.get("body"),
+            value.get("state"),
+            value.get("closed_at"),
+            closed_by.get("login") if isinstance(closed_by, dict) else None,
+        )
+
+    if stable_pull_fields(final_pull) != stable_pull_fields(pull):
+        raise GithubReadError("pull request changed during delivery readback")
+    if stable_issue_fields(final_issue) != stable_issue_fields(issue):
+        raise GithubReadError("Issue changed during delivery readback")
+    assert isinstance(body, str)
+    return {
+        "repository": repo,
+        "observed_at": observed_at,
+        "issue": {
+            **issue,
+            "body_hash": hashlib.sha256(body.encode()).hexdigest(),
+            "acceptance_criteria_hash": hashlib.sha256(ac[1].encode()).hexdigest(),
+        },
+        "pull_request": {
+            "number": pr_number,
+            "node_id": pull.get("node_id"),
+            "title_sha256": hashlib.sha256(pull_title.encode()).hexdigest(),
+            "body_sha256": hashlib.sha256(pull_body.encode()).hexdigest(),
+            "governing_issue": parse_governing_issue(pull_body),
+            "state": pull.get("state"),
+            "merged": pull.get("merged") is True,
+            "merged_at": pull.get("merged_at"),
+            "head_ref": head.get("ref") if isinstance(head, dict) else None,
+            "head_sha": head_sha,
+            "base_ref": base.get("ref") if isinstance(base, dict) else None,
+            "base_sha": base.get("sha") if isinstance(base, dict) else None,
+            "merge_commit_sha": pull.get("merge_commit_sha"),
+        },
+        "required_gates": {
+            "state": gates_state,
+            "head_sha": head_sha,
+            "policy_sha256": hashlib.sha256(
+                json.dumps(protection, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            "observed_at": observed_at,
+        },
+        "reviews": {
+            "state": "approved" if approved else "incomplete",
+            "head_sha": head_sha,
+            "observed_at": observed_at,
+        },
+    }
 
 
 GithubReader = Callable[[str], GithubLiveSnapshot]

@@ -266,7 +266,11 @@ def _receipt_candidate(receipt_provider: Any) -> dict[str, Any] | None:
 
 
 def derive_overview_inputs(
-    *, work_provider: Any, receipt_provider: Any = None, owner_fact_provider: Any = None
+    *,
+    work_provider: Any,
+    receipt_provider: Any = None,
+    owner_fact_provider: Any = None,
+    issue_delivery_provider: Any = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Derive only trusted source-ordered ``Now`` candidates from one contribution.
 
@@ -284,6 +288,27 @@ def derive_overview_inputs(
             if candidate is None:
                 candidates = []
                 break
+            subject = candidate["subject_ref"]["source_id"]
+            projection = (
+                issue_delivery_provider.get(subject)
+                if isinstance(issue_delivery_provider, Mapping)
+                else item.get("issue_delivery_readback")
+                if isinstance(item, Mapping)
+                else None
+            )
+            if isinstance(projection, Mapping):
+                if (
+                    projection.get("contract") != "fca-issue-delivery-readback.v1"
+                    or projection.get("state") != "delivered"
+                    or projection.get("subject_ref") != subject
+                    or not isinstance(projection.get("evidence"), list)
+                    or not isinstance(projection.get("delivery_facts"), Mapping)
+                ):
+                    candidates = []
+                    break
+                candidate["evidence"].extend(copy.deepcopy(projection["evidence"]))
+                candidate["delivery_facts"] = copy.deepcopy(projection["delivery_facts"])
+                candidate["limitations"].extend(copy.deepcopy(projection.get("limitations", [])))
             candidates.append(candidate)
     result: dict[str, list[dict[str, Any]]] = {"now": candidates}
     receipt_candidate = _receipt_candidate(receipt_provider)
