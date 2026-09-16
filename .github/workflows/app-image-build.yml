@@ -247,6 +247,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          runtime_identity="$(docker run --rm --entrypoint sh \
+            "${{ steps.images.outputs.control_plane }}" \
+            -c 'printf "%s:%s" "$(id -u)" "$(id -g)"')"
+          test "${runtime_identity}" = "100:101"
           docker run --rm --entrypoint python \
             "${{ steps.images.outputs.control_plane }}" \
             -c 'from pathlib import Path; from app.builderops.control_plane.service import production_app; from app.builderops.epic_dispatch import CodexIssueSessionLauncher; assert callable(production_app); launcher = CodexIssueSessionLauncher(repo_root=Path("/app")); assert launcher.adapter_path.is_file(); assert launcher.provider_census is not None'
