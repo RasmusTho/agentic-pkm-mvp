@@ -431,7 +431,9 @@ FCA-ID-B now integrates destination reservation, attempt and observed entry into
 dispatch chain and rechecks the approved authority at owning effect gates through the protected
 executor seam. #5552/FCA-ID-C adds a version-bound native task admission/readback, independently
 parses exact Issue/PR/head/check/review/merge/closure state, ignores worker outcome claims, and joins
-only the exact current FCA-09 candidate/profile binding into Overview and Focus. Bob
+only the exact current FCA-09 candidate/profile binding into Overview and the pure Focus adapter
+when a bounded caller supplies that addressed delivery projection. The standalone managed Focus
+route keeps the M1 selected-Issue boundary and does not rescan the BuilderOps task root. Bob
 activation/profile and credential provisioning, deployment, the first real delivery, candidate
 trial, and owner outcome remain pending.
 No bob principal, credential, profile, ACL, service, or deployment is created or activated here.

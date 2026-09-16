@@ -129,7 +129,10 @@ and uses the existing pure Focus input/composer contracts. Repository comparison
 canonical identity while the selected subject and source URL retain their supplied spelling.
 Foreign repositories and malformed source URLs remain refused. Other subject kinds remain unsupported;
 Conversation Port and workflow transitions remain unavailable, and unrelated root/receipt/provider
-observations are never joined. Returning to Overview performs a fresh read.
+observations are never joined. Issue-delivery facts are independently composed into Overview; the
+pure Focus input adapter retains an injectable exact-delivery seam for bounded callers, but the
+standalone managed Focus route does not scan the BuilderOps task root to populate it. Returning to
+Overview performs a fresh root read.
 
 The standalone browser tests establish local managed repository behavior and source/transport
 failure handling. They do not qualify live sources, an operator tunnel, deployed final-main `M`,
