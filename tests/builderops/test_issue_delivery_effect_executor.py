@@ -1422,7 +1422,10 @@ def test_unknown_effect_requires_readback_before_retry(
     )
     recovered = fresh_executor.execute(request)
     assert recovered.outcome == "unknown"
-    assert recovered.readback["retry_refused"] == "prior-dispatch-may-still-complete"
+    assert (
+        recovered.readback["retry_refused"]
+        == "committed-dispatch-may-still-complete"
+    )
     assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
 
