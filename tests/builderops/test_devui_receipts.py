@@ -201,6 +201,65 @@ def test_withdraws_first_deployment_with_previous_identity(tmp_path: Path) -> No
     deploy_path.write_text(json.dumps(deploy), encoding="utf-8")
 
     assert read_vm102_receipt_provider(tmp_path, now=NOW)["status"] == "refused"
+
+
+def test_first_read_requires_packaged_root_builder_instructions(tmp_path: Path) -> None:
+    import copy
+
+    root = Path(__file__).resolve().parents[2]
+    assert "COPY AGENTS.md /devui-candidate/AGENTS.md" in (
+        root / "Dockerfile.builderops"
+    ).read_text(encoding="utf-8")
+    assert "!AGENTS.md" in (root / "Dockerfile.builderops.dockerignore").read_text(
+        encoding="utf-8"
+    )
+
+    from app.builderops.devui_receipts import read_first_read_observation_provider
+    from app.ops.devui_vm102_runtime_receipts import build_first_read_observation, canonical_digest
+    from tests.ops.test_devui_vm102_runtime_receipts import _first_read_inputs
+
+    inputs = _first_read_inputs("- `docs/AGENT_ISSUE_DISPATCHER.md`\n- `AGENTS.md`")
+    inputs["evidence"]["installed"]["documents"]["AGENTS.md"] = "d" * 64
+    inputs["evidence"]["journey"]["inspected_documents"].append("AGENTS.md")
+    inputs["evidence"]["owner"]["journey_sha256"] = canonical_digest(inputs["evidence"]["journey"])
+    receipt = build_first_read_observation(**inputs)
+    assert receipt["verdict"] == "pass"
+
+    folder = tmp_path / "first-read"
+    folder.mkdir()
+    (folder / "observation.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (folder / "inputs.json").write_text(json.dumps(inputs), encoding="utf-8")
+    identity = {
+        key: copy.deepcopy(receipt[key])
+        for key in ("candidate_identity", "origin", "repository", "source", "assets", "documents")
+    }
+    issue = inputs["evidence"]["github"]["payload"]
+    task = inputs["evidence"]["task"]["payload"]
+
+    def source_reader(_binding):
+        return {
+            "issue": issue,
+            "task": task,
+            "authority_epoch": inputs["evidence"]["source"]["authority_epoch"],
+        }
+
+    def read() -> dict:
+        return read_first_read_observation_provider(
+            tmp_path,
+            listener_identity=identity,
+            source_reader=source_reader,
+        )
+
+    assert read()["status"] == "available"
+    for mutation in (
+        lambda broken: broken["evidence"]["installed"]["documents"].pop("AGENTS.md"),
+        lambda broken: broken["evidence"]["installed"]["documents"].__setitem__("AGENTS.md", "e" * 64),
+        lambda broken: broken["evidence"]["journey"]["inspected_documents"].remove("AGENTS.md"),
+    ):
+        broken = copy.deepcopy(inputs)
+        mutation(broken)
+        (folder / "inputs.json").write_text(json.dumps(broken), encoding="utf-8")
+        assert read()["status"] == "refused"
 @pytest.mark.parametrize("nested_failure", [None, "valid_api_key", "receipt_epoch", "receipt_version", "listener_epoch", *_FIRST_READ_INVALID_NESTED_FIELDS])
 def test_first_read_reader_revalidates_retained_inputs(tmp_path, nested_failure):
     import copy

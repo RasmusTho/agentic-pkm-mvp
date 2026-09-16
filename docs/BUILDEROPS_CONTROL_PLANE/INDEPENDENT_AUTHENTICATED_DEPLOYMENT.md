@@ -133,6 +133,11 @@ The image build now requires `SOURCE_REPOSITORY` alongside `VCS_REF`. The existi
 supplies both from its addressed GitHub candidate; `devui_sources.package_candidate` rejects missing
 identity or required document inputs. The immutable image contains the candidate docs/capability
 YAML/matrix and their hashes, plus `gh`, `httpx` and PyYAML in the Builder dependency closure.
+The finite filtered source package also includes the repository-root `AGENTS.md` at
+`/devui-candidate/AGENTS.md`, unchanged and bound by its repository-relative path and SHA. This
+allows a selected Issue that names the builder instructions in `Source Docs` to pass the same
+candidate-manifest and first-read inspection checks; it does not grant those packaged instructions
+runtime authority or broaden the copied file set.
 `Dockerfile.builderops.dockerignore` admits that Builder-only closure through the actual Docker
 context; the `devui-source-inputs` build stage permits a filtered-input export without booting a
 service. Packaged document and capability paths retain their repository-relative identities, so

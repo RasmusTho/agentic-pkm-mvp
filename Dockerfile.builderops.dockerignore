@@ -3,6 +3,7 @@
 **
 !pyproject.toml
 !requirements-builderops.txt
+!AGENTS.md
 !app
 !app/**
 !scripts
