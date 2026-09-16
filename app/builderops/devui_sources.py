@@ -212,6 +212,7 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
             "repo",
             "issue_number",
             "title",
+            "why_now",
             "status",
             "priority",
             "created_at",

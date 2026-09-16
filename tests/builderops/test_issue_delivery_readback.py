@@ -321,10 +321,7 @@ def test_issue_delivery_admission_builds_exact_task_contract() -> None:
     projection = _projection(task=row)
     item = _task(row, repository=REPOSITORY)
     assert item is not None
-    item.update(
-        issue_delivery_readback=projection,
-        why_now="Issue delivery is active.",
-    )
+    item["issue_delivery_readback"] = projection
 
     overview = derive_overview_inputs(
         work_provider=_provider(item),
