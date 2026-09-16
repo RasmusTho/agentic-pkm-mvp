@@ -369,10 +369,11 @@ is no assumption that GitHub/worktree effects roll back atomically with a servic
 ### Issue-delivery implementation slices
 
 Stable source anchor: **FCA-ID-04**. The smallest bounded sequence is three serial repository
-slices. FCA-ID-A is delivered by #5550 as repository-only admission support; FCA-ID-B and FCA-ID-C
-remain the serial destination/readback obligations. Each Issue binds its exact production surface
-and inline `Verify:` targets. The named test pointers below are required production-path
-production-path tests, not claims that tests exist or pass today.
+slices. FCA-ID-A is delivered by #5550 as repository-only admission support, and FCA-ID-B is
+delivered by #5551 as repository-only destination support; FCA-ID-C remains the serial
+independent-readback obligation. Each Issue binds its exact production surface and inline `Verify:`
+targets. Delivered rows name their repository evidence; the pending FCA-ID-C row names its required
+production-path proof and does not claim that proof currently passes.
 
 The credential-isolation and protected-effect prerequisites for FCA-ID-B now have repository
 support through a dormant Linux/systemd adapter around the existing Codex Issue-session launcher
