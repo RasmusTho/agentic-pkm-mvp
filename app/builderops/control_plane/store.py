@@ -35,15 +35,25 @@ from app.builderops.control_plane.models import (
 )
 
 _ISSUE_DELIVERY_IDEMPOTENCY_PREFIX = "issue-delivery:"
+_ISSUE_DELIVERY_OPERATION_IDEMPOTENCY_PREFIX = "issue-delivery-operation:"
 _ISSUE_DELIVERY_SCOPE = "issue-delivery-approval"
 _ISSUE_DELIVERY_RECORD_TYPE = "IssueDeliveryApproval"
 _ISSUE_DELIVERY_ADMISSION_CAPABILITY = object()
+_ISSUE_DELIVERY_OPERATION_SCOPE = "issue-delivery-operation"
+_ISSUE_DELIVERY_OPERATION_RECORD_TYPE = "BuilderOpsReceipt"
+_ISSUE_DELIVERY_OPERATION_CAPABILITY = object()
 
 
 def _issue_delivery_admission_capability() -> object:
     """Return the in-process capability held by the owner-admission service."""
 
     return _ISSUE_DELIVERY_ADMISSION_CAPABILITY
+
+
+def _issue_delivery_operation_capability() -> object:
+    """Return the in-process capability held by the authenticated service route."""
+
+    return _ISSUE_DELIVERY_OPERATION_CAPABILITY
 
 
 def _guard_idempotency_namespace(
@@ -53,6 +63,7 @@ def _guard_idempotency_namespace(
     object_kind: str | None = None,
     record_type: str | None = None,
     secondary_id: str | None = None,
+    issue_delivery_operation_capability: object | None = None,
 ) -> None:
     """Reserve the Issue-delivery keyspace at every global write boundary.
 
@@ -61,9 +72,19 @@ def _guard_idempotency_namespace(
     prevents direct store callers (including leases and task transitions) from
     squatting an operation key before the authenticated approval is committed.
     """
-    if not isinstance(idempotency_key, str) or not idempotency_key.startswith(
-        _ISSUE_DELIVERY_IDEMPOTENCY_PREFIX
-    ):
+    if not isinstance(idempotency_key, str):
+        return
+    if idempotency_key.startswith(_ISSUE_DELIVERY_OPERATION_IDEMPOTENCY_PREFIX):
+        # Destination receipts enter through the capability-bearing
+        # specialized method below.  Generic task/record/lease callers can
+        # never squat this namespace before that method takes its operation
+        # and approval locks.
+        if issue_delivery_operation_capability is _ISSUE_DELIVERY_OPERATION_CAPABILITY:
+            return
+        raise StateConflict(
+            "Issue-delivery operation idempotency keys require the destination adapter"
+        )
+    if not idempotency_key.startswith(_ISSUE_DELIVERY_IDEMPOTENCY_PREFIX):
         return
     issue_delivery_record = (
         envelope.scope == _ISSUE_DELIVERY_SCOPE
@@ -1008,6 +1029,17 @@ class PostgresBuilderOpsStore:
             object_kind="record",
             record_type=record_type,
         )
+        if envelope.scope == _ISSUE_DELIVERY_OPERATION_SCOPE or record_id.startswith(
+            (
+                "issue-delivery-reservation:",
+                "issue-delivery-attempt:",
+                "issue-delivery-entry:",
+                "issue-delivery-terminal:",
+            )
+        ):
+            raise StateConflict(
+                "Issue-delivery operation records require the destination adapter"
+            )
         if record_type == "IssueDeliveryApproval" and envelope.scope != "issue-delivery-approval":
             raise StateConflict("Issue-delivery approvals require exact owner admission")
         if record_type == _ISSUE_DELIVERY_RECORD_TYPE and (
@@ -1034,6 +1066,138 @@ class PostgresBuilderOpsStore:
             expected_states=expected_states,
             fault_at=fault_at,
         )
+
+    def commit_issue_delivery_operation_record(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        record_id: str,
+        state: str,
+        payload: Mapping[str, Any],
+        idempotency_key: str,
+        operation_key: str,
+        approval_id: str,
+        approval_manifest_hash: str,
+        record_kind: str,
+        capability: object | None = None,
+        fault_at: str | None = None,
+    ) -> AuthorityObjectResult:
+        """Commit one FCA-ID-B receipt through the existing PG transaction.
+
+        The operation and approval advisory locks are taken before the record
+        lock.  This makes reservation/attempt/entry/terminal identities a
+        single durable namespace even when competing dispatchers use distinct
+        idempotency keys.
+        """
+
+        if capability is not _ISSUE_DELIVERY_OPERATION_CAPABILITY:
+            raise StateConflict("Issue-delivery operation commits require the authenticated service capability")
+        if envelope.scope != _ISSUE_DELIVERY_OPERATION_SCOPE:
+            raise StateConflict("Issue-delivery operation scope is required")
+        if record_kind not in {"reservation", "attempt", "entry", "terminal"}:
+            raise ValueError("unsupported Issue-delivery operation record kind")
+        expected_record_id = f"issue-delivery-{record_kind}:{operation_key}"
+        if record_id != expected_record_id:
+            raise StateConflict("Issue-delivery operation record identity is invalid")
+        expected_state = {
+            "reservation": "reserved",
+            "attempt": "attempted",
+            "entry": "active",
+            "terminal": "terminal",
+        }[record_kind]
+        if state != expected_state and not (record_kind == "terminal" and state == "launch_unknown"):
+            raise StateConflict("Issue-delivery operation record state is invalid")
+        if idempotency_key != f"issue-delivery-operation:{record_kind}:{operation_key}":
+            raise StateConflict("Issue-delivery operation idempotency identity is invalid")
+        destination_resource_key = payload.get("destination_resource_key")
+        if record_kind in {"reservation", "attempt", "entry", "terminal"} and (
+            not isinstance(destination_resource_key, str)
+            or len(destination_resource_key) != 64
+            or any(character not in "0123456789abcdef" for character in destination_resource_key)
+        ):
+            raise StateConflict("Issue-delivery reservation destination identity is invalid")
+        binding = {
+            "operation_key": operation_key,
+            "approval_id": approval_id,
+            "approval_manifest_hash": approval_manifest_hash,
+            "record_kind": record_kind,
+            "destination_resource_key": destination_resource_key,
+        }
+        if payload.get("operation_key") != operation_key or payload.get("approval_id") != approval_id or payload.get("approval_manifest_hash") != approval_manifest_hash:
+            raise StateConflict("Issue-delivery operation payload does not match its binding")
+        return self._commit_authority_object(
+            envelope=envelope,
+            object_kind="record",
+            object_id=record_id,
+            state=state,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            secondary_id=_ISSUE_DELIVERY_OPERATION_RECORD_TYPE,
+            lease=None,
+            lease_resource_id=f"record:{record_id}",
+            fault_at=fault_at,
+            binding=binding,
+            issue_delivery_operation_capability=_ISSUE_DELIVERY_OPERATION_CAPABILITY,
+        )
+
+    @staticmethod
+    def _issue_delivery_terminal_is_reusable(
+        conn: Any,
+        *,
+        repository: str,
+        operation_key: str,
+        approval_id: str,
+        approval_manifest_hash: str,
+    ) -> bool:
+        """Accept only a verified terminal whose referenced effects settled."""
+
+        terminal = conn.execute(
+            "SELECT record_type, state, payload FROM builderops_records "
+            "WHERE repository = %s AND record_id = %s FOR UPDATE",
+            (repository, f"issue-delivery-terminal:{operation_key}"),
+        ).fetchone()
+        payload = terminal.get("payload") if terminal else None
+        if not (
+            terminal is not None
+            and terminal.get("record_type") == _ISSUE_DELIVERY_OPERATION_RECORD_TYPE
+            and terminal.get("state") == "terminal"
+            and isinstance(payload, Mapping)
+            and payload.get("operation_key") == operation_key
+            and payload.get("approval_id") == approval_id
+            and payload.get("approval_manifest_hash") == approval_manifest_hash
+            and payload.get("receipt_hash")
+            == _hash({key: value for key, value in payload.items() if key != "receipt_hash"})
+        ):
+            return False
+        refs = payload.get("host_effect_refs")
+        if not isinstance(refs, list):
+            return False
+        for ref in refs:
+            if not isinstance(ref, Mapping):
+                return False
+            operation = ref.get("operation_key")
+            request = ref.get("request_sha256")
+            slot = ref.get("effect_slot_sha256")
+            if not all(isinstance(value, str) and len(value) == 64 for value in (operation, request, slot)):
+                return False
+            outbox = conn.execute(
+                "SELECT status, payload FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s FOR UPDATE",
+                (repository, operation),
+            ).fetchone()
+            effect_payload = outbox.get("payload") if outbox else None
+            if not (
+                outbox is not None
+                and outbox.get("status") == "succeeded"
+                and isinstance(effect_payload, Mapping)
+                and effect_payload.get("request_sha256") == request
+                and effect_payload.get("effect_slot_sha256") == slot
+                and effect_payload.get("approval_id") == approval_id
+                and effect_payload.get("approved_operation_key") == operation_key
+                and effect_payload.get("repository") == repository
+            ):
+                return False
+        return True
 
     def get_owner_outcomes(
         self, repository: str, subject_ref: str, *, idempotency_key: str | None = None,
@@ -1126,29 +1290,36 @@ class PostgresBuilderOpsStore:
         expected_states: tuple[str, ...] | None = None,
         expected_task_version: int | None = None,
         fault_at: str | None = None,
+        binding: Mapping[str, Any] | None = None,
+        issue_delivery_operation_capability: object | None = None,
     ) -> AuthorityObjectResult:
         _guard_idempotency_namespace(
             idempotency_key,
             envelope=envelope,
             object_kind=object_kind,
             secondary_id=secondary_id,
+            issue_delivery_operation_capability=issue_delivery_operation_capability,
         )
         if not object_id or not state or not idempotency_key:
             raise ValueError("object identity, state, and idempotency_key are mandatory")
-        request_hash = _hash(
-            {
-                "authority_envelope": envelope.as_json(),
-                "object_kind": object_kind,
-                "object_id": object_id,
-                "state": state,
-                "payload": dict(payload),
-                "primary_id": primary_id,
-                "secondary_id": secondary_id,
-                "lease_identity": self._lease_identity_json(lease) if lease is not None else None,
-                "expected_states": list(expected_states) if expected_states is not None else None,
-                "expected_task_version": expected_task_version,
-            }
-        )
+        request_fields: dict[str, Any] = {
+            "authority_envelope": envelope.as_json(),
+            "object_kind": object_kind,
+            "object_id": object_id,
+            "state": state,
+            "payload": dict(payload),
+            "primary_id": primary_id,
+            "secondary_id": secondary_id,
+            "lease_identity": self._lease_identity_json(lease) if lease is not None else None,
+            "expected_states": list(expected_states) if expected_states is not None else None,
+            "expected_task_version": expected_task_version,
+        }
+        # Preserve the pre-operation request hash byte-for-byte for existing
+        # generic authority objects.  The binding is part of the hash only for
+        # the new capability-gated destination subdomain.
+        if binding is not None:
+            request_fields["binding"] = dict(binding)
+        request_hash = _hash(request_fields)
         envelope_json = Jsonb(envelope.as_json())
         replayed = False
         with self._connect() as conn:
@@ -1173,6 +1344,279 @@ class PostgresBuilderOpsStore:
                 receipt_sequence = provisional.receipt_sequence
                 replayed = True
             else:
+                if binding is not None:
+                    operation = binding.get("operation_key")
+                    approval = binding.get("approval_id")
+                    manifest = binding.get("approval_manifest_hash")
+                    kind = binding.get("record_kind")
+                    resource_key = binding.get("destination_resource_key")
+                    if not all(isinstance(value, str) and value for value in (operation, approval, manifest, kind)):
+                        raise ValueError("Issue-delivery operation binding is incomplete")
+                    if not isinstance(resource_key, str) or len(resource_key) != 64:
+                        raise ValueError("Issue-delivery destination binding is incomplete")
+                    conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"issue-delivery-destination:{envelope.repository}:{resource_key}",),
+                    )
+                    conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"issue-delivery-operation:{envelope.repository}:{operation}",),
+                    )
+                    conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"issue-delivery-approval:{envelope.repository}:{approval}",),
+                    )
+                    rows = conn.execute(
+                        "SELECT record_id, record_type, state, payload FROM builderops_records "
+                        "WHERE repository = %s AND (payload->>'operation_key' = %s OR payload->>'approval_id' = %s "
+                        "OR (record_type = %s AND payload->>'destination_resource_key' = %s)) "
+                        "ORDER BY record_id FOR UPDATE",
+                        (envelope.repository, operation, approval, _ISSUE_DELIVERY_OPERATION_RECORD_TYPE, resource_key),
+                    ).fetchall()
+                    for row in rows:
+                        row_payload = row.get("payload")
+                        if not isinstance(row_payload, Mapping):
+                            raise StateConflict("Issue-delivery operation binding is malformed")
+                        same = (
+                            row_payload.get("operation_key") == operation
+                            and row_payload.get("approval_id") == approval
+                            and row_payload.get("approval_manifest_hash") == manifest
+                        )
+                        if not same and row_payload.get("operation_key") == operation:
+                            raise IdempotencyConflict("Issue-delivery operation key is bound to another manifest")
+                        if not same and row_payload.get("approval_id") == approval:
+                            raise IdempotencyConflict("Issue-delivery approval is already bound to another operation")
+                        if (
+                            kind == "reservation"
+                            and row.get("record_type") == _ISSUE_DELIVERY_OPERATION_RECORD_TYPE
+                            and row_payload.get("destination_resource_key") == resource_key
+                            and not same
+                        ):
+                            conflicting_operation = row_payload.get("operation_key")
+                            conflicting_approval = row_payload.get("approval_id")
+                            conflicting_manifest = row_payload.get("approval_manifest_hash")
+                            if not all(
+                                isinstance(value, str) and value
+                                for value in (
+                                    conflicting_operation,
+                                    conflicting_approval,
+                                    conflicting_manifest,
+                                )
+                            ):
+                                raise StateConflict(
+                                    "Issue-delivery destination conflict binding is malformed"
+                                )
+                            terminal = conn.execute(
+                                "SELECT record_type, state, payload FROM builderops_records "
+                                "WHERE repository = %s AND record_id = %s FOR UPDATE",
+                                (
+                                    envelope.repository,
+                                    f"issue-delivery-terminal:{conflicting_operation}",
+                                ),
+                            ).fetchone()
+                            terminal_payload = terminal.get("payload") if terminal else None
+                            terminal_is_verified = (
+                                terminal is not None
+                                and terminal.get("record_type")
+                                == _ISSUE_DELIVERY_OPERATION_RECORD_TYPE
+                                and terminal.get("state") == "terminal"
+                                and isinstance(terminal_payload, Mapping)
+                                and terminal_payload.get("operation_key")
+                                == conflicting_operation
+                                and terminal_payload.get("approval_id")
+                                == conflicting_approval
+                                and terminal_payload.get("approval_manifest_hash")
+                                == conflicting_manifest
+                                and terminal_payload.get("receipt_hash")
+                                == _hash(
+                                    {
+                                        key: value
+                                        for key, value in terminal_payload.items()
+                                        if key != "receipt_hash"
+                                    }
+                                )
+                            )
+                            terminal_is_verified = (
+                                terminal_is_verified
+                                and self._issue_delivery_terminal_is_reusable(
+                                    conn,
+                                    repository=envelope.repository,
+                                    operation_key=str(conflicting_operation),
+                                    approval_id=str(conflicting_approval),
+                                    approval_manifest_hash=str(conflicting_manifest),
+                                )
+                            )
+                            if terminal_is_verified:
+                                continue
+                            attempt = conn.execute(
+                                "SELECT record_id FROM builderops_records "
+                                "WHERE repository = %s AND record_id = %s FOR UPDATE",
+                                (
+                                    envelope.repository,
+                                    f"issue-delivery-attempt:{conflicting_operation}",
+                                ),
+                            ).fetchone()
+                            approval_record = conn.execute(
+                                "SELECT record_type, state, payload FROM builderops_records "
+                                "WHERE repository = %s AND record_id = %s FOR UPDATE",
+                                (
+                                    envelope.repository,
+                                    f"issue-delivery-approval:{conflicting_approval}",
+                                ),
+                            ).fetchone()
+                            approval_payload = (
+                                approval_record.get("payload")
+                                if approval_record is not None
+                                else None
+                            )
+                            expires_at = (
+                                approval_payload.get("expires_at")
+                                if isinstance(approval_payload, Mapping)
+                                else None
+                            )
+                            approval_is_exact = (
+                                approval_record is not None
+                                and approval_record.get("record_type")
+                                == _ISSUE_DELIVERY_RECORD_TYPE
+                                and approval_record.get("state") == "approved"
+                                and isinstance(approval_payload, Mapping)
+                                and approval_payload.get("approval_id")
+                                == conflicting_approval
+                                and approval_payload.get("operation_key")
+                                == conflicting_operation
+                                and approval_payload.get("approval_manifest_hash")
+                                == conflicting_manifest
+                                and approval_payload.get("approval_digest")
+                                == _hash(
+                                    {
+                                        key: value
+                                        for key, value in approval_payload.items()
+                                        if key != "approval_digest"
+                                    }
+                                )
+                            )
+                            expired_without_attempt = False
+                            if approval_is_exact and attempt is None and isinstance(expires_at, str):
+                                try:
+                                    expiry = datetime.fromisoformat(
+                                        expires_at.replace("Z", "+00:00")
+                                    )
+                                except ValueError:
+                                    expiry = None
+                                if expiry is not None and expiry.tzinfo is not None:
+                                    clock = conn.execute(
+                                        "SELECT clock_timestamp() AS current_time"
+                                    ).fetchone()
+                                    current_time = (
+                                        clock.get("current_time")
+                                        if clock is not None
+                                        else None
+                                    )
+                                    expired_without_attempt = (
+                                        isinstance(current_time, datetime)
+                                        and expiry <= current_time
+                                    )
+                            if not expired_without_attempt:
+                                raise IdempotencyConflict(
+                                    "Issue-delivery destination is already bound to another operation"
+                                )
+                    if kind != "reservation":
+                        predecessor_kind = "reservation" if kind == "attempt" else "attempt"
+                        predecessor_id = f"issue-delivery-{predecessor_kind}:{operation}"
+                        predecessor = conn.execute(
+                            "SELECT record_type, state, payload FROM builderops_records "
+                            "WHERE repository = %s AND record_id = %s FOR UPDATE",
+                            (envelope.repository, predecessor_id),
+                        ).fetchone()
+                        if predecessor is None or predecessor.get("record_type") != _ISSUE_DELIVERY_OPERATION_RECORD_TYPE or predecessor.get("state") != {"reservation": "reserved", "attempt": "attempted"}[predecessor_kind]:
+                            raise StateConflict(f"Issue-delivery {predecessor_kind} receipt is required first")
+                        predecessor_payload = predecessor.get("payload")
+                        expected_hash = payload.get("reservation_receipt_hash") if kind == "attempt" else payload.get("attempt_receipt_hash")
+                        if not isinstance(predecessor_payload, Mapping) or expected_hash != _hash({key: value for key, value in predecessor_payload.items() if key != "receipt_hash"}):
+                            raise StateConflict("Issue-delivery predecessor hash does not match")
+                        if kind in {"attempt", "entry", "terminal"}:
+                            if resource_key != predecessor_payload.get(
+                                "destination_resource_key"
+                            ):
+                                raise StateConflict(
+                                    "Issue-delivery reservation destination identity is invalid"
+                                )
+                        if kind == "attempt":
+                            settled_terminals = conn.execute(
+                                "SELECT reservation.payload FROM builderops_records AS reservation "
+                                "JOIN builderops_records AS terminal ON terminal.repository = reservation.repository "
+                                "AND terminal.record_id = ('issue-delivery-terminal:' || (reservation.payload->>'operation_key')) "
+                                "WHERE reservation.repository = %s AND reservation.record_type = %s "
+                                "AND reservation.state = 'reserved' "
+                                "AND reservation.payload->>'destination_resource_key' = %s "
+                                "AND reservation.payload->>'operation_key' <> %s "
+                                "AND terminal.record_type = %s AND terminal.state = 'terminal' FOR UPDATE OF reservation, terminal",
+                                (envelope.repository, _ISSUE_DELIVERY_OPERATION_RECORD_TYPE, resource_key, operation, _ISSUE_DELIVERY_OPERATION_RECORD_TYPE),
+                            ).fetchall()
+                            for settled in settled_terminals:
+                                settled_payload = settled.get("payload")
+                                if not isinstance(settled_payload, Mapping) or not self._issue_delivery_terminal_is_reusable(
+                                    conn,
+                                    repository=envelope.repository,
+                                    operation_key=str(settled_payload.get("operation_key")),
+                                    approval_id=str(settled_payload.get("approval_id")),
+                                    approval_manifest_hash=str(settled_payload.get("approval_manifest_hash")),
+                                ):
+                                    raise StateConflict("Issue-delivery destination is already bound to another operation")
+                            other_owner = conn.execute(
+                                "SELECT reservation.record_id FROM builderops_records AS reservation "
+                                "WHERE reservation.repository = %s "
+                                "AND reservation.record_type = %s "
+                                "AND reservation.state = 'reserved' "
+                                "AND reservation.payload->>'destination_resource_key' = %s "
+                                "AND reservation.payload->>'operation_key' <> %s "
+                                "AND NOT EXISTS ("
+                                "SELECT 1 FROM builderops_records AS terminal "
+                                "WHERE terminal.repository = reservation.repository "
+                                "AND terminal.record_id = ('issue-delivery-terminal:' "
+                                "|| (reservation.payload->>'operation_key')) "
+                                "AND terminal.record_type = %s AND terminal.state = 'terminal'"
+                                ") "
+                                "AND NOT ("
+                                "NOT EXISTS (SELECT 1 FROM builderops_records AS foreign_attempt "
+                                "WHERE foreign_attempt.repository = reservation.repository "
+                                "AND foreign_attempt.record_id = ('issue-delivery-attempt:' "
+                                "|| (reservation.payload->>'operation_key'))) "
+                                "AND EXISTS (SELECT 1 FROM builderops_records AS approval "
+                                "WHERE approval.repository = reservation.repository "
+                                "AND approval.record_id = ('issue-delivery-approval:' "
+                                "|| (reservation.payload->>'approval_id')) "
+                                "AND approval.record_type = %s AND approval.state = 'approved' "
+                                "AND approval.payload->>'approval_id' = reservation.payload->>'approval_id' "
+                                "AND approval.payload->>'operation_key' = reservation.payload->>'operation_key' "
+                                "AND approval.payload->>'approval_manifest_hash' = "
+                                "reservation.payload->>'approval_manifest_hash' "
+                                "AND (approval.payload->>'expires_at')::timestamptz <= clock_timestamp()"
+                                ")"
+                                ") FOR UPDATE OF reservation",
+                                (
+                                    envelope.repository,
+                                    _ISSUE_DELIVERY_OPERATION_RECORD_TYPE,
+                                    resource_key,
+                                    operation,
+                                    _ISSUE_DELIVERY_OPERATION_RECORD_TYPE,
+                                    _ISSUE_DELIVERY_RECORD_TYPE,
+                                ),
+                            ).fetchone()
+                            if other_owner is not None:
+                                raise StateConflict(
+                                    "Issue-delivery destination is already bound to another operation"
+                                )
+                        if kind == "terminal" and state == "terminal":
+                            entry = conn.execute(
+                                "SELECT state, payload FROM builderops_records WHERE repository = %s AND record_id = %s FOR UPDATE",
+                                (envelope.repository, f"issue-delivery-entry:{operation}"),
+                            ).fetchone()
+                            entry_payload = entry.get("payload") if entry else None
+                            if entry is None or entry.get("state") != "active" or not isinstance(entry_payload, Mapping) or payload.get("session_id") != entry_payload.get("session_id") or payload.get("entry_receipt_hash") != _hash({key: value for key, value in entry_payload.items() if key != "receipt_hash"}):
+                                raise StateConflict("Issue-delivery terminal receipt requires its observed entry")
+                        elif kind == "terminal" and payload.get("entry_receipt_hash") is not None:
+                            raise StateConflict("launch-unknown receipt cannot claim an unverified entry")
                 conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (f"authority:{envelope.repository}:{object_kind}:{object_id}",),

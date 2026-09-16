@@ -253,7 +253,27 @@ class DestinationBinding(_StrictModel):
         repository = approval.get("repository")
         if not isinstance(destination, Mapping) or not isinstance(repository, str):
             raise ValueError("Issue-delivery approval destination is incomplete")
-        return cls.model_validate({"repository": repository, **dict(destination)})
+        # Admission records the resolved path as the durable destination
+        # identity.  Once present, use that canonical value for every
+        # host-side binding rather than comparing a raw symlink spelling to a
+        # frozen canonical binding later in the effect path.
+        normalized = {
+            key: value
+            for key, value in destination.items()
+            if key not in {"resolved_checkout", "resolved_worktree"}
+        }
+        for raw_name, frozen_name in (
+            ("checkout", "resolved_checkout"),
+            ("worktree", "resolved_worktree"),
+        ):
+            frozen = destination.get(frozen_name)
+            if frozen is not None:
+                if not isinstance(frozen, str) or not frozen:
+                    raise ValueError(
+                        f"Issue-delivery destination {frozen_name} is malformed"
+                    )
+                normalized[raw_name] = frozen
+        return cls.model_validate({"repository": repository, **normalized})
 
     def as_manifest(self) -> dict[str, object]:
         return {
@@ -268,6 +288,71 @@ class DestinationBinding(_StrictModel):
             "base_ref": self.base_ref,
             "base_sha": self.base_sha,
         }
+
+
+def _approved_destination_manifest(
+    approval: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return canonical destination fields for frozen-path comparisons.
+
+    Admission adds ``resolved_*`` fields as immutable symlink proofs.  Verify
+    them against the current raw paths, then normalize the comparison to the
+    same canonical path form captured by the protected host destination.
+    """
+
+    destination = approval.get("destination")
+    if not isinstance(destination, Mapping):
+        raise ValueError("Issue-delivery approval destination is incomplete")
+    normalized = dict(destination)
+    for raw_name, frozen_name in (
+        ("checkout", "resolved_checkout"),
+        ("worktree", "resolved_worktree"),
+    ):
+        raw_value = normalized.get(raw_name)
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise ValueError("Issue-delivery destination path is malformed")
+        resolved_path = str(Path(raw_value).resolve())
+        supplied_path = normalized.pop(frozen_name, None)
+        if supplied_path is not None and supplied_path != resolved_path:
+            raise ValueError(
+                f"destination {frozen_name} does not match its approved path"
+            )
+        normalized[raw_name] = resolved_path
+    repository = approval.get("repository")
+    if not isinstance(repository, str):
+        raise ValueError("Issue-delivery approval repository is incomplete")
+    return DestinationBinding.model_validate(
+        {"repository": repository, **normalized}
+    ).as_manifest()
+
+
+def _immutable_approved_destination_manifest(
+    approval: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the admitted destination identity without reopening raw aliases.
+
+    Recovery validates the immutable paths captured at admission.  Fresh
+    execution instead uses :func:`_approved_destination_manifest` and must
+    resolve the currently named paths before it can reach an effect.
+    """
+
+    destination = approval.get("destination")
+    repository = approval.get("repository")
+    if not isinstance(destination, Mapping) or not isinstance(repository, str):
+        raise ValueError("Issue-delivery approval destination is incomplete")
+    normalized = dict(destination)
+    for raw_name, frozen_name in (
+        ("checkout", "resolved_checkout"),
+        ("worktree", "resolved_worktree"),
+    ):
+        frozen = destination.get(frozen_name)
+        if not isinstance(frozen, str) or not frozen:
+            raise ValueError(f"Issue-delivery destination {frozen_name} is malformed")
+        normalized[raw_name] = frozen
+        normalized.pop(frozen_name, None)
+    return DestinationBinding.model_validate(
+        {"repository": repository, **normalized}
+    ).as_manifest()
 
 
 @dataclass(frozen=True)
@@ -638,8 +723,10 @@ class IssueDeliveryHostExecutor:
         credentials: HostCredentialResolver,
         destination: IssueDeliveryDestinationAuthority,
         frozen_destination: FrozenIssueDeliveryDestination,
-        worker_isolation: WorkerIsolationBinding,
         transport: IssueDeliveryEffectTransport,
+        prepared_worker: PreparedIssueDeliveryWorker | None = None,
+        expected_isolation_profile_sha256: str | None = None,
+        live_binding_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         trusted_executor_artifact: Path = Path(__file__),
         trusted_worker_isolation_artifact: Path = Path(__file__).with_name(
             "issue_delivery_worker_isolation.py"
@@ -652,13 +739,65 @@ class IssueDeliveryHostExecutor:
         self.credentials = credentials
         self.destination = destination
         self.frozen_destination = frozen_destination
-        self.worker_isolation = worker_isolation
+        # A protected executor always starts unbound.  Only the prepared
+        # launcher it was given can later supply the one durable host receipt.
+        self._worker_isolation: WorkerIsolationBinding | None = None
+        self._prepared_worker = prepared_worker
+        self._expected_isolation_profile_sha256 = expected_isolation_profile_sha256
         self.transport = transport
+        self._live_binding_reader = live_binding_reader
         self.trusted_executor_artifact = trusted_executor_artifact.resolve()
         self.trusted_worker_isolation_artifact = (
             trusted_worker_isolation_artifact.resolve()
         )
         self.trusted_workflow_root = trusted_workflow_root.resolve()
+
+    @property
+    def worker_isolation(self) -> WorkerIsolationBinding:
+        """Return the one host-observed launch binding after it is frozen."""
+
+        if self._worker_isolation is None:
+            raise ValueError("completed worker receipt is unavailable")
+        return self._worker_isolation
+
+    def bind_completed_worker(self) -> None:
+        """Freeze exactly one host-produced pre-spawn receipt for this launcher."""
+
+        if self._worker_isolation is not None:
+            raise ValueError("completed worker receipt is already bound")
+        prepared = self._prepared_worker
+        expected_profile = self._expected_isolation_profile_sha256
+        if type(prepared) is not PreparedIssueDeliveryWorker or not isinstance(
+            expected_profile, str
+        ):
+            raise ValueError("completed worker receipt is unavailable")
+        launcher = prepared.launcher
+        if not isinstance(launcher, ContentOnlyIssueDeliverySessionLauncher):
+            raise ValueError("prepared worker launcher is invalid")
+        if launcher.expected_profile_sha256 != expected_profile:
+            raise ValueError("prepared worker profile differs from host pin")
+        binding = WorkerIsolationBinding.from_receipt(
+            launcher.completed_isolation_receipt()
+        )
+        if binding.profile_sha256 != expected_profile:
+            raise ValueError("completed worker receipt profile differs from host pin")
+        self._worker_isolation = binding
+
+    def live_binding(self, approval: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Return fresh destination/source/profile facts for FCA-ID-B admission.
+
+        The protected executor owns this seam, but the source/profile readers
+        remain host-configured dependencies.  A missing reader is a hard
+        refusal; echoing the immutable approval here would turn a stale
+        manifest into a false live observation.
+        """
+
+        if self._live_binding_reader is None:
+            raise ValueError("protected host live source/profile reader is unavailable")
+        observed = self._live_binding_reader(approval)
+        if not isinstance(observed, Mapping):
+            raise ValueError("protected host live source/profile binding is malformed")
+        return dict(observed)
 
     def execute(
         self, request: IssueDeliveryEffectRequest
@@ -922,6 +1061,14 @@ class IssueDeliveryHostExecutor:
             if isinstance(profile, Mapping)
             else None
         )
+        try:
+            approved_destination = (
+                _approved_destination_manifest(approval)
+                if current_artifacts
+                else _immutable_approved_destination_manifest(approval)
+            )
+        except ValueError as exc:
+            raise ValueError("Issue-delivery approval destination is invalid") from exc
         if (
             approval.get("contract_version") != "fca-issue-delivery.v1"
             or approval.get("operation_type") != "deliver_ready_issue"
@@ -943,8 +1090,7 @@ class IssueDeliveryHostExecutor:
             or profile.get("content_hash") != request.profile_hash
             or not isinstance(verification, Mapping)
             or verification.get("content_hash") != request.verification_profile_hash
-            or approval.get("destination")
-            != request.destination.unfrozen().as_manifest()
+            or approved_destination != request.destination.unfrozen().as_manifest()
             or _PERMISSIONS[request.effect_kind]
             not in set(approval.get("permitted_effects", ()))
             or request.worker_isolation != self.worker_isolation
@@ -1354,28 +1500,20 @@ class GitIssueDeliveryDestination:
         binding = DestinationBinding.from_approval(approval)
         if not binding.checkout.is_dir():
             raise ValueError("approved Issue-delivery checkout is absent")
-        if not binding.worktree.exists():
-            binding.worktree.parent.mkdir(parents=True, exist_ok=True)
-            branch = self._git(
-                binding.checkout,
-                "show-ref",
-                "--verify",
-                f"refs/heads/{binding.branch}",
-                check=False,
-            )
-            if branch.returncode == 0:
-                raise ValueError("approved Issue-delivery branch already exists")
-            self._git(
-                binding.checkout,
-                "worktree",
-                "add",
-                "-b",
-                binding.branch,
-                str(binding.worktree),
-                binding.base_sha,
-            )
+        # Admission/start may only use a destination that the owner/release
+        # path prepared beforehand.  This method freezes and verifies the
+        # destination; it must never create directories, branches, or
+        # worktrees before authenticated approval and a durable reservation.
+        if not binding.worktree.is_dir():
+            raise ValueError("approved Issue-delivery worktree is absent; prepare it before admission")
         frozen = self._observe(binding, require_base_head=True)
-        if frozen.binding.as_manifest() != approval.get("destination"):
+        try:
+            approved_destination = _approved_destination_manifest(approval)
+        except ValueError as exc:
+            raise ValueError("prepared destination differs from approval") from exc
+        if approved_destination != frozen.binding.as_manifest():
+            raise ValueError("prepared destination differs from approval")
+        if frozen.binding.repository != approval.get("repository"):
             raise ValueError("prepared destination differs from approval")
         return frozen
 
@@ -1384,7 +1522,16 @@ class GitIssueDeliveryDestination:
         frozen: FrozenIssueDeliveryDestination,
         approval: Mapping[str, Any],
     ) -> None:
-        if frozen.binding.as_manifest() != approval.get("destination"):
+        try:
+            approved_destination = _approved_destination_manifest(approval)
+        except ValueError as exc:
+            raise ValueError(
+                "frozen Issue-delivery destination is not approved"
+            ) from exc
+        if (
+            approved_destination != frozen.binding.as_manifest()
+            or frozen.binding.repository != approval.get("repository")
+        ):
             raise ValueError("frozen Issue-delivery destination is not approved")
         try:
             observed = self._observe(frozen.binding, require_base_head=False)
@@ -1747,7 +1894,7 @@ class ContentOnlyIssueDeliverySessionLauncher(LinuxSystemdCodexIssueSessionLaunc
         return (
             "Use the registered slice_implementer execution role as a content-only worker.\n"
             f"{self.developer_instructions}\n"
-            "Implement and validate only the approved repository content change. You must not run Git or GitHub lifecycle effects, write Git metadata, resolve repository credentials, claim or close an Issue, publish a branch or PR, or merge. When a host effect is needed, propose only typed claim, publication, merge, closure, or exact parent-evidence requests matching builderops.issue-delivery-effect.v1. The protected host executor owns every such effect after fresh revalidation. Return content-change and validation evidence without claiming delivery.\n"
+            "Implement and validate only the approved repository content change. You must not run Git or GitHub lifecycle effects, write Git metadata, resolve repository credentials, claim or close an Issue, publish a branch or PR, or merge. The host independently claims the approved Issue before this worker enters. When a later host effect is needed, propose only typed publication, merge, closure, or exact parent-evidence requests in an optional effect_requests list; each item must contain only effect_kind and its complete typed target. The protected host executor binds the approved request fields and owns every effect after fresh revalidation. Return content-change and validation evidence without claiming delivery.\n"
             f"{serialized}\n"
         )
 
@@ -1788,30 +1935,141 @@ class PreparedIssueDeliveryWorker:
         context_pack: Mapping[str, Any],
         *,
         execution_routing: Mapping[str, Any] | None = None,
+        on_entry: Callable[[str], None] | None = None,
+        effect_gate: Callable[..., Mapping[str, Any]] | None = None,
+        pre_process_entry: Callable[[], None] | None = None,
+        pre_spawn_entry: Callable[[], None] | None = None,
     ) -> Mapping[str, Any]:
         plan = context_pack.get("branch_worktree_plan")
-        if not isinstance(plan, Mapping) or plan.get("worktree") != str(
-            self.frozen_destination.binding.worktree
+        if not isinstance(plan, Mapping) or not isinstance(plan.get("worktree"), str):
+            raise ValueError("Issue-delivery context targets another worktree")
+        # Preserve the frozen Git/topology fence before accepting any textual
+        # spelling of the plan path. A missing or replaced worktree remains a
+        # destination failure, not a path-alias compatibility case.
+        self.destination.assert_frozen(self.frozen_destination, self.approval)
+        try:
+            planned_worktree = Path(str(plan["worktree"])).resolve(strict=True)
+            approved_worktree = Path(
+                str(
+                    self.approval["destination"].get(
+                        "resolved_worktree",
+                        self.approval["destination"]["worktree"],
+                    )
+                )
+            ).resolve(strict=True)
+        except (KeyError, OSError, TypeError) as exc:
+            raise ValueError("Issue-delivery context targets another worktree") from exc
+        if (
+            planned_worktree != self.frozen_destination.binding.worktree
+            or approved_worktree != self.frozen_destination.binding.worktree
         ):
             raise ValueError("Issue-delivery context targets another worktree")
-        self.destination.assert_frozen(self.frozen_destination, self.approval)
-        result = dict(
-            self.launcher.launch(
-                context_pack,
-                execution_routing=execution_routing,
-            )
-        )
-        receipt = result.get("isolation_receipt")
-        if not isinstance(receipt, Mapping):
-            raise ValueError("Issue-delivery child isolation receipt is unavailable")
-        result["worker_isolation"] = WorkerIsolationBinding.from_receipt(
-            receipt
-        ).model_dump(mode="json")
-        return result
+        launch_kwargs: dict[str, Any] = {
+            "execution_routing": execution_routing,
+        }
+        if on_entry is not None:
+            launch_kwargs["on_entry"] = on_entry
+        if effect_gate is not None:
+            launch_kwargs["effect_gate"] = effect_gate
+        if pre_process_entry is not None:
+            launch_kwargs["pre_process_entry"] = pre_process_entry
+        if pre_spawn_entry is not None:
+            launch_kwargs["pre_spawn_entry"] = pre_spawn_entry
+        return dict(self.launcher.launch(context_pack, **launch_kwargs))
+
+
+@dataclass(frozen=True)
+class HostIssueDeliveryExecutorRuntime:
+    """Host-installed dependencies for the sole production effect executor.
+
+    This object is installed by the privileged process bootstrap, never parsed
+    from a worker context, CLI argument, or ``module:callable`` environment
+    selector.  The repository package intentionally supplies no default: an
+    unconfigured host cannot cross an Issue-delivery effect gate.
+    """
+
+    repository_authority: IssueDeliveryRepositoryAuthority
+    credentials: HostCredentialResolver
+    transport: IssueDeliveryEffectTransport
+    isolation_profile_sha256: str
+    live_binding_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]]
+    worker_id: str = "issue-delivery-host"
+
+
+_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME: HostIssueDeliveryExecutorRuntime | None = None
+
+
+def install_host_issue_delivery_executor_runtime(
+    runtime: HostIssueDeliveryExecutorRuntime,
+) -> None:
+    """Install one host-owned composition before accepting production CLI work."""
+
+    global _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
+    if _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME is not None:
+        raise ValueError("Issue-delivery host executor runtime is already installed")
+    if not isinstance(runtime, HostIssueDeliveryExecutorRuntime):
+        raise ValueError("Issue-delivery host executor runtime is invalid")
+    if not runtime.worker_id.strip():
+        raise ValueError("Issue-delivery host executor worker identity is required")
+    if (
+        len(runtime.isolation_profile_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in runtime.isolation_profile_sha256)
+    ):
+        raise ValueError("Issue-delivery host executor profile hash is invalid")
+    _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME = runtime
+
+
+def build_host_issue_delivery_executor(
+    *,
+    approval: Mapping[str, Any],
+    client: BuilderOpsControlPlaneClient,
+    prepared: PreparedIssueDeliveryWorker,
+) -> IssueDeliveryHostExecutor:
+    """Build the fixed host-owned executor used by ``dispatch-sessions``.
+
+    There is deliberately no pluggable factory reference at this boundary.
+    Deployment/bootstrap may install one typed dependency bundle, while CLI
+    users and worker input can only select the already approved operation.
+    """
+
+    runtime = _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
+    if runtime is None:
+        raise ValueError("Issue-delivery host executor runtime is unavailable")
+    if type(prepared) is not PreparedIssueDeliveryWorker:
+        raise ValueError("Issue-delivery prepared worker is invalid")
+    if dict(prepared.approval) != dict(approval):
+        raise ValueError("Issue-delivery prepared worker is bound to another approval")
+    if not isinstance(prepared.launcher, ContentOnlyIssueDeliverySessionLauncher):
+        raise ValueError("Issue-delivery prepared worker launcher is invalid")
+    if prepared.launcher.expected_profile_sha256 != runtime.isolation_profile_sha256:
+        raise ValueError("Issue-delivery prepared worker profile differs from host pin")
+    repository = canonical_repository(str(approval.get("repository", "")))
+    destination_data = approval.get("destination")
+    if not isinstance(destination_data, Mapping):
+        raise ValueError("Issue-delivery approval destination is unavailable")
+    return IssueDeliveryHostExecutor(
+        authority=client,
+        ledger=BuilderOpsIssueDeliveryEffectLedger(
+            client,
+            repository=repository,
+            run_id=str(destination_data.get("run_id", "")),
+            approval_id=str(approval.get("approval_id", "")),
+            worker_id=runtime.worker_id,
+        ),
+        repository_authority=runtime.repository_authority,
+        credentials=runtime.credentials,
+        destination=prepared.destination,
+        frozen_destination=prepared.frozen_destination,
+        transport=runtime.transport,
+        prepared_worker=prepared,
+        expected_isolation_profile_sha256=runtime.isolation_profile_sha256,
+        live_binding_reader=runtime.live_binding_reader,
+    )
 
 
 __all__ = [
     "BuilderOpsIssueDeliveryEffectLedger",
+    "HostIssueDeliveryExecutorRuntime",
     "ContentOnlyIssueDeliverySessionLauncher",
     "DestinationBinding",
     "EffectAuthorityReadback",
@@ -1823,4 +2081,6 @@ __all__ = [
     "IssueDeliveryHostExecutor",
     "PreparedIssueDeliveryWorker",
     "WorkerIsolationBinding",
+    "build_host_issue_delivery_executor",
+    "install_host_issue_delivery_executor_runtime",
 ]

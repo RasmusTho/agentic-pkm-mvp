@@ -1110,6 +1110,9 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
         "app/builderops/design_agent_adapters.py": 1,
         "app/builderops/design_run_governance.py": 1,
         "app/builderops/devui_owner_synthesis.py": 1,
+        # The protected Issue operation delegates one typed, receipt-bound
+        # host effect through the separate BuilderOps control-plane owner.
+        "app/builderops/issue_delivery_operation.py": 1,
         "app/builderops/model_inquiry_runner.py": 1,
         "app/builderops/store.py": 1,
         # ``dispatcher show --events`` owns one explicit read transaction

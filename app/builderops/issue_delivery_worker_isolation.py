@@ -15,9 +15,11 @@ import os
 import platform
 import pwd
 import re
+import selectors
 import shutil
 import stat
 import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -33,6 +35,8 @@ _UNIT_PREFIX = "yggdrasil-issue-worker-"
 _PROFILE_MAX_BYTES = 64 * 1024
 _MAX_COMMAND_PARTS = 256
 _MAX_COMMAND_PART_BYTES = 8 * 1024
+_STREAM_MAX_CAPTURED_BYTES = 512 * 1024
+_STREAM_MAX_UNTERMINATED_LINE_BYTES = 256 * 1024
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _SAFE_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 _SAFE_PRINCIPAL = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
@@ -95,6 +99,146 @@ REQUIRED_SYSTEMD_PROPERTIES_SHA256 = _canonical_sha256(_REQUIRED_SYSTEMD_PROPERT
 
 class IssueWorkerIsolationError(ValueError):
     """Raised before worker entry when exact isolation cannot be proven."""
+
+
+def _run_streaming_process(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    input: str,
+    env: Mapping[str, str],
+    timeout: float,
+    on_stdout_line: Callable[[str], None],
+) -> subprocess.CompletedProcess[str]:
+    """Run the protected systemd command while forwarding stdout events.
+
+    ``subprocess.run(capture_output=True)`` hides ``thread.started`` until the
+    worker has finished.  The destination adapter needs that event durable
+    before a host crash can lose the terminal response, so the production
+    systemd path uses bounded selector reads and cleans up its local launcher
+    process if the receipt callback refuses the event.  It does not claim a
+    systemd-unit stop acknowledgement.
+    """
+
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=False,
+        env=dict(env),
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    deadline = time.monotonic() + timeout
+    payload = input.encode("utf-8")
+    offset = 0
+    selector = selectors.DefaultSelector()
+    streams = {"stdout": process.stdout, "stderr": process.stderr}
+    buffers = {"stdout": b"", "stderr": b""}
+    captured_bytes = {"stdout": 0, "stderr": 0}
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    try:
+        # The child may write an entry event before reading a large prompt.
+        # Keep every pipe nonblocking and multiplex bounded writes with reads
+        # so either pipe cannot hold the other hostage.
+        for stream in (process.stdin, process.stdout, process.stderr):
+            os.set_blocking(stream.fileno(), False)
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        if payload:
+            selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+        else:
+            process.stdin.close()
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            for key, _mask in selector.select(timeout=min(remaining, 0.05)):
+                stream_name = str(key.data)
+                if stream_name == "stdin":
+                    try:
+                        written = os.write(
+                            process.stdin.fileno(), payload[offset : offset + 64 * 1024]
+                        )
+                    except BrokenPipeError:
+                        selector.unregister(process.stdin)
+                        process.stdin.close()
+                        continue
+                    if written <= 0:
+                        continue
+                    offset += written
+                    if offset == len(payload):
+                        selector.unregister(process.stdin)
+                        process.stdin.close()
+                    continue
+                try:
+                    # ``BufferedReader.read`` may wait for its requested
+                    # size, defeating the selector and delaying
+                    # ``thread.started`` persistence until EOF.  Read the
+                    # ready pipe directly so each available event is
+                    # delivered incrementally while the child is alive.
+                    chunk = os.read(streams[stream_name].fileno(), 64 * 1024)
+                except OSError as exc:
+                    if exc.errno in {errno.EAGAIN, errno.EWOULDBLOCK}:
+                        continue
+                    raise
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                captured_bytes[stream_name] += len(chunk)
+                if captured_bytes[stream_name] > _STREAM_MAX_CAPTURED_BYTES:
+                    raise IssueWorkerIsolationError(
+                        f"worker {stream_name} stream exceeds the captured byte limit"
+                    )
+                pending = buffers[stream_name] + chunk
+                while b"\n" in pending:
+                    raw_line, pending = pending.split(b"\n", 1)
+                    line = raw_line.decode("utf-8", errors="replace") + "\n"
+                    if stream_name == "stdout":
+                        stdout_chunks.append(line)
+                        on_stdout_line(line)
+                    else:
+                        stderr_chunks.append(line)
+                if len(pending) > _STREAM_MAX_UNTERMINATED_LINE_BYTES:
+                    raise IssueWorkerIsolationError(
+                        f"worker {stream_name} stream has an unterminated line exceeding the byte limit"
+                    )
+                buffers[stream_name] = pending
+        for stream_name, buffer in buffers.items():
+            if buffer:
+                line = buffer.decode("utf-8", errors="replace")
+                if stream_name == "stdout":
+                    stdout_chunks.append(line)
+                    on_stdout_line(line)
+                else:
+                    stderr_chunks.append(line)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            raise subprocess.TimeoutExpired(command, timeout) from exc
+        return subprocess.CompletedProcess(
+            args=list(command),
+            returncode=returncode,
+            stdout="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
+        )
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=0.25)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    finally:
+        selector.close()
 
 
 class CredentialProbeResult(str, Enum):
@@ -1219,6 +1363,11 @@ def _executable_set_digest(profile: _IsolationProfile) -> str:
 
 
 class _SystemdWorkerRunner:
+    # The launcher uses this marker to require an event-stream capable runner.
+    # Test doubles deliberately omit it and retain their deterministic
+    # CompletedProcess contract.
+    supports_streaming = True
+
     def __init__(
         self,
         *,
@@ -1264,6 +1413,8 @@ class _SystemdWorkerRunner:
         self._clock = clock
         self._platform_name = platform_name.lower()
         self.receipt: dict[str, object] | None = None
+        self._pre_process_entry: Callable[[], None] | None = None
+        self._pre_spawn_entry: Callable[[], None] | None = None
 
     @staticmethod
     def _require_principal(
@@ -1374,6 +1525,22 @@ class _SystemdWorkerRunner:
 
     def reset(self) -> None:
         self.receipt = None
+        self._pre_process_entry = None
+        self._pre_spawn_entry = None
+
+    def set_pre_process_entry(self, callback: Callable[[], None] | None) -> None:
+        """Install one host-owned gate for the validated pre-spawn boundary."""
+
+        if callback is not None and not callable(callback):
+            raise IssueWorkerIsolationError("worker isolation pre-entry hook is invalid")
+        self._pre_process_entry = callback
+
+    def set_pre_spawn_entry(self, callback: Callable[[], None] | None) -> None:
+        """Install the final host authority gate immediately before spawn."""
+
+        if callback is not None and not callable(callback):
+            raise IssueWorkerIsolationError("worker isolation pre-spawn hook is invalid")
+        self._pre_spawn_entry = callback
 
     def __call__(
         self,
@@ -1384,6 +1551,8 @@ class _SystemdWorkerRunner:
         capture_output: bool,
         text: bool,
         check: bool,
+        env: Mapping[str, str] | None = None,
+        on_stdout_line: Callable[[str], None] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.receipt = None
         if self._platform_name != "linux":
@@ -1454,6 +1623,27 @@ class _SystemdWorkerRunner:
             "HOME": str(profile.model_auth_home.path),
             **profile.environment,
         }
+        if env is not None:
+            unexpected = set(env) - {
+                "PATH",
+                "BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE",
+            }
+            if unexpected:
+                raise IssueWorkerIsolationError(
+                    "worker isolation received an unapproved environment key"
+                )
+            approval_path = env.get("BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE")
+            supplied_path = env.get("PATH")
+            if supplied_path is not None and supplied_path != profile.environment["PATH"]:
+                raise IssueWorkerIsolationError(
+                    "worker isolation PATH differs from the approved profile"
+                )
+            if approval_path is not None:
+                if not os.path.isabs(approval_path) or not approval_path.strip():
+                    raise IssueWorkerIsolationError(
+                        "worker isolation approval path is invalid"
+                    )
+                child_environment["BUILDEROPS_ISSUE_DELIVERY_APPROVAL_FILE"] = approval_path
         if protected_path in child_environment.values():
             raise IssueWorkerIsolationError("worker isolation environment is invalid")
         properties = _systemd_properties(profile)
@@ -1481,19 +1671,6 @@ class _SystemdWorkerRunner:
             label="receipt time",
             pattern=re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"),
             maximum=20,
-        )
-        result = self._runner(
-            systemd_command,
-            cwd=profile.worktree.path,
-            input=input,
-            capture_output=True,
-            text=True,
-            check=False,
-            env={
-                "LANG": profile.environment["LANG"],
-                "LC_ALL": profile.environment["LC_ALL"],
-            },
-            timeout=5460,
         )
         self.receipt = {
             "contract": ISOLATION_RECEIPT_CONTRACT,
@@ -1544,6 +1721,93 @@ class _SystemdWorkerRunner:
             "child_environment_keys": sorted(child_environment),
             "entered_at": entered_at,
         }
+        # The receipt is host-produced only after every live probe and before
+        # the external systemd child is spawned.  A protected host gate may
+        # bind it and refuse the child without accepting worker text.
+        if self._pre_process_entry is not None:
+            self._pre_process_entry()
+        # The claim round trip is external work. Re-read the profile and all
+        # live isolation facts before the next irreversible boundary.
+        refreshed_profile = _load_profile(
+            self._profile_file, self._expected_profile_sha256
+        )
+        if refreshed_profile != profile or cwd.resolve() != refreshed_profile.worktree.path:
+            raise IssueWorkerIsolationError("worker isolation profile changed before spawn")
+        refreshed_credential, refreshed_systemd = self._validate_live(refreshed_profile)
+        repeated_credential, repeated_systemd = self._validate_live(refreshed_profile)
+        if (
+            refreshed_credential != credential
+            or refreshed_systemd != systemd_identity
+            or repeated_credential != refreshed_credential
+            or repeated_systemd != refreshed_systemd
+        ):
+            raise IssueWorkerIsolationError("worker isolation live identity changed before spawn")
+        try:
+            refreshed_probe = self._credential_probe(
+                refreshed_credential.path,
+                refreshed_profile.worker,
+                refreshed_profile.executor,
+            )
+            refreshed_access = self._worker_access_probe(
+                (refreshed_profile.worktree.path, refreshed_profile.model_auth_home.path),
+                _git_metadata_denial_targets(refreshed_profile),
+                refreshed_profile.worker,
+                refreshed_profile.executor,
+            )
+        except Exception:
+            raise IssueWorkerIsolationError("worker isolation pre-spawn probes are unproven") from None
+        if (
+            refreshed_probe is not CredentialProbeResult.DENIED
+            or refreshed_access is not WorkerAccessProbeResult.ADMITTED
+        ):
+            raise IssueWorkerIsolationError("worker isolation pre-spawn probes are unproven")
+        if _validate_credential(
+            refreshed_profile.protected_credential,
+            executor=refreshed_profile.executor,
+            worktree=refreshed_profile.worktree.path,
+            worktree_git_directory=refreshed_profile.worktree_git_directory.path,
+            worktree_git_common_directory=refreshed_profile.worktree_git_common_directory.path,
+            model_auth_home=refreshed_profile.model_auth_home.path,
+        ) != refreshed_credential:
+            raise IssueWorkerIsolationError("worker isolation credential changed before spawn")
+        self._validate_executable_set(refreshed_profile)
+        if self._pre_spawn_entry is not None:
+            self._pre_spawn_entry()
+        runner_environment: dict[str, str] = {
+            # The systemd launcher is constrained by the profile-owned
+            # executable search path; ambient coordinator PATH is never
+            # inherited at this boundary.
+            "PATH": profile.environment["PATH"],
+            "LANG": profile.environment["LANG"],
+            "LC_ALL": profile.environment["LC_ALL"],
+        }
+        runner_kwargs: dict[str, object] = {
+            "cwd": profile.worktree.path,
+            "input": input,
+            "capture_output": True,
+            "text": True,
+            "check": False,
+            "timeout": 5460,
+            "env": runner_environment,
+        }
+        if getattr(self._runner, "supports_streaming", False) and on_stdout_line is not None:
+            # Injected production runners are external-process transports too:
+            # preserve the same incremental event contract as subprocess.run.
+            # The callback is deliberately forwarded only to runners that
+            # advertise the capability, so legacy deterministic doubles keep
+            # their narrow call shape.
+            runner_kwargs["on_stdout_line"] = on_stdout_line
+        if self._runner is subprocess.run and on_stdout_line is not None:
+            result = _run_streaming_process(
+                systemd_command,
+                cwd=profile.worktree.path,
+                input=input,
+                env=runner_environment,
+                timeout=5460,
+                on_stdout_line=on_stdout_line,
+            )
+        else:
+            result = self._runner(systemd_command, **runner_kwargs)
         return result
 
 
@@ -1559,6 +1823,8 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         adapter_path: Path | None = None,
         provider_census_path: Path | None = None,
         builder_channel: str = "dev",
+        effect_gate_approval_file: Path | None = None,
+        effect_gate_checkout_root: Path | None = None,
         principal_resolver: Callable[[str, str], ResolvedPrincipal] = resolve_principal,
         current_identity: Callable[[], tuple[int, int]] = lambda: (
             os.geteuid(),
@@ -1590,6 +1856,7 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
         platform_name: str = platform.system(),
     ) -> None:
+        self._expected_profile_sha256 = expected_profile_sha256
         self._isolation_runner = _SystemdWorkerRunner(
             profile_file=profile_file,
             expected_profile_sha256=expected_profile_sha256,
@@ -1614,20 +1881,52 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
             builder_channel=builder_channel,
             runner=self._isolation_runner,
             precreated_worktree_only=True,
+            effect_gate_approval_file=effect_gate_approval_file,
+            effect_gate_checkout_root=effect_gate_checkout_root,
         )
+
+    @property
+    def expected_profile_sha256(self) -> str:
+        """Return the host-pinned profile hash selected before launch."""
+
+        return self._expected_profile_sha256
+
+    def completed_isolation_receipt(self) -> dict[str, object]:
+        """Read the runner's host-produced pre-spawn receipt, never worker text."""
+
+        receipt = self._isolation_runner.receipt
+        if not isinstance(receipt, Mapping):
+            raise IssueWorkerIsolationError("worker isolation entry receipt is unavailable")
+        return dict(receipt)
 
     def launch(
         self,
         context_pack: Mapping[str, Any],
         *,
         execution_routing: Mapping[str, Any] | None = None,
+        on_entry: Callable[[str], None] | None = None,
+        effect_gate: Callable[..., Mapping[str, Any]] | None = None,
+        pre_process_entry: Callable[[], None] | None = None,
+        pre_spawn_entry: Callable[[], None] | None = None,
     ) -> Mapping[str, Any]:
         self._isolation_runner.reset()
-        result = dict(super().launch(context_pack, execution_routing=execution_routing))
-        receipt = self._isolation_runner.receipt
-        if receipt is None:
-            raise IssueWorkerIsolationError("worker isolation entry receipt is unavailable")
-        result["isolation_receipt"] = dict(receipt)
+        self._isolation_runner.set_pre_process_entry(pre_process_entry)
+        self._isolation_runner.set_pre_spawn_entry(pre_spawn_entry)
+        try:
+            result = dict(
+                super().launch(
+                    context_pack,
+                    execution_routing=execution_routing,
+                    on_entry=on_entry,
+                    effect_gate=effect_gate,
+                )
+            )
+        finally:
+            self._isolation_runner.set_pre_process_entry(None)
+            self._isolation_runner.set_pre_spawn_entry(None)
+        # Compatibility diagnostics may include the runner observation, but
+        # the protected executor binds only through its direct launcher read.
+        result["isolation_receipt"] = self.completed_isolation_receipt()
         return result
 
 

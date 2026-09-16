@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
+from typing import Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -34,6 +35,10 @@ from app.builderops.control_plane.issue_delivery import (
     normalize_manifest as normalize_issue_delivery_manifest,
 )
 from app.builderops.epic_dispatch import CodexIssueSessionLauncher, HANDOFF_RECEIPT_SCHEMA
+from app.builderops.issue_delivery_operation import (
+    IssueDeliveryOperationAdapter,
+    IssueDeliveryOperationRefused,
+)
 
 pytestmark = pytest.mark.pg
 
@@ -375,6 +380,221 @@ def _client(store: PostgresBuilderOpsStore, registry: CredentialRegistry, token:
         http_client=TestClient(service),
         max_retries=0,
     )
+
+
+def _operation_live_binding(approval: Mapping[str, object]) -> dict[str, object]:
+    destination = approval["destination"]
+    source = approval["source"]
+    workflow = approval["workflow"]
+    issue = approval["issue"]
+    assert isinstance(destination, dict)
+    assert isinstance(source, dict)
+    assert isinstance(workflow, dict)
+    assert isinstance(issue, dict)
+    return {
+        "checkout": str(destination["resolved_checkout"]),
+        "worktree": str(destination["resolved_worktree"]),
+        "branch": str(destination["branch"]),
+        "source_revision": str(source["revision"]),
+        "base_sha": str(destination["base_sha"]),
+        "workflow_hash": str(workflow["content_hash"]),
+        "workflow_artifacts": sorted(
+            [
+                {"path": str(item["path"]), "sha256": str(item["sha256"])}
+                for item in workflow["artifacts"]
+            ],
+            key=lambda item: item["path"],
+        ),
+        "current_issue": {
+            "number": issue["number"],
+            "node_id": issue["node_id"],
+            "state": "open",
+            "body_hash": issue["body_hash"],
+            "acceptance_criteria_hash": issue["acceptance_criteria_hash"],
+        },
+        "current_source": {"revision": source["revision"], "refs": list(source["refs"])},
+        "current_profile": dict(approval["profile"]),
+    }
+
+
+def test_issue_operation_observations_require_execute_but_survive_invalidation(
+    store: PostgresBuilderOpsStore,
+    registry: CredentialRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = _client(store, registry, "owner-token")
+    reader = _client(store, registry, "executor-low-token")
+    writer = _client(store, registry, "executor-high-token")
+    preview = owner.issue_delivery_preview(
+        manifest=_manifest(operation_key="operation-observation-write-scope")
+    )
+    approval = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])["approval"]
+    adapter = IssueDeliveryOperationAdapter(
+        approval,
+        client=writer,
+        live_binding_reader=_operation_live_binding,
+    )
+    immutable_binding = adapter._live_binding(include_current_facts=False)
+    monkeypatch.setattr(
+        adapter,
+        "_live_binding",
+        lambda *, include_current_facts=True: (
+            _operation_live_binding(approval)
+            if include_current_facts
+            else immutable_binding
+        ),
+    )
+    reservation = adapter.reserve()
+    adapter.record_attempt()
+    entry = adapter.record_entry(session_id="session-observation-write-scope")
+
+    terminal_body = {
+        "attempt_receipt_hash": entry["payload"]["attempt_receipt_hash"],
+        "entry_receipt_hash": entry["payload"]["receipt_hash"],
+        "session_id": "session-observation-write-scope",
+        "worker_receipt": {"final_state": "handoff"},
+        "observed_at": "2026-09-16T00:00:00+00:00",
+    }
+    with pytest.raises(
+        IssueDeliveryOperationRefused,
+        match="destination receipt was not durably committed",
+    ) as forged_receipt:
+        adapter._write(
+            "terminal",
+            "terminal",
+            {
+                **terminal_body,
+                "worker_receipt": {
+                    "final_state": "handoff",
+                    "diagnostics": {"effect_receipts": [{"outcome": "forged"}]},
+                },
+                "host_effect_refs": [],
+            },
+        )
+    assert isinstance(forged_receipt.value.__cause__, ControlPlaneConflictError)
+    assert "worker receipt must not supply protected host effect fields" in str(
+        forged_receipt.value.__cause__
+    )
+    assert adapter._read("terminal") is None
+    with pytest.raises(
+        IssueDeliveryOperationRefused,
+        match="destination receipt was not durably committed",
+    ) as unavailable_reference:
+        adapter._write(
+            "terminal",
+            "terminal",
+            {
+                **terminal_body,
+                "host_effect_refs": [
+                    {
+                        "operation_key": "0" * 64,
+                        "request_sha256": "1" * 64,
+                        "effect_slot_sha256": "2" * 64,
+                    }
+                ],
+            },
+        )
+    assert isinstance(unavailable_reference.value.__cause__, ControlPlaneConflictError)
+    assert "reference is unavailable" in str(unavailable_reference.value.__cause__)
+    assert adapter._read("terminal") is None
+
+    monkeypatch.setattr(store, "outbox_status", lambda *_args: "succeeded")
+    monkeypatch.setattr(
+        store,
+        "outbox_intent",
+        lambda *_args: {
+            "task_id": "issue-delivery-effect:" + "2" * 64,
+            "effect_type": "github.issue-delivery.claim.v1",
+            "payload": {
+                "contract": "builderops.issue-delivery-effect.v1",
+                "request_sha256": "1" * 64,
+                "effect_slot_sha256": "2" * 64,
+                "approval_id": "foreign-approval",
+                "approved_operation_key": approval["operation_key"],
+                "repository": approval["repository"],
+                "issue_number": approval["issue"]["number"],
+                "run_id": approval["destination"]["run_id"],
+                "effect_kind": "claim",
+            },
+        },
+    )
+    with pytest.raises(
+        IssueDeliveryOperationRefused,
+        match="destination receipt was not durably committed",
+    ) as foreign_reference:
+        adapter._write(
+            "terminal",
+            "terminal",
+            {
+                **terminal_body,
+                "host_effect_refs": [
+                    {
+                        "operation_key": "0" * 64,
+                        "request_sha256": "1" * 64,
+                        "effect_slot_sha256": "2" * 64,
+                    }
+                ],
+            },
+        )
+    assert isinstance(foreign_reference.value.__cause__, ControlPlaneConflictError)
+    assert "reference is foreign or changed" in str(foreign_reference.value.__cause__)
+    assert adapter._read("terminal") is None
+    monkeypatch.undo()
+
+    with pytest.raises(ControlPlaneScopeError):
+        reader.issue_delivery_operation_record(
+            envelope={
+                "repository": approval["repository"],
+                "scope": "issue-delivery-operation",
+                "stack": "builderops-control-plane",
+                "source_refs": ["test:read-only-write-refusal"],
+            },
+            record_id=f"issue-delivery-reservation:{approval['operation_key']}",
+            state="reserved",
+            payload=reservation["payload"],
+            idempotency_key=f"issue-delivery-operation:reservation:{approval['operation_key']}",
+            operation_key=approval["operation_key"],
+            approval_id=approval["approval_id"],
+            approval_manifest_hash=approval["approval_manifest_hash"],
+        )
+
+    original_current_credential = registry.current_credential
+    monkeypatch.setattr(
+        registry,
+        "current_credential",
+        lambda credential_id: (
+            None
+            if credential_id == "owner"
+            else original_current_credential(credential_id)
+        ),
+    )
+    terminal = adapter.record_terminal(
+        session_id="session-observation-write-scope",
+        worker_receipt={"final_state": "handoff"},
+    )
+    assert entry["state"] == "active"
+    assert terminal["state"] == "terminal"
+    assert terminal["payload"]["host_effect_refs"] == []
+    assert reader.issue_delivery_operation_record_read(
+        repository=str(approval["repository"]),
+        record_id=f"issue-delivery-terminal:{approval['operation_key']}",
+    )["state"] == "terminal"
+    with pytest.raises(ControlPlaneConflictError, match="owner is unavailable"):
+        writer.issue_delivery_operation_record(
+            envelope={
+                "repository": approval["repository"],
+                "scope": "issue-delivery-operation",
+                "stack": "builderops-control-plane",
+                "source_refs": ["test:execute-reservation-refusal"],
+            },
+            record_id=f"issue-delivery-reservation:{approval['operation_key']}",
+            state="reserved",
+            payload=reservation["payload"],
+            idempotency_key=f"issue-delivery-operation:reservation:{approval['operation_key']}",
+            operation_key=approval["operation_key"],
+            approval_id=approval["approval_id"],
+            approval_manifest_hash=approval["approval_manifest_hash"],
+        )
 
 
 def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path) -> None:

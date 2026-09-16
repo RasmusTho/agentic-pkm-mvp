@@ -2,54 +2,46 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import subprocess
 from copy import deepcopy
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Thread
-from typing import Any, Mapping
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import uuid4
+from typing import Any, Mapping, cast
+from types import SimpleNamespace
 
 import psycopg
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from psycopg import sql
 
-from app.builderops.control_plane.auth import CredentialRegistry
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
-    ClientConfig,
 )
 from app.builderops.issue_delivery_effect_executor import (
     BuilderOpsIssueDeliveryEffectLedger,
     ContentOnlyIssueDeliverySessionLauncher,
     DestinationBinding,
     EXECUTOR_ARTIFACT,
-    EffectAuthorityReadback,
     EffectReadback,
     FrozenIssueDeliveryDestination,
     GitIssueDeliveryDestination,
+    HostIssueDeliveryExecutorRuntime,
     IssueDeliveryEffectReceipt,
     IssueDeliveryEffectRequest,
     IssueDeliveryHostExecutor,
     PreparedIssueDeliveryWorker,
     WORKER_ISOLATION_ARTIFACT,
     WorkerIsolationBinding,
+    build_host_issue_delivery_executor,
 )
+from app.builderops import issue_delivery_effect_executor as effect_executor_module
 from app.builderops.control_plane.issue_delivery import (
     REQUIRED_WORKFLOW_ARTIFACTS,
     canonical_hash,
 )
 from app.builderops.control_plane.models import Lease, TransactionResult
-from app.builderops.control_plane.service import create_app
-from app.builderops.control_plane.store import PostgresBuilderOpsStore
 from app.builderops.issue_delivery_worker_isolation import (
     LinuxSystemdCodexIssueSessionLauncher,
 )
@@ -58,251 +50,20 @@ from app.dispatcher.verification_merge import (
     ProtectedDeliveryManifest,
 )
 
-REPOSITORY = "rasmustho/agentic-pkm-mvp"
-BASE_SHA = "a" * 40
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _sha(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def _isolation_receipt() -> dict[str, Any]:
-    return {
-        "contract": "builderops_issue_delivery_worker_isolation_receipt.v1",
-        "profile_id": "issue-delivery-content-worker",
-        "profile_version": 1,
-        "profile_sha256": "1" * 64,
-        "executor": {"uid": 1000, "gid": 1000, "supplementary_gids": [27]},
-        "worker": {"uid": 2000, "gid": 2000, "supplementary_gids": []},
-        "unit_identity": "yggdrasil-issue-worker-0123456789abcdef.service",
-        "worktree_identity_sha256": "2" * 64,
-        "executable_set_identity_sha256": "3" * 64,
-        "model_auth_reference": "codex-login-1",
-        "model_auth_identity_sha256": "4" * 64,
-        "protected_credential_identity_sha256": "5" * 64,
-        "probe_result": "denied",
-        "worker_write_access_probe_result": "worktree-writable-git-denied",
-        "git_metadata_write_denied": True,
-        "command_sha256": "6" * 64,
-        "isolation_properties_sha256": "7" * 64,
-        "isolation_template_sha256": "7" * 64,
-        "no_new_privileges": True,
-        "child_environment_keys": ["CODEX_HOME", "HOME", "LANG", "LC_ALL", "PATH"],
-        "entered_at": "2026-09-15T12:00:00Z",
-    }
-
-
-def _isolation() -> WorkerIsolationBinding:
-    return WorkerIsolationBinding.from_receipt(_isolation_receipt())
-
-
-def _destination(tmp_path: Path) -> FrozenIssueDeliveryDestination:
-    checkout = tmp_path / "checkout"
-    worktree = tmp_path / "worktree"
-    git_dir = tmp_path / "worktree-git"
-    common = tmp_path / "common-git"
-    for path in (checkout, worktree, git_dir, common):
-        path.mkdir(parents=True, exist_ok=True)
-    binding = DestinationBinding(
-        identity="destination:shared",
-        run_id="run-5558",
-        host_identity="host:test",
-        system_identity="system:builderops",
-        channel="dev",
-        repository=REPOSITORY,
-        checkout=checkout,
-        worktree=worktree,
-        branch="codex/5558-protected-host-executor-v2",
-        base_ref="main",
-        base_sha=BASE_SHA,
-    )
-    return FrozenIssueDeliveryDestination.capture(
-        binding,
-        git_directory=git_dir,
-        common_git_directory=common,
-        origin_url="https://github.com/RasmusTho/agentic-pkm-mvp.git",
-    )
-
-
-def _approval(
-    destination: FrozenIssueDeliveryDestination,
-    executor_artifact: Path,
-    isolation_artifact: Path,
-    workflow_root: Path,
-    *,
-    parent: bool = False,
-) -> dict[str, Any]:
-    artifact_paths = {
-        path: workflow_root / path for path in REQUIRED_WORKFLOW_ARTIFACTS
-    }
-    artifact_paths[EXECUTOR_ARTIFACT] = executor_artifact
-    artifact_paths[WORKER_ISOLATION_ARTIFACT] = isolation_artifact
-    artifacts = [
-        {"path": path, "sha256": _sha(artifact_paths[path].read_bytes())}
-        for path in sorted(REQUIRED_WORKFLOW_ARTIFACTS)
-    ]
-    return {
-        "contract_version": "fca-issue-delivery.v1",
-        "operation_type": "deliver_ready_issue",
-        "approval_id": "approval-5558",
-        "operation_key": "operation-5558",
-        "approval_manifest_hash": "8" * 64,
-        "authority_epoch": 7,
-        "repository": REPOSITORY,
-        "issue": {
-            "number": 5558,
-            "node_id": "I_issue5558",
-            "state": "open",
-            "labels": ["agent:ready"],
-            "body_hash": "9" * 64,
-            "acceptance_criteria_hash": "a" * 64,
-        },
-        "source": {"revision": BASE_SHA},
-        "workflow": {"content_hash": "b" * 64, "artifacts": artifacts},
-        "profile": {
-            "content_hash": "c" * 64,
-            "verification_profile": {"content_hash": "d" * 64},
-        },
-        "destination": destination.binding.as_manifest(),
-        "permitted_effects": [
-            "repository_worktree",
-            "issue_claim",
-            "publication",
-            "review_merge",
-            "closure_reconciliation",
-        ],
-        "parent_evidence": (
-            {
-                "kind": "issue",
-                "repository": REPOSITORY,
-                "number": 5399,
-                "node_id": "I_parent5399",
-                "relationship": {
-                    "kind": "parent",
-                    "child_issue_number": 5558,
-                    "authenticated": True,
-                },
-                "contract_version": "fca-parent.v1",
-                "contract_hash": "e" * 64,
-                "write_permission": {
-                    "scope": "parent_evidence:write",
-                    "effects": [
-                        "pr_receipt_comments",
-                        "child_generated_ledger_writeback",
-                    ],
-                },
-            }
-            if parent
-            else {"kind": "none"}
-        ),
-    }
-
-
-def _request(
-    approval: Mapping[str, Any],
-    destination: FrozenIssueDeliveryDestination,
-    isolation: WorkerIsolationBinding,
-    executor_artifact: Path,
-    isolation_artifact: Path,
-    *,
-    effect_kind: str = "claim",
-) -> IssueDeliveryEffectRequest:
-    issue = approval["issue"]
-    source = approval["source"]
-    workflow = approval["workflow"]
-    profile = approval["profile"]
-    verification = profile["verification_profile"]
-    issue_number = int(issue["number"])
-    issue_node_id = str(issue["node_id"])
-    targets: dict[str, dict[str, Any]] = {
-        "claim": {
-            "kind": "claim",
-            "issue_number": issue_number,
-            "issue_node_id": issue_node_id,
-            "expected_state": "open",
-            "expected_label": "agent:ready",
-        },
-        "publication": {
-            "kind": "publication",
-            "issue_number": issue_number,
-            "branch": destination.binding.branch,
-            "base_ref": "main",
-            "base_sha": destination.binding.base_sha,
-            "head_sha": "f" * 40,
-            "title_sha256": "1" * 64,
-            "body_sha256": "2" * 64,
-            "expected_remote_ref_state": "absent",
-        },
-        "merge": {
-            "kind": "merge",
-            "issue_number": issue_number,
-            "pr_number": 6000,
-            "branch": destination.binding.branch,
-            "base_ref": "main",
-            "base_sha": destination.binding.base_sha,
-            "head_sha": "f" * 40,
-        },
-        "closure": {
-            "kind": "closure",
-            "issue_number": issue_number,
-            "pr_number": 6000,
-            "merge_commit_sha": "3" * 40,
-            "expected_issue_state": "open",
-        },
-        "parent_evidence": {
-            "kind": "parent_evidence",
-            "repository": REPOSITORY,
-            "issue_number": 5399,
-            "issue_node_id": "I_parent5399",
-            "expected_state": "open",
-            "child_issue_number": issue_number,
-            "parent_contract_sha256": str(
-                approval.get("parent_evidence", {}).get("contract_hash", "e" * 64)
-            ),
-            "relationship_sha256": canonical_hash(
-                approval.get("parent_evidence", {}).get(
-                    "relationship",
-                    {
-                        "kind": "parent",
-                        "child_issue_number": issue_number,
-                        "authenticated": True,
-                    },
-                )
-            ),
-            "evidence_kind": "pr_receipt_comment",
-            "evidence_sha256": "4" * 64,
-        },
-    }
-    return IssueDeliveryEffectRequest.model_validate(
-        {
-            "contract": "builderops.issue-delivery-effect.v1",
-            "effect_kind": effect_kind,
-            "approval": dict(approval),
-            "approval_id": approval["approval_id"],
-            "approved_operation_key": approval["operation_key"],
-            "approval_manifest_hash": approval["approval_manifest_hash"],
-            "repository": approval["repository"],
-            "issue_number": issue_number,
-            "issue_body_hash": issue["body_hash"],
-            "acceptance_criteria_hash": issue["acceptance_criteria_hash"],
-            "run_id": approval["destination"]["run_id"],
-            "source_revision": source["revision"],
-            "workflow_hash": workflow["content_hash"],
-            "profile_hash": profile["content_hash"],
-            "verification_profile_hash": verification["content_hash"],
-            "authority_epoch": approval["authority_epoch"],
-            "destination": {
-                **destination.binding.model_dump(mode="json"),
-                "frozen_identity_sha256": destination.identity_sha256,
-            },
-            "worker_isolation": isolation.model_dump(mode="json"),
-            "executor_artifact_sha256": _sha(executor_artifact.read_bytes()),
-            "worker_isolation_artifact_sha256": _sha(isolation_artifact.read_bytes()),
-            "target": targets[effect_kind],
-        }
-    )
-
+from tests.builderops.issue_delivery_production_harness import (
+    REPOSITORY,
+    _ProductionHarness,
+    _Transport,
+    _approval,
+    _destination,
+    _isolation,
+    _isolation_receipt,
+    _production_client,
+    _production_manifest,
+    _production_registry,
+    _request,
+    _sha,
+)
 
 class _Authority:
     def __init__(self, approval: Mapping[str, Any]) -> None:
@@ -401,53 +162,6 @@ class _BlockingCredentials(_Credentials):
             repository=repository,
             credential_id=credential_id,
             rotation_generation=rotation_generation,
-        )
-
-
-class _Transport:
-    def __init__(self) -> None:
-        self.apply_calls = 0
-        self.raise_on_apply = False
-        self.target_override: Mapping[str, Any] | None = None
-        self.readback_target_override: str | None = None
-        self.readbacks = ["applied"]
-        self.on_apply: Callable[[], None] | None = None
-
-    def validate_target(
-        self, request: IssueDeliveryEffectRequest
-    ) -> EffectAuthorityReadback:
-        value = {
-            "request_sha256": request.content_sha256,
-            "repository": request.repository,
-            "issue_number": request.issue_number,
-            "issue_body_hash": request.issue_body_hash,
-            "acceptance_criteria_hash": request.acceptance_criteria_hash,
-            "source_revision": request.source_revision,
-            "profile_hash": request.profile_hash,
-            "verification_profile_hash": request.verification_profile_hash,
-            "target": request.target.model_dump(mode="json"),
-        }
-        if self.target_override:
-            value.update(self.target_override)
-        return EffectAuthorityReadback.model_validate(value)
-
-    def apply(self, request: IssueDeliveryEffectRequest, credential: object) -> None:
-        del request, credential
-        self.apply_calls += 1
-        if self.on_apply is not None:
-            self.on_apply()
-        if self.raise_on_apply:
-            raise TimeoutError("ambiguous GitHub response")
-
-    def readback(self, request: IssueDeliveryEffectRequest) -> EffectReadback:
-        return EffectReadback(
-            request_sha256=request.content_sha256,
-            outcome=self.readbacks.pop(0),
-            evidence={
-                "source": "github-authoritative-readback",
-                "observed_target_sha256": self.readback_target_override
-                or canonical_hash(request.target.model_dump(mode="json")),
-            },
         )
 
 
@@ -597,6 +311,15 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
     credentials = _Credentials()
     ledger = _Ledger()
     transport = _Transport()
+    launcher = object.__new__(ContentOnlyIssueDeliverySessionLauncher)
+    launcher._expected_profile_sha256 = isolation.profile_sha256
+    launcher._isolation_runner = SimpleNamespace(receipt=_isolation_receipt())
+    prepared = PreparedIssueDeliveryWorker(
+        approval=dict(approval),
+        destination=cast(GitIssueDeliveryDestination, destination_guard),
+        frozen_destination=destination,
+        launcher=launcher,
+    )
     executor = IssueDeliveryHostExecutor(
         authority=authority,
         ledger=ledger,
@@ -604,12 +327,14 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
         credentials=credentials,
         destination=destination_guard,
         frozen_destination=destination,
-        worker_isolation=isolation,
         transport=transport,
+        prepared_worker=prepared,
+        expected_isolation_profile_sha256=isolation.profile_sha256,
         trusted_executor_artifact=executor_artifact,
         trusted_worker_isolation_artifact=isolation_artifact,
         trusted_workflow_root=workflow_root,
     )
+    executor.bind_completed_worker()
     return (
         executor,
         request,
@@ -622,306 +347,91 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
     )
 
 
-def _schema_dsn(dsn: str, schema: str) -> str:
-    parts = urlsplit(dsn)
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["options"] = f"-csearch_path={schema},public"
-    return urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+def test_fixed_host_executor_factory_binds_only_the_completed_prepared_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (
+        original_executor,
+        _request,
+        authority,
+        destination,
+        repository,
+        credentials,
+        ledger,
+        transport,
+    ) = _executor(tmp_path)
+    runtime = HostIssueDeliveryExecutorRuntime(
+        repository_authority=repository,
+        credentials=credentials,
+        transport=transport,
+        isolation_profile_sha256=_request.worker_isolation.profile_sha256,
+        live_binding_reader=lambda approval: {
+            "checkout": approval["destination"]["resolved_checkout"],
+            "worktree": approval["destination"]["resolved_worktree"],
+        },
     )
-
-
-@pytest.fixture
-def issue_delivery_pg_store() -> PostgresBuilderOpsStore:
-    base = (
-        os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
-        or os.getenv("DATABASE_URL", "").strip()
+    launcher = object.__new__(ContentOnlyIssueDeliverySessionLauncher)
+    launcher._expected_profile_sha256 = _request.worker_isolation.profile_sha256
+    launcher._isolation_runner = SimpleNamespace(receipt=None)
+    prepared = PreparedIssueDeliveryWorker(
+        approval=dict(_request.approval),
+        destination=cast(GitIssueDeliveryDestination, destination),
+        frozen_destination=original_executor.frozen_destination,
+        launcher=launcher,
     )
-    if not base:
-        pytest.skip("no explicit non-production BuilderOps PostgreSQL DSN configured")
-    schema = f"builderops_effect_executor_{uuid4().hex}"
-    try:
-        with psycopg.connect(base, connect_timeout=2, autocommit=True) as conn:
-            conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-    except psycopg.Error as exc:
-        pytest.skip(f"PostgreSQL unavailable for host-executor test: {exc}")
-    store = PostgresBuilderOpsStore(_schema_dsn(base, schema))
-    store.initialize()
-    try:
-        yield store
-    finally:
-        with psycopg.connect(base, autocommit=True) as conn:
-            conn.execute(
-                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
-                    sql.Identifier(schema)
-                )
-            )
+    monkeypatch.setattr(
+        effect_executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime
+    )
+    built = build_host_issue_delivery_executor(
+        approval=_request.approval,
+        client=cast(BuilderOpsControlPlaneClient, authority),
+        prepared=prepared,
+    )
+    assert type(built) is IssueDeliveryHostExecutor
+    assert built.transport is transport
+    assert built.live_binding(_request.approval)["checkout"] == _request.approval[
+        "destination"
+    ]["resolved_checkout"]
+    with pytest.raises(ValueError, match="completed worker receipt is unavailable"):
+        built.execute(_request)
+    assert ledger.state == "missing"
+    assert credentials.calls == 0
+    assert transport.apply_calls == 0
 
+    launcher._isolation_runner.receipt = _isolation_receipt()
+    built.bind_completed_worker()
+    assert built.worker_isolation == _request.worker_isolation
+    with pytest.raises(ValueError, match="already bound"):
+        built.bind_completed_worker()
 
-def _production_registry(tmp_path: Path) -> CredentialRegistry:
-    entries: list[dict[str, Any]] = []
-    for credential_id, principal, token, scopes, principal_kind in (
-        (
-            "owner",
-            "owner:human",
-            "owner-pg-token",
-            ["issue_delivery:approve", "issue_delivery:read", "status:read"],
-            "human",
-        ),
-        (
-            "issue-delivery-host",
-            "destination:shared",
-            "executor-pg-token",
-            [
-                "issue_delivery:execute",
-                "issue_delivery:read",
-                "outbox:write",
-                "receipts:read",
-                "status:read",
-                "tasks:write",
-            ],
-            "agent",
-        ),
-    ):
-        secret = tmp_path / f"{credential_id}.secret"
-        secret.write_text(token, encoding="utf-8")
-        entries.append(
-            {
-                "id": credential_id,
-                "principal": principal,
-                "secret_ref": f"host-secret:{credential_id}",
-                "secret_file": str(secret),
-                "scopes": scopes,
-                "repositories": [REPOSITORY],
-                "rotation_generation": 1,
-                "principal_kind": principal_kind,
-            }
+    mismatched_launcher = object.__new__(ContentOnlyIssueDeliverySessionLauncher)
+    mismatched_launcher._expected_profile_sha256 = "f" * 64
+    mismatched_launcher._isolation_runner = SimpleNamespace(receipt=None)
+    mismatched_prepared = PreparedIssueDeliveryWorker(
+        approval=dict(_request.approval),
+        destination=cast(GitIssueDeliveryDestination, destination),
+        frozen_destination=original_executor.frozen_destination,
+        launcher=mismatched_launcher,
+    )
+    with pytest.raises(ValueError, match="profile differs"):
+        build_host_issue_delivery_executor(
+            approval=_request.approval,
+            client=cast(BuilderOpsControlPlaneClient, authority),
+            prepared=mismatched_prepared,
         )
-    manifest_path = tmp_path / "builderops-credentials.json"
-    manifest_path.write_text(json.dumps({"credentials": entries}), encoding="utf-8")
-    return CredentialRegistry(manifest_path)
 
 
-def _production_client(
-    store: PostgresBuilderOpsStore,
-    registry: CredentialRegistry,
-    token: str,
-) -> BuilderOpsControlPlaneClient:
-    return BuilderOpsControlPlaneClient(
-        ClientConfig(base_url="http://builderops", token=token),
-        http_client=TestClient(create_app(store=store, credentials=registry)),
-        max_retries=0,
-    )
-
-
-def _production_manifest(
-    *,
-    checkout: Path,
-    worktree: Path,
-    base_sha: str,
-    operation_key: str,
-) -> dict[str, Any]:
-    # This is the established FCA-ID-A production manifest fixture, rebound to
-    # the test's real checkout/worktree and the exact current trusted files.
-    from tests.builderops.test_control_plane_issue_delivery import _manifest
-
-    manifest = deepcopy(_manifest(operation_key=operation_key))
-    manifest["approval_id"] = (
-        f"approval-pg-{_sha(operation_key.encode('utf-8'))[:24]}"
-    )
-    branch = f"codex/pg-effect-{uuid4().hex[:12]}"
-    destination = manifest["destination"]
-    destination.update(
-        {
-            "checkout": str(checkout),
-            "worktree": str(worktree),
-            "branch": branch,
-            "base_sha": base_sha,
-        }
-    )
-    manifest["source"]["revision"] = base_sha
-    manifest["source"]["refs"] = ["github:issue:5550", f"git:{base_sha}"]
-    dispatch_plan = manifest["context"]["dispatch_plan"]
-    context_pack = dispatch_plan["context_packs"][0]
-    context_pack["branch_worktree_plan"].update(
-        {"branch": branch, "worktree": str(worktree)}
-    )
-    manifest["context"]["content_hash"] = canonical_hash(context_pack)
-    manifest["context"]["expected_plan_hash"] = canonical_hash(dispatch_plan)
-    artifacts = [
-        {
-            "path": path,
-            "sha256": _sha((REPO_ROOT / path).read_bytes()),
-        }
-        for path in sorted(REQUIRED_WORKFLOW_ARTIFACTS)
-    ]
-    manifest["workflow"]["artifacts"] = artifacts
-    manifest["workflow"]["content_hash"] = canonical_hash(artifacts)
-    return manifest
-
-
-@dataclass(frozen=True)
-class _ProductionHarness:
-    store: PostgresBuilderOpsStore
-    registry: CredentialRegistry
-    owner: BuilderOpsControlPlaneClient
-    client: BuilderOpsControlPlaneClient
-    approval: Mapping[str, Any]
-    destination: GitIssueDeliveryDestination
-    frozen: FrozenIssueDeliveryDestination
-    prepared_worker: PreparedIssueDeliveryWorker
-    isolation: WorkerIsolationBinding
-    request: IssueDeliveryEffectRequest
-    ledger: BuilderOpsIssueDeliveryEffectLedger
-    credentials: _Credentials
-    transport: _Transport
-    executor: IssueDeliveryHostExecutor
-    checkout: Path
-    worktree: Path
-    preparation_observed: tuple[bool, ...]
-
-
-@pytest.fixture
-def issue_delivery_production_harness(
-    issue_delivery_pg_store: PostgresBuilderOpsStore,
+def test_production_fixture_keeps_operation_and_host_outbox_scopes_separate(
     tmp_path: Path,
-) -> Callable[..., _ProductionHarness]:
-    counter = 0
+) -> None:
+    registry = _production_registry(tmp_path)
+    operation = registry.current_credential("issue-delivery-operation")
+    host = registry.current_credential("issue-delivery-host")
 
-    def build(
-        *, effect_kind: str = "claim", parent: bool = False
-    ) -> _ProductionHarness:
-        nonlocal counter
-        counter += 1
-        case = tmp_path / f"production-{counter}"
-        checkout = case / "checkout"
-        worktree = case / "worktrees" / "issue-delivery"
-        checkout.mkdir(parents=True)
-        subprocess.run(
-            ["git", "init", "--initial-branch=main", str(checkout)],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(checkout), "config", "user.email", "test@example.com"],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(checkout), "config", "user.name", "Host Executor Test"],
-            check=True,
-        )
-        (checkout / "tracked.txt").write_text("base\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(checkout), "add", "tracked.txt"], check=True)
-        subprocess.run(
-            ["git", "-C", str(checkout), "commit", "-m", "base"],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(checkout),
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/RasmusTho/agentic-pkm-mvp.git",
-            ],
-            check=True,
-        )
-        base_sha = subprocess.run(
-            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        registry = _production_registry(case)
-        owner = _production_client(
-            issue_delivery_pg_store, registry, "owner-pg-token"
-        )
-        client = _production_client(
-            issue_delivery_pg_store, registry, "executor-pg-token"
-        )
-        manifest = _production_manifest(
-            checkout=checkout,
-            worktree=worktree,
-            base_sha=base_sha,
-            operation_key=f"operation-pg-{uuid4().hex}",
-        )
-        if parent:
-            raise ValueError("production parent fixture is not yet required")
-        preview = owner.issue_delivery_preview(manifest=manifest)
-        approval = owner.issue_delivery_start(
-            decision="start", manifest=preview["manifest"]
-        )["approval"]
-        destination = GitIssueDeliveryDestination()
-        preparation_observed: list[bool] = []
-        launcher = object.__new__(ContentOnlyIssueDeliverySessionLauncher)
-
-        def launcher_factory(
-            frozen: FrozenIssueDeliveryDestination,
-        ) -> ContentOnlyIssueDeliverySessionLauncher:
-            preparation_observed.append(
-                frozen.binding.worktree.is_dir()
-                and frozen.binding.worktree == worktree
-            )
-            return launcher
-
-        prepared_worker = PreparedIssueDeliveryWorker.create(
-            approval=approval,
-            destination=destination,
-            launcher_factory=launcher_factory,
-        )
-        frozen = prepared_worker.frozen_destination
-        isolation = _isolation()
-        request = _request(
-            approval,
-            frozen,
-            isolation,
-            REPO_ROOT / "app/builderops/issue_delivery_effect_executor.py",
-            REPO_ROOT / "app/builderops/issue_delivery_worker_isolation.py",
-            effect_kind=effect_kind,
-        )
-        ledger = BuilderOpsIssueDeliveryEffectLedger(
-            client,
-            repository=REPOSITORY,
-            run_id=request.run_id,
-            approval_id=request.approval_id,
-            worker_id="issue-delivery-host",
-        )
-        credentials = _Credentials()
-        transport = _Transport()
-        executor = IssueDeliveryHostExecutor(
-            authority=client,
-            ledger=ledger,
-            repository_authority=_RepositoryAuthority(),
-            credentials=credentials,
-            destination=destination,
-            frozen_destination=frozen,
-            worker_isolation=isolation,
-            transport=transport,
-        )
-        return _ProductionHarness(
-            store=issue_delivery_pg_store,
-            registry=registry,
-            owner=owner,
-            client=client,
-            approval=approval,
-            destination=destination,
-            frozen=frozen,
-            prepared_worker=prepared_worker,
-            isolation=isolation,
-            request=request,
-            ledger=ledger,
-            credentials=credentials,
-            transport=transport,
-            executor=executor,
-            checkout=checkout,
-            worktree=worktree,
-            preparation_observed=tuple(preparation_observed),
-        )
-
-    return build
+    assert operation is not None and host is not None
+    assert "outbox:write" not in operation.scopes
+    assert "outbox:write" in host.scopes
+    assert operation.principal == host.principal == "destination:shared"
 
 
 @pytest.mark.pg
@@ -938,17 +448,19 @@ def test_worker_has_no_ambient_repository_mutation_identity(
         LinuxSystemdCodexIssueSessionLauncher,
     )
     assert harness.preparation_observed == (True,)
-    assert harness.isolation.worker_uid != harness.isolation.executor_uid
-    assert harness.isolation.worker_gid != harness.isolation.executor_gid
-    assert harness.isolation.worker_supplementary_gids == ()
-    assert harness.isolation.repository_credential_probe == "denied"
-    assert harness.isolation.git_metadata_write_denied is True
-    receipt = harness.executor.execute(harness.request)
+    request = harness.completed_request()
+    isolation = request.worker_isolation
+    assert isolation.worker_uid != isolation.executor_uid
+    assert isolation.worker_gid != isolation.executor_gid
+    assert isolation.worker_supplementary_gids == ()
+    assert isolation.repository_credential_probe == "denied"
+    assert isolation.git_metadata_write_denied is True
+    receipt = harness.executor.execute(request)
     assert receipt.outcome == "applied"
     status = harness.ledger.status(receipt.operation_key)
     assert status["status"] == "succeeded"
     assert status["payload"]["worker_isolation_binding_sha256"] == canonical_hash(
-        harness.isolation.model_dump(mode="json")
+        isolation.model_dump(mode="json")
     )
     assert harness.transport.apply_calls == 1
 
@@ -978,7 +490,8 @@ def test_host_executor_applies_only_exact_authorized_delivery_effect(
     effect_kind: str,
 ) -> None:
     harness = issue_delivery_production_harness(effect_kind=effect_kind)
-    receipt = harness.executor.execute(harness.request)
+    request = harness.completed_request()
+    receipt = harness.executor.execute(request)
     assert receipt.outcome == "applied"
     assert harness.ledger.status(receipt.operation_key)["status"] == "succeeded"
     assert harness.transport.apply_calls == 1
@@ -986,7 +499,7 @@ def test_host_executor_applies_only_exact_authorized_delivery_effect(
     serialized = receipt.as_dict()
     assert "worktree" not in serialized
     assert "credential" not in serialized
-    broadened = harness.request.model_dump(mode="json")
+    broadened = request.model_dump(mode="json")
     broadened["target"]["other_issue"] = 5559
     with pytest.raises(ValidationError):
         IssueDeliveryEffectRequest.model_validate(broadened)
@@ -1005,17 +518,17 @@ def test_revocation_and_target_drift_fail_closed(
         json.dumps(credential_manifest), encoding="utf-8"
     )
     with pytest.raises(Exception, match="revoked|credential"):
-        revoked.executor.execute(revoked.request)
+        revoked.executor.execute(revoked.completed_request())
     assert revoked.transport.apply_calls == revoked.credentials.calls == 0
 
     drifted = issue_delivery_production_harness()
     drifted.transport.target_override = {"source_revision": "b" * 40}
     with pytest.raises(ValueError, match="target/source/profile"):
-        drifted.executor.execute(drifted.request)
+        drifted.executor.execute(drifted.completed_request())
     assert drifted.transport.apply_calls == drifted.credentials.calls == 0
     assert drifted.ledger.status(
         drifted.ledger.operation_key(
-            effect_slot_sha256=drifted.request.effect_slot_sha256,
+            effect_slot_sha256=drifted.completed_request().effect_slot_sha256,
             effect_type="github.issue-delivery.claim.v1",
         )
     )["status"] == "pending"
@@ -1033,7 +546,7 @@ def test_host_prepares_and_freezes_destination_before_entry(
     harness.worktree.rename(moved)
     try:
         with pytest.raises(ValueError, match="Git identity"):
-            harness.executor.execute(harness.request)
+            harness.executor.execute(harness.completed_request())
     finally:
         moved.rename(harness.worktree)
     assert harness.transport.apply_calls == harness.credentials.calls == 0
@@ -1065,8 +578,68 @@ def test_unit_worker_binding_rejects_ambient_repository_identity() -> None:
     launcher.developer_instructions = "Implement the bounded content change."
     prompt = launcher.prompt({"branch_worktree_plan": {"worktree": "/worktrees/5558"}})
     assert "propose only typed" in prompt
+    assert "host independently claims the approved Issue before this worker enters" in prompt
+    assert "typed claim," not in prompt
     assert "must not run Git or GitHub lifecycle effects" in prompt
     assert "Self-claim" not in prompt
+
+
+def test_host_executor_requires_host_owned_live_binding_reader(tmp_path: Path) -> None:
+    executor, request, *_ = _executor(tmp_path)
+
+    with pytest.raises(ValueError, match="live source/profile reader"):
+        executor.live_binding(request.approval)
+
+    observed = {
+        "checkout": "/approved/checkout",
+        "worktree": "/approved/worktree",
+        "current_issue": {"state": "open"},
+    }
+    executor._live_binding_reader = lambda approval: (
+        observed if approval == request.approval else {}
+    )
+    assert executor.live_binding(request.approval) == observed
+
+
+def test_host_executor_accepts_admitted_resolved_destination_request(
+    tmp_path: Path,
+) -> None:
+    executor, request, *_rest = _executor(tmp_path)
+    # Production requests carry admission-side resolved path proofs; the
+    # host strips them only after validating those proofs against the raw
+    # approved paths.
+    executor._validate_static_request(request, current_artifacts=False)
+
+    # The request carries the frozen canonical destination, while an admitted
+    # approval may retain a user-facing symlink spelling alongside its
+    # resolved proof.  Static host validation must normalize that pair rather
+    # than rejecting an otherwise exact frozen destination.
+    checkout_link = tmp_path / "checkout-link"
+    worktree_link = tmp_path / "worktree-link"
+    checkout_link.symlink_to(request.destination.checkout, target_is_directory=True)
+    worktree_link.symlink_to(request.destination.worktree, target_is_directory=True)
+    symlinked_payload = request.model_dump(mode="json")
+    symlinked_destination = symlinked_payload["approval"]["destination"]
+    symlinked_destination["checkout"] = str(checkout_link)
+    symlinked_destination["worktree"] = str(worktree_link)
+    symlinked_destination["resolved_checkout"] = str(
+        request.destination.checkout.resolve()
+    )
+    symlinked_destination["resolved_worktree"] = str(
+        request.destination.worktree.resolve()
+    )
+    symlinked = IssueDeliveryEffectRequest.model_validate(symlinked_payload)
+    executor._validate_static_request(symlinked, current_artifacts=False)
+
+    tampered_payload = request.model_dump(mode="json")
+    tampered_payload["approval"]["destination"]["resolved_worktree"] = str(
+        (tmp_path / "retargeted").resolve()
+    )
+    tampered = IssueDeliveryEffectRequest.model_validate(tampered_payload)
+    with pytest.raises(ValueError, match="request does not match exact approval"):
+        executor._validate_static_request(tampered, current_artifacts=False)
+    with pytest.raises(ValueError, match="approval destination is invalid"):
+        executor._validate_static_request(tampered, current_artifacts=True)
 
 
 @pytest.mark.parametrize("effect_kind", ["claim", "publication", "merge", "closure"])
@@ -1146,20 +719,9 @@ def test_unit_unknown_effect_requires_readback_before_retry(tmp_path: Path) -> N
     assert authority.reads[-1] == "readback"
 
     authority.revoked = True
-    fresh_executor = IssueDeliveryHostExecutor(
-        authority=authority,
-        ledger=ledger,
-        repository_authority=_RepositoryAuthority(),
-        credentials=credentials,
-        destination=_DestinationGuard(executor.frozen_destination),
-        frozen_destination=executor.frozen_destination,
-        worker_isolation=executor.worker_isolation,
-        transport=transport,
-        trusted_executor_artifact=tmp_path / "issue_delivery_effect_executor.py",
-        trusted_worker_isolation_artifact=tmp_path
-        / "issue_delivery_worker_isolation.py",
-    )
-    second = fresh_executor.execute(request)
+    # A retry in the same host process retains the one frozen host receipt.
+    # A restarted executor cannot reconstruct it from worker output.
+    second = executor.execute(request)
     assert second.outcome == "unknown"
     assert second.readback["retry_refused"] == "committed-dispatch-may-still-complete"
     assert ledger.state == "unknown"
@@ -1174,7 +736,7 @@ def test_unit_unknown_effect_requires_readback_before_retry(tmp_path: Path) -> N
     assert changed_request.effect_slot_sha256 == request.effect_slot_sha256
     assert changed_request.content_sha256 != request.content_sha256
     with pytest.raises(ValueError, match="foreign or changed"):
-        fresh_executor.execute(changed_request)
+        executor.execute(changed_request)
     assert transport.apply_calls == 1
 
     (
@@ -1194,7 +756,82 @@ def test_unit_unknown_effect_requires_readback_before_retry(tmp_path: Path) -> N
         denied_executor.execute(denied_request)
     assert denied_transport.apply_calls == 1
     assert denied_ledger.state == "unknown"
-    assert denied_transport.readbacks == ["applied"]
+    assert denied_transport.readbacks == ["applied", "applied"]
+
+
+def test_unknown_effect_readback_uses_immutable_destination_after_alias_drift(
+    tmp_path: Path,
+) -> None:
+    (
+        executor,
+        request,
+        authority,
+        _destination_guard,
+        _repository,
+        credentials,
+        ledger,
+        transport,
+    ) = _executor(tmp_path / "recovery")
+    alias = tmp_path / "recovery-worktree-alias"
+    alias.symlink_to(request.destination.worktree, target_is_directory=True)
+    approval = deepcopy(request.approval)
+    approval["destination"]["worktree"] = str(alias)
+    approval["destination"]["resolved_worktree"] = str(request.destination.worktree)
+    authority.approval = deepcopy(approval)
+    request = request.model_copy(update={"approval": approval})
+    transport.raise_on_apply = True
+    transport.readbacks = ["unknown", "applied"]
+
+    first = executor.execute(request)
+    assert first.outcome == "unknown"
+    assert transport.apply_calls == credentials.calls == 1
+    assert ledger.state == "unknown"
+
+    alias.unlink()
+    retarget = tmp_path / "retarget"
+    retarget.mkdir()
+    alias.symlink_to(retarget, target_is_directory=True)
+
+    recovered = executor.execute(request)
+    assert recovered.outcome == "applied"
+    assert transport.apply_calls == credentials.calls == 1
+    assert ledger.recovery_claims == 2
+    assert authority.reads[-1] == "readback"
+
+    foreign_approval = deepcopy(approval)
+    foreign_approval["destination"]["resolved_worktree"] = str(retarget)
+    authority.approval = deepcopy(foreign_approval)
+    foreign_request = request.model_copy(update={"approval": foreign_approval})
+    with pytest.raises(ValueError, match="request does not match exact approval"):
+        executor.execute(foreign_request)
+    assert transport.apply_calls == credentials.calls == 1
+
+    (
+        fresh_executor,
+        fresh_request,
+        fresh_authority,
+        _fresh_destination_guard,
+        _fresh_repository,
+        fresh_credentials,
+        fresh_ledger,
+        fresh_transport,
+    ) = _executor(tmp_path / "fresh")
+    fresh_alias = tmp_path / "fresh-worktree-alias"
+    fresh_alias.symlink_to(fresh_request.destination.worktree, target_is_directory=True)
+    fresh_approval = deepcopy(fresh_request.approval)
+    fresh_approval["destination"]["worktree"] = str(fresh_alias)
+    fresh_approval["destination"]["resolved_worktree"] = str(
+        fresh_request.destination.worktree
+    )
+    fresh_authority.approval = deepcopy(fresh_approval)
+    fresh_request = fresh_request.model_copy(update={"approval": fresh_approval})
+    fresh_alias.unlink()
+    fresh_alias.symlink_to(retarget, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="approval destination is invalid"):
+        fresh_executor.execute(fresh_request)
+    assert fresh_ledger.state == "missing"
+    assert fresh_transport.apply_calls == fresh_credentials.calls == 0
 
 
 def test_issue_delivery_ledger_reuses_outbox_with_bounded_scope() -> None:
@@ -1348,11 +985,10 @@ def test_unknown_effect_requires_readback_before_retry(
     harness = issue_delivery_production_harness()
     issue_delivery_pg_store = harness.store
     registry = harness.registry
-    client = harness.client
+    host = harness.host
     destination = harness.destination
     frozen = harness.frozen
-    isolation = harness.isolation
-    request = harness.request
+    request = harness.completed_request()
     ledger = harness.ledger
     credentials = harness.credentials
     transport = harness.transport
@@ -1360,7 +996,7 @@ def test_unknown_effect_requires_readback_before_retry(
     transport.readbacks = ["unknown", "not_applied", "not_applied"]
     executor = harness.executor
 
-    original_mark_unknown = client.mark_outbox_unknown
+    original_mark_unknown = host.mark_outbox_unknown
     lose_first_response = True
 
     def committed_unknown_with_lost_response(*args: Any, **kwargs: Any) -> Any:
@@ -1372,7 +1008,7 @@ def test_unknown_effect_requires_readback_before_retry(
         return result
 
     monkeypatch.setattr(
-        client, "mark_outbox_unknown", committed_unknown_with_lost_response
+        host, "mark_outbox_unknown", committed_unknown_with_lost_response
     )
     first = executor.execute(request)
     assert first.outcome == "unknown"
@@ -1401,41 +1037,48 @@ def test_unknown_effect_requires_readback_before_retry(
     credential_manifest = json.loads(registry.manifest_path.read_text(encoding="utf-8"))
     credential_manifest["credentials"][0]["revoked"] = True
     registry.manifest_path.write_text(json.dumps(credential_manifest), encoding="utf-8")
-    # A process with no cached claim can still use the separately scoped
-    # readback grant after owner revocation, but cannot repeat the GitHub effect.
+    # A process without the frozen host receipt cannot reconstruct it from
+    # worker output, even if it can obtain a separately scoped readback grant.
     fresh_ledger = BuilderOpsIssueDeliveryEffectLedger(
-        client,
+        host,
         repository=REPOSITORY,
         run_id=request.run_id,
         approval_id=request.approval_id,
         worker_id="issue-delivery-host",
     )
     fresh_executor = IssueDeliveryHostExecutor(
-        authority=client,
+        authority=host,
         ledger=fresh_ledger,
-        repository_authority=_RepositoryAuthority(),
+        repository_authority=harness.repository_authority,
         credentials=credentials,
         destination=destination,
         frozen_destination=frozen,
-        worker_isolation=isolation,
         transport=transport,
     )
-    recovered = fresh_executor.execute(request)
+    with pytest.raises(ValueError, match="completed worker receipt is unavailable"):
+        fresh_executor.execute(request)
+    assert transport.apply_calls == credentials.calls == 1
+    # A fresh process has no authority to reconstruct the launch receipt from
+    # worker text; only the original bound executor may read back the slot.
+    recovered = executor.execute(request)
     assert recovered.outcome == "unknown"
     assert (
         recovered.readback["retry_refused"]
         == "committed-dispatch-may-still-complete"
     )
-    assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
+    assert ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
 
-    recovered_again = fresh_executor.execute(request)
+    # The forced max clock proves exactly one expired-fence recovery above.
+    # Restore normal time before proving that its fresh token is reused.
+    ledger.clock = lambda: datetime.now(timezone.utc)
+    recovered_again = executor.execute(request)
     assert recovered_again.outcome == "unknown"
     assert (
         recovered_again.readback["retry_refused"]
         == "committed-dispatch-may-still-complete"
     )
-    assert fresh_ledger.status(first.operation_key)["status"] == "unknown"
+    assert ledger.status(first.operation_key)["status"] == "unknown"
     assert transport.apply_calls == credentials.calls == 1
 
     with psycopg.connect(issue_delivery_pg_store.dsn) as conn:
@@ -1457,6 +1100,7 @@ def test_unknown_effect_requires_readback_before_retry(
     # admitted transport is still in flight. Its negative observation must
     # not reopen pending or permit a second transport.
     concurrent = issue_delivery_production_harness()
+    concurrent_request = concurrent.completed_request()
     transport_entered = Event()
     transport_release = Event()
 
@@ -1471,14 +1115,14 @@ def test_unknown_effect_requires_readback_before_retry(
 
     def run_concurrent_executor() -> None:
         try:
-            concurrent_result.append(concurrent.executor.execute(concurrent.request))
+            concurrent_result.append(concurrent.executor.execute(concurrent_request))
         except Exception as exc:
             concurrent_result.append(exc)
 
     concurrent_thread = Thread(target=run_concurrent_executor, daemon=True)
     concurrent_thread.start()
     assert transport_entered.wait(timeout=10)
-    negative_while_inflight = concurrent.executor.execute(concurrent.request)
+    negative_while_inflight = concurrent.executor.execute(concurrent_request)
     assert negative_while_inflight.outcome == "unknown"
     assert (
         negative_while_inflight.readback["retry_refused"]
@@ -1500,6 +1144,7 @@ def test_unknown_effect_requires_readback_before_retry(
     # negative readback must not reopen the slot while the old process could
     # still resume and issue the external effect.
     race = issue_delivery_production_harness()
+    race_request = race.completed_request()
 
     class BlockingDispatchLedger(BuilderOpsIssueDeliveryEffectLedger):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1516,28 +1161,32 @@ def test_unknown_effect_requires_readback_before_retry(
             return super().mark_unknown(claim, detail=detail)
 
     stalled_ledger = BlockingDispatchLedger(
-        race.client,
+        race.host,
         repository=REPOSITORY,
-        run_id=race.request.run_id,
-        approval_id=race.request.approval_id,
+        run_id=race_request.run_id,
+        approval_id=race_request.approval_id,
         worker_id="issue-delivery-host",
     )
     stale_transport = _Transport()
     stalled_executor = IssueDeliveryHostExecutor(
-        authority=race.client,
+        authority=race.host,
         ledger=stalled_ledger,
-        repository_authority=_RepositoryAuthority(),
+        repository_authority=race.repository_authority,
         credentials=race.credentials,
         destination=race.destination,
         frozen_destination=race.frozen,
-        worker_isolation=race.isolation,
         transport=stale_transport,
+        prepared_worker=race.prepared_worker,
+        expected_isolation_profile_sha256=(
+            race.prepared_worker.launcher.expected_profile_sha256
+        ),
     )
+    stalled_executor.bind_completed_worker()
     stalled_result: list[object] = []
 
     def run_stalled_executor() -> None:
         try:
-            stalled_result.append(stalled_executor.execute(race.request))
+            stalled_result.append(stalled_executor.execute(race_request))
         except Exception as exc:
             stalled_result.append(exc)
 
@@ -1545,7 +1194,7 @@ def test_unknown_effect_requires_readback_before_retry(
     thread.start()
     assert stalled_ledger.dispatch_entered.wait(timeout=10)
     race_operation_key = stalled_ledger.operation_key(
-        effect_slot_sha256=race.request.effect_slot_sha256,
+        effect_slot_sha256=race_request.effect_slot_sha256,
         effect_type="github.issue-delivery.claim.v1",
     )
     with psycopg.connect(race.store.dsn) as conn:
@@ -1556,10 +1205,10 @@ def test_unknown_effect_requires_readback_before_retry(
             (REPOSITORY, race_operation_key),
         )
     recovery_ledger = BuilderOpsIssueDeliveryEffectLedger(
-        race.client,
+        race.host,
         repository=REPOSITORY,
-        run_id=race.request.run_id,
-        approval_id=race.request.approval_id,
+        run_id=race_request.run_id,
+        approval_id=race_request.approval_id,
         worker_id="issue-delivery-host",
     )
     recovery_claim = recovery_ledger.claim_for_readback(race_operation_key)
@@ -1569,7 +1218,7 @@ def test_unknown_effect_requires_readback_before_retry(
         observed_applied=False,
         evidence={
             "outcome": "not_applied",
-            "request_sha256": race.request.content_sha256,
+            "request_sha256": race_request.content_sha256,
             "source": "github-authoritative-readback",
         },
     )
@@ -1802,6 +1451,34 @@ def test_unit_host_prepares_and_freezes_destination_before_entry(
         ).as_manifest(),
     }
     guard = GitIssueDeliveryDestination()
+    with pytest.raises(ValueError, match="worktree is absent"):
+        guard.prepare(approval)
+    assert not worktree.parent.exists()
+    worktree.parent.mkdir(parents=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "worktree",
+            "add",
+            "-b",
+            "codex/5558-host-prepared",
+            str(worktree),
+            base_sha,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    approval["destination"]["resolved_checkout"] = str(checkout.resolve())
+    approval["destination"]["resolved_worktree"] = str(worktree.resolve())
+    frozen = guard.prepare(approval)
+    tampered = deepcopy(approval)
+    tampered["destination"]["resolved_worktree"] = str(
+        (tmp_path / "retargeted-worktree").resolve()
+    )
+    with pytest.raises(ValueError, match="not approved"):
+        guard.assert_frozen(frozen, tampered)
     calls: list[bool] = []
 
     launcher = object.__new__(ContentOnlyIssueDeliverySessionLauncher)
@@ -1829,6 +1506,18 @@ def test_unit_host_prepares_and_freezes_destination_before_entry(
     result = worker.launch({"branch_worktree_plan": {"worktree": str(worktree)}})
     assert result["isolation_receipt"]["git_metadata_write_denied"] is True
     assert calls == [True]
+
+    # A symlink spelling is the portable equivalent of macOS /tmp ->
+    # /private/tmp: the admitted raw plan may differ textually, but it must
+    # resolve to exactly the frozen worktree identity and never retarget it.
+    equivalent_spelling = tmp_path / "private-tmp-spelling"
+    equivalent_spelling.symlink_to(worktree, target_is_directory=True)
+    worker.launch({"branch_worktree_plan": {"worktree": str(equivalent_spelling)}})
+    assert calls == [True, True]
+    retargeted = tmp_path / "retargeted-worktree"
+    retargeted.mkdir()
+    with pytest.raises(ValueError, match="another worktree"):
+        worker.launch({"branch_worktree_plan": {"worktree": str(retargeted)}})
 
     absent = worktree.with_name("issue-5558-absent")
     worktree.rename(absent)
@@ -1878,4 +1567,4 @@ def test_unit_host_prepares_and_freezes_destination_before_entry(
     )
     with pytest.raises(ValueError, match="Git identity"):
         worker.launch({"branch_worktree_plan": {"worktree": str(worktree)}})
-    assert calls == [True]
+    assert calls == [True, True]

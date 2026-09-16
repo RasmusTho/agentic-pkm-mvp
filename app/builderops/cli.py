@@ -78,7 +78,20 @@ from app.builderops.evidence_bridge import (
 from app.builderops.epic_dispatch import (
     EpicDispatchError,
     build_dispatch_plan,
+    dispatch_issue_sessions,
 )
+from app.builderops.issue_delivery_operation import (
+    IssueDeliveryOperationError,
+    IssueDeliveryOperationAdapter,
+    observe_issue_delivery_operation,
+)
+from app.builderops.issue_delivery_effect_executor import (
+    ContentOnlyIssueDeliverySessionLauncher,
+    GitIssueDeliveryDestination,
+    PreparedIssueDeliveryWorker,
+    build_host_issue_delivery_executor,
+)
+from app.builderops.control_plane.client import BuilderOpsControlPlaneClient, ClientConfig
 from app.builderops.epic_delivery_ledger import (
     EpicDeliveryLedgerError,
     build_parent_epic_delivery_ledger,
@@ -2443,7 +2456,7 @@ def dispatch_plan(
 
 @epic_run_state.command(
     "dispatch-sessions",
-    help="Unavailable until the #5551 authenticated destination adapter ships.",
+    help="Dispatch one approved #5551 destination operation or replay its durable observation.",
 )
 @click.option(
     "--plan-file",
@@ -2453,7 +2466,14 @@ def dispatch_plan(
 )
 @click.option(
     "--repo-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(
+        exists=False,
+        file_okay=True,
+        dir_okay=True,
+        readable=False,
+        resolve_path=False,
+        path_type=Path,
+    ),
     default=Path.cwd,
     show_default="current directory",
 )
@@ -2464,6 +2484,30 @@ def dispatch_plan(
         "contains execution_routing evidence."
     ),
 )
+@click.option(
+    "--approval-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Committed FCA-ID-A approval JSON (required for authenticated dispatch).",
+)
+@click.option(
+    "--worker-isolation-profile-file",
+    type=click.Path(
+        exists=False,
+        file_okay=True,
+        dir_okay=True,
+        readable=False,
+        resolve_path=False,
+        path_type=Path,
+    ),
+    default=None,
+    help="Host-owned #5559 isolation profile (required for production dispatch).",
+)
+@click.option(
+    "--worker-isolation-profile-sha256",
+    default=None,
+    help="Exact SHA-256 of the host-owned worker isolation profile.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
 def dispatch_sessions(
@@ -2471,13 +2515,135 @@ def dispatch_sessions(
     plan_file: Path,
     repo_root: Path,
     expected_plan_hash: str | None,
+    approval_file: Path | None,
+    worker_isolation_profile_file: Path | None,
+    worker_isolation_profile_sha256: str | None,
     as_json: bool,
 ) -> None:
-    del ctx, plan_file, repo_root, expected_plan_hash, as_json
-    raise click.ClickException(
-        "dispatch-sessions is unavailable until #5551 binds destination reservation, "
-        "attempt, entry, and replay fences before child entry"
-    )
+    del ctx
+    # Keep the old fail-closed behavior for callers that have not supplied an
+    # owner-approved manifest.  It also makes accidental legacy invocations
+    # incapable of reaching plan parsing or child construction.
+    if approval_file is None:
+        raise click.ClickException(
+            "dispatch-sessions is unavailable until #5551's committed FCA-ID-A approval file is supplied"
+        )
+    plan = _load_json_object_file(plan_file, field="plan-file")
+    approval_document = _load_json_object_file(approval_file, field="approval-file")
+    approval = approval_document.get("approval", approval_document)
+    if not isinstance(approval, dict):
+        raise click.ClickException("approval-file must contain one approval object")
+    client: BuilderOpsControlPlaneClient | None = None
+    try:
+        client = BuilderOpsControlPlaneClient(ClientConfig.from_env(), max_retries=0)
+        observation = observe_issue_delivery_operation(
+            approval,
+            client=client,
+            plan=plan,
+            expected_plan_hash=expected_plan_hash,
+            repo_root=repo_root,
+        )
+        if observation.state in {"reconciliation_required", "active", "terminal", "launch_unknown"}:
+            session = {
+                "issue_number": observation.issue_number,
+                "context_pack_id": observation.context_pack_id,
+                "session_id": observation.session_id,
+                "fresh_session": False,
+                "operation_state": observation.state,
+                "stop_support": "unsupported",
+            }
+            if observation.worker_receipt is not None:
+                session["worker_receipt"] = observation.worker_receipt
+                session["status"] = observation.worker_receipt.get("final_state")
+            else:
+                session["status"] = observation.state
+            if observation.host_effect_refs is not None:
+                session["host_effect_refs"] = observation.host_effect_refs
+            receipt = {
+                "run_id": observation.run_id,
+                "sessions": [session],
+                "status": "stopped",
+                "stopped_reason": (
+                    "reconciliation-required"
+                    if observation.state in {"reconciliation_required", "active", "launch_unknown"}
+                    else "operation-replay"
+                ),
+            }
+        else:
+            if worker_isolation_profile_file is None or not worker_isolation_profile_sha256:
+                raise click.ClickException(
+                    "production dispatch requires an explicit #5559 worker isolation profile and SHA-256"
+                )
+            if (
+                len(worker_isolation_profile_sha256) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in worker_isolation_profile_sha256
+                )
+            ):
+                raise click.ClickException(
+                    "worker isolation profile SHA-256 must be lowercase hexadecimal"
+                )
+            if not worker_isolation_profile_file.is_file():
+                raise click.ClickException("worker isolation profile is unavailable")
+            try:
+                with worker_isolation_profile_file.open("rb"):
+                    pass
+            except OSError as exc:
+                raise click.ClickException("worker isolation profile is unavailable") from exc
+            if not repo_root.is_dir() or not os.access(repo_root, os.R_OK | os.X_OK):
+                raise click.ClickException("repo-root is unavailable for a fresh Issue-delivery attempt")
+            destination = approval.get("destination")
+            if not isinstance(destination, Mapping):
+                raise click.ClickException("approval-file has no destination binding")
+            configured_root = repo_root.resolve()
+            approved_roots = {
+                Path(str(destination["checkout"])).resolve(),
+                Path(str(destination["worktree"])).resolve(),
+            }
+            if configured_root not in approved_roots:
+                raise click.ClickException(
+                    "repo-root must equal the approved checkout or dedicated worktree"
+                )
+            destination_guard = GitIssueDeliveryDestination()
+            prepared = PreparedIssueDeliveryWorker.create(
+                approval=approval,
+                destination=destination_guard,
+                launcher_factory=lambda frozen: ContentOnlyIssueDeliverySessionLauncher(
+                    repo_root=frozen.binding.worktree,
+                    profile_file=worker_isolation_profile_file,
+                    expected_profile_sha256=worker_isolation_profile_sha256,
+                    effect_gate_approval_file=approval_file,
+                    effect_gate_checkout_root=frozen.binding.checkout,
+                ),
+            )
+            protected_executor = build_host_issue_delivery_executor(
+                approval=approval,
+                client=client,
+                prepared=prepared,
+            )
+            adapter = IssueDeliveryOperationAdapter(
+                approval,
+                client=client,
+                launcher=prepared,
+                repo_root=prepared.frozen_destination.binding.worktree,
+                approval_file=approval_file,
+                protected_executor=protected_executor,
+                live_binding_reader=protected_executor.live_binding,
+                require_protected_composition=True,
+            )
+            adapter.bind_dispatch_plan(plan, expected_plan_hash=expected_plan_hash)
+            receipt = dispatch_issue_sessions(
+                plan,
+                adapter,
+                expected_plan_hash=expected_plan_hash,
+            )
+    except (IssueDeliveryOperationError, EpicDispatchError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        if client is not None:
+            client.close()
+    _emit(receipt, as_json)
 
 
 @epic_run_state.command(

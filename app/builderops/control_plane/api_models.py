@@ -154,6 +154,28 @@ class IssueDeliveryAuthorityRequest(BaseModel):
         return value
 
 
+class IssueDeliveryOperationRecordRequest(BaseModel):
+    """Closed destination receipt write for FCA-ID-B.
+
+    Every write requires the destination's execute grant. Entry and terminal
+    observations retain immutable predecessor bindings without rechecking a
+    started approval's mutable expiry, revocation, source, or filesystem facts.
+    This is deliberately separate from generic record writes so a worker cannot
+    turn a copied manifest or read grant into launch authority.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    envelope: AuthorityEnvelopeInput
+    record_id: str = Field(min_length=1, max_length=512)
+    state: Literal["reserved", "attempted", "active", "launch_unknown", "terminal"]
+    payload: dict[str, Any]
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    operation_key: str = Field(min_length=1, max_length=256)
+    approval_id: str = Field(min_length=1, max_length=256)
+    approval_manifest_hash: str = Field(min_length=64, max_length=64)
+
+
 class TaskClaimRequest(BaseModel):
     envelope: AuthorityEnvelopeInput
     task_id: str
@@ -343,6 +365,7 @@ __all__ = [
     "AuthorityEnvelopeInput",
     "InquiryCommitRequest",
     "IssueDeliveryAuthorityRequest",
+    "IssueDeliveryOperationRecordRequest",
     "IssueDeliveryPreviewRequest",
     "IssueDeliveryStartRequest",
     "LeaseClaimRequest",

@@ -756,6 +756,58 @@ def test_dispatch_sessions_stops_at_the_first_nonterminal_worker_handoff() -> No
     assert receipt["coordinator_claims"] == []
 
 
+def test_dispatch_sessions_preserves_adapter_replay_truth() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5403],
+        run_id="serial-replay",
+        candidates=[_candidate(5403, risk="high", files=["app/a.py"])],
+    )
+    launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5403",
+                "fresh_session": False,
+                "worker_receipt": _worker_receipt(5403),
+            }
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert receipt["stopped_reason"] == "worker-handoff"
+    assert receipt["sessions"][0]["fresh_session"] is False
+
+
+def test_dispatch_sessions_preserves_host_effect_refs_without_worker_derivation() -> None:
+    plan = build_dispatch_plan(
+        independent_issue_numbers=[5404],
+        run_id="serial-host-refs",
+        candidates=[_candidate(5404, risk="high", files=["app/a.py"])],
+    )
+    host_effect_refs = [
+        {
+            "operation_key": "a" * 64,
+            "request_sha256": "b" * 64,
+            "effect_slot_sha256": "c" * 64,
+        }
+    ]
+    launcher = _RecordingSessionLauncher(
+        [
+            {
+                "session_id": "session-5404",
+                "fresh_session": False,
+                "worker_receipt": _worker_receipt(5404),
+                "host_effect_refs": host_effect_refs,
+            }
+        ]
+    )
+
+    receipt = dispatch_issue_sessions(plan, launcher)
+
+    assert receipt["sessions"][0]["host_effect_refs"] == host_effect_refs
+    assert "host_effect_refs" not in receipt["sessions"][0]["worker_receipt"]
+
+
 def test_dispatch_sessions_rejects_invalid_plan_before_launch() -> None:
     valid = build_dispatch_plan(
         independent_issue_numbers=[5501],
@@ -2040,6 +2092,27 @@ def test_dispatch_sessions_cli_fails_closed_before_legacy_child_entry(
     load_plan.assert_not_called()
     launcher.assert_not_called()
     dispatch.assert_not_called()
+
+
+def test_dispatch_sessions_cli_rejects_caller_selected_executor_factory(
+    tmp_path: Path,
+) -> None:
+    plan_file = tmp_path / "plan.json"
+    plan_file.write_text("{}", encoding="utf-8")
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "dispatch-sessions",
+            "--plan-file",
+            str(plan_file),
+            "--protected-executor-factory",
+            "attacker.module:substitute",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
 
 
 def test_dispatch_sessions_cli_refuses_a_routed_plan_before_session_launch(

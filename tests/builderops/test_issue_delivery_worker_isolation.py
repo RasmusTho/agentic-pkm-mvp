@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -32,6 +34,7 @@ from app.builderops.issue_delivery_worker_isolation import (
     resolve_executable,
     resolve_worktree_git_topology,
     resolve_worktree_head,
+    _run_streaming_process,
 )
 
 
@@ -530,6 +533,127 @@ def _launcher(
     )
 
 
+def test_streaming_process_drains_output_before_large_prompt_is_consumed(
+    tmp_path: Path,
+) -> None:
+    observed: list[str] = []
+    child = """
+import os
+import sys
+import threading
+
+timer = threading.Timer(0.8, lambda: os._exit(3))
+timer.daemon = True
+timer.start()
+sys.stdout.write('{\"event\": \"thread.started\"}\\n')
+sys.stdout.flush()
+sys.stdout.buffer.write(b'x' * (256 * 1024))
+sys.stdout.flush()
+payload = sys.stdin.buffer.read()
+sys.stdout.write('\\nreceived=' + str(len(payload)) + '\\n')
+sys.stdout.flush()
+"""
+
+    result = _run_streaming_process(
+        [sys.executable, "-c", child],
+        cwd=tmp_path,
+        input="p" * (512 * 1024),
+        env={"PATH": os.environ.get("PATH", "")},
+        timeout=0.6,
+        on_stdout_line=observed.append,
+    )
+
+    assert result.returncode == 0
+    assert observed[0] == '{"event": "thread.started"}\n'
+    assert "received=524288\n" in result.stdout
+
+
+def test_streaming_process_deadline_includes_delayed_stdin_reader(tmp_path: Path) -> None:
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_streaming_process(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time; time.sleep(0.3); sys.stdin.buffer.read()",
+            ],
+            cwd=tmp_path,
+            input="p" * (512 * 1024),
+            env={"PATH": os.environ.get("PATH", "")},
+            timeout=0.05,
+            on_stdout_line=lambda _line: None,
+        )
+    assert time.monotonic() - started < 0.2
+
+
+def test_streaming_process_handles_broken_pipe_after_partial_prompt_write(
+    tmp_path: Path,
+) -> None:
+    result = _run_streaming_process(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdin.close(); print('child-closed-stdin')",
+        ],
+        cwd=tmp_path,
+        input="p" * (512 * 1024),
+        env={"PATH": os.environ.get("PATH", "")},
+        timeout=0.6,
+        on_stdout_line=lambda _line: None,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "child-closed-stdin\n"
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_streaming_process_refuses_newline_free_output_over_byte_limit(
+    tmp_path: Path,
+    stream: str,
+) -> None:
+    observed: list[str] = []
+    child = (
+        "import sys; "
+        f"sys.{stream}.buffer.write(b'x' * (512 * 1024 + 1)); "
+        f"sys.{stream}.flush()"
+    )
+
+    with pytest.raises(IssueWorkerIsolationError, match=f"{stream} stream"):
+        _run_streaming_process(
+            [sys.executable, "-c", child],
+            cwd=tmp_path,
+            input="",
+            env={"PATH": os.environ.get("PATH", "")},
+            timeout=1.0,
+            on_stdout_line=observed.append,
+        )
+    assert observed == []
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_streaming_process_refuses_cumulative_newline_output_over_byte_limit(
+    tmp_path: Path,
+    stream: str,
+) -> None:
+    observed: list[str] = []
+    child = (
+        "import sys; "
+        f"[sys.{stream}.buffer.write(b'x' * 1023 + b'\\n') for _ in range(513)]; "
+        f"sys.{stream}.flush()"
+    )
+
+    with pytest.raises(IssueWorkerIsolationError, match=f"{stream} stream"):
+        _run_streaming_process(
+            [sys.executable, "-c", child],
+            cwd=tmp_path,
+            input="",
+            env={"PATH": os.environ.get("PATH", "")},
+            timeout=1.0,
+            on_stdout_line=observed.append,
+        )
+    assert all(len(line.encode("utf-8")) <= 1024 for line in observed)
+
+
 def test_systemd_worker_runs_as_distinct_unprivileged_principal(tmp_path: Path) -> None:
     worktree = tmp_path / "issue-5559"
     model_home = tmp_path / "worker-model-home"
@@ -638,7 +762,13 @@ def test_systemd_worker_runs_as_distinct_unprivileged_principal(tmp_path: Path) 
 
     result = launcher.launch(context_pack)
 
-    assert events == ["credential-probe", "worker-access-probe", "systemd-entry"]
+    assert events == [
+        "credential-probe",
+        "worker-access-probe",
+        "credential-probe",
+        "worker-access-probe",
+        "systemd-entry",
+    ]
     command, kwargs = invocations[0]
     assert command[:5] == [
         SYSTEMD_RUN.path,
@@ -671,7 +801,13 @@ def test_systemd_worker_runs_as_distinct_unprivileged_principal(tmp_path: Path) 
     assert all(Path(token).name not in {"sh", "bash", "dash", "zsh"} for token in child)
     assert "--add-dir" not in child
     assert kwargs["cwd"] == worktree
-    assert kwargs["env"] == {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    # The systemd boundary receives the profile-owned environment, never the
+    # coordinator's ambient shell PATH.
+    assert kwargs["env"] == {
+        "PATH": "/opt/codex/bin:/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
     assert kwargs["timeout"] == 5460
     assert result["session_id"] == "session-5559"
     receipt = result["isolation_receipt"]
@@ -1469,3 +1605,70 @@ def test_isolation_receipt_keeps_model_and_repository_authority_separate(
     assert str(secret) not in rendered_receipt
     assert str(model_home) not in rendered_receipt
     assert "github_pat_DO_NOT_LEAK" not in rendered_receipt
+
+
+def test_validated_pre_process_entry_runs_before_the_systemd_child(
+    tmp_path: Path,
+) -> None:
+    """The host may complete a protected pre-entry gate before child spawn."""
+
+    context_pack, profile_file, _profile, worktree, _model_home, _secret = _prepared_case(
+        tmp_path / "pre-process-entry"
+    )
+    ordering: list[str] = []
+
+    def runner(_command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert ordering == ["pre-entry"]
+        ordering.append("child")
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "thread.started", "thread_id": "session-pre-entry"}),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": json.dumps(_worker_receipt())},
+                    }
+                ),
+            ]
+        )
+        return subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+
+    launcher = _launcher(
+        worktree=worktree,
+        profile_file=profile_file,
+        expected_profile_sha256=file_sha256(profile_file),
+        runner=runner,
+    )
+
+    def pre_process_entry() -> None:
+        assert launcher._isolation_runner.receipt is not None
+        ordering.append("pre-entry")
+
+    launcher.launch(context_pack, pre_process_entry=pre_process_entry)
+    assert ordering == ["pre-entry", "child"]
+
+
+def test_pre_spawn_rechecks_isolation_after_the_claim_hook(tmp_path: Path) -> None:
+    context_pack, profile_file, _profile, worktree, _model_home, _secret = _prepared_case(
+        tmp_path / "pre-spawn-drift"
+    )
+    calls: list[str] = []
+
+    def runner(_command: Sequence[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append("child")
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    launcher = _launcher(
+        worktree=worktree,
+        profile_file=profile_file,
+        expected_profile_sha256=file_sha256(profile_file),
+        runner=runner,
+    )
+
+    def claim_hook() -> None:
+        calls.append("claim")
+        profile_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(IssueWorkerIsolationError, match="profile"):
+        launcher.launch(context_pack, pre_process_entry=claim_hook)
+    assert calls == ["claim"]
