@@ -1094,11 +1094,12 @@ def idempotency_key(operation_key: str) -> str:
 def destination_resource_key(
     repository: str, issue_number: int, destination: Mapping[str, Any]
 ) -> str:
-    """Identify one Issue destination independently of mutable approval facts.
+    """Identify one physical destination independently of Issue/approval facts.
 
-    ``base_ref``, ``base_sha``, approval/run identifiers, and host labels are
-    deliberately excluded: changing any of those values must not let a second
-    unresolved operation acquire the same checkout/worktree/branch destination.
+    ``issue_number``, ``base_ref``, ``base_sha``, approval/run identifiers,
+    and host labels are deliberately excluded: changing any of those values
+    must not let another unresolved operation acquire the same
+    checkout/worktree/branch destination.
     """
 
     checkout = destination.get("resolved_checkout")
@@ -1110,7 +1111,6 @@ def destination_resource_key(
     return canonical_hash(
         {
             "repository": canonical_repository(repository),
-            "issue_number": issue_number,
             "destination": {
                 # The physical paths/branch are the resource.  Approval,
                 # run, host and base-commit labels are mutable facts and must

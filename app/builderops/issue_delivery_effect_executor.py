@@ -761,7 +761,7 @@ class IssueDeliveryHostExecutor:
         return self._worker_isolation
 
     def bind_completed_worker(self) -> None:
-        """Freeze exactly one receipt produced by this prepared host launcher."""
+        """Freeze exactly one host-produced pre-spawn receipt for this launcher."""
 
         if self._worker_isolation is not None:
             raise ValueError("completed worker receipt is already bound")
@@ -1894,7 +1894,7 @@ class ContentOnlyIssueDeliverySessionLauncher(LinuxSystemdCodexIssueSessionLaunc
         return (
             "Use the registered slice_implementer execution role as a content-only worker.\n"
             f"{self.developer_instructions}\n"
-            "Implement and validate only the approved repository content change. You must not run Git or GitHub lifecycle effects, write Git metadata, resolve repository credentials, claim or close an Issue, publish a branch or PR, or merge. When a host effect is needed, propose only typed claim, publication, merge, closure, or exact parent-evidence requests in an optional effect_requests list; each item must contain only effect_kind and its complete typed target. The protected host executor binds the approved request fields and owns every effect after fresh revalidation. Return content-change and validation evidence without claiming delivery.\n"
+            "Implement and validate only the approved repository content change. You must not run Git or GitHub lifecycle effects, write Git metadata, resolve repository credentials, claim or close an Issue, publish a branch or PR, or merge. The host independently claims the approved Issue before this worker enters. When a later host effect is needed, propose only typed publication, merge, closure, or exact parent-evidence requests in an optional effect_requests list; each item must contain only effect_kind and its complete typed target. The protected host executor binds the approved request fields and owns every effect after fresh revalidation. Return content-change and validation evidence without claiming delivery.\n"
             f"{serialized}\n"
         )
 
@@ -1937,6 +1937,8 @@ class PreparedIssueDeliveryWorker:
         execution_routing: Mapping[str, Any] | None = None,
         on_entry: Callable[[str], None] | None = None,
         effect_gate: Callable[..., Mapping[str, Any]] | None = None,
+        pre_process_entry: Callable[[], None] | None = None,
+        pre_spawn_entry: Callable[[], None] | None = None,
     ) -> Mapping[str, Any]:
         plan = context_pack.get("branch_worktree_plan")
         if not isinstance(plan, Mapping) or not isinstance(plan.get("worktree"), str):
@@ -1969,6 +1971,10 @@ class PreparedIssueDeliveryWorker:
             launch_kwargs["on_entry"] = on_entry
         if effect_gate is not None:
             launch_kwargs["effect_gate"] = effect_gate
+        if pre_process_entry is not None:
+            launch_kwargs["pre_process_entry"] = pre_process_entry
+        if pre_spawn_entry is not None:
+            launch_kwargs["pre_spawn_entry"] = pre_spawn_entry
         return dict(self.launcher.launch(context_pack, **launch_kwargs))
 
 

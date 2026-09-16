@@ -1413,6 +1413,8 @@ class _SystemdWorkerRunner:
         self._clock = clock
         self._platform_name = platform_name.lower()
         self.receipt: dict[str, object] | None = None
+        self._pre_process_entry: Callable[[], None] | None = None
+        self._pre_spawn_entry: Callable[[], None] | None = None
 
     @staticmethod
     def _require_principal(
@@ -1523,6 +1525,22 @@ class _SystemdWorkerRunner:
 
     def reset(self) -> None:
         self.receipt = None
+        self._pre_process_entry = None
+        self._pre_spawn_entry = None
+
+    def set_pre_process_entry(self, callback: Callable[[], None] | None) -> None:
+        """Install one host-owned gate for the validated pre-spawn boundary."""
+
+        if callback is not None and not callable(callback):
+            raise IssueWorkerIsolationError("worker isolation pre-entry hook is invalid")
+        self._pre_process_entry = callback
+
+    def set_pre_spawn_entry(self, callback: Callable[[], None] | None) -> None:
+        """Install the final host authority gate immediately before spawn."""
+
+        if callback is not None and not callable(callback):
+            raise IssueWorkerIsolationError("worker isolation pre-spawn hook is invalid")
+        self._pre_spawn_entry = callback
 
     def __call__(
         self,
@@ -1654,41 +1672,6 @@ class _SystemdWorkerRunner:
             pattern=re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"),
             maximum=20,
         )
-        runner_environment: dict[str, str] = {
-            # The systemd launcher is constrained by the profile-owned
-            # executable search path; ambient coordinator PATH is never
-            # inherited at this boundary.
-            "PATH": profile.environment["PATH"],
-            "LANG": profile.environment["LANG"],
-            "LC_ALL": profile.environment["LC_ALL"],
-        }
-        runner_kwargs: dict[str, object] = {
-            "cwd": profile.worktree.path,
-            "input": input,
-            "capture_output": True,
-            "text": True,
-            "check": False,
-            "timeout": 5460,
-            "env": runner_environment,
-        }
-        if getattr(self._runner, "supports_streaming", False) and on_stdout_line is not None:
-            # Injected production runners are external-process transports too:
-            # preserve the same incremental event contract as subprocess.run.
-            # The callback is deliberately forwarded only to runners that
-            # advertise the capability, so legacy deterministic doubles keep
-            # their narrow call shape.
-            runner_kwargs["on_stdout_line"] = on_stdout_line
-        if self._runner is subprocess.run and on_stdout_line is not None:
-            result = _run_streaming_process(
-                systemd_command,
-                cwd=profile.worktree.path,
-                input=input,
-                env=runner_environment,
-                timeout=5460,
-                on_stdout_line=on_stdout_line,
-            )
-        else:
-            result = self._runner(systemd_command, **runner_kwargs)
         self.receipt = {
             "contract": ISOLATION_RECEIPT_CONTRACT,
             "profile_id": profile.profile_id,
@@ -1738,6 +1721,93 @@ class _SystemdWorkerRunner:
             "child_environment_keys": sorted(child_environment),
             "entered_at": entered_at,
         }
+        # The receipt is host-produced only after every live probe and before
+        # the external systemd child is spawned.  A protected host gate may
+        # bind it and refuse the child without accepting worker text.
+        if self._pre_process_entry is not None:
+            self._pre_process_entry()
+        # The claim round trip is external work. Re-read the profile and all
+        # live isolation facts before the next irreversible boundary.
+        refreshed_profile = _load_profile(
+            self._profile_file, self._expected_profile_sha256
+        )
+        if refreshed_profile != profile or cwd.resolve() != refreshed_profile.worktree.path:
+            raise IssueWorkerIsolationError("worker isolation profile changed before spawn")
+        refreshed_credential, refreshed_systemd = self._validate_live(refreshed_profile)
+        repeated_credential, repeated_systemd = self._validate_live(refreshed_profile)
+        if (
+            refreshed_credential != credential
+            or refreshed_systemd != systemd_identity
+            or repeated_credential != refreshed_credential
+            or repeated_systemd != refreshed_systemd
+        ):
+            raise IssueWorkerIsolationError("worker isolation live identity changed before spawn")
+        try:
+            refreshed_probe = self._credential_probe(
+                refreshed_credential.path,
+                refreshed_profile.worker,
+                refreshed_profile.executor,
+            )
+            refreshed_access = self._worker_access_probe(
+                (refreshed_profile.worktree.path, refreshed_profile.model_auth_home.path),
+                _git_metadata_denial_targets(refreshed_profile),
+                refreshed_profile.worker,
+                refreshed_profile.executor,
+            )
+        except Exception:
+            raise IssueWorkerIsolationError("worker isolation pre-spawn probes are unproven") from None
+        if (
+            refreshed_probe is not CredentialProbeResult.DENIED
+            or refreshed_access is not WorkerAccessProbeResult.ADMITTED
+        ):
+            raise IssueWorkerIsolationError("worker isolation pre-spawn probes are unproven")
+        if _validate_credential(
+            refreshed_profile.protected_credential,
+            executor=refreshed_profile.executor,
+            worktree=refreshed_profile.worktree.path,
+            worktree_git_directory=refreshed_profile.worktree_git_directory.path,
+            worktree_git_common_directory=refreshed_profile.worktree_git_common_directory.path,
+            model_auth_home=refreshed_profile.model_auth_home.path,
+        ) != refreshed_credential:
+            raise IssueWorkerIsolationError("worker isolation credential changed before spawn")
+        self._validate_executable_set(refreshed_profile)
+        if self._pre_spawn_entry is not None:
+            self._pre_spawn_entry()
+        runner_environment: dict[str, str] = {
+            # The systemd launcher is constrained by the profile-owned
+            # executable search path; ambient coordinator PATH is never
+            # inherited at this boundary.
+            "PATH": profile.environment["PATH"],
+            "LANG": profile.environment["LANG"],
+            "LC_ALL": profile.environment["LC_ALL"],
+        }
+        runner_kwargs: dict[str, object] = {
+            "cwd": profile.worktree.path,
+            "input": input,
+            "capture_output": True,
+            "text": True,
+            "check": False,
+            "timeout": 5460,
+            "env": runner_environment,
+        }
+        if getattr(self._runner, "supports_streaming", False) and on_stdout_line is not None:
+            # Injected production runners are external-process transports too:
+            # preserve the same incremental event contract as subprocess.run.
+            # The callback is deliberately forwarded only to runners that
+            # advertise the capability, so legacy deterministic doubles keep
+            # their narrow call shape.
+            runner_kwargs["on_stdout_line"] = on_stdout_line
+        if self._runner is subprocess.run and on_stdout_line is not None:
+            result = _run_streaming_process(
+                systemd_command,
+                cwd=profile.worktree.path,
+                input=input,
+                env=runner_environment,
+                timeout=5460,
+                on_stdout_line=on_stdout_line,
+            )
+        else:
+            result = self._runner(systemd_command, **runner_kwargs)
         return result
 
 
@@ -1822,7 +1892,7 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         return self._expected_profile_sha256
 
     def completed_isolation_receipt(self) -> dict[str, object]:
-        """Read the runner's own completed receipt without accepting worker text."""
+        """Read the runner's host-produced pre-spawn receipt, never worker text."""
 
         receipt = self._isolation_runner.receipt
         if not isinstance(receipt, Mapping):
@@ -1836,16 +1906,24 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         execution_routing: Mapping[str, Any] | None = None,
         on_entry: Callable[[str], None] | None = None,
         effect_gate: Callable[..., Mapping[str, Any]] | None = None,
+        pre_process_entry: Callable[[], None] | None = None,
+        pre_spawn_entry: Callable[[], None] | None = None,
     ) -> Mapping[str, Any]:
         self._isolation_runner.reset()
-        result = dict(
-            super().launch(
-                context_pack,
-                execution_routing=execution_routing,
-                on_entry=on_entry,
-                effect_gate=effect_gate,
+        self._isolation_runner.set_pre_process_entry(pre_process_entry)
+        self._isolation_runner.set_pre_spawn_entry(pre_spawn_entry)
+        try:
+            result = dict(
+                super().launch(
+                    context_pack,
+                    execution_routing=execution_routing,
+                    on_entry=on_entry,
+                    effect_gate=effect_gate,
+                )
             )
-        )
+        finally:
+            self._isolation_runner.set_pre_process_entry(None)
+            self._isolation_runner.set_pre_spawn_entry(None)
         # Compatibility diagnostics may include the runner observation, but
         # the protected executor binds only through its direct launcher read.
         result["isolation_receipt"] = self.completed_isolation_receipt()

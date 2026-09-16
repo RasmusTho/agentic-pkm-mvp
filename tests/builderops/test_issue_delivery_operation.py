@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
 from typing import Any, Mapping
 from unittest.mock import patch
 
@@ -16,7 +20,11 @@ from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_standalone_root
 
-from app.builderops.control_plane.client import ControlPlaneAuthError, ControlPlaneNotFoundError, ControlPlaneUnavailableError
+from app.builderops.control_plane.client import (
+    ControlPlaneAuthError,
+    ControlPlaneNotFoundError,
+    ControlPlaneUnavailableError,
+)
 from app.builderops.control_plane.issue_delivery import (
     canonical_hash,
     destination_resource_key,
@@ -36,6 +44,7 @@ from app.builderops.issue_delivery_operation import (
 from app.builderops.issue_delivery_effect_executor import (
     ContentOnlyIssueDeliverySessionLauncher,
     PreparedIssueDeliveryWorker,
+    WorkerIsolationBinding,
 )
 from app.builderops.issue_delivery_worker_isolation import _run_streaming_process
 from tests.builderops.test_control_plane_issue_delivery import _manifest
@@ -52,7 +61,10 @@ def _binding(approval: Mapping[str, Any]) -> dict[str, Any]:
         "base_sha": str(destination["base_sha"]),
         "workflow_hash": str(approval["workflow"]["content_hash"]),
         "workflow_artifacts": sorted(
-            [{"path": str(item["path"]), "sha256": str(item["sha256"])} for item in approval["workflow"]["artifacts"]],
+            [
+                {"path": str(item["path"]), "sha256": str(item["sha256"])}
+                for item in approval["workflow"]["artifacts"]
+            ],
             key=lambda item: item["path"],
         ),
     }
@@ -67,19 +79,32 @@ class Client:
         self.read_only = False
         self.authority_calls: list[str] = []
 
-    def issue_delivery_authority(self, *, manifest: Mapping[str, Any], purpose: str) -> dict[str, Any]:
+    def issue_delivery_authority(
+        self, *, manifest: Mapping[str, Any], purpose: str
+    ) -> dict[str, Any]:
         self.authority_calls.append(purpose)
         if self.revoked:
             raise ControlPlaneAuthError("revoked")
         if self.read_only and purpose == "execute":
             raise ControlPlaneAuthError("read-only credential")
-        return {"approval": self.approval, "purpose": purpose, "operation_key": self.approval["operation_key"], "authority_epoch": 1, "observed_at": "2026-09-16T00:00:00+00:00"}
+        return {
+            "approval": self.approval,
+            "purpose": purpose,
+            "operation_key": self.approval["operation_key"],
+            "authority_epoch": 1,
+            "observed_at": "2026-09-16T00:00:00+00:00",
+        }
 
     def issue_delivery_operation_record(self, **kwargs: Any) -> dict[str, Any]:
         kind = kwargs["record_id"].removeprefix("issue-delivery-").split(":", 1)[0]
         if kind in self.fail:
             raise ControlPlaneUnavailableError("receipt unavailable")
-        record = {"record_type": "BuilderOpsReceipt", "state": kwargs["state"], "payload": deepcopy(kwargs["payload"]), "replayed": False}
+        record = {
+            "record_type": "BuilderOpsReceipt",
+            "state": kwargs["state"],
+            "payload": deepcopy(kwargs["payload"]),
+            "replayed": False,
+        }
         previous = self.records.get(kwargs["record_id"])
         if previous is not None and previous != record:
             raise RuntimeError("receipt conflict")
@@ -87,7 +112,9 @@ class Client:
         self.records[kwargs["record_id"]] = record
         return {"replayed": record["replayed"]}
 
-    def issue_delivery_operation_record_read(self, *, repository: str, record_id: str) -> dict[str, Any]:
+    def issue_delivery_operation_record_read(
+        self, *, repository: str, record_id: str
+    ) -> dict[str, Any]:
         del repository
         if record_id not in self.records:
             raise ControlPlaneNotFoundError("not found")
@@ -98,16 +125,38 @@ class Launcher:
     def __init__(self, *, session_id: str = "session-1", fail: bool = False) -> None:
         self.session_id, self.fail, self.calls = session_id, fail, 0
 
-    def launch(self, context: Mapping[str, Any], *, on_entry: Any = None, effect_gate: Any = None) -> Mapping[str, Any]:
+    def launch(
+        self, context: Mapping[str, Any], *, on_entry: Any = None, effect_gate: Any = None
+    ) -> Mapping[str, Any]:
         self.calls += 1
         if effect_gate is not None:
             issue = context["issue_contract"]
             plan = context["branch_worktree_plan"]
-            target = {"repository": issue["repository"], "issue_number": issue["number"], "checkout": "/workspaces/agentic-pkm-mvp", "worktree": plan["worktree"], "branch": plan["branch"]}
-            for effect in ("repository_worktree", "issue_claim", "publication", "review_merge", "closure_reconciliation"):
+            target = {
+                "repository": issue["repository"],
+                "issue_number": issue["number"],
+                "checkout": "/workspaces/agentic-pkm-mvp",
+                "worktree": plan["worktree"],
+                "branch": plan["branch"],
+            }
+            for effect in (
+                "repository_worktree",
+                "issue_claim",
+                "publication",
+                "review_merge",
+                "closure_reconciliation",
+            ):
                 effect_target = dict(target)
                 if effect in {"review_merge", "closure_reconciliation"}:
-                    effect_target.update({"pr_number": 1, "pr_repository": issue["repository"], "pr_issue_number": issue["number"], "pr_head_ref": plan["branch"], "pr_base_ref": "main"})
+                    effect_target.update(
+                        {
+                            "pr_number": 1,
+                            "pr_repository": issue["repository"],
+                            "pr_issue_number": issue["number"],
+                            "pr_head_ref": plan["branch"],
+                            "pr_base_ref": "main",
+                        }
+                    )
                 effect_gate(effect, target=effect_target)
         if on_entry is not None:
             on_entry(self.session_id)
@@ -121,7 +170,9 @@ class Launcher:
 class TimeoutAfterEntryLauncher(Launcher):
     """Persist a streamed entry, then lose the launcher response."""
 
-    def launch(self, context: Mapping[str, Any], *, on_entry: Any = None, effect_gate: Any = None) -> Mapping[str, Any]:
+    def launch(
+        self, context: Mapping[str, Any], *, on_entry: Any = None, effect_gate: Any = None
+    ) -> Mapping[str, Any]:
         del context, effect_gate
         self.calls += 1
         assert on_entry is not None
@@ -129,8 +180,12 @@ class TimeoutAfterEntryLauncher(Launcher):
         raise TimeoutError("launcher response lost")
 
 
-def _adapter(approval: Mapping[str, Any], client: Client, launcher: Launcher) -> IssueDeliveryOperationAdapter:
-    return IssueDeliveryOperationAdapter(approval, client=client, launcher=launcher, repo_root=None, live_binding_reader=_binding)
+def _adapter(
+    approval: Mapping[str, Any], client: Client, launcher: Launcher
+) -> IssueDeliveryOperationAdapter:
+    return IssueDeliveryOperationAdapter(
+        approval, client=client, launcher=launcher, repo_root=None, live_binding_reader=_binding
+    )
 
 
 def test_authenticated_observation_replays_terminal_before_fresh_preparation() -> None:
@@ -164,7 +219,9 @@ def test_authenticated_observation_replays_terminal_before_fresh_preparation() -
     assert client.authority_calls == ["readback"]
 
 
-def test_authenticated_observation_uses_durable_entry_for_launch_unknown_without_terminal_session() -> None:
+def test_authenticated_observation_uses_durable_entry_for_launch_unknown_without_terminal_session() -> (
+    None
+):
     approval = _manifest(operation_key="operation-observe-launch-unknown-entry")
     approval["approval_manifest_hash"] = manifest_hash(approval)
     client = Client(approval)
@@ -190,9 +247,9 @@ def test_authenticated_observation_uses_durable_entry_for_launch_unknown_without
     assert client.authority_calls == ["readback"]
     assert launcher.calls == 1
 
-    terminal = client.records[
-        "issue-delivery-terminal:operation-observe-launch-unknown-entry"
-    ]["payload"]
+    terminal = client.records["issue-delivery-terminal:operation-observe-launch-unknown-entry"][
+        "payload"
+    ]
     terminal["session_id"] = "session-conflicts-with-entry"
     terminal["receipt_hash"] = _digest(
         {key: value for key, value in terminal.items() if key != "receipt_hash"}
@@ -299,8 +356,12 @@ def test_observed_not_started_race_loses_attempt_ownership_before_child_entry() 
     )
     assert observed.state == "not_started"
     winner = _adapter(approval, client, Launcher())
-    winner.reserve()
-    winner.record_attempt()
+    reservation = winner.reserve()
+    attempt = winner.record_attempt()
+    assert (
+        attempt["payload"]["destination_resource_key"]
+        == reservation["payload"]["destination_resource_key"]
+    )
 
     _attempt, owns_attempt = _adapter(approval, client, Launcher())._record_attempt()
 
@@ -375,20 +436,18 @@ def test_cli_recomposition_replays_terminal_before_worker_or_executor_constructi
         profile_file.write_text("{}", encoding="utf-8")
         profile_file.chmod(0)
     approval_file.write_text(json.dumps({"approval": approval}), encoding="utf-8")
-    plan_file.write_text(
-        json.dumps(plan), encoding="utf-8"
-    )
+    plan_file.write_text(json.dumps(plan), encoding="utf-8")
     original_records = deepcopy(client.records)
     client.authority_calls.clear()
     client.close = lambda: None  # type: ignore[attr-defined]
 
-    with patch("app.builderops.cli.ClientConfig.from_env", return_value=object()), patch(
-        "app.builderops.cli.BuilderOpsControlPlaneClient", return_value=client
-    ), patch(
-        "app.builderops.cli.PreparedIssueDeliveryWorker.create"
-    ) as prepared, patch(
-        "app.builderops.cli.build_host_issue_delivery_executor"
-    ) as executor, patch("app.builderops.cli.dispatch_issue_sessions") as dispatch:
+    with (
+        patch("app.builderops.cli.ClientConfig.from_env", return_value=object()),
+        patch("app.builderops.cli.BuilderOpsControlPlaneClient", return_value=client),
+        patch("app.builderops.cli.PreparedIssueDeliveryWorker.create") as prepared,
+        patch("app.builderops.cli.build_host_issue_delivery_executor") as executor,
+        patch("app.builderops.cli.dispatch_issue_sessions") as dispatch,
+    ):
         result = CliRunner().invoke(
             builderops_standalone_root,
             [
@@ -458,13 +517,13 @@ def test_cli_recomposition_replays_terminal_with_type_drifted_repo_root(tmp_path
     client.authority_calls.clear()
     client.close = lambda: None  # type: ignore[attr-defined]
 
-    with patch("app.builderops.cli.ClientConfig.from_env", return_value=object()), patch(
-        "app.builderops.cli.BuilderOpsControlPlaneClient", return_value=client
-    ), patch(
-        "app.builderops.cli.PreparedIssueDeliveryWorker.create"
-    ) as prepared, patch(
-        "app.builderops.cli.build_host_issue_delivery_executor"
-    ) as executor, patch("app.builderops.cli.dispatch_issue_sessions") as dispatch:
+    with (
+        patch("app.builderops.cli.ClientConfig.from_env", return_value=object()),
+        patch("app.builderops.cli.BuilderOpsControlPlaneClient", return_value=client),
+        patch("app.builderops.cli.PreparedIssueDeliveryWorker.create") as prepared,
+        patch("app.builderops.cli.build_host_issue_delivery_executor") as executor,
+        patch("app.builderops.cli.dispatch_issue_sessions") as dispatch,
+    ):
         result = CliRunner().invoke(
             builderops_standalone_root,
             [
@@ -544,6 +603,51 @@ def _production_adapter(
     )
 
 
+def _cross_issue_approval(
+    harness: _ProductionHarness, *, issue_number: int, suffix: str
+) -> Mapping[str, Any]:
+    """Admit another Issue identity against the harness's same destination."""
+
+    manifest = deepcopy(strip_server_fields(harness.approval))
+    manifest["approval_id"] = f"approval-pg-cross-{suffix}"
+    manifest["operation_key"] = f"operation-pg-cross-{suffix}"
+    manifest["expires_at"] = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()
+    manifest["issue"] = {
+        **manifest["issue"],
+        "number": issue_number,
+        "node_id": f"I_kwDOQEip6s8AAAACdXiy{issue_number}",
+        "url": f"https://github.com/RasmusTho/agentic-pkm-mvp/issues/{issue_number}",
+    }
+    manifest["source"] = {
+        **manifest["source"],
+        "refs": [
+            f"github:issue:{issue_number}",
+            *[
+                ref
+                for ref in manifest["source"]["refs"]
+                if not str(ref).startswith("github:issue:")
+            ],
+        ],
+    }
+    plan = manifest["context"]["dispatch_plan"]
+    decision = plan["decisions"][0]
+    context = plan["context_packs"][0]
+    decision["issue_number"] = issue_number
+    context["issue_contract"] = {
+        **context["issue_contract"],
+        "number": issue_number,
+        "url": f"https://github.com/RasmusTho/agentic-pkm-mvp/issues/{issue_number}",
+    }
+    plan["epic_run_state_update"]["dispatch_decisions"][0]["issue_number"] = issue_number
+    plan["scope"] = {**plan["scope"], "issue_numbers": [issue_number]}
+    manifest["context"]["content_hash"] = canonical_hash(context)
+    manifest["context"]["expected_plan_hash"] = canonical_hash(plan)
+    preview = harness.owner.issue_delivery_preview(manifest=manifest)
+    return harness.owner.issue_delivery_start(decision="start", manifest=preview["manifest"])[
+        "approval"
+    ]
+
+
 @pytest.mark.pg
 def test_production_dispatch_reservation_and_crash_matrix(
     issue_delivery_production_harness: Callable[..., _ProductionHarness],
@@ -561,8 +665,48 @@ def test_production_dispatch_reservation_and_crash_matrix(
             record_id=f"issue-delivery-entry:{before_attempt.approval['operation_key']}",
         )
 
+    # Revoking the host credential at the pre-spawn hook refuses the claim
+    # after reservation/attempt but before the content-only runner is entered.
+    pre_entry_revoked = issue_delivery_production_harness()
+    original_bind = pre_entry_revoked.executor.bind_completed_worker
+
+    def revoke_then_bind() -> None:
+        pre_entry_revoked.worker_transport._revoke_destination()
+        original_bind()
+
+    monkeypatch.setattr(pre_entry_revoked.executor, "bind_completed_worker", revoke_then_bind)
+    refused_pre_entry = dispatch_issue_sessions(
+        pre_entry_revoked.approval["context"]["dispatch_plan"],
+        _production_adapter(pre_entry_revoked),
+        expected_plan_hash=pre_entry_revoked.approval["context"]["expected_plan_hash"],
+    )
+    assert refused_pre_entry["stopped_reason"] == "session-launch-failed"
+    assert pre_entry_revoked.worker_transport.calls == 0
+    assert pre_entry_revoked.transport.apply_calls == 0
+    for kind, state in (("reservation", "reserved"), ("attempt", "attempted")):
+        assert (
+            pre_entry_revoked.owner.issue_delivery_operation_record_read(
+                repository=str(pre_entry_revoked.approval["repository"]),
+                record_id=f"issue-delivery-{kind}:{pre_entry_revoked.approval['operation_key']}",
+            )["state"]
+            == state
+        )
+
     harness = issue_delivery_production_harness()
+    competing_approval = _cross_issue_approval(harness, issue_number=5552, suffix="unresolved")
+    assert harness.approval["issue"]["number"] != competing_approval["issue"]["number"]
+    assert harness.approval["context"]["dispatch_plan"]["scope"]["issue_numbers"] == [
+        harness.approval["issue"]["number"]
+    ]
+
+    def assert_host_claim_precedes_content_worker() -> None:
+        assert harness.transport.apply_calls == 1
+
+    harness.worker_transport.pre_entry_check = assert_host_claim_precedes_content_worker
     adapter = _production_adapter(harness)
+    adapter.reserve()
+    with pytest.raises(IssueDeliveryOperationRefused, match="durably committed"):
+        _production_adapter(harness, approval=competing_approval).reserve()
     plan = harness.approval["context"]["dispatch_plan"]
     result = dispatch_issue_sessions(
         plan,
@@ -575,6 +719,9 @@ def test_production_dispatch_reservation_and_crash_matrix(
     assert len(result["sessions"][0]["host_effect_refs"]) == 1
     assert harness.worker_transport.calls == 1
     assert harness.transport.apply_calls == 1
+    assert harness.executor.worker_isolation == WorkerIsolationBinding.from_receipt(
+        harness.prepared_worker.launcher.completed_isolation_receipt()
+    )
 
     replay = dispatch_issue_sessions(
         plan,
@@ -602,6 +749,34 @@ def test_production_dispatch_reservation_and_crash_matrix(
             record_id=f"issue-delivery-{kind}:{lost.approval['operation_key']}",
         )
         assert readback["state"] == state
+    with pytest.raises(IssueDeliveryOperationRefused, match="durably committed"):
+        _production_adapter(
+            lost,
+            approval=_cross_issue_approval(lost, issue_number=5553, suffix="launch-unknown"),
+        ).reserve()
+
+    attempt_only = issue_delivery_production_harness()
+    attempt_only_adapter = _production_adapter(attempt_only)
+    attempt_only_adapter.reserve()
+    attempt_only_adapter.record_attempt()
+    with pytest.raises(IssueDeliveryOperationRefused, match="durably committed"):
+        _production_adapter(
+            attempt_only,
+            approval=_cross_issue_approval(attempt_only, issue_number=5554, suffix="attempt-only"),
+        ).reserve()
+
+    expired = issue_delivery_production_harness(approval_ttl_seconds=5.0)
+    stale_prepared_attempt = _production_adapter(expired)
+    stale_prepared_attempt.reserve()
+    expires_at = datetime.fromisoformat(str(expired.approval["expires_at"]))
+    time.sleep(max(0.0, (expires_at - datetime.now(timezone.utc)).total_seconds()) + 0.05)
+    expired_reuse = _production_adapter(
+        expired,
+        approval=_cross_issue_approval(expired, issue_number=5555, suffix="expired"),
+    ).reserve()
+    assert expired_reuse["state"] == "reserved"
+    with pytest.raises(IssueDeliveryOperationRefused, match="durably committed"):
+        stale_prepared_attempt.record_attempt()
 
     # Once reservation and attempt are durable, observations deliberately do
     # not resolve mutable paths. This exercises the authenticated service
@@ -623,27 +798,22 @@ def test_production_dispatch_reservation_and_crash_matrix(
     )
     assert entry["state"] == "active"
     assert terminal["state"] == "terminal"
-    assert observation.owner.issue_delivery_operation_record_read(
-        repository=str(observation.approval["repository"]),
-        record_id=f"issue-delivery-terminal:{observation.approval['operation_key']}",
-    )["payload"]["session_id"] == "session-observed-pg"
+    assert (
+        observation.owner.issue_delivery_operation_record_read(
+            repository=str(observation.approval["repository"]),
+            record_id=f"issue-delivery-terminal:{observation.approval['operation_key']}",
+        )["payload"]["session_id"]
+        == "session-observed-pg"
+    )
     monkeypatch.undo()
 
-    # Two distinct admitted approvals cannot reserve the same physical
-    # checkout/worktree/branch resource, even when their operation identities
-    # differ. The conflict is raised by the PostgreSQL capability boundary.
-    competing_manifest = strip_server_fields(harness.approval)
-    competing_manifest["approval_id"] = "approval-pg-competing-resource"
-    competing_manifest["operation_key"] = "operation-pg-competing-resource"
-    preview = harness.owner.issue_delivery_preview(manifest=competing_manifest)
-    competing_approval = harness.owner.issue_delivery_start(
-        decision="start", manifest=preview["manifest"]
-    )["approval"]
-    _production_adapter(harness).reserve()
-    with pytest.raises(IssueDeliveryOperationRefused, match="durably committed"):
-        _production_adapter(harness, approval=competing_approval).reserve()
+    # The terminal first operation releases the physical destination.
+    reused = _production_adapter(harness, approval=competing_approval).reserve()
+    assert reused["state"] == "reserved"
 
-    crashed_harness = issue_delivery_production_harness(revoke_before_effect=True)
+    crashed_harness = issue_delivery_production_harness(
+        effect_kind="publication", revoke_before_effect=True
+    )
     crashed_result = dispatch_issue_sessions(
         crashed_harness.approval["context"]["dispatch_plan"],
         _production_adapter(crashed_harness),
@@ -651,18 +821,24 @@ def test_production_dispatch_reservation_and_crash_matrix(
     )
     assert crashed_result["stopped_reason"] == "session-launch-failed"
     assert crashed_harness.worker_transport.calls == 1
-    assert crashed_harness.transport.apply_calls == 0
-    # The protected host grant was revoked only after the live entry callback.
-    # The separate injected operation client can still persist the terminal
-    # observation, while the later external effect remains refused.
-    assert crashed_harness.owner.issue_delivery_operation_record_read(
-        repository=str(crashed_harness.approval["repository"]),
-        record_id=f"issue-delivery-entry:{crashed_harness.approval['operation_key']}",
-    )["state"] == "active"
-    assert crashed_harness.owner.issue_delivery_operation_record_read(
-        repository=str(crashed_harness.approval["repository"]),
-        record_id=f"issue-delivery-terminal:{crashed_harness.approval['operation_key']}",
-    )["state"] == "launch_unknown"
+    assert crashed_harness.transport.apply_calls == 1
+    # The pre-entry claim was applied before worker entry. The host grant was
+    # revoked only after the live entry callback, so the later publication is
+    # refused while the injected operation client persists ambiguity.
+    assert (
+        crashed_harness.owner.issue_delivery_operation_record_read(
+            repository=str(crashed_harness.approval["repository"]),
+            record_id=f"issue-delivery-entry:{crashed_harness.approval['operation_key']}",
+        )["state"]
+        == "active"
+    )
+    assert (
+        crashed_harness.owner.issue_delivery_operation_record_read(
+            repository=str(crashed_harness.approval["repository"]),
+            record_id=f"issue-delivery-terminal:{crashed_harness.approval['operation_key']}",
+        )["state"]
+        == "launch_unknown"
+    )
     crashed_replay = dispatch_issue_sessions(
         crashed_harness.approval["context"]["dispatch_plan"],
         _production_adapter(crashed_harness),
@@ -670,6 +846,124 @@ def test_production_dispatch_reservation_and_crash_matrix(
     )
     assert crashed_replay["stopped_reason"] == "session-launch-failed"
     assert crashed_harness.worker_transport.calls == 1
+
+
+@pytest.mark.pg
+def test_claim_readback_authority_drift_refuses_worker_spawn(
+    issue_delivery_production_harness: Callable[..., _ProductionHarness],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow claim cannot carry stale admission across the final spawn gate."""
+
+    harness = issue_delivery_production_harness()
+    current_readiness = harness.store.readiness()
+
+    def invalidate_approval_after_claim_readback() -> None:
+        monkeypatch.setattr(
+            harness.store,
+            "readiness",
+            lambda: {
+                **current_readiness,
+                "authority_epoch": current_readiness["authority_epoch"] + 1,
+            },
+        )
+
+    harness.transport.on_readback = invalidate_approval_after_claim_readback
+    result = dispatch_issue_sessions(
+        harness.approval["context"]["dispatch_plan"],
+        _production_adapter(harness),
+        expected_plan_hash=harness.approval["context"]["expected_plan_hash"],
+    )
+
+    assert result["stopped_reason"] == "session-launch-failed"
+    assert harness.transport.apply_calls == 1
+    assert harness.worker_transport.calls == 0
+    for kind, state in (
+        ("reservation", "reserved"),
+        ("attempt", "attempted"),
+        ("terminal", "launch_unknown"),
+    ):
+        assert (
+            harness.owner.issue_delivery_operation_record_read(
+                repository=str(harness.approval["repository"]),
+                record_id=f"issue-delivery-{kind}:{harness.approval['operation_key']}",
+            )["state"]
+            == state
+        )
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("observation_kind", ["entry", "terminal"])
+def test_destination_takeover_race_is_serialized_before_observation_write(
+    issue_delivery_production_harness: Callable[..., _ProductionHarness],
+    observation_kind: str,
+) -> None:
+    """A successor reservation and old observation use one lock order."""
+
+    harness = issue_delivery_production_harness()
+    old = _production_adapter(harness)
+    old.reserve()
+    old.record_attempt()
+    if observation_kind == "terminal":
+        old.record_entry(session_id="session-race-terminal")
+    successor = _production_adapter(
+        harness,
+        approval=_cross_issue_approval(
+            harness,
+            issue_number=5561 if observation_kind == "entry" else 5562,
+            suffix=f"race-{observation_kind}",
+        ),
+    )
+    barrier = threading.Barrier(2)
+
+    def record_observation() -> Mapping[str, Any]:
+        barrier.wait(timeout=10)
+        if observation_kind == "entry":
+            return old.record_entry(session_id="session-race-entry")
+        return old.record_terminal(
+            session_id="session-race-terminal",
+            worker_receipt={"final_state": "handoff"},
+        )
+
+    def reserve_successor() -> str:
+        barrier.wait(timeout=10)
+        try:
+            successor.reserve()
+        except IssueDeliveryOperationRefused:
+            return "refused"
+        return "reserved"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        observation_future = pool.submit(record_observation)
+        successor_future = pool.submit(reserve_successor)
+        observation = observation_future.result(timeout=10)
+        successor_state = successor_future.result(timeout=10)
+
+    assert observation["state"] == ("active" if observation_kind == "entry" else "terminal")
+    if observation_kind == "entry":
+        assert successor_state == "refused"
+    else:
+        assert successor_state in {"refused", "reserved"}
+
+
+@pytest.mark.pg
+def test_terminal_unknown_effect_blocks_cross_issue_destination_reuse(
+    issue_delivery_production_harness: Callable[..., _ProductionHarness],
+) -> None:
+    harness = issue_delivery_production_harness(effect_kind="publication")
+    harness.transport.readbacks = ["applied", "unknown"]
+    result = dispatch_issue_sessions(
+        harness.approval["context"]["dispatch_plan"],
+        _production_adapter(harness),
+        expected_plan_hash=harness.approval["context"]["expected_plan_hash"],
+    )
+    assert result["stopped_reason"] == "worker-handoff"
+    assert harness.transport.apply_calls == 2
+    with pytest.raises(IssueDeliveryOperationRefused, match="durably committed"):
+        _production_adapter(
+            harness,
+            approval=_cross_issue_approval(harness, issue_number=5560, suffix="unknown-effect"),
+        ).reserve()
 
 
 @pytest.mark.pg
@@ -686,8 +980,14 @@ def test_delivery_effect_boundaries_recheck_authority(
     )
     assert result["stopped_reason"] == "worker-handoff"
     assert "effect_receipts" not in result["sessions"][0]["worker_receipt"]
-    assert len(result["sessions"][0]["host_effect_refs"]) == 1
-    assert harness.transport.apply_calls == 1
+    expected_effects = 1 if effect_kind == "claim" else 2
+    assert len(result["sessions"][0]["host_effect_refs"]) == expected_effects
+    assert harness.transport.apply_calls == expected_effects
+    for ref in result["sessions"][0]["host_effect_refs"]:
+        status = harness.ledger.status(ref["operation_key"])
+        assert status["status"] == "succeeded"
+        assert status["payload"]["request_sha256"] == ref["request_sha256"]
+        assert status["payload"]["effect_slot_sha256"] == ref["effect_slot_sha256"]
     replay = dispatch_issue_sessions(
         harness.approval["context"]["dispatch_plan"],
         _production_adapter(harness),
@@ -696,12 +996,16 @@ def test_delivery_effect_boundaries_recheck_authority(
     assert replay["sessions"][0]["fresh_session"] is False
     assert replay["sessions"][0]["host_effect_refs"] == result["sessions"][0]["host_effect_refs"]
     assert harness.worker_transport.calls == 1
-    assert harness.transport.apply_calls == 1
+    assert harness.transport.apply_calls == expected_effects
+    for ref in replay["sessions"][0]["host_effect_refs"]:
+        status = harness.ledger.status(ref["operation_key"])
+        assert status["status"] == "succeeded"
+        assert status["payload"]["request_sha256"] == ref["request_sha256"]
+        assert status["payload"]["effect_slot_sha256"] == ref["effect_slot_sha256"]
 
-    revoked = issue_delivery_production_harness(
-        effect_kind=effect_kind,
-        revoke_before_effect=True,
-    )
+    if effect_kind == "claim":
+        return
+    revoked = issue_delivery_production_harness(effect_kind=effect_kind, revoke_before_effect=True)
     refused = dispatch_issue_sessions(
         revoked.approval["context"]["dispatch_plan"],
         _production_adapter(revoked),
@@ -709,7 +1013,7 @@ def test_delivery_effect_boundaries_recheck_authority(
     )
     assert refused["stopped_reason"] == "session-launch-failed"
     assert revoked.worker_transport.calls == 1
-    assert revoked.transport.apply_calls == 0
+    assert revoked.transport.apply_calls == 1
 
 
 @pytest.mark.pg
@@ -737,7 +1041,10 @@ def test_unit_dispatch_reservation_and_crash_matrix() -> None:
     result = adapter.launch(context)
     assert result["operation_state"] == "terminal"
     assert launcher.calls == 1
-    assert set(client.records) == {f"issue-delivery-{kind}:operation-b-matrix" for kind in ("reservation", "attempt", "entry", "terminal")}
+    assert set(client.records) == {
+        f"issue-delivery-{kind}:operation-b-matrix"
+        for kind in ("reservation", "attempt", "entry", "terminal")
+    }
     replay = adapter.launch(context)
     assert replay["fresh_session"] is False
     assert launcher.calls == 1
@@ -750,7 +1057,10 @@ def test_unit_dispatch_reservation_and_crash_matrix() -> None:
     with pytest.raises(IssueDeliveryOperationError, match="ambiguous|replacement"):
         crashing.launch(crash["context"]["dispatch_plan"]["context_packs"][0])
     assert crashing_launcher.calls == 1
-    assert crashing_client.records["issue-delivery-terminal:operation-b-crash"]["state"] == "launch_unknown"
+    assert (
+        crashing_client.records["issue-delivery-terminal:operation-b-crash"]["state"]
+        == "launch_unknown"
+    )
     with pytest.raises(IssueDeliveryOperationError, match="unresolved|replacement"):
         crashing.launch(crash["context"]["dispatch_plan"]["context_packs"][0])
     assert crashing_launcher.calls == 1
@@ -761,7 +1071,9 @@ def test_unit_dispatch_reservation_and_crash_matrix() -> None:
     blocked_client.fail.add("attempt")
     blocked_launcher = Launcher()
     with pytest.raises(IssueDeliveryOperationError):
-        _adapter(blocked, blocked_client, blocked_launcher).launch(blocked["context"]["dispatch_plan"]["context_packs"][0])
+        _adapter(blocked, blocked_client, blocked_launcher).launch(
+            blocked["context"]["dispatch_plan"]["context_packs"][0]
+        )
     assert blocked_launcher.calls == 0
 
 
@@ -779,9 +1091,7 @@ def test_production_path_refuses_worker_effect_receipts_before_terminal_persiste
             result = dict(super().launch(context, **kwargs))
             receipt: dict[str, Any] = {
                 "final_state": "handoff",
-                "effect_receipts": [
-                    {"effect_kind": "merge", "outcome": "applied", "forged": True}
-                ],
+                "effect_receipts": [{"effect_kind": "merge", "outcome": "applied", "forged": True}],
             }
             if effect_requests is not None:
                 receipt["effect_requests"] = effect_requests
@@ -813,7 +1123,56 @@ def test_production_path_refuses_worker_effect_receipts_before_terminal_persiste
     assert launcher.calls == 1
 
 
-def test_production_path_refuses_nested_worker_host_effect_fields_before_terminal_persistence() -> None:
+def test_production_path_refuses_worker_claim_proposal_before_terminal_persistence() -> None:
+    """The child cannot defer the host-owned pre-entry claim to worker JSON."""
+
+    class WorkerClaimLauncher(Launcher):
+        def launch(self, context: Mapping[str, Any], **kwargs: Any) -> Mapping[str, Any]:
+            result = dict(super().launch(context, **kwargs))
+            issue = context["issue_contract"]
+            result["worker_receipt"] = {
+                "final_state": "handoff",
+                "effect_requests": [
+                    {
+                        "effect_kind": "claim",
+                        "target": {
+                            "kind": "claim",
+                            "issue_number": issue["number"],
+                            "issue_node_id": "I_issue5550",
+                            "expected_state": "open",
+                            "expected_label": "agent:ready",
+                        },
+                    }
+                ],
+            }
+            return result
+
+    approval = _manifest(operation_key="operation-b-worker-claim")
+    approval["approval_manifest_hash"] = manifest_hash(approval)
+    client = Client(approval)
+    launcher = WorkerClaimLauncher()
+    adapter = _adapter(approval, client, launcher)
+    context = approval["context"]["dispatch_plan"]["context_packs"][0]
+
+    with pytest.raises(IssueDeliveryOperationRefused, match="host-owned Issue claim"):
+        adapter.launch(context)
+
+    assert launcher.calls == 1
+    assert f"issue-delivery-terminal:{approval['operation_key']}" not in client.records
+
+
+def test_worker_post_entry_proposals_reserve_the_pre_entry_host_ref_slot() -> None:
+    approval = _manifest(operation_key="operation-b-post-worker-effect-bound")
+    approval["approval_manifest_hash"] = manifest_hash(approval)
+    adapter = _adapter(approval, Client(approval), Launcher())
+
+    with pytest.raises(IssueDeliveryOperationRefused, match="bounded list"):
+        adapter._execute_proposed_effects({"effect_requests": [{}] * 5})
+
+
+def test_production_path_refuses_nested_worker_host_effect_fields_before_terminal_persistence() -> (
+    None
+):
     """Worker diagnostics cannot smuggle host-owned fields below their root."""
 
     class NestedForgedReceiptLauncher(Launcher):
@@ -848,10 +1207,24 @@ def test_unit_delivery_effect_boundaries_recheck_authority() -> None:
     client = Client(approval)
     adapter = _adapter(approval, client, Launcher())
     target = adapter._default_target()
-    for effect in ("repository_worktree", "issue_claim", "publication", "review_merge", "closure_reconciliation"):
+    for effect in (
+        "repository_worktree",
+        "issue_claim",
+        "publication",
+        "review_merge",
+        "closure_reconciliation",
+    ):
         effect_target = dict(target)
         if effect in {"review_merge", "closure_reconciliation"}:
-            effect_target.update({"pr_number": 1, "pr_repository": approval["repository"], "pr_issue_number": approval["issue"]["number"], "pr_head_ref": approval["destination"]["branch"], "pr_base_ref": approval["destination"]["base_ref"]})
+            effect_target.update(
+                {
+                    "pr_number": 1,
+                    "pr_repository": approval["repository"],
+                    "pr_issue_number": approval["issue"]["number"],
+                    "pr_head_ref": approval["destination"]["branch"],
+                    "pr_base_ref": approval["destination"]["base_ref"],
+                }
+            )
         assert adapter.authorize_effect(effect, target=effect_target)["effect"] == effect
     assert len(client.authority_calls) == 5
     with pytest.raises(IssueDeliveryOperationRefused, match="targetless"):
@@ -866,7 +1239,10 @@ def test_unit_delivery_effect_boundaries_recheck_authority() -> None:
 def test_selected_launcher_reports_stop_unsupported() -> None:
     approval = _manifest(operation_key="operation-b-stop")
     approval["approval_manifest_hash"] = manifest_hash(approval)
-    assert _adapter(approval, Client(approval), Launcher()).stop() == {"stop_support": "unsupported", "stop_status": "unsupported"}
+    assert _adapter(approval, Client(approval), Launcher()).stop() == {
+        "stop_support": "unsupported",
+        "stop_status": "unsupported",
+    }
 
 
 def test_observation_receipts_do_not_require_live_execute_authority(
@@ -921,9 +1297,9 @@ def test_admitted_observation_adapter_does_not_reresolve_frozen_destination(
     destination["worktree"] = str(worktree_link)
     destination["resolved_checkout"] = str(checkout.resolve())
     destination["resolved_worktree"] = str(worktree.resolve())
-    approval["context"]["dispatch_plan"]["context_packs"][0][
-        "branch_worktree_plan"
-    ]["worktree"] = str(worktree_link)
+    approval["context"]["dispatch_plan"]["context_packs"][0]["branch_worktree_plan"]["worktree"] = (
+        str(worktree_link)
+    )
     approval["approval_manifest_hash"] = manifest_hash(approval)
 
     def fail_resolve(_self: Path, *args: Any, **kwargs: Any) -> Path:
@@ -941,11 +1317,14 @@ def test_admitted_observation_adapter_does_not_reresolve_frozen_destination(
     assert adapter.repo_root == worktree_link
 
 
-def test_destination_resource_lock_excludes_mutable_approval_and_base() -> None:
+def test_destination_resource_lock_is_physical_across_issue_and_approval_identity() -> None:
     first = _manifest(operation_key="operation-b-resource-1")
     second = deepcopy(first)
     second["approval_id"] = "approval-resource-2"
     second["operation_key"] = "operation-b-resource-2"
+    second["issue"]["number"] = 5551
+    second["issue"]["node_id"] = "I_kwDOQEip6s8AAAACdXiyQQ"
+    second["issue"]["url"] = "https://github.com/RasmusTho/agentic-pkm-mvp/issues/5551"
     second["destination"]["base_sha"] = "b" * 40
     second["destination"]["base_ref"] = "release"
     second["source"]["revision"] = "b" * 40
@@ -977,9 +1356,7 @@ def test_protected_effect_boundary_refuses_callable_substitute_executor() -> Non
         def live_binding(self, _approval: Mapping[str, Any]) -> dict[str, Any]:
             return {}
 
-    with pytest.raises(
-        IssueDeliveryOperationRefused, match="exact protected host executor"
-    ):
+    with pytest.raises(IssueDeliveryOperationRefused, match="exact protected host executor"):
         _require_protected_host_executor(SubstituteExecutor())
 
 

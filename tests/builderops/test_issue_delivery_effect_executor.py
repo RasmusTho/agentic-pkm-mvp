@@ -578,6 +578,8 @@ def test_unit_worker_binding_rejects_ambient_repository_identity() -> None:
     launcher.developer_instructions = "Implement the bounded content change."
     prompt = launcher.prompt({"branch_worktree_plan": {"worktree": "/worktrees/5558"}})
     assert "propose only typed" in prompt
+    assert "host independently claims the approved Issue before this worker enters" in prompt
+    assert "typed claim," not in prompt
     assert "must not run Git or GitHub lifecycle effects" in prompt
     assert "Self-claim" not in prompt
 
@@ -754,7 +756,7 @@ def test_unit_unknown_effect_requires_readback_before_retry(tmp_path: Path) -> N
         denied_executor.execute(denied_request)
     assert denied_transport.apply_calls == 1
     assert denied_ledger.state == "unknown"
-    assert denied_transport.readbacks == ["applied"]
+    assert denied_transport.readbacks == ["applied", "applied"]
 
 
 def test_unknown_effect_readback_uses_immutable_destination_after_alias_drift(

@@ -11,6 +11,7 @@ import base64
 from copy import deepcopy
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -136,9 +137,7 @@ def _approval(
     *,
     parent: bool = False,
 ) -> dict[str, Any]:
-    artifact_paths = {
-        path: workflow_root / path for path in REQUIRED_WORKFLOW_ARTIFACTS
-    }
+    artifact_paths = {path: workflow_root / path for path in REQUIRED_WORKFLOW_ARTIFACTS}
     artifact_paths[EXECUTOR_ARTIFACT] = executor_artifact
     artifact_paths[WORKER_ISOLATION_ARTIFACT] = isolation_artifact
     artifacts = [
@@ -311,19 +310,19 @@ def _request(
     )
 
 
-
 class _Transport:
     def __init__(self) -> None:
         self.apply_calls = 0
         self.raise_on_apply = False
         self.target_override: Mapping[str, Any] | None = None
         self.readback_target_override: str | None = None
-        self.readbacks = ["applied"]
+        # Production dispatch always consumes the mandatory pre-entry claim
+        # readback and may then consume one worker-proposed effect readback.
+        self.readbacks = ["applied", "applied"]
         self.on_apply: Callable[[], None] | None = None
+        self.on_readback: Callable[[], None] | None = None
 
-    def validate_target(
-        self, request: IssueDeliveryEffectRequest
-    ) -> EffectAuthorityReadback:
+    def validate_target(self, request: IssueDeliveryEffectRequest) -> EffectAuthorityReadback:
         value = {
             "request_sha256": request.content_sha256,
             "repository": request.repository,
@@ -348,6 +347,8 @@ class _Transport:
             raise TimeoutError("ambiguous GitHub response")
 
     def readback(self, request: IssueDeliveryEffectRequest) -> EffectReadback:
+        if self.on_readback is not None:
+            self.on_readback()
         return EffectReadback(
             request_sha256=request.content_sha256,
             outcome=self.readbacks.pop(0),
@@ -359,23 +360,16 @@ class _Transport:
         )
 
 
-
-
 def _schema_dsn(dsn: str, schema: str) -> str:
     parts = urlsplit(dsn)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["options"] = f"-csearch_path={schema},public"
-    return urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
-    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 @pytest.fixture
 def issue_delivery_pg_store() -> PostgresBuilderOpsStore:
-    base = (
-        os.getenv("BUILDEROPS_DATABASE_URL", "").strip()
-        or os.getenv("DATABASE_URL", "").strip()
-    )
+    base = os.getenv("BUILDEROPS_DATABASE_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
     if not base:
         pytest.skip("no explicit non-production BuilderOps PostgreSQL DSN configured")
     schema = f"builderops_effect_executor_{uuid4().hex}"
@@ -390,11 +384,7 @@ def issue_delivery_pg_store() -> PostgresBuilderOpsStore:
         yield store
     finally:
         with psycopg.connect(base, autocommit=True) as conn:
-            conn.execute(
-                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
-                    sql.Identifier(schema)
-                )
-            )
+            conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
 
 
 def _production_registry(tmp_path: Path) -> CredentialRegistry:
@@ -432,7 +422,7 @@ def _production_registry(tmp_path: Path) -> CredentialRegistry:
             ["issue_delivery:execute", "issue_delivery:read", "status:read"],
             "agent",
         ),
-        ):
+    ):
         secret = tmp_path / f"{credential_id}.secret"
         secret.write_text(token, encoding="utf-8")
         secret.chmod(0o600)
@@ -492,9 +482,7 @@ def _production_manifest(
     from tests.builderops.test_control_plane_issue_delivery import _manifest
 
     manifest = deepcopy(_manifest(operation_key=operation_key))
-    manifest["approval_id"] = (
-        f"approval-pg-{_sha(operation_key.encode('utf-8'))[:24]}"
-    )
+    manifest["approval_id"] = f"approval-pg-{_sha(operation_key.encode('utf-8'))[:24]}"
     branch = f"codex/pg-effect-{uuid4().hex[:12]}"
     destination = manifest["destination"]
     destination.update(
@@ -509,9 +497,7 @@ def _production_manifest(
     manifest["source"]["refs"] = ["github:issue:5550", f"git:{base_sha}"]
     dispatch_plan = manifest["context"]["dispatch_plan"]
     context_pack = dispatch_plan["context_packs"][0]
-    context_pack["branch_worktree_plan"].update(
-        {"branch": branch, "worktree": str(worktree)}
-    )
+    context_pack["branch_worktree_plan"].update({"branch": branch, "worktree": str(worktree)})
     manifest["context"]["content_hash"] = canonical_hash(context_pack)
     manifest["context"]["expected_plan_hash"] = canonical_hash(dispatch_plan)
     artifacts = [
@@ -533,9 +519,7 @@ class _RegistryCredentialResolver:
         self.registry = registry
         self.calls = 0
 
-    def resolve(
-        self, *, repository: str, credential_id: str, rotation_generation: int
-    ) -> object:
+    def resolve(self, *, repository: str, credential_id: str, rotation_generation: int) -> object:
         credential = self.registry.current_credential(credential_id)
         if (
             credential is None
@@ -594,6 +578,7 @@ class _ProductionWorkerTransport:
         self.lose_response_after_entry = lose_response_after_entry
         self.calls = 0
         self.entry_observed_during_call = False
+        self.pre_entry_check: Callable[[], None] | None = None
 
     def _effect_target(self) -> dict[str, Any]:
         issue = self.approval["issue"]
@@ -653,6 +638,8 @@ class _ProductionWorkerTransport:
     ) -> subprocess.CompletedProcess[str]:
         del command
         self.calls += 1
+        if self.pre_entry_check is not None:
+            self.pre_entry_check()
         callback = kwargs.get("on_stdout_line")
         if not callable(callback):
             raise AssertionError("streaming production runner callback is missing")
@@ -670,9 +657,10 @@ class _ProductionWorkerTransport:
             self._revoke_destination()
         receipt = _production_worker_receipt()
         receipt["worktree"] = "approved-worktree"
-        receipt["effect_requests"] = [
-            {"effect_kind": self.effect_kind, "target": self._effect_target()}
-        ]
+        if self.effect_kind != "claim":
+            receipt["effect_requests"] = [
+                {"effect_kind": self.effect_kind, "target": self._effect_target()}
+            ]
         completed = json.dumps(
             {
                 "type": "item.completed",
@@ -788,20 +776,40 @@ def _production_worker_components(
     )
     identities = {
         "/usr/bin/systemd-run": ExecutableIdentity(
-            path="/usr/bin/systemd-run", device=11, inode=12, sha256="1" * 64,
-            mode=0o755, owner_uid=0, owner_gid=0,
+            path="/usr/bin/systemd-run",
+            device=11,
+            inode=12,
+            sha256="1" * 64,
+            mode=0o755,
+            owner_uid=0,
+            owner_gid=0,
         ),
         "/usr/bin/env": ExecutableIdentity(
-            path="/usr/bin/env", device=21, inode=22, sha256="2" * 64,
-            mode=0o755, owner_uid=0, owner_gid=0,
+            path="/usr/bin/env",
+            device=21,
+            inode=22,
+            sha256="2" * 64,
+            mode=0o755,
+            owner_uid=0,
+            owner_gid=0,
         ),
         "/usr/bin/git": ExecutableIdentity(
-            path="/usr/bin/git", device=25, inode=26, sha256="3" * 64,
-            mode=0o755, owner_uid=0, owner_gid=0,
+            path="/usr/bin/git",
+            device=25,
+            inode=26,
+            sha256="3" * 64,
+            mode=0o755,
+            owner_uid=0,
+            owner_gid=0,
         ),
         "/opt/codex/bin/codex": ExecutableIdentity(
-            path="/opt/codex/bin/codex", device=31, inode=32, sha256="4" * 64,
-            mode=0o755, owner_uid=0, owner_gid=0,
+            path="/opt/codex/bin/codex",
+            device=31,
+            inode=32,
+            sha256="4" * 64,
+            mode=0o755,
+            owner_uid=0,
+            owner_gid=0,
         ),
     }
     direct_launcher = CodexIssueSessionLauncher(
@@ -822,31 +830,44 @@ def _production_worker_components(
         "profile_id": "pg-issue-delivery-worker",
         "profile_version": 1,
         "executor": {
-            "user": executor.user, "uid": executor.uid, "group": executor.group,
-            "gid": executor.gid, "supplementary_gids": [],
+            "user": executor.user,
+            "uid": executor.uid,
+            "group": executor.group,
+            "gid": executor.gid,
+            "supplementary_gids": [],
         },
         "worker": {
-            "user": worker.user, "uid": worker.uid, "group": worker.group,
-            "gid": worker.gid, "supplementary_gids": [],
+            "user": worker.user,
+            "uid": worker.uid,
+            "group": worker.group,
+            "gid": worker.gid,
+            "supplementary_gids": [],
         },
         "worktree": {
-            "path": str(worktree), "device": worktree_stat.st_dev,
-            "inode": worktree_stat.st_ino, "git_head": base_sha,
+            "path": str(worktree),
+            "device": worktree_stat.st_dev,
+            "inode": worktree_stat.st_ino,
+            "git_head": base_sha,
             "git_directory": {
-                "path": str(git_directory), "device": git_stat.st_dev,
+                "path": str(git_directory),
+                "device": git_stat.st_dev,
                 "inode": git_stat.st_ino,
             },
             "git_common_directory": {
-                "path": str(common_directory), "device": common_stat.st_dev,
+                "path": str(common_directory),
+                "device": common_stat.st_dev,
                 "inode": common_stat.st_ino,
             },
         },
         "model_auth": {
-            "home": str(model_home), "reference": "codex-worker-subscription-v1",
-            "device": model_stat.st_dev, "inode": model_stat.st_ino,
+            "home": str(model_home),
+            "reference": "codex-worker-subscription-v1",
+            "device": model_stat.st_dev,
+            "inode": model_stat.st_ino,
         },
         "protected_github_credential": {
-            "path": str(credential_file), "device": credential_stat.st_dev,
+            "path": str(credential_file),
+            "device": credential_stat.st_dev,
             "inode": credential_stat.st_ino,
         },
         "systemd_run": identities["/usr/bin/systemd-run"].__dict__,
@@ -855,7 +876,8 @@ def _production_worker_components(
         "codex_executable": identities["/opt/codex/bin/codex"].__dict__,
         "command_sha256": canonical_command_sha256(direct_command),
         "environment": {
-            "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
             "PATH": "/opt/codex/bin:/usr/bin:/bin",
         },
         "isolation_properties_sha256": REQUIRED_SYSTEMD_PROPERTIES_SHA256,
@@ -908,7 +930,10 @@ def _production_worker_components(
         principal_resolver=principal_resolver,
         current_identity=lambda: (executor.uid, executor.gid),
         credential_probe=lambda _path, _worker, _executor: CredentialProbeResult.DENIED,
-        worker_access_probe=lambda _roots, _denied, _worker, _executor: WorkerAccessProbeResult.ADMITTED,
+        worker_access_probe=lambda _roots,
+        _denied,
+        _worker,
+        _executor: WorkerAccessProbeResult.ADMITTED,
         worktree_head_resolver=lambda _path, _git: base_sha,
         worktree_git_topology_resolver=lambda _path, _git: (
             git_directory,
@@ -980,6 +1005,7 @@ def issue_delivery_production_harness(
         parent: bool = False,
         revoke_before_effect: bool = False,
         lose_response_after_entry: bool = False,
+        approval_ttl_seconds: float | None = None,
     ) -> _ProductionHarness:
         nonlocal counter
         counter += 1
@@ -1037,27 +1063,25 @@ def issue_delivery_production_harness(
             text=True,
         ).stdout.strip()
         registry = _production_registry(case)
-        owner = _production_client(
-            issue_delivery_pg_store, registry, "owner-pg-token"
-        )
-        client = _production_client(
-            issue_delivery_pg_store, registry, "operation-pg-token"
-        )
-        host = _production_client(
-            issue_delivery_pg_store, registry, "executor-pg-token"
-        )
+        owner = _production_client(issue_delivery_pg_store, registry, "owner-pg-token")
+        client = _production_client(issue_delivery_pg_store, registry, "operation-pg-token")
+        host = _production_client(issue_delivery_pg_store, registry, "executor-pg-token")
         manifest = _production_manifest(
             checkout=checkout,
             worktree=worktree,
             base_sha=base_sha,
             operation_key=f"operation-pg-{uuid4().hex}",
         )
+        if approval_ttl_seconds is not None:
+            manifest["expires_at"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds)
+            ).isoformat()
         if parent:
             raise ValueError("production parent fixture is not yet required")
         preview = owner.issue_delivery_preview(manifest=manifest)
-        approval = owner.issue_delivery_start(
-            decision="start", manifest=preview["manifest"]
-        )["approval"]
+        approval = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])[
+            "approval"
+        ]
         worktree.parent.mkdir(parents=True)
         subprocess.run(
             [
@@ -1092,8 +1116,7 @@ def issue_delivery_production_harness(
             frozen: FrozenIssueDeliveryDestination,
         ) -> ContentOnlyIssueDeliverySessionLauncher:
             preparation_observed.append(
-                frozen.binding.worktree.is_dir()
-                and frozen.binding.worktree == worktree
+                frozen.binding.worktree.is_dir() and frozen.binding.worktree == worktree
             )
             return launcher
 

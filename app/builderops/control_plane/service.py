@@ -1454,9 +1454,9 @@ def create_app(
         }
         expected_specific = {
             "reservation": {"destination", "destination_resource_key", "issue_number", "proposed_run", "reserved_at"},
-            "attempt": {"reservation_receipt_hash", "attempt_id", "attempted_at"},
-            "entry": {"attempt_receipt_hash", "attempt_id", "session_id", "entered_at"},
-            "terminal": {"attempt_receipt_hash", "entry_receipt_hash", "session_id", "worker_receipt", "host_effect_refs", "observed_at"},
+            "attempt": {"reservation_receipt_hash", "attempt_id", "destination_resource_key", "attempted_at"},
+            "entry": {"attempt_receipt_hash", "attempt_id", "destination_resource_key", "session_id", "entered_at"},
+            "terminal": {"attempt_receipt_hash", "destination_resource_key", "entry_receipt_hash", "session_id", "worker_receipt", "host_effect_refs", "observed_at"},
         }[kind]
         if set(payload) != expected_common | expected_specific:
             raise StateConflict("Issue-delivery operation receipt fields are not closed")
@@ -1529,16 +1529,16 @@ def create_app(
             ):
                 raise StateConflict("Issue-delivery reservation does not match its approval")
         elif kind == "attempt":
-            if payload.get("attempt_id") != f"{request.operation_key}:attempt" or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("reservation_receipt_hash"))):
+            if payload.get("attempt_id") != f"{request.operation_key}:attempt" or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("reservation_receipt_hash"))) or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("destination_resource_key"))):
                 raise StateConflict("Issue-delivery attempt receipt is malformed")
         elif kind == "entry":
-            if payload.get("attempt_id") != f"{request.operation_key}:attempt" or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", str(payload.get("session_id"))) or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attempt_receipt_hash"))):
+            if payload.get("attempt_id") != f"{request.operation_key}:attempt" or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", str(payload.get("session_id"))) or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attempt_receipt_hash"))) or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("destination_resource_key"))):
                 raise StateConflict("Issue-delivery entry receipt is malformed")
         else:
             session_id = payload.get("session_id")
             if session_id is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}", str(session_id)):
                 raise StateConflict("Issue-delivery terminal session id is malformed")
-            if not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attempt_receipt_hash"))):
+            if not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attempt_receipt_hash"))) or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("destination_resource_key"))):
                 raise StateConflict("Issue-delivery terminal attempt binding is malformed")
             if request.state == "terminal" and (not isinstance(payload.get("worker_receipt"), Mapping) or not isinstance(session_id, str)):
                 raise StateConflict("terminal receipt requires a worker and session")

@@ -909,7 +909,7 @@ class IssueDeliveryOperationAdapter:
         self,
         proposal: Mapping[str, Any],
     ) -> Any:
-        """Bind a worker's small typed proposal to host-owned exact fields."""
+        """Bind one closed typed proposal to host-owned exact fields."""
 
         if set(proposal) != {"effect_kind", "target"}:
             raise IssueDeliveryOperationRefused(
@@ -988,6 +988,90 @@ class IssueDeliveryOperationAdapter:
         )
         return request
 
+    def _host_claim_proposal(self) -> dict[str, Any]:
+        """Build the sole claim target from immutable host-approved identity."""
+
+        issue = self.approval["issue"]
+        return {
+            "effect_kind": "claim",
+            "target": {
+                "kind": "claim",
+                "issue_number": issue["number"],
+                "issue_node_id": issue["node_id"],
+                "expected_state": "open",
+                "expected_label": "agent:ready",
+            },
+        }
+
+    def _execute_bound_effect(self, request: Any) -> tuple[dict[str, str], Any]:
+        """Execute one host-built request and verify its durable ledger binding."""
+
+        receipt = self.execute_effect(request)
+        from app.builderops.issue_delivery_effect_executor import (
+            IssueDeliveryEffectReceipt,
+        )
+
+        if not isinstance(receipt, IssueDeliveryEffectReceipt):
+            raise IssueDeliveryOperationRefused(
+                "protected host executor returned a malformed receipt"
+            )
+        protected_executor = _require_protected_host_executor(self.protected_executor)
+        expected_operation_key = protected_executor.ledger.operation_key(
+            effect_slot_sha256=request.effect_slot_sha256,
+            effect_type={
+                "claim": "github.issue-delivery.claim.v1",
+                "publication": "github.issue-delivery.publication.v1",
+                "merge": "github.issue-delivery.merge.v1",
+                "closure": "github.issue-delivery.closure.v1",
+                "parent_evidence": "github.issue-delivery.parent-evidence.v1",
+            }[request.effect_kind],
+        )
+        status = protected_executor.ledger.status(receipt.operation_key)
+        payload = status.get("payload")
+        if (
+            receipt.operation_key != expected_operation_key
+            or receipt.request_sha256 != request.content_sha256
+            or receipt.effect_kind != request.effect_kind
+            or receipt.repository != self.repository
+            or receipt.issue_number != self.approval["issue"]["number"]
+            or status.get("operation_key") != expected_operation_key
+            or not isinstance(payload, Mapping)
+            or payload.get("contract") != "builderops.issue-delivery-effect.v1"
+            or payload.get("request_sha256") != request.content_sha256
+            or payload.get("effect_slot_sha256") != request.effect_slot_sha256
+            or payload.get("approval_id") != self.approval_id
+            or payload.get("approved_operation_key") != self.operation_key
+            or payload.get("repository") != self.repository
+            or payload.get("issue_number") != self.approval["issue"]["number"]
+            or payload.get("run_id") != self.run_id
+            or payload.get("effect_kind") != request.effect_kind
+        ):
+            raise IssueDeliveryOperationRefused(
+                "protected host effect receipt is foreign or unbound"
+            )
+        return (
+            {
+                "operation_key": receipt.operation_key,
+                "request_sha256": receipt.request_sha256,
+                "effect_slot_sha256": request.effect_slot_sha256,
+            },
+            receipt,
+        )
+
+    def _execute_pre_entry_claim(self) -> dict[str, str]:
+        """Require one host-owned, readback-confirmed claim before child entry."""
+
+        request = self._build_effect_request(self._host_claim_proposal())
+        self.authorize_effect(
+            "issue_claim", target=self._default_target("issue_claim")
+        )
+        ref, receipt = self._execute_bound_effect(request)
+        if receipt.outcome != "applied":
+            raise IssueDeliveryOperationRefused(
+                "pre-entry Issue claim was not readback-confirmed"
+            )
+        return ref
+
     def _execute_proposed_effects(
         self,
         worker_receipt: Mapping[str, Any],
@@ -995,11 +1079,13 @@ class IssueDeliveryOperationAdapter:
         proposals = worker_receipt.get("effect_requests")
         if proposals is None:
             return []
-        if not isinstance(proposals, list) or len(proposals) > 5:
+        # One of the five durable host-reference slots is reserved for the
+        # mandatory pre-entry claim; content-only worker proposals occupy the
+        # remaining post-worker slots.
+        if not isinstance(proposals, list) or len(proposals) > 4:
             raise IssueDeliveryOperationRefused("worker effect proposals are not a bounded list")
         refs: list[dict[str, str]] = []
         permission_by_kind = {
-            "claim": "issue_claim",
             "publication": "publication",
             "merge": "review_merge",
             "closure": "closure_reconciliation",
@@ -1008,6 +1094,10 @@ class IssueDeliveryOperationAdapter:
         for raw_proposal in proposals:
             if not isinstance(raw_proposal, Mapping):
                 raise IssueDeliveryOperationRefused("worker effect proposal is malformed")
+            if raw_proposal.get("effect_kind") == "claim":
+                raise IssueDeliveryOperationRefused(
+                    "worker may not propose the host-owned Issue claim"
+                )
             request = self._build_effect_request(dict(raw_proposal))
             if request.effect_kind != "parent_evidence":
                 approval_path = getattr(self.launcher, "effect_gate_approval_file", None)
@@ -1040,58 +1130,8 @@ class IssueDeliveryOperationAdapter:
                     approval_path=approval_path,
                     adapter=self,
                 )
-            receipt = self.execute_effect(request)
-            from app.builderops.issue_delivery_effect_executor import (
-                IssueDeliveryEffectReceipt,
-            )
-
-            if not isinstance(receipt, IssueDeliveryEffectReceipt):
-                raise IssueDeliveryOperationRefused(
-                    "protected host executor returned a malformed receipt"
-                )
-            protected_executor = _require_protected_host_executor(
-                self.protected_executor
-            )
-            expected_operation_key = protected_executor.ledger.operation_key(
-                effect_slot_sha256=request.effect_slot_sha256,
-                effect_type={
-                    "claim": "github.issue-delivery.claim.v1",
-                    "publication": "github.issue-delivery.publication.v1",
-                    "merge": "github.issue-delivery.merge.v1",
-                    "closure": "github.issue-delivery.closure.v1",
-                    "parent_evidence": "github.issue-delivery.parent-evidence.v1",
-                }[request.effect_kind],
-            )
-            status = protected_executor.ledger.status(receipt.operation_key)
-            payload = status.get("payload")
-            if (
-                receipt.operation_key != expected_operation_key
-                or receipt.request_sha256 != request.content_sha256
-                or receipt.effect_kind != request.effect_kind
-                or receipt.repository != self.repository
-                or receipt.issue_number != self.approval["issue"]["number"]
-                or status.get("operation_key") != expected_operation_key
-                or not isinstance(payload, Mapping)
-                or payload.get("contract") != "builderops.issue-delivery-effect.v1"
-                or payload.get("request_sha256") != request.content_sha256
-                or payload.get("effect_slot_sha256") != request.effect_slot_sha256
-                or payload.get("approval_id") != self.approval_id
-                or payload.get("approved_operation_key") != self.operation_key
-                or payload.get("repository") != self.repository
-                or payload.get("issue_number") != self.approval["issue"]["number"]
-                or payload.get("run_id") != self.run_id
-                or payload.get("effect_kind") != request.effect_kind
-            ):
-                raise IssueDeliveryOperationRefused(
-                    "protected host effect receipt is foreign or unbound"
-                )
-            refs.append(
-                {
-                    "operation_key": receipt.operation_key,
-                    "request_sha256": receipt.request_sha256,
-                    "effect_slot_sha256": request.effect_slot_sha256,
-                }
-            )
+            ref, receipt = self._execute_bound_effect(request)
+            refs.append(ref)
             if receipt.outcome == "unknown":
                 # An admitted transport may still complete.  Do not let a
                 # later publication/merge/closure proposal run until this
@@ -1191,7 +1231,22 @@ class IssueDeliveryOperationAdapter:
         existing = self._read("attempt")
         if existing is not None:
             return existing, False
-        body = {"reservation_receipt_hash": _record_hash(reservation), "attempt_id": f"{self.operation_key}:attempt", "attempted_at": self.now()}
+        reservation_payload = reservation.get("payload")
+        destination_resource_key = (
+            reservation_payload.get("destination_resource_key")
+            if isinstance(reservation_payload, Mapping)
+            else None
+        )
+        if not isinstance(destination_resource_key, str) or len(destination_resource_key) != 64:
+            raise IssueDeliveryOperationRefused(
+                "destination reservation resource identity is malformed"
+            )
+        body = {
+            "reservation_receipt_hash": _record_hash(reservation),
+            "attempt_id": f"{self.operation_key}:attempt",
+            "destination_resource_key": destination_resource_key,
+            "attempted_at": self.now(),
+        }
         return self._write_with_ownership("attempt", "attempted", body)
 
     def record_attempt(self) -> dict[str, Any]:
@@ -1210,7 +1265,15 @@ class IssueDeliveryOperationAdapter:
             if existing["payload"].get("session_id") != session_id:
                 raise IssueDeliveryOperationRefused("destination entry is bound to another session")
             return existing
-        return self._write("entry", state, {"attempt_receipt_hash": _record_hash(attempt), "attempt_id": f"{self.operation_key}:attempt", "session_id": session_id, "entered_at": self.now()})
+        attempt_payload = attempt.get("payload")
+        destination_resource_key = (
+            attempt_payload.get("destination_resource_key")
+            if isinstance(attempt_payload, Mapping)
+            else None
+        )
+        if not isinstance(destination_resource_key, str) or len(destination_resource_key) != 64:
+            raise IssueDeliveryOperationRefused("destination attempt resource identity is malformed")
+        return self._write("entry", state, {"attempt_receipt_hash": _record_hash(attempt), "attempt_id": f"{self.operation_key}:attempt", "destination_resource_key": destination_resource_key, "session_id": session_id, "entered_at": self.now()})
 
     def record_terminal(
         self,
@@ -1238,8 +1301,16 @@ class IssueDeliveryOperationAdapter:
         terminal_worker_receipt = (
             dict(worker_receipt) if worker_receipt is not None else None
         )
+        attempt_payload = attempt.get("payload")
+        destination_resource_key = (
+            attempt_payload.get("destination_resource_key")
+            if isinstance(attempt_payload, Mapping)
+            else None
+        )
+        if not isinstance(destination_resource_key, str) or len(destination_resource_key) != 64:
+            raise IssueDeliveryOperationRefused("destination attempt resource identity is malformed")
         refs = _valid_host_effect_refs(list(host_effect_refs or []))
-        return self._write("terminal", state, {"attempt_receipt_hash": _record_hash(attempt), "entry_receipt_hash": _record_hash(entry) if state == "terminal" and entry is not None else None, "session_id": session_id, "worker_receipt": terminal_worker_receipt, "host_effect_refs": refs, "observed_at": self.now()})
+        return self._write("terminal", state, {"attempt_receipt_hash": _record_hash(attempt), "destination_resource_key": destination_resource_key, "entry_receipt_hash": _record_hash(entry) if state == "terminal" and entry is not None else None, "session_id": session_id, "worker_receipt": terminal_worker_receipt, "host_effect_refs": refs, "observed_at": self.now()})
 
     def _selected_context(self, context_pack: Mapping[str, Any]) -> None:
         context = self.approval["context"]
@@ -1287,6 +1358,7 @@ class IssueDeliveryOperationAdapter:
         _attempt, owns_attempt = self._record_attempt()
         if not owns_attempt:
             raise IssueDeliveryOperationError("another dispatcher owns the launch attempt; reconciliation is required")
+        pre_entry_host_refs: list[dict[str, str]] = []
         try:
             def observe_entry(session_id: str) -> None:
                 self.record_entry(session_id=session_id)
@@ -1299,14 +1371,35 @@ class IssueDeliveryOperationAdapter:
                     effect_gate(effect, target=target)
                 return result
 
-            result = self.launcher.launch(
-                context_pack, on_entry=observe_entry, effect_gate=gate
-            )
+            launch_kwargs: dict[str, Any] = {
+                "on_entry": observe_entry,
+                "effect_gate": gate,
+            }
+            if self.require_protected_composition:
+                protected_executor = _require_protected_host_executor(
+                    self.protected_executor
+                )
+
+                def pre_process_entry() -> None:
+                    protected_executor.bind_completed_worker()
+                    pre_entry_host_refs.append(self._execute_pre_entry_claim())
+
+                launch_kwargs["pre_process_entry"] = pre_process_entry
+                launch_kwargs["pre_spawn_entry"] = lambda: self._authority(
+                    "repository_worktree",
+                    target=self._default_target("repository_worktree"),
+                )
+            result = self.launcher.launch(context_pack, **launch_kwargs)
             if not isinstance(result, Mapping):
                 raise IssueDeliveryOperationError("launcher returned a non-object result")
             session_id = result.get("session_id")
             if not isinstance(session_id, str) or _SESSION.fullmatch(session_id.strip()) is None:
-                self.record_terminal(session_id=None, worker_receipt=None, state="launch_unknown")
+                self.record_terminal(
+                    session_id=None,
+                    worker_receipt=None,
+                    host_effect_refs=pre_entry_host_refs,
+                    state="launch_unknown",
+                )
                 raise IssueDeliveryOperationError("launcher returned no observed session entry")
             entry = self.record_entry(session_id=session_id)
             receipt = result.get("worker_receipt")
@@ -1315,14 +1408,13 @@ class IssueDeliveryOperationAdapter:
                     raise IssueDeliveryOperationRefused(
                         "worker receipt must not supply protected host effect fields"
                     )
-                if self.require_protected_composition:
-                    _require_protected_host_executor(
-                        self.protected_executor
-                    ).bind_completed_worker()
                 host_effect_refs = (
-                    self._execute_proposed_effects(receipt)
+                    [
+                        *pre_entry_host_refs,
+                        *self._execute_proposed_effects(receipt),
+                    ]
                     if receipt.get("effect_requests") is not None
-                    else []
+                    else pre_entry_host_refs
                 )
                 self.record_terminal(
                     session_id=session_id,
@@ -1361,7 +1453,12 @@ class IssueDeliveryOperationAdapter:
                 except IssueDeliveryOperationError as entry_exc:
                     raise IssueDeliveryOperationError("launcher response was lost and entry observation is unavailable", session_id=session_id) from entry_exc
             try:
-                self.record_terminal(session_id=session_id, worker_receipt=None, state="launch_unknown")
+                self.record_terminal(
+                    session_id=session_id,
+                    worker_receipt=None,
+                    host_effect_refs=pre_entry_host_refs,
+                    state="launch_unknown",
+                )
             except IssueDeliveryOperationError as terminal_exc:
                 raise IssueDeliveryOperationError("launcher outcome is ambiguous; destination reconciliation is required", session_id=session_id) from terminal_exc
             raise IssueDeliveryOperationError("launcher outcome is ambiguous; replacement launch is forbidden", session_id=session_id) from exc
