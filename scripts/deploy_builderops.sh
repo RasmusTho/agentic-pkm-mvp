@@ -361,6 +361,7 @@ else
   exit "${failure_domain_exit}"
 fi
 assert_local_durability_posture
+builderops_preflight_control_plane_secrets
 "${ROOT}/scripts/builderops/configure_tailnet_tls.sh" --preflight
 
 placeholder_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -368,7 +369,7 @@ pin_backup="$(mktemp "${PIN_FILE}.rollback.XXXXXX")"
 cp "${PIN_FILE}" "${pin_backup}"
 
 activate_target() {
-  builderops_preflight_app_password_secret || return
+  builderops_preflight_control_plane_secrets || return
   # Refuse before pin, database, or container mutation when the fixed
   # loopback unit or restart authority is unavailable. The post-recreation
   # refresh below is still required because API recreation invalidates the
@@ -390,7 +391,7 @@ reactivate_previous_release() {
   # BuilderOps writer is visible. The original failure remains actionable and
   # the operator must resolve the writer boundary before another mutation.
   builderops_assert_failure_domain || return
-  builderops_preflight_app_password_secret || return
+  builderops_preflight_control_plane_secrets || return
   # A rollback must also prove the loopback unit and restart authority before
   # restoring its pin or recreating any service; otherwise a forwarder outage
   # becomes a second late mutation failure.

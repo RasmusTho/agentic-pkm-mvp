@@ -270,6 +270,14 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
     secret_root = tmp_path / "secrets"
     secret_root.mkdir()
     (secret_root / "database-app-password").write_text("not-a-real-secret\n", encoding="utf-8")
+    for name in (
+        "database-owner-url",
+        "database-app-url",
+        "api-credentials.json",
+        "executor-credentials.json",
+        "probe-token",
+    ):
+        (secret_root / name).write_text("not-a-real-runtime-secret\n", encoding="utf-8")
 
     _write_executable(
         bin_dir / "gh",
@@ -391,7 +399,19 @@ fi
     )
     _write_executable(
         bin_dir / "stat",
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_SECRET_STAT:-0:600}\"\n",
+        """#!/usr/bin/env bash
+set -eu
+if [ "${2:-}" = '%u:%a' ]; then
+  printf '%s\n' "${FAKE_SECRET_STAT:-0:600}"
+  exit 0
+fi
+secret_name="${3##*/}"
+if [ -n "${FAKE_DRIFT_SECRET_NAME:-}" ] && [ "$secret_name" = "$FAKE_DRIFT_SECRET_NAME" ]; then
+  printf '%s\n' "${FAKE_DRIFT_SECRET_STAT:-0:0:600}"
+else
+  printf '%s\n' '0:101:640'
+fi
+""",
     )
 
     env = os.environ.copy()
@@ -804,6 +824,48 @@ def test_deploy_preflight_refuses_nonprivate_app_secret_before_pull_or_db_up(
         events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
         assert " pull " not in events
         assert " up " not in events
+
+
+@pytest.mark.parametrize(
+    "secret_name",
+    (
+        "database-owner-url",
+        "database-app-url",
+        "api-credentials.json",
+        "executor-credentials.json",
+        "probe-token",
+    ),
+)
+def test_deploy_preflight_refuses_unreadable_runtime_secret_before_pin_or_container_mutation(
+    tmp_path: Path, secret_name: str
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(
+        tmp_path / secret_name
+    )
+    pin_path = root / "config/deploy/builderops.env"
+    before = pin_path.read_text(encoding="utf-8")
+    env["FAKE_DRIFT_SECRET_NAME"] = secret_name
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert secret_name in result.stderr
+    assert pin_path.read_text(encoding="utf-8") == before
+    events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
+    assert " pull " not in events
+    assert " up " not in events
 
 
 def test_deploy_refuses_a_local_mode_that_would_require_recovery_egress(tmp_path: Path) -> None:
