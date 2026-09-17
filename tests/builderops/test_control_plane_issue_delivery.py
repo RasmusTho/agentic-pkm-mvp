@@ -515,7 +515,7 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
     monkeypatch.setattr(
         adapter,
         "_live_binding",
-        lambda *, include_current_facts=True: (
+        lambda *, include_current_facts=True, post_merge_observation=False: (
             _operation_live_binding(approval)
             if include_current_facts
             else immutable_binding

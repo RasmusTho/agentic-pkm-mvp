@@ -218,18 +218,18 @@ def admit_issue_delivery_task(
         validate_import_response(response, request)
         row = client.get_task(repository=repo, task_id=task_id)
         validate_import_readback(row, request)
-        fresh_approval = _approval(
-            client.issue_delivery_readback(
-                repository=repo, approval_id=approval_id
-            )
+        fresh_readback = client.issue_delivery_readback(
+            repository=repo, approval_id=approval_id
         )
+        fresh_approval = _approval(fresh_readback)
         fresh_issue = issue_reader(issue_repository, number)
         fresh_payload = issue_source_task(
             dict(fresh_issue), repository=issue_repository, number=number,
             observed_at=observed_at, authority_epoch=client.authority_epoch,
         )
         if (
-            not same_json_value(fresh_approval, approval)
+            fresh_readback.get("state") != "approved"
+            or not same_json_value(fresh_approval, approval)
             or
             not same_json_value(fresh_payload, source_payload)
             or client.status().get("authority_epoch") != approval["authority_epoch"]

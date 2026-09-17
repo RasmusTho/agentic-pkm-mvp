@@ -689,7 +689,7 @@ class IssueDeliveryOperationAdapter:
         destination = self.approval["destination"]
         issue = self.approval["issue"]
         target: dict[str, Any] = {
-            "repository": tracking_repository(self.approval) if effect in {"issue_claim", "closure_reconciliation"} else self.repository,
+            "repository": tracking_repository(self.approval) if delivery_source_pair(self.approval) and effect in {"issue_claim", "closure_reconciliation"} else self.repository,
             "issue_number": issue["number"],
             "checkout": str(Path(str(destination["checkout"])).resolve()),
             "worktree": str(Path(str(destination["worktree"])).resolve()),

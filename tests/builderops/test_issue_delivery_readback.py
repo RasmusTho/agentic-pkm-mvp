@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+import json
 
 import pytest
 
@@ -22,6 +23,31 @@ from app.builderops.issue_delivery_readback import (
 
 
 REPOSITORY = "rasmustho/agentic-pkm-mvp"
+
+
+@pytest.mark.pg
+def test_native_admission_refuses_withdrawal_during_readback(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True, issue_body=BODY)
+    approval = harness.approval
+    number = approval["issue"]["number"]
+    issue = {**_issue(), "number": number, "node_id": approval["issue"]["node_id"],
+             "title": approval["issue"]["title"], "html_url": approval["issue"]["url"],
+             "url": f"https://api.github.com/repos/{REPOSITORY}/issues/{number}"}
+    def issue_reader(repo, issue_number):
+        assert (repo, issue_number) == (REPOSITORY, number)
+        document = json.loads(harness.registry.manifest_path.read_text())
+        for credential in document["credentials"]:
+            if credential["id"] == "owner":
+                credential["revoked"] = True
+        harness.registry.manifest_path.write_text(json.dumps(document))
+        return deepcopy(issue)
+    with pytest.raises(IssueDeliveryReadbackRefused, match="admission readback"):
+        admit_issue_delivery_task(client=harness.host, repository=approval["repository"],
+            approval_id=approval["approval_id"], issue_reader=issue_reader,
+            observed_at="2026-09-17T17:00:00Z")
+    assert harness.host.issue_delivery_readback(repository=approval["repository"],
+        approval_id=approval["approval_id"])["state"] == "invalidated"
+    assert harness.transport.apply_calls == harness.worker_transport.calls == 0
 
 
 @pytest.mark.pg
