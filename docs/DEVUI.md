@@ -867,8 +867,11 @@ current FCA-09 candidate admission is VM102-only; neither is a live M2 completio
 The separately requested bounded M2 target is exactly one Bifrost documentation candidate under
 [FCA-ID-SECOND](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target)
 and [FCA-09-BIFROST](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target).
-That target requires new versioned admission, separate consumer/workflow pins, consumer preparation
-and non-image source readiness. It does not widen existing approvals or prove native-app readiness.
+Versioned admission, separate consumer/workflow pins, exact hub tracking and per-effect authority,
+complete-diff publication/merge checks and independent delivery projection are implemented by
+#5586. Consumer preparation and non-image source readiness (#5587) remain pending. This repository
+support does not widen existing approvals or prove native-app readiness; the Bifrost projection
+keeps candidate readiness unavailable until its own profile is implemented and admitted.
 Both scopes follow the accepted see → decide → act → verify functions: source-linked
 intent, acceptance criteria and relevant architecture requirements; scoped external reasoning;
 approval of one exact permitted action; actual delivery/readback; and the owner's trial and explicit

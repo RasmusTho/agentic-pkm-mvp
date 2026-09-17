@@ -20,6 +20,8 @@ from typing import Any
 from app.builderops.control_plane.models import canonical_repository
 
 CONTRACT_VERSION = "fca-issue-delivery.v1"
+SECOND_CONTRACT_VERSION = "fca-issue-delivery.v2"
+SECOND_REPOSITORY = "rasmustho/bifrost"
 OPERATION_TYPE = "deliver_ready_issue"
 RECORD_TYPE = "IssueDeliveryApproval"
 RECORD_PREFIX = "issue-delivery-approval:"
@@ -620,13 +622,13 @@ def _hash_binding(value: Any, name: str) -> dict[str, Any]:
     return result
 
 
-def _workflow_fields(value: Any) -> dict[str, Any]:
+def _workflow_fields(value: Any, *, contract_version: str = CONTRACT_VERSION) -> dict[str, Any]:
     workflow = _mapping(value, "workflow")
     _version_present, version = _coalesce_aliases(
         workflow, ("version", "contract_version"), "workflow version"
     )
     version = _text(version, "workflow version")
-    if version != CONTRACT_VERSION:
+    if version != contract_version:
         raise IssueDeliveryContractError("workflow version is not approved")
     _hash_present, declared_hash = _coalesce_aliases(
         workflow, ("content_hash", "workflow_hash"), "workflow hash"
@@ -887,6 +889,79 @@ def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
     }
 
 
+def delivery_source_pair(value: Mapping[str, Any]) -> dict[str, str]:
+    """Only v2 adds identities; never reinterpret or rehash a stored v1 binding."""
+    if value.get("contract_version") != SECOND_CONTRACT_VERSION:
+        return {}
+    return {
+        "contract_version": SECOND_CONTRACT_VERSION,
+        "repository": value["repository"],
+        "source_revision": value["source"]["revision"],
+        "issue_repository": value["issue"]["repository"],
+        "workflow_repository": value["workflow"]["repository"],
+        "workflow_source_revision": value["workflow"]["source_revision"],
+    }
+
+
+def tracking_repository(value: Mapping[str, Any]) -> str:
+    return delivery_source_pair(value).get("issue_repository", value["repository"])
+
+
+def _second_consumer_bindings(value: dict[str, Any]) -> None:
+    issue, workflow = value["issue"], value["workflow"]
+    if issue.get("repository") != QUALIFIED_REPOSITORY or workflow.get("repository") != QUALIFIED_REPOSITORY:
+        raise IssueDeliveryContractError("v2 requires separate exact hub Issue and workflow identities")
+    if not isinstance(workflow.get("source_revision"), str) or not _GIT_SHA.fullmatch(workflow["source_revision"]):
+        raise IssueDeliveryContractError("trusted workflow requires an immutable source revision")
+    if value["source"]["revision"] != value["destination"]["base_sha"]:
+        raise IssueDeliveryContractError("consumer source must equal the approved protected base")
+    parent = value["parent_evidence"]
+    if parent["kind"] != "none" and parent["repository"] != QUALIFIED_REPOSITORY:
+        raise IssueDeliveryContractError("v2 parent evidence must target the exact hub")
+    policies = _mapping(value.get("target_policies"), "per-target policies")
+    if set(policies) != {SECOND_REPOSITORY, QUALIFIED_REPOSITORY}:
+        raise IssueDeliveryContractError("v2 requires both exact target policies")
+    required = {
+        SECOND_REPOSITORY: {"publication", "merge"},
+        QUALIFIED_REPOSITORY: {"claim", "closure"} | ({"parent-evidence"} if parent["kind"] != "none" else set()),
+    }
+    for repository, effects in required.items():
+        policy = _mapping(policies[repository], "target policy")
+        fields = {"repository", "base_sha", "blob_sha", "content_sha256", "credential_id", "rotation_generation", "allowed_effects", "documentation_paths", "verification_profile", "required_checks"}
+        if set(policy) != fields or policy["repository"] != repository:
+            raise IssueDeliveryContractError("target policy fields or repository are not exact")
+        for name in ("base_sha", "blob_sha"):
+            if not isinstance(policy[name], str) or not _GIT_SHA.fullmatch(policy[name]):
+                raise IssueDeliveryContractError("target policy requires immutable Git identities")
+        _sha(policy["content_sha256"], "target policy hash")
+        _text(policy["credential_id"], "target credential identifier")
+        if type(policy["rotation_generation"]) is not int or policy["rotation_generation"] < 1:
+            raise IssueDeliveryContractError("exact credential generation is required")
+        if set(_list_of_text(policy["allowed_effects"], "target effects")) != {
+            f"github.issue-delivery.{effect}.v1" for effect in effects
+        }:
+            raise IssueDeliveryContractError("target effect grants are not exact")
+        if repository == SECOND_REPOSITORY:
+            paths = _list_of_text(policy["documentation_paths"], "documentation paths")
+            for path in paths:
+                parts = PurePosixPath(path)
+                if (str(parts) != path or parts.is_absolute() or ".." in parts.parts
+                    or any(part.startswith(".") for part in parts.parts)
+                    or not path.startswith("docs/") or parts.suffix != ".md"
+                    or parts.name.casefold() in {"agents.md", "claude.md", "skill.md"}
+                    or any(char in path for char in "*?[]\\\n\r\0")):
+                    raise IssueDeliveryContractError("only finite explicit documentation paths are permitted")
+            if (policy["base_sha"] != value["destination"]["base_sha"]
+                or policy["verification_profile"] != value["profile"]["verification_profile"]
+                or not _list_of_text(policy["required_checks"], "consumer required checks")):
+                raise IssueDeliveryContractError("consumer policy/profile does not bind approval")
+        elif policy["documentation_paths"] != [] or policy["verification_profile"] is not None or policy["required_checks"] != []:
+            raise IssueDeliveryContractError("hub policy cannot grant consumer content effects")
+    pack = value["context"]["dispatch_plan"]["context_packs"][0]
+    if pack.get("delivery_sources") != delivery_source_pair(value):
+        raise IssueDeliveryContractError("frozen plan must retain the exact source pair")
+
+
 def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and normalize the caller-controlled portion of a manifest."""
 
@@ -895,12 +970,13 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
     assert_no_credential_fingerprint_fields(value)
     raw = dict(value)
     try:
-        if raw.get("contract_version") != CONTRACT_VERSION:
-            raise IssueDeliveryContractError("fca-issue-delivery.v1 contract is required")
+        version = raw.get("contract_version")
+        if version not in {CONTRACT_VERSION, SECOND_CONTRACT_VERSION}:
+            raise IssueDeliveryContractError("unsupported Issue-delivery contract")
         if raw.get("operation_type") != OPERATION_TYPE:
             raise IssueDeliveryContractError("deliver_ready_issue operation is required")
         repository = canonical_repository(_text(raw.get("repository"), "repository", limit=256))
-        if repository != QUALIFIED_REPOSITORY:
+        if repository != (QUALIFIED_REPOSITORY if version == CONTRACT_VERSION else SECOND_REPOSITORY):
             raise IssueDeliveryContractError(
                 "Issue-delivery admission is not qualified for this repository"
             )
@@ -926,7 +1002,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             channel=destination["channel"],
             repo_root=destination["checkout"],
         )
-        workflow = _workflow_fields(raw.get("workflow"))
+        workflow = _workflow_fields(raw.get("workflow"), contract_version=version)
         profile = _execution_profile_fields(raw.get("profile"))
         selected_context = context["dispatch_plan"]["context_packs"][0]
         runtime = selected_context["runtime"]
@@ -934,9 +1010,8 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         dispatch_plan = context["dispatch_plan"]
         branch_worktree_plan = selected_context["branch_worktree_plan"]
         context_issue = selected_context["issue_contract"]
-        expected_issue_url = (
-            f"https://github.com/{repository}/issues/{issue['number']}"
-        )
+        issue_repository = repository if version == CONTRACT_VERSION else QUALIFIED_REPOSITORY
+        expected_issue_url = f"https://github.com/{issue_repository}/issues/{issue['number']}"
         if issue["url"].casefold() != expected_issue_url.casefold():
             raise IssueDeliveryContractError(
                 "approved Issue URL does not bind the canonical repository and number"
@@ -945,7 +1020,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             _text(context_issue.get("repository"), "context Issue repository")
         )
         if (
-            context_repository != repository
+            context_repository != issue_repository
             or context_issue.get("number") != issue["number"]
             or context_issue.get("title") != issue["title"]
             or not isinstance(context_issue.get("url"), str)
@@ -1036,7 +1111,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
         )
         result = {
             **raw,
-            "contract_version": CONTRACT_VERSION,
+            "contract_version": version,
             "operation_type": OPERATION_TYPE,
             "repository": repository,
             "approval_id": approval_id,
@@ -1053,6 +1128,8 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             "parent_evidence": parent,
             "owner_profile": {**owner_profile, "principal": profile_principal},
         }
+        if version == SECOND_CONTRACT_VERSION:
+            _second_consumer_bindings(result)
         return result
     except IssueDeliveryContractError:
         raise

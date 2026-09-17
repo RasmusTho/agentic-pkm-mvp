@@ -348,6 +348,11 @@ class GitHubProtectedRepositoryAuthority:
             blob_sha=str(response["sha"]),
         )
 
+    def issue_delivery_source(self, repository: str, number: int) -> Mapping[str, Any]:
+        """Read the exact independently addressed tracking Issue."""
+        canonical = RepoRef.parse(repository).canonical
+        return self._get(f"/repos/{canonical}/issues/{number}")
+
     def _pull(self, repository: str, pr_number: int) -> Mapping[str, Any]:
         canonical = RepoRef.parse(repository).canonical
         return self._get(f"/repos/{canonical}/pulls/{pr_number}")
@@ -705,7 +710,8 @@ class GitHubProtectedRepositoryAuthority:
         )
 
     def required_gates(
-        self, repository: str, pr_number: int, head_sha: str
+        self, repository: str, pr_number: int, head_sha: str,
+        *, verification_checks: tuple[str, ...] | None = None,
     ) -> Mapping[str, bool]:
         canonical = RepoRef.parse(repository).canonical
         pull = self._pull(canonical, pr_number)
@@ -762,7 +768,9 @@ class GitHubProtectedRepositoryAuthority:
         # branch protection exposes it through the legacy contexts shape or
         # is temporarily misconfigured. A legacy status can never substitute
         # for the authenticated ci-smoke workflow run.
-        required.add((_REQUIRED_VERIFICATION_CHECK, None))
+        required.update((name, None) for name in (
+            (_REQUIRED_VERIFICATION_CHECK,) if verification_checks is None else verification_checks
+        ))
         status_history: dict[str, list[Mapping[str, Any]]] = {}
         for row in statuses:
             context = row.get("context")

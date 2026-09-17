@@ -22,6 +22,7 @@ from app.builderops.control_plane.client_cli import (
     validate_import_response,
 )
 from app.builderops.control_plane.models import canonical_repository
+from app.builderops.control_plane.issue_delivery import delivery_source_pair, tracking_repository
 from app.builderops.owner_fact_producers import OwnerFactRefusal, read_owner_binding
 from app.builderops.devui_receipts import AUTHORITY as OWNER_BINDING_AUTHORITY
 
@@ -82,7 +83,7 @@ def _approval(value: Any) -> Mapping[str, Any]:
     approval = _mapping(readback.get("approval"), "Issue-delivery approval")
     issue = _mapping(approval.get("issue"), "approved Issue")
     if (
-        readback.get("state") != "approved"
+        readback.get("state") not in {"approved", "invalidated"}
         or readback.get("approval_id") != approval.get("approval_id")
         or readback.get("manifest") != approval
         or _mapping(readback.get("receipt"), "approval receipt").get("approval_manifest_hash")
@@ -137,11 +138,14 @@ def admit_issue_delivery_task(
         raise IssueDeliveryReadbackRefused("admission observation time is invalid") from exc
     readback = client.issue_delivery_readback(repository=repo, approval_id=approval_id)
     approval = _approval(readback)
+    if readback.get("state") != "approved":
+        raise IssueDeliveryReadbackRefused("withdrawn approval cannot admit a new native task")
     if approval.get("repository") != repo or approval.get("approval_id") != approval_id:
         raise IssueDeliveryReadbackRefused("approval address does not match admission request")
     issue_binding = _mapping(approval.get("issue"), "approved Issue")
     number = int(issue_binding["number"])
-    issue = _mapping(issue_reader(repo, number), "GitHub Issue source")
+    issue_repository = tracking_repository(approval)
+    issue = _mapping(issue_reader(issue_repository, number), "GitHub Issue source")
     body_hash, ac_hash = _source_hashes(issue)
     if (
         issue.get("number") != number
@@ -154,7 +158,7 @@ def admit_issue_delivery_task(
 
     try:
         payload = issue_source_task(
-            dict(issue), repository=repo, number=number,
+            dict(issue), repository=issue_repository, number=number,
             observed_at=observed_at, authority_epoch=client.authority_epoch,
         )
     except ValueError as exc:
@@ -176,6 +180,7 @@ def admit_issue_delivery_task(
             "issue_body_hash": body_hash,
             "acceptance_criteria_hash": ac_hash,
             "source_revision": approval["source"]["revision"],
+            **({"delivery_sources": delivery_source_pair(approval)} if delivery_source_pair(approval) else {}),
         },
     )
     envelope = {
@@ -218,9 +223,9 @@ def admit_issue_delivery_task(
                 repository=repo, approval_id=approval_id
             )
         )
-        fresh_issue = issue_reader(repo, number)
+        fresh_issue = issue_reader(issue_repository, number)
         fresh_payload = issue_source_task(
-            dict(fresh_issue), repository=repo, number=number,
+            dict(fresh_issue), repository=issue_repository, number=number,
             observed_at=observed_at, authority_epoch=client.authority_epoch,
         )
         if (
@@ -242,6 +247,8 @@ def _task_binding(task: Any, approval: Mapping[str, Any]) -> None:
     payload = _mapping(row.get("payload"), "Issue-delivery task payload")
     binding = _mapping(payload.get("issue_delivery"), "Issue-delivery task binding")
     issue = _mapping(approval.get("issue"), "approved Issue")
+    if delivery_source_pair(approval) and binding.get("delivery_sources") != delivery_source_pair(approval):
+        raise IssueDeliveryReadbackRefused("native task source pair changed")
     if (
         row.get("repository") != approval.get("repository")
         or row.get("state") not in {"ready", "claimed", "completed"}
@@ -375,8 +382,11 @@ def read_issue_delivery_projection(
         host_effects.append(deepcopy(dict(value)))
     issue = _mapping(approval.get("issue"), "approved Issue")
     branch = _text(destination.get("branch"), "approved branch")
-    github = github_reader(repository, int(issue["number"]), branch=branch)
-    subject = f"github:{repository}#{issue['number']}"
+    github = github_reader(repository, int(issue["number"]), branch=branch,
+                           **({"issue_repository": tracking_repository(approval),
+                               "verification_checks": tuple(approval["target_policies"][repository]["required_checks"])}
+                              if delivery_source_pair(approval) else {}))
+    subject = f"github:{tracking_repository(approval)}#{issue['number']}"
     try:
         owner = owner_binding_reader(
             repository,
@@ -448,6 +458,12 @@ def compose_issue_delivery_readback(
         raise IssueDeliveryReadbackRefused("destination operation is not terminal for this approval")
     # Deliberately do not consult op["worker_receipt"] for any outcome.
     targets = _targets(host_effects, op.get("host_effect_refs"))
+    if delivery_source_pair(approval):
+        for effect in host_effects:
+            payload = effect["payload"]
+            if (payload.get("delivery_sources") != delivery_source_pair(approval)
+                or payload.get("approval_manifest_hash", approval["approval_manifest_hash"]) != approval["approval_manifest_hash"]):
+                raise IssueDeliveryReadbackRefused("host effect source pair changed")
     github = _mapping(github_evidence, "GitHub evidence")
     issue = _mapping(github.get("issue"), "GitHub Issue evidence")
     pull = _mapping(github.get("pull_request"), "GitHub pull-request evidence")
@@ -465,6 +481,12 @@ def compose_issue_delivery_readback(
         or ac_hash != approved_issue.get("acceptance_criteria_hash")
     ):
         raise IssueDeliveryReadbackRefused("GitHub evidence does not match the approved Issue source")
+    if delivery_source_pair(approval) and (
+        github.get("issue_repository") != tracking_repository(approval)
+        or pull.get("governing_issue_repository") != tracking_repository(approval)
+        or issue.get("html_url", "").casefold() != approved_issue["url"].casefold()
+    ):
+        raise IssueDeliveryReadbackRefused("GitHub tracking Issue repository changed")
     head_sha = _sha(publication.get("head_sha"), "published head", length=40)
     if (
         merge.get("head_sha") != head_sha
@@ -513,7 +535,7 @@ def compose_issue_delivery_readback(
 
     repository = str(approval["repository"])
     number = int(approved_issue["number"])
-    subject = f"github:{repository}#{number}"
+    subject = f"github:{tracking_repository(approval)}#{number}"
     evidence_id = f"issue-delivery:{number}:{head_sha}"
     evidence = {
         "evidence_id": evidence_id,
@@ -535,7 +557,7 @@ def compose_issue_delivery_readback(
     }
     candidate = _candidate(
         owner_binding, repository=repository, subject=subject, head_sha=head_sha
-    )
+    ) if not delivery_source_pair(approval) else {"ready_to_try": False, "reason": "FCA-09-BIFROST readiness is not implemented"}
     evidence_rows: list[dict[str, Any]] = [evidence]
     delivery_facts: dict[str, Any] = {
         "delivery": {
@@ -588,6 +610,8 @@ def compose_issue_delivery_readback(
         "operation_key": approval["operation_key"],
         "task_record_version": None if task is None else task["version"],
         "repository": repository,
+        **({"delivery_sources": delivery_source_pair(approval), "issue_repository": tracking_repository(approval)}
+           if delivery_source_pair(approval) else {}),
         "issue_number": number,
         "pr_number": pull["number"],
         "head_sha": head_sha,

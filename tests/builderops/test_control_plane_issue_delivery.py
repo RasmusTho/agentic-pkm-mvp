@@ -46,6 +46,73 @@ pytestmark = pytest.mark.pg
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 
 
+def _bifrost_manifest():
+    """The public constituent identity, with an independently tracked hub Issue."""
+    value = _manifest()
+    value["contract_version"] = "fca-issue-delivery.v2"
+    value["repository"] = "rasmustho/bifrost"
+    value["destination"]["base_sha"] = value["source"]["revision"]
+    value["issue"]["repository"] = REPOSITORY.lower()
+    value["workflow"].update(
+        version="fca-issue-delivery.v2", repository=REPOSITORY.lower(),
+        source_revision="b" * 40,
+    )
+    value["target_policies"] = {}
+    for repository, effects in (
+        ("rasmustho/bifrost", ["publication", "merge"]),
+        (REPOSITORY.lower(), ["claim", "closure"]),
+    ):
+        value["target_policies"][repository] = {
+            "repository": repository,
+            "base_sha": value["destination"]["base_sha"] if "bifrost" in repository else "b" * 40,
+            "blob_sha": "c" * 40,
+            "content_sha256": "d" * 64,
+            "credential_id": "consumer-writer" if "bifrost" in repository else "hub-writer",
+            "rotation_generation": 1,
+            "allowed_effects": [f"github.issue-delivery.{effect}.v1" for effect in effects],
+            "documentation_paths": ["docs/guide.md"] if "bifrost" in repository else [],
+            "verification_profile": deepcopy(value["profile"]["verification_profile"]) if "bifrost" in repository else None,
+            "required_checks": ["documentation"] if "bifrost" in repository else [],
+        }
+    pack = value["context"]["dispatch_plan"]["context_packs"][0]
+    pack["delivery_sources"] = {
+        "contract_version": value["contract_version"],
+        "repository": value["repository"],
+        "source_revision": value["source"]["revision"],
+        "issue_repository": value["issue"]["repository"],
+        "workflow_repository": value["workflow"]["repository"],
+        "workflow_source_revision": value["workflow"]["source_revision"],
+    }
+    value["context"]["content_hash"] = canonical_hash(pack)
+    value["context"]["expected_plan_hash"] = canonical_hash(value["context"]["dispatch_plan"])
+    return value
+
+
+def test_issue_delivery_v1_compatibility_and_v2_scope() -> None:
+    from app.builderops.control_plane.issue_delivery import IssueDeliveryContractError
+
+    legacy = _manifest()
+    legacy["expires_at"] = "2099-01-01T00:00:00+00:00"
+    assert canonical_hash(normalize_issue_delivery_manifest(legacy)) == (
+        "114f9b5bbaa7baea1d10834031b29535336e97d772a1f7c103b382d98b0c43ec"
+    )
+    v2 = _bifrost_manifest()
+    normalized = normalize_issue_delivery_manifest(v2)
+    assert normalized["issue"]["repository"] == REPOSITORY.lower()
+    assert normalized["workflow"]["source_revision"] != normalized["source"]["revision"]
+    assert normalize_issue_delivery_manifest(normalized) == normalized
+    for field, bad in (("repository", "other/third"), ("repository", REPOSITORY),
+                       ("contract_version", "fca-issue-delivery.v3"),
+                       ("target_policies", {})):
+        changed = deepcopy(v2)
+        changed[field] = bad
+        with pytest.raises(IssueDeliveryContractError):
+            normalize_issue_delivery_manifest(changed)
+    legacy["repository"] = "rasmustho/bifrost"
+    with pytest.raises(IssueDeliveryContractError):
+        normalize_issue_delivery_manifest(legacy)
+
+
 def _dsn() -> str:
     value = os.getenv("BUILDEROPS_DATABASE_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
     if not value:
@@ -613,7 +680,46 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
     assert "owner is unavailable" in str(service_errors[-1])
 
 
-def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("bifrost", [False, True])
+def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path, issue_delivery_production_harness, bifrost) -> None:
+    if bifrost:
+        from app.builderops.control_plane.issue_delivery import strip_server_fields
+        from app.builderops.control_plane.client import ControlPlaneClientError
+        harness = issue_delivery_production_harness(bifrost=True)
+        assert harness.approval["contract_version"] == "fca-issue-delivery.v2"
+        assert harness.approval["owner_principal"] == "owner:human"
+        manifest = strip_server_fields(harness.approval)
+        manifest.pop("contract", None)
+        preview = harness.owner.issue_delivery_preview(manifest=manifest)
+        assert preview["contract_version"] == "fca-issue-delivery.v2"
+        for repository in ("rasmustho/bifrost", REPOSITORY.lower()):
+            original = harness.source_state["documents"][repository]
+            harness.source_state["documents"][repository] = {}
+            with pytest.raises(ControlPlaneClientError):
+                harness.owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
+            harness.source_state["documents"][repository] = original
+        document = json.loads(harness.registry.manifest_path.read_text())
+        for credential_id in ("consumer-effect", "hub-effect", "owner"):
+            changed = deepcopy(document)
+            for row in changed["credentials"]:
+                if row["id"] == credential_id:
+                    if credential_id == "owner":
+                        row["repositories"] = ["rasmustho/bifrost"]
+                    else:
+                        row["revoked"] = True
+            harness.registry.manifest_path.write_text(json.dumps(changed))
+            with pytest.raises(ControlPlaneClientError):
+                harness.owner.issue_delivery_preview(manifest=manifest)
+            harness.registry.manifest_path.write_text(json.dumps(document))
+        for version, repo in (("fca-issue-delivery.v1", "rasmustho/bifrost"),
+                              ("fca-issue-delivery.v2", "other/third"),
+                              ("fca-issue-delivery.v3", "rasmustho/bifrost")):
+            changed = deepcopy(manifest)
+            changed.update(contract_version=version, repository=repo)
+            with pytest.raises(ControlPlaneClientError):
+                harness.owner.issue_delivery_preview(manifest=changed)
+        assert harness.transport.apply_calls == 0
+        return
     owner = _client(store, registry, "owner-token")
     reader = _client(store, registry, "reader-token")
     executor_low = _client(store, registry, "executor-low-token")

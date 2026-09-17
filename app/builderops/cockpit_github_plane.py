@@ -359,7 +359,9 @@ def default_github_reader(repo: str) -> GithubLiveSnapshot:
 
 
 def read_issue_delivery_github(
-    repo: str, issue_number: int, *, branch: str
+    repo: str, issue_number: int, *, branch: str,
+    issue_repository: str | None = None,
+    verification_checks: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Read one closed Issue delivery through bounded, independent REST calls.
 
@@ -372,8 +374,19 @@ def read_issue_delivery_github(
     owner, separator, name = repo.partition("/")
     if not separator or not owner or not name or type(issue_number) is not int or issue_number < 1:
         raise GithubReadError("exact repository and Issue are required")
+    tracking = repo if issue_repository is None else issue_repository
+    if issue_repository is not None and (repo != "rasmustho/bifrost" or tracking != "rasmustho/agentic-pkm-mvp"
+                                         or not verification_checks):
+        raise GithubReadError("unsupported second-consumer readback binding")
+    def governing_issue(body: Any) -> int | None:
+        if issue_repository is None:
+            return parse_governing_issue(body)
+        if not isinstance(body, str):
+            return None
+        matches = re.findall(r"(?im)^Governing-Issue:\s*" + re.escape(tracking) + r"#([1-9][0-9]*)\s*$", body)
+        return int(matches[0]) if len(matches) == 1 else None
     observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    issue = _run_gh(["api", f"repos/{owner}/{name}/issues/{issue_number}"])
+    issue = _run_gh(["api", f"repos/{tracking}/issues/{issue_number}"])
     if not isinstance(issue, dict) or issue.get("pull_request"):
         raise GithubReadError("addressed GitHub Issue is unavailable")
     pulls = _paged_rest(
@@ -387,7 +400,7 @@ def read_issue_delivery_github(
     matches = [
         row
         for row in pulls
-        if parse_governing_issue(row.get("body")) == issue_number
+        if governing_issue(row.get("body")) == issue_number
         and isinstance(row.get("head"), dict)
         and row["head"].get("ref") == branch
     ]
@@ -458,7 +471,7 @@ def read_issue_delivery_github(
         protection.get("required_status_checks") if isinstance(protection, dict) else None
     )
     required: set[tuple[str, int | None]] = {
-        (_REQUIRED_VERIFICATION_CHECK, None)
+        (check, None) for check in ((_REQUIRED_VERIFICATION_CHECK,) if verification_checks is None else verification_checks)
     }
     if isinstance(required_document, dict):
         contexts = required_document.get("contexts", [])
@@ -547,7 +560,7 @@ def read_issue_delivery_github(
     if ac is None:
         raise GithubReadError("GitHub Issue acceptance criteria are unavailable")
     final_pull = _run_gh(["api", f"repos/{owner}/{name}/pulls/{pr_number}"])
-    final_issue = _run_gh(["api", f"repos/{owner}/{name}/issues/{issue_number}"])
+    final_issue = _run_gh(["api", f"repos/{tracking}/issues/{issue_number}"])
     if not isinstance(final_pull, dict) or not isinstance(final_issue, dict):
         raise GithubReadError("GitHub source changed during delivery readback")
 
@@ -587,6 +600,7 @@ def read_issue_delivery_github(
     assert isinstance(body, str)
     return {
         "repository": repo,
+        **({"issue_repository": tracking} if issue_repository is not None else {}),
         "observed_at": observed_at,
         "issue": {
             **issue,
@@ -598,7 +612,8 @@ def read_issue_delivery_github(
             "node_id": pull.get("node_id"),
             "title_sha256": hashlib.sha256(pull_title.encode()).hexdigest(),
             "body_sha256": hashlib.sha256(pull_body.encode()).hexdigest(),
-            "governing_issue": parse_governing_issue(pull_body),
+            "governing_issue": governing_issue(pull_body),
+            **({"governing_issue_repository": tracking} if issue_repository is not None else {}),
             "state": pull.get("state"),
             "merged": pull.get("merged") is True,
             "merged_at": pull.get("merged_at"),

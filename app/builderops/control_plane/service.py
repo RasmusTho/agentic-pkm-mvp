@@ -94,6 +94,9 @@ from app.builderops.control_plane.issue_delivery import (
     normalize_manifest as normalize_issue_delivery_manifest,
     receipt_ref as issue_delivery_receipt_ref,
     record_id as issue_delivery_record_id,
+    delivery_source_pair,
+    SECOND_CONTRACT_VERSION,
+    tracking_repository,
 )
 
 bearer = HTTPBearer(auto_error=False)
@@ -774,6 +777,10 @@ def create_app(
         normalized = normalize_issue_delivery_manifest(manifest_input)
         repository = normalized["repository"]
         _enforce_repo_scope(credential, repository)
+        if delivery_source_pair(normalized):
+            issue_delivery_permission(credential, tracking_repository(normalized))
+            from app.builderops.issue_delivery_effect_executor import validate_installed_v2_admission
+            validate_installed_v2_admission(normalized)
         parent_evidence = normalized.get("parent_evidence")
         if isinstance(parent_evidence, Mapping) and parent_evidence.get("kind") == "issue":
             parent_repository = parent_evidence.get("repository")
@@ -801,7 +808,7 @@ def create_app(
         return normalized
 
     def validate_issue_delivery_approval(
-        manifest_input: Mapping[str, Any], credential: Credential
+        manifest_input: Mapping[str, Any], credential: Credential, *, admitted: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Validate an immutable preview and fresh current authority."""
 
@@ -864,6 +871,11 @@ def create_app(
         permission = issue_delivery_permission(credential, repository)
         if manifest.get("permission") != permission:
             raise StateConflict("Issue-delivery approval permission was revoked or rotated")
+        if delivery_source_pair(manifest):
+            issue_delivery_permission(credential, tracking_repository(manifest))
+            from app.builderops.issue_delivery_effect_executor import validate_installed_v2_admission
+            if not admitted:
+                validate_installed_v2_admission(manifest)
         readiness = store.readiness()
         if manifest.get("authority_epoch") != readiness.get("authority_epoch"):
             raise StateConflict("Issue-delivery approval authority epoch is stale")
@@ -888,7 +900,7 @@ def create_app(
     ) -> dict[str, Any]:
         payload = {
             **dict(manifest),
-            "contract": ISSUE_DELIVERY_CONTRACT,
+            "contract": manifest["contract_version"],
             "state": "approved",
             "approved_at": approved_at,
             "approval_receipt_ref": manifest["approval_receipt_ref"],
@@ -933,7 +945,7 @@ def create_app(
             state, reason = "invalidated", "current_authority_unavailable"
         replay = store.replay(canonical, issue_delivery_idempotency_key(operation_key))
         return {
-            "contract_version": ISSUE_DELIVERY_CONTRACT,
+            "contract_version": payload["contract_version"],
             "operation_type": ISSUE_DELIVERY_OPERATION,
             "approval_id": payload.get("approval_id", approval_id),
             "state": state,
@@ -1113,7 +1125,7 @@ def create_app(
         manifest, _permission = validate_issue_delivery_approval(request.manifest, credential)
         if request.decision == "hold":
             return {
-                "contract_version": ISSUE_DELIVERY_CONTRACT,
+                "contract_version": manifest["contract_version"],
                 "operation_type": ISSUE_DELIVERY_OPERATION,
                 "approval_id": manifest["approval_id"],
                 "state": "held",
@@ -1142,7 +1154,7 @@ def create_app(
                 raise ControlPlaneError("Issue-delivery approval replay is unavailable")
             payload = dict(existing_payload)
             return {
-                "contract_version": ISSUE_DELIVERY_CONTRACT,
+                "contract_version": manifest["contract_version"],
                 "operation_type": ISSUE_DELIVERY_OPERATION,
                 "approval_id": approval_id,
                 "state": "approved",
@@ -1206,7 +1218,7 @@ def create_app(
                 ) from exc
             return replay_existing(winner)
         return {
-            "contract_version": ISSUE_DELIVERY_CONTRACT,
+            "contract_version": manifest["contract_version"],
             "operation_type": ISSUE_DELIVERY_OPERATION,
             "approval_id": approval_id,
             "state": "approved",
@@ -1232,7 +1244,7 @@ def create_app(
         except Exception as exc:
             raise _control_plane_error(exc) from exc
         return {
-            "contract_version": ISSUE_DELIVERY_CONTRACT,
+            "contract_version": manifest["contract_version"],
             "operation_type": ISSUE_DELIVERY_OPERATION,
             "approval_id": manifest["approval_id"],
             "state": "previewed",
@@ -1350,7 +1362,7 @@ def create_app(
                 )
                 if owner is None:
                     raise StateConflict("Issue-delivery approval owner is unavailable")
-                validate_issue_delivery_approval(approved, owner)
+                validate_issue_delivery_approval(approved, owner, admitted=True)
                 destination = approved.get("destination")
                 destination_identity = (
                     destination.get("identity")
@@ -1439,7 +1451,7 @@ def create_app(
         # not erase the crash evidence needed for reconciliation.
         if kind in {"reservation", "attempt"}:
             assert owner is not None
-            validate_issue_delivery_approval(approved, owner)
+            validate_issue_delivery_approval(approved, owner, admitted=True)
         # Observation records intentionally use only this immutable, already
         # admitted payload and their predecessor hashes.  Re-normalizing here
         # would re-resolve mutable symlinks and could turn truthful crash
@@ -1507,6 +1519,8 @@ def create_app(
                     "current_profile": dict(approved["profile"]),
                 }
             )
+        if delivery_source_pair(approved):
+            expected_live_binding["delivery_sources"] = delivery_source_pair(approved)
         if payload.get("live_binding") != expected_live_binding:
             raise StateConflict("Issue-delivery source or workflow binding changed after approval")
         for field in ("reserved_at", "attempted_at", "entered_at", "observed_at"):
@@ -1818,7 +1832,7 @@ def create_app(
         if (
             request.record_type == ISSUE_DELIVERY_RECORD_TYPE
             or request.record_id.startswith("issue-delivery-approval:")
-            or request.payload.get("contract") == ISSUE_DELIVERY_CONTRACT
+            or request.payload.get("contract") in {ISSUE_DELIVERY_CONTRACT, SECOND_CONTRACT_VERSION}
             or request.payload.get("operation_type") == ISSUE_DELIVERY_OPERATION
         ):
             raise HTTPException(

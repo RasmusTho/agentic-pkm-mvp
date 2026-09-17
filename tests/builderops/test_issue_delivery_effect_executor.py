@@ -65,6 +65,134 @@ from tests.builderops.issue_delivery_production_harness import (
     _sha,
 )
 
+@pytest.mark.pg
+def test_bifrost_executor_binds_distinct_consumer_and_workflow_roots(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    assert harness.workflow_root != harness.checkout
+    assert not (harness.checkout / EXECUTOR_ARTIFACT).exists()
+    binding = harness.executor.live_binding(harness.approval)
+    assert binding["delivery_sources"]["issue_repository"] == REPOSITORY
+    assert binding["delivery_sources"]["workflow_source_revision"] != binding["source_revision"]
+    request = harness.completed_request()
+    receipt = harness.executor.execute(request)
+    assert receipt.outcome == "applied"
+    status = harness.ledger.status(receipt.operation_key)
+    assert status["payload"]["credential_id"] == "hub-effect"
+    assert status["payload"]["effect_repository"] == REPOSITORY
+    assert status["payload"]["delivery_sources"] == binding["delivery_sources"]
+    assert harness.source_state is not None
+    reads = harness.source_state["reads"]
+    assert any("/rasmustho/bifrost/contents/" in path for path in reads)
+    assert any(f"/{REPOSITORY}/issues/" in path for path in reads)
+    artifact = harness.workflow_root / EXECUTOR_ARTIFACT
+    artifact.write_text(artifact.read_text() + "\n# drift\n")
+    from app.builderops.issue_delivery_operation import IssueDeliveryOperationRefused
+    with pytest.raises(IssueDeliveryOperationRefused):
+        harness.executor.live_binding(harness.approval)
+    assert harness.transport.apply_calls == 1
+    assert harness.executor.execute(request).outcome == "applied"
+    assert harness.transport.apply_calls == 1
+
+
+def _bifrost_candidate_request(harness, effect_kind, change="allowed"):
+    root = harness.worktree
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+    document = root / "docs/guide.md"
+    document.parent.mkdir(exist_ok=True)
+    document.write_text("Documented client behavior.\n")
+    if change in {"swift", "script", "policy"}:
+        name = {"swift": "Client.swift", "script": "setup.sh", "policy": ".builderops/delivery-manifest.json"}[change]
+        extra = root / name
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_text("extra effect\n")
+    elif change == "rename":
+        (root / "tracked.txt").rename(root / "docs/renamed.md")
+    elif change == "delete":
+        (root / "tracked.txt").unlink()
+    elif change == "copy":
+        document.write_bytes((root / "tracked.txt").read_bytes())
+    elif change == "symlink":
+        document.unlink()
+        document.symlink_to("../tracked.txt")
+    elif change == "executable":
+        document.chmod(0o755)
+    git("add", ".")
+    git("commit", "-m", "documentation candidate")
+    head = git("rev-parse", "HEAD")
+    base = harness.approval["destination"]["base_sha"]
+    # Independent selected-document claim: it is intentionally insufficient
+    # for every extra-path case. The protected production caller reads all trees.
+    diff = {"base_sha": base, "head_sha": head, "changes": [{
+        "old_mode": "000000", "new_mode": "100644", "old_blob": "0" * 40,
+        "new_blob": git("rev-parse", "HEAD:docs/guide.md"), "status": "A", "paths": ["docs/guide.md"],
+    }]}
+    target = {"kind": effect_kind, "issue_number": harness.approval["issue"]["number"],
+              "branch": harness.approval["destination"]["branch"], "base_ref": "main",
+              "base_sha": base, "head_sha": head, "diff_sha256": canonical_hash(diff)}
+    if effect_kind == "publication":
+        target.update(title_sha256="1" * 64, body_sha256="2" * 64, expected_remote_ref_state="absent")
+    else:
+        target["pr_number"] = 6000
+    harness.source_state["head"] = head
+    claim = harness.completed_request()
+    return IssueDeliveryEffectRequest.model_validate({**claim.model_dump(mode="json"), "effect_kind": effect_kind, "target": target})
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("drift", [None, "foreign_base", "foreign_merge", "unmerged", "policy"])
+def test_bifrost_closure_requires_owned_merge_transition(issue_delivery_production_harness, drift) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    harness.transport.readbacks = ["applied"] * 4
+    harness.executor.execute(harness.completed_request())
+    merge = _bifrost_candidate_request(harness, "merge")
+    assert harness.executor.execute(merge).outcome == "applied"
+    request = IssueDeliveryEffectRequest.model_validate({**merge.model_dump(mode="json"), "effect_kind": "closure", "target": {
+        "kind": "closure", "issue_number": merge.issue_number, "pr_number": 6000,
+        "merge_commit_sha": "3" * 40, "expected_issue_state": "open"}})
+    if drift == "foreign_base":
+        harness.source_state["bases"][merge.repository] = "4" * 40
+    elif drift == "foreign_merge":
+        harness.source_state["head"] = "4" * 40
+    elif drift == "unmerged":
+        harness.source_state["merged"] = False
+    elif drift == "policy":
+        harness.source_state["documents"][merge.repository]["credential_id"] = "foreign-effect"
+    if drift is None:
+        assert harness.executor.execute(request).outcome == "applied"
+        assert harness.source_state["issue"]["state"] == "closed"
+        assert harness.executor.execute(request).outcome == "applied"
+        assert harness.transport.apply_calls == 3
+    else:
+        with pytest.raises(ValueError):
+            harness.executor.execute(request)
+        assert harness.transport.apply_calls == 2
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("effect_kind", ["publication", "merge"])
+@pytest.mark.parametrize("change", ["allowed", "swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "head", "diff"])
+def test_bifrost_publication_and_merge_enforce_complete_diff(issue_delivery_production_harness, effect_kind, change) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    harness.executor.execute(harness.completed_request())
+    request = _bifrost_candidate_request(harness, effect_kind, change)
+    if change == "diff":
+        request = request.model_copy(update={"target": request.target.model_copy(update={"diff_sha256": "0" * 64})})
+    elif change == "head":
+        request = request.model_copy(update={"target": request.target.model_copy(update={"head_sha": harness.approval["source"]["revision"]})})
+    if change == "allowed":
+        result = harness.executor.execute(request)
+        assert result.outcome == "applied"
+        status = harness.ledger.status(result.operation_key)
+        assert status["payload"]["credential_id"] == "consumer-effect"
+        assert status["payload"]["target"]["diff_sha256"] == request.target.diff_sha256
+        assert harness.transport.apply_calls == 2
+    else:
+        with pytest.raises(ValueError):
+            harness.executor.execute(request)
+        assert harness.transport.apply_calls == 1
+
+
 class _Authority:
     def __init__(self, approval: Mapping[str, Any]) -> None:
         self.approval = deepcopy(dict(approval))
@@ -978,11 +1106,33 @@ def test_production_manifest_allocates_unique_approval_identity(tmp_path: Path) 
 
 
 @pytest.mark.pg
+@pytest.mark.parametrize("bifrost", [False, True])
 def test_unknown_effect_requires_readback_before_retry(
     issue_delivery_production_harness: Callable[..., _ProductionHarness],
     monkeypatch: pytest.MonkeyPatch,
+    bifrost: bool,
 ) -> None:
-    harness = issue_delivery_production_harness()
+    harness = issue_delivery_production_harness(bifrost=bifrost)
+    if bifrost:
+        request = harness.completed_request()
+        harness.transport.raise_on_apply = True
+        harness.transport.readbacks = ["unknown", "not_applied", "applied"]
+        first = harness.executor.execute(request)
+        assert first.outcome == "unknown"
+        # Restart/re-entry of the actual executor uses the same persisted slot;
+        # a later negative read cannot authorize redispatch of a committed call.
+        assert harness.executor.execute(request).outcome == "unknown"
+        assert harness.transport.apply_calls == 1
+        credential_manifest = json.loads(harness.registry.manifest_path.read_text())
+        for row in credential_manifest["credentials"]:
+            if row["credential_id"] in {"consumer-effect", "hub-effect"}:
+                row["revoked"] = True
+        harness.registry.manifest_path.write_text(json.dumps(credential_manifest))
+        assert harness.executor.execute(request).outcome == "applied"
+        assert harness.transport.apply_calls == 1
+        status = harness.ledger.status(first.operation_key)
+        assert status["payload"]["delivery_sources"]["repository"] == request.repository
+        return
     issue_delivery_pg_store = harness.store
     registry = harness.registry
     host = harness.host

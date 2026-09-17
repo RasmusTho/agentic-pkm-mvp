@@ -403,8 +403,12 @@ they neither qualify a second repository nor provide live owner/platform accepta
 The separately requested Bifrost documentation target is defined by
 [FCA-ID-SECOND](../BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target)
 and [FCA-09-BIFROST](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target).
-Current v1 hub-only delivery and VM102-only outcome support remain unchanged. Use the following
-two serial repository slices; these are extraction boundaries, not sibling Issues created here.
+Current v1 hub-only delivery and VM102-only outcome support remain unchanged. #5586 implements the
+first serial repository slice: bounded v2 Bifrost delivery with independent workflow/tracking pins,
+per-target policy/credential checks, complete-diff enforcement and native delivery readback.
+#5587 owns the still-pending documentation readiness/outcome slice. #5405 conformance, managed
+UI/host activation, real policy/grants and pilot, and owner trial/acceptance remain later gates.
+The following boundaries remain the scope and verification map for those two serial slices.
 Keep coupled identity fields and their consumers together instead of creating a new architecture.
 
 | Stable source anchor | Small implementation boundary and consumed seams | Decisive verification target for later extraction |

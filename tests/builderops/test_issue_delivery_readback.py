@@ -22,6 +22,73 @@ from app.builderops.issue_delivery_readback import (
 
 
 REPOSITORY = "rasmustho/agentic-pkm-mvp"
+
+
+@pytest.mark.pg
+def test_bifrost_delivery_projection_preserves_source_pair(issue_delivery_production_harness) -> None:
+    from app.builderops.epic_dispatch import dispatch_issue_sessions
+    from app.builderops.issue_delivery_readback import read_issue_delivery_projection
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+    from tests.builderops.test_issue_delivery_effect_executor import _bifrost_candidate_request
+    from app.builderops.control_plane.issue_delivery import delivery_source_pair
+
+    harness = issue_delivery_production_harness(bifrost=True, issue_body=BODY)
+    approval = harness.approval
+    repository = approval["repository"]
+    number = approval["issue"]["number"]
+    source = {**_issue(), "number": number, "node_id": approval["issue"]["node_id"],
+              "title": approval["issue"]["title"],
+              "html_url": approval["issue"]["url"],
+              "url": f"https://api.github.com/repos/{REPOSITORY}/issues/{number}"}
+    harness.source_state["issue"] = source
+    reads = []
+    def issue_reader(repo, issue_number):
+        reads.append((repo, issue_number))
+        assert (repo, issue_number) == (REPOSITORY, number)
+        return deepcopy(source)
+    task = admit_issue_delivery_task(client=harness.host, repository=repository, approval_id=approval["approval_id"],
+                                    issue_reader=issue_reader, observed_at="2026-09-17T17:00:00Z")
+    assert reads == [(REPOSITORY, number)] * 2
+    assert task["payload"]["issue_delivery"]["delivery_sources"] == delivery_source_pair(approval)
+    proposed = {}
+    def worker_content():
+        request = _bifrost_candidate_request(harness, "publication")
+        publication = request.target.model_dump(mode="json")
+        merge = {key: val for key, val in publication.items() if key not in {"title_sha256", "body_sha256", "expected_remote_ref_state"}}
+        merge.update(kind="merge", pr_number=6000)
+        proposed.update(publication=publication, merge=merge, closure={"kind": "closure", "issue_number": number,
+                        "pr_number": 6000, "merge_commit_sha": "3" * 40, "expected_issue_state": "open"})
+        harness.worker_transport.effect_targets = proposed
+    harness.worker_transport.effect_kind = "delivery"
+    harness.worker_transport.pre_entry_check = worker_content
+    harness.transport.readbacks = ["applied"] * 4
+    result = dispatch_issue_sessions(approval["context"]["dispatch_plan"], _production_adapter(harness),
+                                    expected_plan_hash=approval["context"]["expected_plan_hash"])
+    assert result["stopped_reason"] == "worker-handoff", result
+    assert harness.transport.apply_calls == 4
+    github = _github()
+    github.update(repository=repository, issue_repository=REPOSITORY)
+    github["issue"].update(number=number, node_id=approval["issue"]["node_id"], html_url=approval["issue"]["url"])
+    head = proposed["publication"]["head_sha"]
+    github["pull_request"].update(number=6000, governing_issue=number, governing_issue_repository=REPOSITORY,
+        head_sha=head, head_ref=approval["destination"]["branch"], base_sha=approval["destination"]["base_sha"],
+        merge_commit_sha="3" * 40, title_sha256="1" * 64, body_sha256="2" * 64)
+    github["required_gates"]["head_sha"] = head
+    github["reviews"]["head_sha"] = head
+    def github_reader(repo, issue_number, **kwargs):
+        assert (repo, issue_number, kwargs["issue_repository"]) == (repository, number, REPOSITORY)
+        assert kwargs["verification_checks"] == ("documentation",)
+        return deepcopy(github)
+    projection = read_issue_delivery_projection(client=harness.host, task=task, github_reader=github_reader,
+                                                owner_binding_reader=lambda *args, **kwargs: None)
+    assert projection["state"] == "delivered"
+    assert projection["delivery_sources"] == delivery_source_pair(approval)
+    assert projection["subject_ref"] == f"github:{REPOSITORY}#{number}"
+    assert projection["candidate"]["ready_to_try"] is False
+    github["issue_repository"] = repository
+    with pytest.raises(IssueDeliveryReadbackRefused, match="repository"):
+        read_issue_delivery_projection(client=harness.host, task=task, github_reader=github_reader,
+                                       owner_binding_reader=lambda *args, **kwargs: None)
 ISSUE = 5552
 BODY = """## Context
 Bounded FCA-ID-C slice.
@@ -488,10 +555,13 @@ def test_production_issue_task_envelope_reaches_overview(
     )
 
 
-def test_production_readback_uses_independent_github_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("bifrost", [False, True])
+def test_production_readback_uses_independent_github_evidence(monkeypatch: pytest.MonkeyPatch, bifrost: bool) -> None:
+    repository = "rasmustho/bifrost" if bifrost else REPOSITORY
+    body = f"Governing-Issue: {REPOSITORY}#{ISSUE}" if bifrost else PR_BODY
     def paged(_owner: str, _name: str, endpoint: str, **_kwargs: object) -> list[dict]:
         if endpoint == "pulls":
-            return [{"number": 6001, "body": PR_BODY, "head": {
+            return [{"number": 6001, "body": body, "head": {
                 "ref": "codex/5552-issue-delivery-readback",
             }}]
         if endpoint == "pulls/6001/reviews":
@@ -503,35 +573,42 @@ def test_production_readback_uses_independent_github_evidence(monkeypatch: pytes
 
     def run(args: list[str]) -> dict:
         endpoint = args[1]
+        assert "/rasmustho/bifrost/issues/" not in endpoint
         if endpoint.endswith(f"issues/{ISSUE}"):
             return _github()["issue"]
         if endpoint.endswith("pulls/6001"):
             return {
                 "number": 6001, "node_id": "PR_6001", "state": "closed", "merged": True,
                 "merged_at": "2026-09-16T12:00:30Z",
-                "title": PR_TITLE, "body": PR_BODY,
+                "title": PR_TITLE, "body": body,
                 "head": {"ref": "codex/5552-issue-delivery-readback", "sha": HEAD_SHA},
                 "base": {"ref": "main", "sha": SOURCE_SHA},
                 "merge_commit_sha": MERGE_SHA,
             }
         if endpoint.endswith(f"commits/{HEAD_SHA}/check-runs"):
             return {"check_runs": [{
-                "id": 2, "name": "Unit tests (not pg)", "head_sha": HEAD_SHA,
+                "id": 2, "name": "documentation" if bifrost else "Unit tests (not pg)", "head_sha": HEAD_SHA,
                 "status": "completed", "conclusion": "success", "app": {"id": 7},
             }]}
         if endpoint.endswith(f"commits/{HEAD_SHA}/status"):
             return {"statuses": []}
         if endpoint.endswith("branches/main/protection"):
             return {"required_status_checks": {"contexts": [], "checks": []}}
-        if endpoint.endswith(REPOSITORY):
+        if endpoint.endswith(repository):
             return {"default_branch": "main"}
         raise AssertionError(endpoint)
 
     monkeypatch.setattr(cockpit_github_plane, "_paged_rest", paged)
     monkeypatch.setattr(cockpit_github_plane, "_run_gh", run)
     parsed = cockpit_github_plane.read_issue_delivery_github(
-        REPOSITORY, ISSUE, branch="codex/5552-issue-delivery-readback"
+        repository, ISSUE, branch="codex/5552-issue-delivery-readback",
+        **({"issue_repository": REPOSITORY, "verification_checks": ("documentation",)} if bifrost else {}),
     )
+    if bifrost:
+        assert parsed["issue_repository"] == REPOSITORY
+        assert parsed["pull_request"]["governing_issue_repository"] == REPOSITORY
+        assert parsed["required_gates"]["state"] == "success"
+        return
 
     delivered = _projection(
         operation=_operation(worker_receipt={"forged": "success"}),

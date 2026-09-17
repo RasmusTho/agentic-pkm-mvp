@@ -53,6 +53,9 @@ class ProtectedDeliveryManifest:
     credential_id: str
     credential_generation: int
     allowed_effects: tuple[str, ...]
+    documentation_paths: tuple[str, ...] = ()
+    verification_profile: Mapping[str, Any] | None = None
+    required_checks: tuple[str, ...] = ()
 
     @classmethod
     def from_document(
@@ -96,6 +99,9 @@ class ProtectedDeliveryManifest:
             credential_id=str(credential["credential_id"]),
             credential_generation=int(credential["rotation_generation"]),
             allowed_effects=tuple(effects),
+            documentation_paths=tuple(document.get("documentation_paths", ())),
+            verification_profile=document.get("verification_profile"),
+            required_checks=tuple(document.get("required_checks", ())),
         )
 
 
