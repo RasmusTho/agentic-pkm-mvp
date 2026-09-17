@@ -94,6 +94,40 @@ def test_bifrost_executor_binds_distinct_consumer_and_workflow_roots(issue_deliv
     assert harness.transport.apply_calls == 1
 
 
+@pytest.mark.pg
+@pytest.mark.parametrize("field", ["effect_repository", "delivery_sources", "target_policies_sha256", "approval_manifest_hash"])
+def test_bifrost_recovery_refuses_corrupted_identity(issue_delivery_production_harness, field) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    request = harness.completed_request()
+    receipt = harness.executor.execute(request)
+    payload = deepcopy(harness.ledger.status(receipt.operation_key)["payload"])
+    payload[field] = {} if field == "delivery_sources" else "0" * 64
+    with psycopg.connect(harness.store.dsn) as conn:
+        conn.execute("UPDATE builderops_outbox SET payload = %s::jsonb WHERE repository = %s AND operation_key = %s",
+                     (json.dumps(payload), request.repository, receipt.operation_key))
+    with pytest.raises(ValueError, match="recovery authority binding"):
+        harness.executor.execute(request)
+    assert harness.transport.apply_calls == 1
+
+
+@pytest.mark.pg
+def test_bifrost_target_and_readback_cannot_borrow_consumer_identity(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    request = harness.completed_request()
+    harness.transport.target_override = {"repository": request.repository}
+    with pytest.raises(ValueError, match="target/source/profile"):
+        harness.executor.execute(request)
+    assert harness.transport.apply_calls == 0
+    independent = issue_delivery_production_harness(bifrost=True)
+    request = independent.completed_request()
+    independent.transport.readback_repository_override = request.repository
+    with pytest.raises(ValueError, match="another effect repository"):
+        independent.executor.execute(request)
+    independent.transport.readback_repository_override = None
+    assert independent.executor.execute(request).outcome == "applied"
+    assert independent.transport.apply_calls == 1
+
+
 def _bifrost_candidate_request(harness, effect_kind, change="allowed"):
     root = harness.worktree
     def git(*args):
@@ -167,6 +201,28 @@ def test_bifrost_closure_requires_owned_merge_transition(issue_delivery_producti
         with pytest.raises(ValueError):
             harness.executor.execute(request)
         assert harness.transport.apply_calls == 2
+
+
+@pytest.mark.pg
+def test_bifrost_explicit_parent_grant_after_owned_closure(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True, parent=True)
+    harness.transport.readbacks = ["applied"] * 4
+    harness.executor.execute(harness.completed_request())
+    merge = _bifrost_candidate_request(harness, "merge")
+    harness.executor.execute(merge)
+    closure = IssueDeliveryEffectRequest.model_validate({**merge.model_dump(mode="json"), "effect_kind": "closure", "target": {
+        "kind": "closure", "issue_number": merge.issue_number, "pr_number": 6000,
+        "merge_commit_sha": "3" * 40, "expected_issue_state": "open"}})
+    harness.executor.execute(closure)
+    parent = harness.approval["parent_evidence"]
+    request = IssueDeliveryEffectRequest.model_validate({**merge.model_dump(mode="json"), "effect_kind": "parent_evidence", "target": {
+        "kind": "parent_evidence", "repository": REPOSITORY, "issue_number": parent["number"], "issue_node_id": parent["node_id"],
+        "expected_state": "open", "child_issue_number": merge.issue_number, "parent_contract_sha256": parent["contract_hash"],
+        "relationship_sha256": canonical_hash(parent["relationship"]), "evidence_kind": "pr_receipt_comment",
+        "evidence_sha256": "a" * 64, "pr_number": 6000}})
+    assert harness.executor.execute(request).outcome == "applied"
+    assert harness.transport.apply_calls == 4
+    assert harness.transport.applied_requests[-1].effect_repository == REPOSITORY
 
 
 @pytest.mark.pg

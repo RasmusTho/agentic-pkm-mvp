@@ -807,7 +807,7 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationRefused("effect target PR differs from approved destination")
         return {**expected, **raw_target} if partial_resource_target else dict(raw_target)
 
-    def _live_binding(self, *, include_current_facts: bool = True) -> dict[str, Any]:
+    def _live_binding(self, *, include_current_facts: bool = True, post_merge_observation: bool = False) -> dict[str, Any]:
         destination = self.approval["destination"]
         workflow = self.approval["workflow"]
         if include_current_facts:
@@ -859,7 +859,14 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationRefused(
                     f"approved destination {raw_name} identity changed after approval"
                 )
-        observed = dict(self.live_binding_reader(self.approval))
+        if post_merge_observation and self.require_protected_composition and delivery_source_pair(self.approval):
+            # Closure observes the immutable source pair; the protected closure
+            # executor alone validates the operation-owned merged-base transition
+            # against its durable merge slot and independent GitHub readback.
+            observed = dict(_require_protected_host_executor(self.protected_executor).live_binding(
+                self.approval, post_merge_observation=True))
+        else:
+            observed = dict(self.live_binding_reader(self.approval))
         # Protected composition adds fresh Issue/source/profile facts to the
         # same observation.  Compare the immutable destination binding as its
         # own exact field set first; comparing the entire mapping here would
@@ -919,7 +926,7 @@ class IssueDeliveryOperationAdapter:
             "authority_epoch": reply["authority_epoch"],
             "observed_at": reply.get("observed_at"),
             "approval_manifest_hash": self.approval_manifest_hash,
-            "live_binding": self._live_binding(),
+            "live_binding": self._live_binding(post_merge_observation=effect == "closure_reconciliation"),
         }
 
     def authorize_effect(self, effect: str, *, target: Mapping[str, Any] | None = None) -> dict[str, Any]:

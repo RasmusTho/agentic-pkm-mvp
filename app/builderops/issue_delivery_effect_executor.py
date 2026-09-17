@@ -936,7 +936,7 @@ class IssueDeliveryHostExecutor:
             raise ValueError("completed worker receipt profile differs from host pin")
         self._worker_isolation = binding
 
-    def live_binding(self, approval: Mapping[str, Any]) -> Mapping[str, Any]:
+    def live_binding(self, approval: Mapping[str, Any], *, post_merge_observation: bool = False) -> Mapping[str, Any]:
         """Return fresh destination/source/profile facts for FCA-ID-B admission.
 
         The protected executor owns this seam, but the source/profile readers
@@ -954,7 +954,7 @@ class IssueDeliveryHostExecutor:
             from app.builderops.issue_delivery_operation import _default_live_binding_reader
             current = _v2_authority_bindings(approval, repository_authority=self.repository_authority,
                                             credentials=self.credentials, trusted_workflow_root=self.trusted_workflow_root,
-                                            check_current_bases=False)
+                                            check_current_bases=not post_merge_observation)
             observed = {**observed, **_default_live_binding_reader(approval, trusted_workflow_root=self.trusted_workflow_root)}
             observed["current_issue"] = {key: current[key] for key in ("number", "node_id", "state")}
             from app.builderops.issue_delivery_readback import _source_hashes
@@ -1562,6 +1562,13 @@ class IssueDeliveryHostExecutor:
             or not isinstance(payload.get("protected_manifest_blob_sha"), str)
         ):
             raise ValueError("Issue-delivery recovery intent is foreign or changed")
+        if delivery_source_pair(request.approval) and (
+            payload.get("delivery_sources") != delivery_source_pair(request.approval)
+            or payload.get("effect_repository") != request.effect_repository
+            or payload.get("target_policies_sha256") != _canonical_hash(request.approval["target_policies"])
+            or payload.get("approval_manifest_hash") != request.approval["approval_manifest_hash"]
+        ):
+            raise ValueError("Issue-delivery recovery authority binding changed")
 
     @staticmethod
     def _validate_intent(

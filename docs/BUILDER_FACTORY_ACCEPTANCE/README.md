@@ -531,13 +531,17 @@ cannot borrow VM102 candidate readiness.
 
 The v2 approval's `target_policies` binds exactly the consumer and hub protected policy snapshots,
 including blob/content identities, effect sets and credential ID/generation. The consumer snapshot
-also binds finite `docs/*.md` paths, its verification profile and required checks. The frozen
+also binds finite, explicit Markdown paths under `docs/`, its verification profile and required checks. The frozen
 context carries `delivery_sources`; approval, operation and effect receipts retain that same pair.
 Publication and merge each carry `diff_sha256` over independently read complete base/head tree
 changes, including old/new modes, blobs and every rename/copy path. The production reader requires
 an explicitly installed `trusted_workflow_root`; consumer artifacts and ambient roots cannot
 supply its workflow pin. The existing GitHub readback independently addresses the hub Issue and
 Bifrost PR, requiring an explicit `Governing-Issue: rasmustho/agentic-pkm-mvp#N` link.
+V2 target-authority and effect-readback evidence bind the addressed effect repository explicitly.
+Merge independently reads current-head collaborator reviews. Closure accepts only the exact
+operation-owned merged-base transition proven by its durable merge slot and fresh GitHub evidence;
+optional admitted hub parent evidence additionally names that consumer PR in its typed target.
 
 **Compatibility and identity.** Extend the existing operation as `fca-issue-delivery.v2`, retaining
 `deliver_ready_issue` and the same service, adapter, protected executor and receipt/outbox owners.

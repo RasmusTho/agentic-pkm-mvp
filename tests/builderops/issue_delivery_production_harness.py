@@ -318,6 +318,7 @@ class _Transport:
         self.raise_on_apply = False
         self.target_override: Mapping[str, Any] | None = None
         self.readback_target_override: str | None = None
+        self.readback_repository_override: str | None = None
         # Production dispatch always consumes the mandatory pre-entry claim
         # readback and may then consume one worker-proposed effect readback.
         self.readbacks = ["applied", "applied"]
@@ -357,7 +358,7 @@ class _Transport:
             outcome=self.readbacks.pop(0),
             evidence={
                 "source": "github-authoritative-readback",
-                **({"effect_repository": request.effect_repository} if request.approval.get("contract_version") == "fca-issue-delivery.v2" else {}),
+                **({"effect_repository": self.readback_repository_override or request.effect_repository} if request.approval.get("contract_version") == "fca-issue-delivery.v2" else {}),
                 "observed_target_sha256": self.readback_target_override
                 or canonical_hash(request.target.model_dump(mode="json")),
             },
@@ -1107,7 +1108,14 @@ def issue_delivery_production_harness(
                 datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds)
             ).isoformat()
         if parent:
-            raise ValueError("production parent fixture is not yet required")
+            if not bifrost:
+                raise ValueError("production parent fixture is not yet required")
+            manifest["parent_evidence"] = {
+                "kind": "issue", "repository": REPOSITORY, "number": 5399, "node_id": "I_parent5399",
+                "relationship": {"kind": "parent", "child_issue_number": manifest["issue"]["number"], "authenticated": True},
+                "contract_version": "fca-parent.v1", "contract_hash": "e" * 64,
+                "write_permission": {"scope": "parent_evidence:write", "writes": ["pr_receipt_comments", "child_generated_ledger_writeback"]},
+            }
         workflow_root = None
         source_state = None
         runtime = None
@@ -1129,6 +1137,8 @@ def issue_delivery_production_harness(
             subprocess.run(["git", "-C", str(workflow_root), "remote", "add", "origin", f"https://github.com/{REPOSITORY}.git"], check=True)
             workflow_sha = subprocess.run(["git", "-C", str(workflow_root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
             template = _bifrost_manifest()
+            if parent:
+                template["target_policies"][REPOSITORY]["allowed_effects"].append("github.issue-delivery.parent-evidence.v1")
             manifest["contract_version"] = template["contract_version"]
             manifest["repository"] = template["repository"]
             manifest["issue"]["repository"] = REPOSITORY

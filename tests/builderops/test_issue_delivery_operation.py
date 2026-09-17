@@ -1026,6 +1026,19 @@ def test_bifrost_replay_preserves_original_source_pair(issue_delivery_production
 
 
 @pytest.mark.pg
+def test_bifrost_claim_readback_base_drift_refuses_worker_spawn(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    def drift_after_claim():
+        harness.source_state["bases"][harness.approval["repository"]] = "9" * 40
+    harness.transport.on_readback = drift_after_claim
+    result = dispatch_issue_sessions(harness.approval["context"]["dispatch_plan"], _production_adapter(harness),
+                                    expected_plan_hash=harness.approval["context"]["expected_plan_hash"])
+    assert result["stopped_reason"] == "session-launch-failed"
+    assert harness.transport.apply_calls == 1
+    assert harness.worker_transport.calls == 0
+
+
+@pytest.mark.pg
 @pytest.mark.parametrize("effect_kind", ["claim", "publication", "merge", "closure"])
 def test_delivery_effect_boundaries_recheck_authority(
     issue_delivery_production_harness: Callable[..., _ProductionHarness],

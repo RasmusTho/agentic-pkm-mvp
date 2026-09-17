@@ -739,7 +739,7 @@ def _destination_fields(value: Any) -> dict[str, Any]:
     }
 
 
-def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
+def _parent_evidence(value: Any, *, issue_number: int, canonical_effects: bool = False) -> dict[str, Any]:
     parent = _mapping(value, "parent evidence binding")
     parent_kind = _text(parent.get("kind"), "parent evidence kind", limit=32)
     if parent_kind == "none":
@@ -831,7 +831,7 @@ def _parent_evidence(value: Any, *, issue_number: int) -> dict[str, Any]:
         parent, ("write_permission", "permission"), "parent write permission"
     )
     write_permission = _mapping(write_permission_value, "parent write permission")
-    if not set(write_permission).issubset({"scope", "grant", "writes", "targets"}):
+    if not set(write_permission).issubset({"scope", "grant", "writes", "targets"} | ({"effects"} if canonical_effects else set())):
         raise IssueDeliveryContractError(
             "parent write permission contains unknown fields"
         )
@@ -1082,7 +1082,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError("permitted effects do not match the closed delivery set")
         if set(non_effects) != NON_EFFECTS:
             raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
-        parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"])
+        parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"], canonical_effects=version == SECOND_CONTRACT_VERSION)
         if parent.get("kind") == "issue" and (
             parent.get("node_id") == issue["node_id"]
             or (
