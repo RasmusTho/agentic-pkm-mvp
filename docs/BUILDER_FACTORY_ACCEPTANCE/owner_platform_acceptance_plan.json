@@ -1,0 +1,59 @@
+{
+  "contract": "builder_owner_platform_acceptance_plan.v1",
+  "status": "incomplete",
+  "parent_issue": "RasmusTho/agentic-pkm-mvp#5399",
+  "harness_issue": "RasmusTho/agentic-pkm-mvp#5406",
+  "authority": "procedure_only_no_execution_or_acceptance_authority",
+  "qualified_repositories": ["rasmustho/agentic-pkm-mvp"],
+  "selected_workflow": {
+    "operation": "deliver_ready_issue",
+    "ddo_required": false,
+    "admission": "app/builderops/control_plane/issue_delivery.py",
+    "destination": "app/builderops/issue_delivery_operation.py",
+    "protected_effects": "app/builderops/issue_delivery_effect_executor.py",
+    "readback": "app/builderops/issue_delivery_readback.py",
+    "delegated_authority": "One explicitly approved issue, exact body/AC/source/workflow/profile hashes, destination and authority epoch; claim/publication/review-merge/closure only as enumerated by that manifest.",
+    "excluded_effects": ["deployment", "credential_provisioning", "owner_acceptance"],
+    "stop_recovery": "Hold before approval; after admission use existing grant revocation/invalidation and read back the operation. Reserved/active/launch_unknown/unknown-effect states remain incomplete. Reconnect and observe the same operation key; never launch from model text or retry an ambiguous effect. Revocation does not undo committed effects."
+  },
+  "required_live_receipts": [
+    {"kind": "vm102_identity_epoch", "status": "incomplete", "receipt_ref": null, "required_identity": ["vmid", "host_name", "source_sha", "image_digest", "config_fingerprint", "component_inventory_digest", "authority_epoch", "health_observed_at"]},
+    {"kind": "independent_control_plane_authority", "status": "incomplete", "receipt_ref": null, "required_identity": ["service_identity", "recovery_identity", "api_only_no_fallback", "epoch"]},
+    {"kind": "real_second_consumer", "status": "incomplete", "receipt_ref": null, "required_identity": ["repository", "issue", "branch", "base_sha", "head_sha", "admitted_operation", "credential_scope", "actual_effect_receipts"], "gate": "#5405; current operation is hub-only. A second repository needs its own admission and live qualification before this row can pass."},
+    {"kind": "selected_workflow_effects", "status": "incomplete", "receipt_ref": null, "required_identity": ["approval_id", "manifest_hash", "operation_key", "destination_identity", "reservation_attempt_entry_terminal_refs", "host_effect_refs", "github_current_head_gates_merge_closure"]},
+    {"kind": "stop_recovery", "status": "incomplete", "receipt_ref": null, "required_identity": ["revoked_grant_or_invalidated_approval", "observed_operation_key", "last_committed_effect", "no_duplicate_effect_readback"]},
+    {"kind": "operator_acknowledgement", "status": "incomplete", "receipt_ref": null, "required_identity": ["operator", "exact_scope", "identity_epoch", "acknowledged_at"], "gate": "Read-only #4749 acknowledgement remains distinct from effectful owner acceptance; preserve #5181 platform evidence."},
+    {"kind": "explicit_owner_trial_acceptance", "status": "incomplete", "receipt_ref": null, "required_identity": ["repository_subject", "candidate_source_image_config", "environment", "readiness_receipt", "profile_ac_revision", "human_confirmation", "trial_receipt", "acceptance_receipt", "current_binding"]}
+  ],
+  "read_only_acknowledgement_is_owner_acceptance": false,
+  "owner_questions": [
+    {"question": "Can I identify current work, its exact subject and what evidence is missing?", "success": "Owner follows Overview to Focus and names the source version and missing evidence without treating a model statement as delivered work."},
+    {"question": "Do I understand what Start authorizes and what Hold leaves unchanged?", "success": "Owner identifies the exact issue, scope, destination, effects, expiry and epoch before confirming through the existing action boundary."},
+    {"question": "Can I distinguish a technical wait from a decision requiring me?", "success": "Reserved, unavailable-model and ambiguous-effect cases remain explicit incomplete states; no fabricated owner decision is shown."},
+    {"question": "Can I trace the result to actual effects and try this exact candidate?", "success": "Owner follows host effect receipts and independent GitHub readback to current candidate/readiness/profile evidence, then records a separate trial."},
+    {"question": "Is the explanation useful and do I explicitly accept the tested criterion scope?", "success": "Owner records observations and an explicit accepted/rejected outcome bound to the current candidate and profile. Automated fixture success cannot answer this question."}
+  ],
+  "scenarios": {
+    "normal": "Overview/Focus -> source-linked synthesis -> exact Start -> protected existing workflow -> independent actual readback -> readiness -> separate trial -> separate owner decision.",
+    "owner_decision": "Confirm Start/Hold against the exact preview; separately confirm tried/unable_to_try and accepted/rejected through FCA-09. No model action text supplies either authority.",
+    "technical_wait": "Reserve without entering the worker; show waiting/incomplete, observe without spawning or asking for invented owner authority.",
+    "stale_or_contradictory": "Withdraw current acceptance on source/head/candidate/profile/epoch/receipt drift, missing component, conflicting selection or changed evidence during readback.",
+    "model_unavailable": "Keep usable source facts and label model failure. Do not activate providers or billing fallback; live usefulness remains unobserved.",
+    "ambiguous_start": "Lose the response after entry, read launch_unknown and the same operation key, retain the fence and do not redispatch.",
+    "client_disconnected": "Show incomplete while disconnected. Reconnect by rereading receipts/current bindings; no client memory is authority.",
+    "revoked": "Revoke the host grant before the next proposed effect; preserve prior claim evidence, refuse new effect and observe recovery state."
+  },
+  "residual_limits": [
+    "Harness transport doubles do not prove live GitHub/provider/systemd/VM102 effects or operating-system isolation.",
+    "Fixture owner tokens and typed runtime fixture receipts are test inputs, not human observations or deployment receipts.",
+    "Receipt hashes establish internal consistency only; readers must be authenticated source owners.",
+    "Evidence composition is read-only, has no new store, and never qualifies live platform acceptance.",
+    "No visual redesign, runtime credential change, deployment or owner acceptance write is performed by this child."
+  ],
+  "source_contracts": [
+    "docs/BUILDER_FACTORY_ACCEPTANCE/PREPARE_COMPOSED_OWNER_ACCEPTANCE.md",
+    "docs/BUILDER_FACTORY_ACCEPTANCE/README.md",
+    "docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md",
+    "docs/BUILDEROPS_CONTROL_PLANE/README.md"
+  ]
+}

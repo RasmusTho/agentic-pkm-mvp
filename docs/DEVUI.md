@@ -523,6 +523,16 @@ was admitted, ARO-02 was superseded: there are no authorized facts for the produ
 enrich. Until a separately governed source contract exists, producers and the composer must
 preserve the explicit withdrawal state.
 
+#### FCA-07 composed acceptance evidence (2026-09-17)
+
+The [composed acceptance harness and operator procedure](BUILDER_FACTORY_ACCEPTANCE/PREPARE_COMPOSED_OWNER_ACCEPTANCE.md#operator-procedure-and-live-plan)
+exercise source-backed Focus/synthesis, exact hub Issue-delivery approval, the protected existing
+workflow, independent effect readback and separate candidate-bound trial/decision receipts.
+The read-only `app.builderops.owner_acceptance.read_owner_acceptance` joins current source evidence;
+missing/stale/contradictory evidence or disconnection returns `incomplete`. Even complete fixture
+evidence leaves live platform acceptance incomplete. No second repository is qualified, no visual
+surface changes, and no live owner acceptance is inferred; #5399 retains those obligations.
+
 #### FCA-02 source-backed owner facts and bounded handoff (2026-09-07)
 
 FCA-02 defines the smallest source contract that may restore **Needs you** or **Ready to try**.

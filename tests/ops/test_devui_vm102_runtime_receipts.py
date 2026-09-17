@@ -53,12 +53,14 @@ def _package_runtime_candidate(
     monkeypatch.setattr(devui_runtime, "CANDIDATE_ROOT", root)
 
 
-def _bundle() -> dict:
+def _bundle(*, source_sha: str | None = None) -> dict:
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     inventory_evidence = json.loads((FIXTURES / "inventory.json").read_text())
     inventory_evidence["observed_at"] = now
     inventory = build_component_inventory_receipt(inventory_evidence)
     activation_evidence = json.loads((FIXTURES / "activation.json").read_text())
+    if source_sha is not None:
+        activation_evidence["candidate_identity"]["source_sha"] = source_sha
     activation_evidence["observed_at"] = now
     digest = inventory["component_inventory_digest"]
     activation_evidence["component_inventory_digest"] = digest
