@@ -80,6 +80,13 @@ input for sequencing, not a runtime-promotion document. This status file remains
 owner doc. Capabilities should be read as shipped only when code plus tests or operator evidence are
 present and any owner-doc promotion gate has been satisfied.
 
+2026-09-17 bounded FCA-07 writeback (#5406; repository evidence only): the
+[composed acceptance harness and read-only validator](BUILDER_FACTORY_ACCEPTANCE/PREPARE_COMPOSED_OWNER_ACCEPTANCE.md#how-to-verify-pre-merge)
+join protected hub Issue-delivery effects and candidate-bound owner outcomes. Missing, contradictory
+or expired evidence, including expiry during final reads, cannot pass the composition. The operator
+plan remains incomplete: no live activation, second-repository qualification or owner acceptance is
+established by fixture success. Parent #5399 retains those gates.
+
 Standing Questions validation line (2026-08-29): the SQ-04 candidate delivery in PR #5174 adds
 the evidence-delta answer-refresh path and the explicit SQ-03 match-then-refresh composition, with
 focused contract coverage. It remains a review candidate: live test-channel capability validation,

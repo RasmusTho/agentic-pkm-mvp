@@ -10,7 +10,7 @@ depends_on: [COMPOSE_LLM_ASSISTED_OWNER_OVERVIEW.md, PRODUCE_OWNER_DECISION_AND_
 can_parallelize_with: []
 ---
 
-State: Target-state pre-merge acceptance-harness task; harness not implemented and live platform/owner acceptance remains parent-owned.
+State: Implemented pre-merge acceptance harness and receipt validator (#5406); live platform/owner acceptance remains incomplete and parent-owned.
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -51,16 +51,78 @@ A component or proposal must not be mistaken for a working owner platform. This 
 
 ## Acceptance Criteria
 
-- [ ] The composed harness proves see -> explain -> exact approval -> existing workflow -> actual readback -> try/trial flow, and cannot render a model claim as delivery or acceptance.
+- [x] The composed harness proves see -> explain -> exact approval -> existing workflow -> actual readback -> try/trial flow, and cannot render a model claim as delivery or acceptance.
   - Verify: `tests/builderops/test_builder_owner_acceptance.py::test_composed_owner_flow_preserves_real_effect_and_trial_evidence`
-- [ ] A missing required component/receipt, stale candidate, disconnected client or unknown effect yields an explicit incomplete result; no component-pass count or closed-issue count produces overall acceptance.
+- [x] A missing required component/receipt, stale candidate, disconnected client or unknown effect yields an explicit incomplete result; no component-pass count or closed-issue count produces overall acceptance.
   - Verify: `tests/builderops/test_builder_owner_acceptance.py::test_incomplete_or_stale_evidence_cannot_pass_acceptance`
-- [ ] The parent pilot plan names exact identities, owner questions, LLM availability/failure cases, selected workflow mode, delegated authority, stop/recovery proof, residual limits and explicit owner validation.
+- [x] The parent pilot plan names exact identities, owner questions, LLM availability/failure cases, selected workflow mode, delegated authority, stop/recovery proof, residual limits and explicit owner validation.
   - Verify: runtime receipt: builder_owner_platform_acceptance_plan.v1
 
 ## How to Verify (Pre-Merge)
 
 Run named harness tests plus the production source/action fixture suite. Validate source/receipt references and publish an operator-readable pilot procedure. At parent validation collect exact VM102 source/image/epoch, second consumer and owner observation; do not close this child as a claimed live factory deployment.
+
+The executable composition is `tests/builderops/test_builder_owner_acceptance.py`, reusing
+`tests/builderops/issue_delivery_production_harness.py`: real authenticated service/PostgreSQL
+kernel, approval, task admission, protected destination/worker/executor, host outbox and independent
+delivery readback. Only external GitHub, model, host isolation and worker transports are doubled.
+The scenario binds typed deployment fixture evidence and FCA-09 confirmed outcome writes to the
+same exact candidate and subject. These test writes never claim live human acceptance.
+
+Run the named tests with both `DATABASE_URL` and `BUILDEROPS_DATABASE_URL` set to the same explicit
+scratch database per `docs/development/DEV_WORKFLOW.md :: Pointing the PG lane at a scratch database`.
+The shared fixture creates and drops only its unique schema. A skipped PG test is missing proof.
+The source/action regression suite includes `test_issue_delivery_operation.py`,
+`test_issue_delivery_readback.py`, `test_issue_delivery_effect_executor.py`,
+`test_owner_fact_producers.py`, `test_devui_owner_synthesis.py`, and the typed runtime receipt tests.
+
+`app.builderops.owner_acceptance.read_owner_acceptance` is a read-only source composition for
+acceptance tooling, with authenticated delivery client, native task, independent GitHub reader,
+authenticated current-owner-outcome reader, connection state and observation clock as explicit
+inputs. It returns `builder_owner_acceptance_evidence.v1`, exact receipt references and a bounded
+missing-evidence list. It checks source freshness (default 300 seconds), production delivery
+readback, candidate/profile/epoch identity, outcome integrity and current trial/decision lineage,
+then rereads owner selection and epoch to detect change during composition. After the last source
+I/O, all joined observations are checked against one final clock so slow reads cannot extend their
+freshness window; expiry withdraws delivery and owner references. Its result is
+rebuildable and unpersisted; failures return `incomplete`. `evidence_complete` means only that
+the supplied current source chain joined consistently. Hashes are not source authentication.
+The caller must use authenticated source owners; arbitrary offline JSON is not trusted proof.
+`platform_acceptance` remains `incomplete` in every result. There is no model call, command, provider
+activation, execution permission or new storage in the validator.
+
+## Operator procedure and live plan
+
+[The operator plan](owner_platform_acceptance_plan.json) is the explicit
+`builder_owner_platform_acceptance_plan.v1` artifact. Every missing live receipt has status
+`incomplete`, a null receipt reference and the exact identity fields still required. It is a
+procedure, not a signed receipt, deployment instruction or owner decision. Preserve it as the
+pre-merge template; collect actual receipts on parent #5399 through their existing owners.
+
+1. Read the plan's owner questions and observable success criteria before the trial. Identify the
+   exact live candidate source/image/config, VM102 identity, component inventory, control-plane
+   epoch and operator scope from current authenticated sources. Leave missing rows incomplete.
+2. Use the currently admitted hub-only `deliver_ready_issue` operation. Follow Overview to Focus,
+   inspect source-linked synthesis, and inspect the exact action preview. An explicit owner Start
+   authorizes only the bound issue/workflow/effects; Hold starts nothing. Inquiry admission does not
+   supply Issue-delivery permission. This child changes no visual surface or admission scope.
+3. Read reservation, attempt, entry, terminal and protected host effect receipts, then independently
+   inspect GitHub head/check/review/merge/closure evidence. A worker message or closed-issue count
+   cannot substitute. Exercise technical wait, model failure, revocation, ambiguous start and
+   client disconnection as described in the plan. On reconnect, observe the same operation key;
+   never redispatch from reconstructed UI/model text. Existing revocation stops later effects and
+   does not roll back an already committed effect.
+4. Read the deployment owner's current readiness/candidate/profile binding. Under separate owner
+   authority, the owner tries that candidate and submits the explicit FCA-09 trial and decision.
+   Read both immutable receipts and current selection. Missing, corrected, stale, contradictory or
+   rejected evidence cannot pass. Read-only #4749 acknowledgement is not this effectful acceptance.
+5. Retain actual second-repository admission, effects, scope and independent authority as missing
+   until #5405's live qualification is performed under its own authority. The harness never widens
+   the current hub operation. Keep #5399 open until all platform and explicit owner criteria pass;
+   fixture success, this child merge and baseline browser tests cannot close that live plan.
+
+Semantic usefulness, live model access, actual host isolation, complete VM102 deployment and real
+second-consumer operation remain unproved by these tests. The plan records those residual limits.
 
 ## Out of Scope
 

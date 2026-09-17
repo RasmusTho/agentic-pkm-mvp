@@ -396,6 +396,10 @@ flowchart TD
   Q --> U["M5 · workflow-specific autonomy"]
 ```
 
+FCA-07/#5406 now supplies the [composed harness, read-only validator and incomplete operator plan](../BUILDER_FACTORY_ACCEPTANCE/PREPARE_COMPOSED_OWNER_ACCEPTANCE.md#operator-procedure-and-live-plan)
+over the currently admitted hub operation. Its tests prove source composition and refusal cases;
+they neither qualify a second repository nor provide live owner/platform acceptance.
+
 There is no #5405/#5406 → live evidence → same child pickup cycle. There is also no waiver of
 complete-system health or owner acceptance: an incomplete live plan stays incomplete on its parent.
 The bounded first-read observation and full read-only pilot never launch actions or write

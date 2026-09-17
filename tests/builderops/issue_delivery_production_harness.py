@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import base64
@@ -580,11 +581,12 @@ class _ProductionWorkerTransport:
         self.entry_observed_during_call = False
         self.pre_entry_check: Callable[[], None] | None = None
 
-    def _effect_target(self) -> dict[str, Any]:
+    def _effect_target(self, effect_kind: str | None = None) -> dict[str, Any]:
+        effect_kind = effect_kind or self.effect_kind
         issue = self.approval["issue"]
         destination = self.approval["destination"]
         number = int(issue["number"])
-        if self.effect_kind == "claim":
+        if effect_kind == "claim":
             return {
                 "kind": "claim",
                 "issue_number": number,
@@ -592,7 +594,7 @@ class _ProductionWorkerTransport:
                 "expected_state": "open",
                 "expected_label": "agent:ready",
             }
-        if self.effect_kind == "publication":
+        if effect_kind == "publication":
             return {
                 "kind": "publication",
                 "issue_number": number,
@@ -604,7 +606,7 @@ class _ProductionWorkerTransport:
                 "body_sha256": "2" * 64,
                 "expected_remote_ref_state": "absent",
             }
-        if self.effect_kind == "merge":
+        if effect_kind == "merge":
             return {
                 "kind": "merge",
                 "issue_number": number,
@@ -658,8 +660,9 @@ class _ProductionWorkerTransport:
         receipt = _production_worker_receipt()
         receipt["worktree"] = "approved-worktree"
         if self.effect_kind != "claim":
+            kinds = ("publication", "merge", "closure") if self.effect_kind == "delivery" else (self.effect_kind,)
             receipt["effect_requests"] = [
-                {"effect_kind": self.effect_kind, "target": self._effect_target()}
+                {"effect_kind": kind, "target": self._effect_target(kind)} for kind in kinds
             ]
         completed = json.dumps(
             {
@@ -1006,6 +1009,8 @@ def issue_delivery_production_harness(
         revoke_before_effect: bool = False,
         lose_response_after_entry: bool = False,
         approval_ttl_seconds: float | None = None,
+        issue_body: str | None = None,
+        preview_observer: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> _ProductionHarness:
         nonlocal counter
         counter += 1
@@ -1072,6 +1077,11 @@ def issue_delivery_production_harness(
             base_sha=base_sha,
             operation_key=f"operation-pg-{uuid4().hex}",
         )
+        if issue_body is not None:
+            criteria = re.search(r"^## Acceptance Criteria\s*\n(.*?)(?=^## |\Z)", issue_body, re.MULTILINE | re.DOTALL)
+            assert criteria is not None
+            manifest["issue"]["body_hash"] = _sha(issue_body.encode())
+            manifest["issue"]["acceptance_criteria_hash"] = _sha(criteria[1].encode())
         if approval_ttl_seconds is not None:
             manifest["expires_at"] = (
                 datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds)
@@ -1079,6 +1089,8 @@ def issue_delivery_production_harness(
         if parent:
             raise ValueError("production parent fixture is not yet required")
         preview = owner.issue_delivery_preview(manifest=manifest)
+        if preview_observer is not None:
+            preview_observer(preview)
         approval = owner.issue_delivery_start(decision="start", manifest=preview["manifest"])[
             "approval"
         ]
