@@ -515,6 +515,73 @@ is an intermediate owner-value checkpoint and cannot close #5399.
 - [ ] A separately authorized second consumer completes the selected bounded workflow under its own repo/policy and produces real readback, with no hub policy/credential borrowing. Verify: runtime receipt: builder_second_consumer_pilot.v1
 - [ ] Exact candidate trial/acceptance or rejection is explicitly recorded by the owner, and no fixture or model judgment supplies that human fact. Verify: runtime receipt: builder_owner_platform_acceptance.v1
 
+<!-- anchor: FCA-ID-SECOND -->
+### FCA-ID-SECOND — bounded Bifrost documentation delivery target
+
+This is the source contract for exactly one later documentation candidate in
+`RasmusTho/bifrost`, the existing ADR-0050 constituent. It is not delivered admission or a grant.
+The current `normalize_manifest` qualification remains hub-only; FCA-ID-A/B/C repository support
+and FCA-07 fixtures do not prove a live Bifrost journey. The owner's preparation mandate names
+this one separate consumer, but neither it nor installed deploy/rollback delegation grants
+Issue-delivery effects. No live Issue, branch, host, approval or human trial is selected here.
+
+**Compatibility and identity.** Extend the existing operation as `fca-issue-delivery.v2`, retaining
+`deliver_ready_issue` and the same service, adapter, protected executor and receipt/outbox owners.
+The bounded v2 consumer is only `rasmustho/bifrost`; v1 remains only `rasmustho/agentic-pkm-mvp`.
+Keep v1 hashes, stored approvals, keys and historical readback unchanged. Never upgrade a v1
+approval, reinterpret its single source revision, or replay it as v2. Unsupported versions and a
+third repository refuse, even if a credential or generic RepoRef exists for them. A new v2
+operation requires its own exact preview and authenticated human Start.
+
+The closed v2 manifest must retain all FCA-ID-01 bindings and distinguish these two sources:
+
+| Binding | Exact authority and independent reread |
+| --- | --- |
+| Consumer | `repository`, `source.revision` and destination base identify Bifrost, an immutable 40-character commit and the approved protected base ref/SHA. Bind the Bifrost Issue number/node/URL, body/AC hashes, one context/plan, branch/worktree/run, permitted documentation paths, parent evidence or explicit `none`, and the consumer verification profile. Re-read GitHub Issue/base/policy and destination Git identity independently. No hub Issue or checkout can fill an absent consumer identity. |
+| Trusted workflow | Add explicit `workflow.repository = rasmustho/agentic-pkm-mvp` and `workflow.source_revision` as a separately pinned immutable commit. Its canonical artifact manifest/hash binds the CLI/launcher, executor, isolation adapter, owning skills/shared gates and verification machinery at that commit. Read these from the host's existing protected `trusted_workflow_root`, verifying its repository/commit and artifact bytes independently of Bifrost. Bind the pair into approval, effect requests, operation/readback receipts and their hashes; equal-looking revision strings do not collapse repository identities. |
+
+The frozen plan must preserve both pins, use Bifrost's governed stack/policy for validation, and
+never assume that Python/hub checks prove a Bifrost result. Workflow code is not copied into the
+consumer to satisfy artifact validation. Neither source may default from CWD, model text, an
+ambient checkout, credential scope or an unpinned `main`. The implementation must update both
+`issue_delivery_operation.py::_default_live_binding_reader` and the protected executor's artifact
+and request validation, including the host composition's explicit workflow-root binding; its
+existing separate root is reuse, not evidence that the default reader already separates sources.
+
+**Policy before pilot.** Use existing RepoRef routing and
+`GitHubProtectedRepositoryAuthority.delivery_manifest` to read Bifrost's
+`.builderops/delivery-manifest.json` from the protected target base. Bind its revision/hash,
+repository, allowed documentation paths/effects, required checks/profile and exact credential
+identifier/rotation generation. A separately governed preparation must install and review that
+consumer policy before pilot approval; the pilot cannot add or broaden its own policy, grants,
+workflow, credential mapping or acceptance profile. Existing Bifrost inherited governance and
+tracking conventions must be reconciled for the selected local Issue by that preparation, without
+double-tracking or silently treating a hub Issue as the consumer Issue. No policy is installed here.
+
+The protected executor resolves credentials only with the exact consumer repository, manifest
+credential ID and rotation generation through the existing `HostCredentialResolver`. Missing,
+unavailable or inconsistent policy/credential/profile refuses before the first effect. Consumer
+permissions do not grant workflow-repository mutation; this target adds no cross-repository parent
+write. A parent evidence target, if needed, remains exact and within the consumer's admitted scope.
+
+**Continuing gates and readback.** Revalidate both source identities/artifacts, the target-base
+policy, consumer verification requirements, grant/epoch/expiry and destination isolation at Start,
+pre-entry claim and each later effect boundary. Either-source drift, base/policy drift or a foreign
+claim withdraws further permission; obtain a new exact approval after reconciliation. Distinguish
+the operation's own expected claim/content/head changes from authority drift. Preserve the original
+approval and completed effects; never silently substitute the new workflow or rebase under it.
+FCA-ID-02/03 retain their reservation, attempt, entry, stop and ambiguous-replay semantics: a lost
+response or non-unique source lookup cannot justify another attempt, key or worker. Authorized
+historical readback survives expiry/withdrawal and carries the original version and both pins;
+it does not reopen execution. Delivery still needs independently observed Bifrost PR/head/checks,
+review, merge, closure and owner-doc evidence, not worker success text.
+
+The only candidate admission added to the target is
+[FCA-09-BIFROST](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target).
+It proves availability of exact documentation for an owner trial, never native-app behavior,
+Xcode readiness or a human outcome. Repository work and later activation are ordered in the
+[implementation dependency graph](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph).
+
 ### First-repository milestone
 
 M2 narrows the first observed journey to one owner, this repository, one named feature/Issue and

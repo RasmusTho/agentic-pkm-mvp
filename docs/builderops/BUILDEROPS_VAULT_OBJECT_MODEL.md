@@ -888,6 +888,77 @@ coverage; an empty subject list is not proof of no earlier outcome. Missing prof
 repository seams do not provision credentials, activate a host, perform an inquiry or authorize
 the separately gated Issue-delivery operation.
 
+<!-- anchor: FCA-09-BIFROST -->
+#### FCA-09-BIFROST — non-image documentation candidate target
+
+This is a bounded target extension of FCA-09 for exactly one documentation candidate in
+`RasmusTho/bifrost`, under
+[FCA-ID-SECOND](../BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target).
+The implemented producer above remains VM102-only. This contract adds no live source, grant,
+trial or acceptance, and does not widen old VM102 profiles or receipts.
+
+**One source owner.** Bifrost's protected GitHub repository is the documentation artifact owner.
+Name its one bounded source adapter `bifrost_git_documentation_source`, implemented within the
+existing `owner_fact_producers.py` source/readback path using the existing protected GitHub
+repository authority. This is a source-owner identifier, not a new registry, provider family,
+service or writer. Bifrost inherits ecosystem governance under ADR-0050; the hub workflow source
+does not own Bifrost document bytes. The existing authenticated BuilderOps service remains the sole
+FCA-09 outcome writer and the existing PostgreSQL receipt/outbox owner retains durability.
+
+**Finite candidate and profile.** Before any pilot, independently prepared Bifrost protected-base
+policy must admit exactly one documentation subject/profile and a finite explicit path set drawn
+from `README.md` and `docs/**/*.md`. No glob is an executable grant: the later exact proposal must
+enumerate every permitted file, with no images, app/package code, executable scripts, governance
+bootstrap or policy changes. The source-owned profile binds repository, exact Issue subject,
+profile ID/version/hash, designated human owner, permission authority/version/epoch, required
+criterion IDs/content hashes, bounded limitation refs and retention policy. This slice chooses
+none of those live values. Any consumer tracking/governance preparation precedes this selection.
+
+`candidate_ref` binds the Bifrost delivery merge/source commit, exact document paths, each Git blob
+OID and SHA-256 of the served bytes. `source_revision` is that Bifrost commit, never the separately
+pinned workflow commit. The non-image variant explicitly represents image digests and deployed
+runtime configuration as `not_applicable`; it must not invent an image digest or borrow VM102's
+configuration fields. `environment_ref` identifies the GitHub repository/document view at the
+immutable commit and the versioned documentation access policy. This is the trial environment;
+it makes no mobile-app, simulator, Xcode, deployment or whole-platform readiness claim.
+
+**Readiness production and expiry.** The existing authenticated service's source producer must
+independently read the protected Bifrost policy/profile, exact merge/base reachability and delivery
+readback, all selected commit/tree/blob bytes and the addressed owner's read access. It may issue
+a source-owned readiness `BuilderOpsReceipt` only if the finite documentation verification profile
+passes on that exact candidate and every required document is retrievable. Preserve the underlying
+Bifrost required-check policy; declaring image/Xcode acceptance inapplicable cannot waive a
+repository merge check. Merged code or a passed check alone is insufficient readiness.
+
+The receipt binds source owner, repository/subject, candidate/environment, delivery operation and
+merge refs, policy/profile/criterion hashes, per-criterion technical results, limitation refs,
+server `observed_at`, `expires_at` and receipt ID/hash/version. The observation window is at most
+24 hours, with `observed_at < expires_at`; policy may shorten it. Eligibility is `ready` only while
+all required checks and reads agree and server time precedes expiry. `withdrawn` covers expiry,
+policy withdrawal, loss of access or source/profile/candidate drift; unavailable or contradictory
+readback is explicitly `unavailable` or `conflict`, never ready. A refreshed receipt is a new
+readiness binding and cannot transfer an old trial/acceptance to itself. No source content is copied
+into the readiness or outcome payload.
+
+**Independent admission and human evidence.** Extend `read_owner_profiles` and `read_owner_binding`
+only for this named non-image source and preserve the VM102 path. At confirmation and current
+readback, re-read the same protected source and exact receipt/profile/candidate binding; a browser,
+worker, fixture or caller-authored receipt cannot attest readiness. Bind the new source through the
+existing service's `owner_outcomes:confirm` admission and guarded outcome transaction. Extend the
+closed candidate/reference validation coherently; old `builder_owner_outcome.v1` requests retain
+their exact bytes/hash and cannot acquire non-image applicability retroactively. Unknown source or
+candidate variants refuse. No second outcome schema, confirmation service or decision store is needed.
+
+All FCA-09 confirmation, replay, conflict, corrective/predecessor, retention and historical-read
+rules above apply unchanged. The authenticated human must explicitly record `tried` or
+`unable_to_try`, then independently confirm `accepted` or `rejected` against the exact required
+documentation criteria. Acceptance requires the current `tried` receipt for the complete binding.
+An agent may prepare a proposal but cannot submit human confirmation, fabricate observations or
+turn merge/readiness into acceptance. Changed material limits/profile/bytes or revoked authority
+withdraw current projection without rewriting history. During source outage, authorized keyed
+lookup may return an intact historical outcome with unavailable projection. Only an independently
+retained exact withdrawn readiness binding can support `unable_to_try`; missing history cannot.
+
 ### PromotionIntent
 
 **Purpose:** Represent an explicit intent to move BuilderOps material into another authority surface:
