@@ -648,6 +648,37 @@ def test_targeted_janitor_apply_resumes_removed_generation_branch_cleanup(tmp_pa
     assert record["status"] == "removed"
 
 
+def test_targeted_janitor_apply_never_fetches_or_prunes(tmp_path) -> None:
+    """The production entrypoint preserves unrelated remote-tracking refs."""
+    repo, worktree, registry_path, branch, generation = _init_repo_with_tombstoned_branch(
+        tmp_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+    base = git_hygiene.run_git(["rev-parse", "origin/main"], repo)
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/unrelated", base],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "config", "fetch.prune", "true"], cwd=repo, check=True)
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: _merged_pr_state(repo, branch)},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=generation,
+    )
+
+    assert result["ok"] is True, result["errors"]
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/unrelated"],
+        cwd=repo,
+    ).returncode == 0
+
+
 @pytest.mark.parametrize(
     "authority",
     ("path_lease", "branch_lease", "late_path_lease", "late_branch_lease", "binding_change"),

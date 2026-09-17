@@ -3075,14 +3075,18 @@ def janitor_apply(
             errors.append(record)
             return False
 
-    apply_git(["fetch", "--prune", "origin"], {"artifact": "remote", "action": "fetch_prune"})
-    if errors:
-        return {
-            "mode": "apply",
-            "destructive_actions": actions,
-            "errors": errors,
-            "ok": False,
-        }
+    # Targeted cleanup is authorized only for the selected worktree or its
+    # bound tombstone branch. Fetch/prune mutates unrelated remote-tracking
+    # refs, so it belongs exclusively to the untargeted global janitor path.
+    if target_worktree is None:
+        apply_git(["fetch", "--prune", "origin"], {"artifact": "remote", "action": "fetch_prune"})
+        if errors:
+            return {
+                "mode": "apply",
+                "destructive_actions": actions,
+                "errors": errors,
+                "ok": False,
+            }
 
     def reload_active_leases() -> tuple[list[dict[str, Any]], set[str]] | None:
         try:

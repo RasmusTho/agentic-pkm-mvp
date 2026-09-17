@@ -280,7 +280,94 @@ def test_targeted_janitor_apply_mutates_only_selected_worktree(
     assert not any(str(other) in command for command in commands)
     assert not any(command[:2] == ["push", "origin"] for command in commands)
     assert not any(command[:2] == ["stash", "drop"] for command in commands)
+    assert ["fetch", "--prune", "origin"] not in commands
+    assert not any(command[:2] == ["remote", "prune"] for command in commands)
     assert ["branch", "-d", "codex/unrelated"] not in commands
+
+
+def _init_remote_repo_with_stale_tracking_ref(tmp_path: Path) -> Path:
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "--initial-branch=main", remote], check=True)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--initial-branch=main", repo], check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "fetch", "origin"], cwd=repo, check=True)
+    base = git_hygiene.run_git(["rev-parse", "origin/main"], repo)
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/unrelated", base], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "fetch.prune", "true"], cwd=repo, check=True)
+    return repo
+
+
+def test_targeted_janitor_preserves_unrelated_remote_tracking_refs(tmp_path) -> None:
+    """Targeted apply must not prune a stale ref, even when fetch.prune is true."""
+    repo = _init_remote_repo_with_stale_tracking_ref(tmp_path)
+    branch = "codex/target"
+    subprocess.run(["git", "branch", branch], cwd=repo, check=True)
+    worktree = tmp_path / "target"
+    subprocess.run(["git", "worktree", "add", str(worktree), branch], cwd=repo, check=True)
+    (worktree / "feature.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=worktree, check=True)
+    subprocess.run(["git", "commit", "-m", "feature"], cwd=worktree, check=True)
+    subprocess.run(["git", "merge", "--no-ff", "-m", "merge feature", branch], cwd=repo, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "fetch", "origin"], cwd=repo, check=True)
+    base = git_hygiene.run_git(["rev-parse", "origin/main"], repo)
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/unrelated", base], cwd=repo, check=True
+    )
+    subprocess.run(["git", "config", "fetch.prune", "true"], cwd=repo, check=True)
+
+    registry_path = tmp_path / "agent-worktrees.json"
+    registration = agent_worktree.register_worktree(
+        repo, worktree=worktree, owner="owner", registry_path=registry_path
+    )
+    agent_worktree.complete_worktree(
+        repo, worktree=worktree, owner="owner", registry_path=registry_path
+    )
+    lease_path = tmp_path / "leases.json"
+    lease_path.write_text("[]\n", encoding="utf-8")
+
+    result = agent_worktree.janitor_apply(
+        repo,
+        registry_path=registry_path,
+        pr_states={branch: {"state": "MERGED"}},
+        lease_path=lease_path,
+        target_worktree=worktree,
+        target_generation=registration["generation"],
+    )
+
+    assert result["ok"] is True, result["errors"]
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/unrelated"],
+        cwd=repo,
+    ).returncode == 0
+
+
+def test_untargeted_janitor_retains_fetch_prune(tmp_path) -> None:
+    """The global janitor keeps its established fetch/prune behavior."""
+    repo = _init_remote_repo_with_stale_tracking_ref(tmp_path)
+
+    result = git_hygiene.janitor_apply(
+        repo,
+        pr_states={},
+        active_lease_loader=lambda: [],
+        lifecycle_authority_guard=_allow_lifecycle_authority,
+        lifecycle_records={},
+    )
+
+    assert result["ok"] is True, result["errors"]
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/remotes/origin/unrelated"],
+        cwd=repo,
+    ).returncode != 0
 
 
 def test_apply_real_git_reclaims_squash_merged_worktree_and_branch(tmp_path) -> None:
