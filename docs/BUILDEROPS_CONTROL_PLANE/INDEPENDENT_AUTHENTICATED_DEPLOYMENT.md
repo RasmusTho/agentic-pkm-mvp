@@ -183,6 +183,65 @@ version is recorded in the redacted operator receipt. The runner's GitHub authen
 in its normal credential
 store or environment and is never copied into the repository, command output, or receipt.
 
+### Owner-delegated unattended updates
+
+The normal `deploy` and `rollback` actions remain available for a deliberately
+interactive operator run. To avoid asking the owner to re-authorize every
+routine update, the deployment host may install one durable, root-owned owner
+authorization profile at `/etc/builderops/owner-authorization.json`. The
+profile is a bounded delegation, not a bypass: it admits only this repository,
+`refs/heads/main`, the `builderops-control-plane` project on VM 102 guest
+`builder-system`, and the fixed `builderops` Docker socket. It must allow
+exactly `deploy` and `rollback`, name the owner, and expire within 90 days.
+
+The profile is installed once through the host's normal privileged provisioning
+path with mode `0600` or `0640`; it must be a regular file owned by root. Its
+canonical JSON fingerprint is recorded in every unattended success or refusal
+receipt. The profile contains no GitHub token, SSH key, password, or other
+secret. Replacing or revoking it is the owner-control operation; expiry,
+hostname mismatch, scope drift, missing profile, or malformed permissions fail
+closed before Docker, database, pin, or ingress mutation.
+
+The repository helper can create or deliberately rotate the profile during that
+one-time owner operation; it refuses non-root execution, accidental overwrite,
+blank owner identity, invalid expiry, and a review window longer than 90 days:
+
+```bash
+sudo python3 scripts/builderops/owner_authorization.py issue \
+  --file /etc/builderops/owner-authorization.json \
+  --authorized-by owner \
+  --expires-at 2026-10-17T04:00:00Z \
+  --confirm 'AUTHORIZE BOB-1 BUILDEROPS UPDATES'
+```
+
+Use `--replace` only when rotating or revoking the existing delegation is the
+intentional owner action. The command does not create or copy any GitHub or
+runtime secret.
+
+After installation, the bounded no-prompt path is:
+
+```bash
+scripts/deploy_builderops.sh unattended-deploy <attested-candidate-pair-receipt.json>
+scripts/deploy_builderops.sh unattended-rollback
+```
+
+Every unattended deployment still performs the local `gh attestation verify`
+against the exact candidate receipt immediately before mutation, and retains
+the existing engine/project, secret, migration, readiness, single-writer,
+ingress, and automatic-rollback gates. A later candidate therefore needs no
+new owner click when it remains inside the delegated scope, but a changed
+repository, source ref, target, authorization epoch, security posture, or
+expired review window requires a new owner profile. This removes repetitive
+approval work without granting universal unattended operation or changing
+GitHub delivery authority.
+
+Unattended rollback is intentionally narrower than forward update: the previous
+pin must be root-owned and carry the SHA of a stored candidate-pair receipt from
+an earlier successful deployment. That receipt is re-read and checked against
+the previous source/image pins, repository, `main` ref and attestation workflow
+before rollback. A legacy previous pin without this provenance is refused;
+manual rollback remains available through the existing operator path.
+
 Run the following command on the VM 102 deployment host with the exact candidate-pair receipt and
 source SHA supplied by the release evidence:
 

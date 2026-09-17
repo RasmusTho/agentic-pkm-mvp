@@ -34,7 +34,7 @@ python3 "${ROOT}/scripts/builderops/deployment_lock.py" \
 }
 
 usage() {
-  echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback" >&2
+  echo "usage: scripts/deploy_builderops.sh deploy <attested-candidate-pair-receipt.json> | rollback | unattended-deploy <attested-candidate-pair-receipt.json> | unattended-rollback" >&2
   exit 2
 }
 
@@ -44,7 +44,7 @@ read_pin() {
 }
 
 write_pin() {
-  local file="${1:?pin file required}" source_sha="${2:?source SHA required}" digest="${3:?digest required}" postgres_digest="${4:?postgres digest required}"
+  local file="${1:?pin file required}" source_sha="${2:?source SHA required}" digest="${3:?digest required}" postgres_digest="${4:?postgres digest required}" candidate_receipt_sha="${5:-}"
   local repository postgres_repository local_durability_mode tmp
   repository="$(read_pin "${PIN_FILE}" BUILDEROPS_IMAGE_REPOSITORY)"
   postgres_repository="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_REPOSITORY)"
@@ -56,6 +56,7 @@ write_pin() {
     printf 'BUILDEROPS_SOURCE_SHA=%s\n' "${source_sha}"
     printf 'BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=%s\n' "${postgres_repository}"
     printf 'BUILDEROPS_POSTGRES_IMAGE_DIGEST=%s\n' "${postgres_digest}"
+    printf 'BUILDEROPS_CANDIDATE_RECEIPT_SHA=%s\n' "${candidate_receipt_sha}"
     printf 'BUILDEROPS_DOCKER_CONTEXT=%s\n' "${BUILDEROPS_DOCKER_CONTEXT}"
     printf 'PRODUCT_DOCKER_CONTEXT=%s\n' "${PRODUCT_DOCKER_CONTEXT}"
     printf 'BUILDEROPS_LOCAL_DURABILITY_MODE=%s\n' "${local_durability_mode}"
@@ -83,17 +84,131 @@ validate_identity() {
   [[ "${3}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "PostgreSQL image pin must be an immutable sha256 digest" >&2; exit 2; }
 }
 
+archive_candidate_receipt() {
+  local source="${1:?candidate receipt source required}" receipt_sha="${2:?candidate receipt SHA required}"
+  RECEIPT_DIR="${RECEIPT_DIR}" SOURCE="${source}" RECEIPT_SHA="${receipt_sha}" python3 - <<'PY'
+import hashlib
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+receipt_dir = Path(os.environ["RECEIPT_DIR"])
+source = Path(os.environ["SOURCE"])
+receipt_sha = os.environ["RECEIPT_SHA"]
+raw = source.read_bytes()
+if hashlib.sha256(raw).hexdigest() != receipt_sha:
+    raise SystemExit("candidate receipt changed after attestation")
+candidate_dir = receipt_dir / "candidate-pairs"
+candidate_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+if os.environ.get("BUILDEROPS_AUTHORIZATION_MODE") == "unattended":
+    if not candidate_dir.is_absolute():
+        raise SystemExit("unattended candidate receipt directory must be absolute")
+    current = candidate_dir
+    while True:
+        metadata = current.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0:
+            raise SystemExit("unattended candidate receipt directory must be root-owned")
+        if metadata.st_mode & 0o022:
+            raise SystemExit("unattended candidate receipt directory must not be writable")
+        if current == Path("/"):
+            break
+        current = current.parent
+target = candidate_dir / f"{receipt_sha}.json"
+descriptor, temporary = tempfile.mkstemp(dir=candidate_dir, prefix=f".{target.name}.tmp.")
+try:
+    os.fchmod(descriptor, 0o640)
+    if os.geteuid() == 0:
+        os.fchown(descriptor, 0, 0)
+    with os.fdopen(descriptor, "wb") as stream:
+        descriptor = -1
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, target)
+    temporary = ""
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+    if temporary:
+        Path(temporary).unlink(missing_ok=True)
+PY
+}
+
+snapshot_candidate_receipt() {
+  local source="${1:?candidate receipt source required}"
+  RECEIPT_DIR="${RECEIPT_DIR}" SOURCE="${source}" python3 - <<'PY'
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+receipt_dir = Path(os.environ["RECEIPT_DIR"])
+source = Path(os.environ["SOURCE"])
+descriptor = os.open(source, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+try:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit("candidate receipt must be a regular file")
+    raw = os.read(descriptor, metadata.st_size)
+finally:
+    os.close(descriptor)
+candidate_dir = receipt_dir / "candidate-pairs"
+candidate_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
+if os.environ.get("BUILDEROPS_AUTHORIZATION_MODE") == "unattended":
+    if not candidate_dir.is_absolute():
+        raise SystemExit("unattended candidate receipt directory must be absolute")
+    current = candidate_dir
+    while True:
+        metadata = current.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0:
+            raise SystemExit("unattended candidate receipt directory must be root-owned")
+        if metadata.st_mode & 0o022:
+            raise SystemExit("unattended candidate receipt directory must not be writable")
+        if current == Path("/"):
+            break
+        current = current.parent
+descriptor, temporary = tempfile.mkstemp(
+    dir=candidate_dir,
+    prefix=f".{source.name}.snapshot.",
+    suffix=".json",
+)
+try:
+    os.fchmod(descriptor, 0o640)
+    if os.geteuid() == 0:
+        os.fchown(descriptor, 0, 0)
+    with os.fdopen(descriptor, "wb") as stream:
+        descriptor = -1
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    print(temporary)
+    temporary = ""
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+    if temporary:
+        Path(temporary).unlink(missing_ok=True)
+PY
+}
+
 load_attested_candidate_pair() {
   local receipt="${1:?candidate pair receipt required}"
   local expected_repository="RasmusTho/agentic-pkm-mvp"
   local expected_workflow="RasmusTho/agentic-pkm-mvp/.github/workflows/app-image-build.yml"
-  local builderops_socket
+  local builderops_socket snapshot_receipt
+  snapshot_receipt="$(snapshot_candidate_receipt "${receipt}")" || {
+    record_preflight_refusal "candidate_receipt_snapshot_refused" 75
+    exit 75
+  }
+  candidate_snapshot="${snapshot_receipt}"
+  trap 'if [ -n "${candidate_snapshot:-}" ]; then rm -f -- "${candidate_snapshot}"; fi' EXIT
   command -v gh >/dev/null 2>&1 || {
     echo "gh CLI is required to verify the BuilderOps candidate pair attestation" >&2
     exit 69
   }
   IFS=$'\t' read -r target_sha target_digest target_postgres_digest < <(
-    python3 - "${receipt}" <<'PY'
+    python3 - "${snapshot_receipt}" <<'PY'
 import json
 import re
 import sys
@@ -122,6 +237,15 @@ for name, value in (("control-plane", control), ("PostgreSQL", postgres)):
 print(source_sha, control, postgres, sep="\t")
 PY
   )
+  target_receipt_sha="$(python3 - "${snapshot_receipt}" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+  target_receipt_file="${snapshot_receipt}"
   [ "${BUILDEROPS_DOCKER_CONTEXT}" = "builderops" ] || {
     echo "BuilderOps attestation must run with the fixed VM 102 builderops context" >&2
     exit 75
@@ -134,12 +258,19 @@ PY
     echo "BuilderOps attestation requires the local VM 102 Docker context" >&2
     exit 75
   }
-  gh attestation verify "${receipt}" \
+  gh attestation verify "${snapshot_receipt}" \
     --repo "${expected_repository}" \
     --signer-workflow "${expected_workflow}" \
     --source-ref refs/heads/main \
     --source-digest "${target_sha}" >/dev/null
-  export target_sha target_digest target_postgres_digest
+  archive_candidate_receipt "${target_receipt_file}" "${target_receipt_sha}" || {
+    record_preflight_refusal "candidate_receipt_archive_refused" 75 "${target_sha}" "${target_digest}" "${target_postgres_digest}"
+    exit 75
+  }
+  target_receipt_file="${RECEIPT_DIR}/candidate-pairs/${target_receipt_sha}.json"
+  rm -f -- "${candidate_snapshot}"
+  candidate_snapshot=""
+  export target_sha target_digest target_postgres_digest target_receipt_sha target_receipt_file
 }
 
 wait_ready() {
@@ -216,8 +347,10 @@ record_receipt() {
   mkdir -p "${RECEIPT_DIR}"
   path="${RECEIPT_DIR}/${timestamp}-${action}.json"
   ACTION="${action}" SOURCE_SHA="${source_sha}" IMAGE_DIGEST="${digest}" POSTGRES_IMAGE_DIGEST="${postgres_digest}" PREVIOUS_DIGEST="${previous_digest}" PREVIOUS_POSTGRES_DIGEST="${previous_postgres_digest}" \
+    CANDIDATE_RECEIPT_SHA="${target_receipt_sha:-}" CANDIDATE_RECEIPT_FILE="${target_receipt_file:-}" \
     ENGINE_ID="${engine_id}" RECORDED_AT="${timestamp}" python3 - "${path}" <<'PY'
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -243,6 +376,9 @@ payload = {
     "dual_writer": "forbidden",
     "external_effect_reconciliation_required": True,
     "rollback_data_rewind": "forbidden",
+    "candidate_receipt_sha": os.environ.get("CANDIDATE_RECEIPT_SHA"),
+    "authorization_mode": os.environ.get("BUILDEROPS_AUTHORIZATION_MODE", "manual"),
+    "authorization_fingerprint": os.environ.get("BUILDEROPS_AUTHORIZATION_FINGERPRINT"),
     "recorded_at": os.environ["RECORDED_AT"],
     "database_rebuild_required": False,
 }
@@ -307,6 +443,8 @@ payload = {
         "no_mutation_performed",
     ],
     "preflight_exit_code": int(os.environ["EXIT_CODE"]),
+    "authorization_mode": os.environ.get("BUILDEROPS_AUTHORIZATION_MODE", "manual"),
+    "authorization_fingerprint": os.environ.get("BUILDEROPS_AUTHORIZATION_FINGERPRINT"),
 }
 payload["evidence_fingerprint"] = hashlib.sha256(
     json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -319,23 +457,105 @@ PY
   echo "recorded BuilderOps preflight refusal receipt: ${path}" >&2
 }
 
-action="${1:-}"
+requested_action="${1:-}"
+authorization_mode="manual"
+case "${requested_action}" in
+  unattended-deploy)
+    authorization_mode="unattended"
+    action="deploy"
+    ;;
+  unattended-rollback)
+    authorization_mode="unattended"
+    action="rollback"
+    ;;
+  *)
+    action="${requested_action}"
+    ;;
+esac
+export BUILDEROPS_AUTHORIZATION_MODE="${authorization_mode}"
+unset BUILDEROPS_AUTHORIZATION_FINGERPRINT
 load_contexts
 current_sha="$(read_pin "${PIN_FILE}" BUILDEROPS_SOURCE_SHA)"
 current_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_IMAGE_DIGEST)"
 current_postgres_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
 
+validate_unattended_authorization() {
+  local requested_operation="${1:?operation required}"
+  local authorization_file="${BUILDEROPS_AUTHORIZATION_FILE:-/etc/builderops/owner-authorization.json}"
+  local builderops_socket
+  authorization_fingerprint="$({
+    python3 "${ROOT}/scripts/builderops/owner_authorization.py" validate \
+      --file "${authorization_file}" \
+      --action "${requested_operation}" \
+      --hostname "$(hostname -s)"
+  })" || {
+    record_preflight_refusal "owner_authorization_refused" 78
+    exit 78
+  }
+  export BUILDEROPS_AUTHORIZATION_FINGERPRINT="${authorization_fingerprint}"
+  [ "${BUILDEROPS_DOCKER_CONTEXT}" = "builderops" ] || {
+    record_preflight_refusal "unattended_builderops_context_refused" 75
+    exit 75
+  }
+  builderops_socket="$(docker context inspect --format '{{.Endpoints.docker.Host}}' builderops 2>/dev/null)" || {
+    record_preflight_refusal "unattended_builderops_context_unavailable" 75
+    exit 75
+  }
+  [ "${builderops_socket}" = "unix:///run/docker-builderops.sock" ] || {
+    record_preflight_refusal "unattended_builderops_context_refused" 75
+    exit 75
+  }
+}
+
+validate_unattended_rollback_candidate() {
+  local previous_receipt_sha candidate_file
+  python3 "${ROOT}/scripts/builderops/owner_authorization.py" secure-file \
+    --file "${PREVIOUS_PIN_FILE}" >/dev/null 2>&1 || {
+    record_preflight_refusal "rollback_pin_custody_refused" 78
+    exit 78
+  }
+  previous_receipt_sha="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_CANDIDATE_RECEIPT_SHA)"
+  [[ "${previous_receipt_sha}" =~ ^[0-9a-f]{64}$ ]] || {
+    record_preflight_refusal "rollback_candidate_provenance_missing" 78
+    exit 78
+  }
+  candidate_file="${RECEIPT_DIR}/candidate-pairs/${previous_receipt_sha}.json"
+  python3 "${ROOT}/scripts/builderops/owner_authorization.py" verify-candidate \
+    --file "${candidate_file}" \
+    --receipt-sha "${previous_receipt_sha}" \
+    --source-sha "${target_sha}" \
+    --image-digest "${target_digest}" \
+    --postgres-digest "${target_postgres_digest}" >/dev/null 2>&1 || {
+    record_preflight_refusal "rollback_candidate_provenance_refused" 78
+    exit 78
+  }
+  target_receipt_sha="${previous_receipt_sha}"
+  target_receipt_file="${candidate_file}"
+  export target_receipt_sha target_receipt_file
+}
+
 case "${action}" in
   deploy)
-    [ "$#" -eq 2 ] || usage
-    load_attested_candidate_pair "${2}"
+    [ "$#" -eq 2 ] || { [ "${authorization_mode}" = "unattended" ] && usage; }
+    candidate_receipt="${2}"
+    [ -n "${candidate_receipt:-}" ] || usage
+    if [ "${authorization_mode}" = "unattended" ]; then
+      validate_unattended_authorization deploy
+    fi
+    load_attested_candidate_pair "${candidate_receipt}"
     ;;
   rollback)
     [ "$#" -eq 1 ] || usage
+    if [ "${authorization_mode}" = "unattended" ]; then
+      validate_unattended_authorization rollback
+    fi
     [ -f "${PREVIOUS_PIN_FILE}" ] || { echo "previous BuilderOps pin is unavailable" >&2; exit 2; }
     target_sha="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_SOURCE_SHA)"
     target_digest="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_IMAGE_DIGEST)"
     target_postgres_digest="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
+    if [ "${authorization_mode}" = "unattended" ]; then
+      validate_unattended_rollback_candidate
+    fi
     ;;
   *) usage ;;
 esac
@@ -375,7 +595,7 @@ activate_target() {
   # refresh below is still required because API recreation invalidates the
   # cached address.
   preflight_loopback_forwarder || return
-  write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" || return
+  write_pin "${PIN_FILE}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" "${target_receipt_sha:-}" || return
   builderops_compose "${ROOT}" pull db api worker migrate || return
   builderops_compose "${ROOT}" up -d db || return
   builderops_compose "${ROOT}" up --abort-on-container-exit --exit-code-from migrate migrate || return
