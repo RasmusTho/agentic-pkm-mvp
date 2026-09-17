@@ -70,8 +70,9 @@ def _guard_idempotency_namespace(
     record_type: str | None = None,
     secondary_id: str | None = None,
     issue_delivery_operation_capability: object | None = None,
+    owner_readiness_capability: object | None = None,
 ) -> None:
-    """Reserve the Issue-delivery keyspace at every global write boundary.
+    """Reserve source-owned keyspaces at every global write boundary.
 
     The Issue-delivery approval writer is the sole admitted owner of this
     prefix. Keeping the decision here, rather than only in an HTTP route,
@@ -80,6 +81,12 @@ def _guard_idempotency_namespace(
     """
     if not isinstance(idempotency_key, str):
         return
+    from app.builderops.owner_fact_producers import BIFROST_READINESS_PREFIX
+
+    if idempotency_key.startswith(BIFROST_READINESS_PREFIX):
+        if owner_readiness_capability is _OWNER_READINESS_CAPABILITY:
+            return
+        raise StateConflict("Owner readiness idempotency keys require the source capability")
     if idempotency_key.startswith(_ISSUE_DELIVERY_OPERATION_IDEMPOTENCY_PREFIX):
         # Destination receipts enter through the capability-bearing
         # specialized method below.  Generic task/record/lease callers can
@@ -1046,6 +1053,7 @@ class PostgresBuilderOpsStore:
             envelope=envelope,
             object_kind="record",
             record_type=record_type,
+            owner_readiness_capability=owner_readiness_admission,
         )
         if envelope.scope == _ISSUE_DELIVERY_OPERATION_SCOPE or record_id.startswith(
             (
@@ -1083,6 +1091,7 @@ class PostgresBuilderOpsStore:
             lease_resource_id=f"record:{record_id}",
             expected_states=expected_states,
             fault_at=fault_at,
+            owner_readiness_capability=owner_readiness_admission,
         )
 
     def commit_issue_delivery_operation_record(
@@ -1310,6 +1319,7 @@ class PostgresBuilderOpsStore:
         fault_at: str | None = None,
         binding: Mapping[str, Any] | None = None,
         issue_delivery_operation_capability: object | None = None,
+        owner_readiness_capability: object | None = None,
     ) -> AuthorityObjectResult:
         _guard_idempotency_namespace(
             idempotency_key,
@@ -1317,6 +1327,7 @@ class PostgresBuilderOpsStore:
             object_kind=object_kind,
             secondary_id=secondary_id,
             issue_delivery_operation_capability=issue_delivery_operation_capability,
+            owner_readiness_capability=owner_readiness_capability,
         )
         if not object_id or not state or not idempotency_key:
             raise ValueError("object identity, state, and idempotency_key are mandatory")

@@ -140,7 +140,7 @@ def owner_writer(tmp_path, control_plane_store, monkeypatch):  # noqa: F811
 class BifrostWriter(OwnerWriter):
     """Real v2 delivery, authenticated clients/store, substituted external IO."""
 
-    def __init__(self, build, monkeypatch, *, merge_change=None):
+    def __init__(self, build, monkeypatch, *, merge_change=None, prior_approval=False):
         from app.builderops import cockpit_github_plane, owner_fact_producers
         from app.builderops.epic_dispatch import dispatch_issue_sessions
         from app.builderops.issue_delivery_readback import admit_issue_delivery_task
@@ -149,7 +149,9 @@ class BifrostWriter(OwnerWriter):
         from tests.builderops.test_issue_delivery_effect_executor import _bifrost_candidate_request
 
         monkeypatch.setenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", "10000")
-        h = self.harness = build(bifrost=True, documentation_owner=True, issue_body=BODY)
+        previews = []
+        h = self.harness = build(bifrost=True, documentation_owner=True, issue_body=BODY,
+            preview_observer=lambda value: previews.append(copy.deepcopy(value)))
         self.store, self.registry, self.manifest = h.store, h.registry, h.registry.manifest_path
         self.repository = h.approval["repository"]
         self.profile = h.source_state["documents"][self.repository]["owner_documentation"]["profile"]
@@ -159,6 +161,17 @@ class BifrostWriter(OwnerWriter):
             "title": h.approval["issue"]["title"], "html_url": h.approval["issue"]["url"],
             "url": f"https://api.github.com/repos/rasmustho/agentic-pkm-mvp/issues/{number}"}
         h.source_state["issue"] = source
+        self.prior_task = None
+        if prior_approval:
+            from app.builderops.control_plane.issue_delivery import strip_server_fields
+            prior = strip_server_fields(copy.deepcopy(previews[0]["manifest"]))
+            prior["approval_id"] += "-prior"
+            prior["operation_key"] += "-prior"
+            preview = h.owner.issue_delivery_preview(manifest=prior)
+            old = h.owner.issue_delivery_start(decision="start", manifest=preview["manifest"])["approval"]
+            self.prior_task = admit_issue_delivery_task(client=h.host, repository=self.repository,
+                approval_id=old["approval_id"], issue_reader=lambda *args: copy.deepcopy(source),
+                observed_at=datetime.now(timezone.utc).isoformat())
         self.task = admit_issue_delivery_task(client=h.host, repository=self.repository,
             approval_id=h.approval["approval_id"], issue_reader=lambda *args: copy.deepcopy(source),
             observed_at=datetime.now(timezone.utc).isoformat())
@@ -228,6 +241,7 @@ class BifrostWriter(OwnerWriter):
                     "base": {"ref": "main", "sha": h.source_state.get("pr_base_sha", h.approval["destination"]["base_sha"])}, "merge_commit_sha": self.merge}
             return h.repository_authority._get("/" + endpoint)
 
+        self.external_paged, self.external_gh = paged, gh_read
         monkeypatch.setattr(cockpit_github_plane, "_paged_rest", paged)
         monkeypatch.setattr(cockpit_github_plane, "_run_gh", gh_read)
         # Both supplied objects are the real production classes. Only their
@@ -290,6 +304,105 @@ class BifrostWriter(OwnerWriter):
 @pytest.fixture
 def bifrost_writer(issue_delivery_production_harness, monkeypatch):
     return BifrostWriter(issue_delivery_production_harness, monkeypatch)
+
+
+@pytest.mark.parametrize("writer", ["task", "claim", "heartbeat", "release", "attempt"])
+def test_bifrost_readiness_namespace_reserved_across_writers(control_plane_store, writer):  # noqa: F811
+    from app.builderops.control_plane.models import AuthorityEnvelope
+    from app.builderops.control_plane.store import StateConflict
+
+    store = control_plane_store
+    env = AuthorityEnvelope(repository="rasmustho/bifrost", scope="ordinary", stack="builderops", actor="agent:test", source_refs=("test:source",))
+    key = "bifrost-readiness:" + "1" * 64
+    _, lease = store.claim_lease(envelope=env, resource_id="generic-resource", holder="agent:test",
+        idempotency_key="ordinary-claim", request={})
+    store.commit_transition(envelope=env, task_id="generic-task", to_state="ready",
+        idempotency_key="ordinary-task", request={})
+    task_lease = store.claim_task(envelope=env, task_id="generic-task", holder="agent:test",
+        idempotency_key="ordinary-task-claim", request={})[1]
+    with store._connect() as conn:
+        before = conn.execute("SELECT count(*) AS n FROM builderops_idempotency").fetchone()["n"]
+    with pytest.raises(StateConflict, match="readiness"):
+        if writer == "task":
+            store.commit_transition(envelope=env, task_id="squatter", to_state="ready", idempotency_key=key, request={})
+        elif writer == "claim":
+            store.claim_lease(envelope=env, resource_id="squatter", holder="agent:test", idempotency_key=key, request={})
+        elif writer == "heartbeat":
+            store.heartbeat_lease(envelope=env, lease=lease, idempotency_key=key, request={}, ttl_seconds=60)
+        elif writer == "release":
+            store.release_lease(envelope=env, lease=lease, idempotency_key=key, request={})
+        else:
+            store.commit_attempt(envelope=env, task_id="generic-task", attempt_id="attempt", state="active",
+                payload={}, idempotency_key=key, lease=task_lease)
+    with store._connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM builderops_idempotency").fetchone()["n"] == before
+
+
+def test_bifrost_reapproval_uses_unique_independently_delivered_task(issue_delivery_production_harness, monkeypatch):
+    w = BifrostWriter(issue_delivery_production_harness, monkeypatch, prior_approval=True)
+    assert w.prior_task["task_id"] != w.task["task_id"]
+    native = [task for task in w.harness.host.list_tasks(repository=w.repository) if "issue_delivery" in task["payload"]]
+    assert len(native) == 2
+    result = w.read()
+    assert result.status_code == 200, result.text
+    binding = result.json()["binding"]
+    assert binding["candidate_ref"]["delivery_ref"]["approval_id"] == w.harness.approval["approval_id"]
+    assert binding["source_revision"] == w.merge
+    w.responses["collaborators/fixture-owner/permission"]["permission"] = "none"
+    assert w.read().status_code == 409
+
+
+def test_bifrost_ambiguous_independent_deliveries_fail_closed(issue_delivery_production_harness, monkeypatch):
+    from app.builderops import cockpit_github_plane
+    from app.builderops.issue_delivery_readback import read_issue_delivery_projection
+
+    first = BifrostWriter(issue_delivery_production_harness, monkeypatch)
+    second = BifrostWriter(issue_delivery_production_harness, monkeypatch)
+    writers = {w.harness.approval["destination"]["branch"]: w for w in (first, second)}
+    selected = second
+    def paged(owner, name, endpoint, **kwargs):
+        nonlocal selected
+        if endpoint == "pulls":
+            field = next(field for field in kwargs["extra_fields"] if field.startswith("head="))
+            selected = writers[field.split(":", 1)[1]]
+        return selected.external_paged(owner, name, endpoint, **kwargs)
+    monkeypatch.setattr(cockpit_github_plane, "_paged_rest", paged)
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", lambda args: selected.external_gh(args))
+    # Both genuinely qualify through independently composed production native
+    # task/operation/effect/GitHub readback; no fixture readiness verdict.
+    for w in (first, second):
+        projection = read_issue_delivery_projection(client=second.harness.host, task=w.task,
+            github_reader=cockpit_github_plane.read_issue_delivery_github, owner_binding_reader=lambda *a, **kw: None)
+        assert projection["state"] == "delivered"
+    result = second.read()
+    assert result.status_code == 409, result.text
+    assert result.json()["detail"] == "owner_delivery_conflict"
+
+
+def test_bifrost_reapproval_excludes_authenticated_incomplete_terminal_history(issue_delivery_production_harness, monkeypatch):
+    from app.builderops.epic_dispatch import dispatch_issue_sessions
+    from app.builderops.issue_delivery_readback import admit_issue_delivery_task
+    from tests.builderops.test_issue_delivery_readback import BODY, _issue
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+
+    monkeypatch.setenv("BUILDEROPS_RATE_LIMIT_PER_MINUTE", "10000")
+    prior = issue_delivery_production_harness(bifrost=True, documentation_owner=True, issue_body=BODY)
+    approved = prior.approval["issue"]
+    source = {**_issue(), "number": approved["number"], "node_id": approved["node_id"],
+        "title": approved["title"], "html_url": approved["url"],
+        "url": f"https://api.github.com/repos/rasmustho/agentic-pkm-mvp/issues/{approved['number']}"}
+    prior.source_state["issue"] = source
+    admit_issue_delivery_task(client=prior.host, repository=prior.approval["repository"],
+        approval_id=prior.approval["approval_id"], issue_reader=lambda *a: copy.deepcopy(source),
+        observed_at=datetime.now(timezone.utc).isoformat())
+    result = dispatch_issue_sessions(prior.approval["context"]["dispatch_plan"], _production_adapter(prior),
+        expected_plan_hash=prior.approval["context"]["expected_plan_hash"])
+    assert result["stopped_reason"] == "worker-handoff"
+    assert prior.transport.apply_calls == 1  # terminal, but only an independently applied claim
+    current = BifrostWriter(issue_delivery_production_harness, monkeypatch)
+    ready = current.read()
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["binding"]["candidate_ref"]["delivery_ref"]["approval_id"] == current.harness.approval["approval_id"]
 
 
 @pytest.mark.parametrize("merge_style", [None, "identical_tree"])

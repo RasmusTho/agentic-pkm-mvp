@@ -429,6 +429,8 @@ def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
     from app.builderops.cockpit_github_plane import read_issue_delivery_github
     from app.builderops.issue_delivery_readback import read_issue_delivery_projection
     from app.builderops.issue_delivery_effect_executor import complete_documentation_diff
+    from app.builderops.issue_delivery_operation import observe_issue_delivery_operation
+    from app.builderops.control_plane.issue_delivery import delivery_source_pair
 
     matches = []
     for task in client.list_tasks(repository=BIFROST_REPOSITORY):
@@ -439,19 +441,50 @@ def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
                                                   approval_id=delivery["approval_id"])
         approval = readback.get("approval", {})
         issue = approval.get("issue", {})
-        if f"github:{issue.get('repository')}#{issue.get('number')}" == profile["subject_ref"]:
-            matches.append((task, approval))
+        if f"github:{issue.get('repository')}#{issue.get('number')}" != profile["subject_ref"]:
+            continue
+        if (approval.get("contract_version") != "fca-issue-delivery.v2"
+            or approval.get("repository") != BIFROST_REPOSITORY
+            or issue.get("repository") != BIFROST_TRACKING_REPOSITORY):
+            raise OwnerFactRefusal("owner_delivery_conflict", 409)
+        context, destination = approval["context"], approval["destination"]
+        observed = observe_issue_delivery_operation(approval, client=client,
+            plan=context["dispatch_plan"], expected_plan_hash=context["expected_plan_hash"],
+            repo_root=Path(destination.get("resolved_worktree") or destination["worktree"]))
+        # Reapproval retains historical native tasks. Only independently
+        # authenticated terminal delivery may qualify; malformed/unavailable
+        # history still fails closed, and multiple qualifying deliveries do too.
+        if observed.state != "terminal":
+            continue
+        kinds = set()
+        for ref in observed.host_effect_refs or []:
+            effect = client.get_outbox_status(repository=BIFROST_REPOSITORY, operation_key=ref["operation_key"])
+            payload = effect.get("payload", {})
+            kind = payload.get("effect_kind")
+            if (effect.get("status") != "succeeded"
+                or effect.get("operation_key") != ref["operation_key"]
+                or payload.get("request_sha256") != ref["request_sha256"]
+                or payload.get("effect_slot_sha256") != ref["effect_slot_sha256"]
+                or payload.get("approval_id") != approval["approval_id"]
+                or payload.get("approved_operation_key") != approval["operation_key"]
+                or payload.get("repository") != BIFROST_REPOSITORY
+                or payload.get("approval_manifest_hash") != approval["approval_manifest_hash"]
+                or payload.get("delivery_sources") != delivery_source_pair(approval)
+                or payload.get("effect_repository") != (BIFROST_REPOSITORY if kind in {"publication", "merge"} else BIFROST_TRACKING_REPOSITORY)
+                or not isinstance(payload.get("target"), dict) or payload["target"].get("kind") != kind
+                or kind not in {"claim", "publication", "merge", "closure", "parent_evidence"}
+                or kind in kinds):
+                raise OwnerFactRefusal("owner_delivery_conflict", 409)
+            kinds.add(kind)
+        if not {"publication", "merge", "closure"}.issubset(kinds):
+            continue  # Authenticated terminal history with incomplete effects is not delivery.
+        projection = read_issue_delivery_projection(client=client, task=task,
+            github_reader=read_issue_delivery_github, owner_binding_reader=lambda *a, **kw: None)
+        if projection["state"] == "delivered" and projection["subject_ref"] == profile["subject_ref"]:
+            matches.append((task, approval, projection))
     if len(matches) != 1:
         raise OwnerFactRefusal("owner_delivery_conflict", 409)
-    task, approval = matches[0]
-    if (approval.get("contract_version") != "fca-issue-delivery.v2"
-        or approval.get("repository") != BIFROST_REPOSITORY
-        or approval.get("issue", {}).get("repository") != BIFROST_TRACKING_REPOSITORY):
-        raise OwnerFactRefusal("owner_delivery_conflict", 409)
-    projection = read_issue_delivery_projection(client=client, task=task,
-        github_reader=read_issue_delivery_github, owner_binding_reader=lambda *a, **kw: None)
-    if projection["state"] != "delivered" or projection["subject_ref"] != profile["subject_ref"]:
-        raise OwnerFactRefusal("owner_delivery_conflict", 409)
+    _task, approval, projection = matches[0]
     protected = approval["target_policies"][BIFROST_REPOSITORY]
     if (protected["content_sha256"] != policy.content_sha256
         or protected["blob_sha"] != policy.blob_sha

@@ -976,6 +976,10 @@ assertion or an installed live grant. Its criteria must equal the delivery verif
 and its finite paths and required checks remain those independently admitted by FCA-ID-SECOND.
 
 The producer consumes the real v2 native task, approval, operation and host-effect readbacks;
+retained nonterminal tasks and authenticated terminal operations with incomplete effects from
+earlier approvals are not delivery candidates. Exactly one
+independently delivered task must qualify; multiple deliveries or unavailable/malformed history
+remain a conflict, never permission to select a convenient historical success.
 independent GitHub reads confirm merge/closure, reachability, document blob bytes, regular modes,
 owner access and required checks. It inspects the entire approved-base-to-merge Git tree delta.
 The merge tree must equal the independently verified PR-head tree; otherwise head checks cannot
@@ -990,7 +994,8 @@ The deterministic source-evidence key includes its UTC observation window, bound
 TTL; it retains its first server observation and expiry, and rereading never extends that receipt.
 Fresh independent observation in a later window produces different readiness and cannot inherit a
 trial or acceptance. Generic service and store ingestion cannot create readiness under this reserved
-source namespace. Both current and retained reads authenticate record/journal/idempotency lineage.
+source namespace, including task, attempt and lease idempotency write boundaries. Both current
+and retained reads authenticate record/journal/idempotency lineage.
 Confirmation and readback independently revalidate source evidence;
 `unable_to_try` can refer only to an exact retained withdrawn binding. Authenticated keyed history
 survives an unavailable current source. No document content is retained in readiness or outcomes.
