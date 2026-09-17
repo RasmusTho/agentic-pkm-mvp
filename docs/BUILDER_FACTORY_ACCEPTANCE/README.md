@@ -537,7 +537,8 @@ The closed v2 manifest must retain all FCA-ID-01 bindings and distinguish these 
 
 | Binding | Exact authority and independent reread |
 | --- | --- |
-| Consumer | `repository`, `source.revision` and destination base identify Bifrost, an immutable 40-character commit and the approved protected base ref/SHA. Bind the Bifrost Issue number/node/URL, body/AC hashes, one context/plan, branch/worktree/run, permitted documentation paths, parent evidence or explicit `none`, and the consumer verification profile. Re-read GitHub Issue/base/policy and destination Git identity independently. No hub Issue or checkout can fill an absent consumer identity. |
+| Consumer | `repository`, `source.revision` and destination base identify Bifrost, an immutable 40-character commit and the approved protected base ref/SHA. Bind one context/plan, branch/worktree/run, permitted documentation paths and the consumer verification profile. Re-read Bifrost base/policy and destination Git identity independently. A tracking Issue does not supply the consumer Git identity. |
+| Tracking Issue | Bind `issue.repository = rasmustho/agentic-pkm-mvp` separately from the consumer, plus exact Issue number/node/URL, body/AC hashes and parent evidence target or explicit `none`. ADR-0050 retains hub tracking until Bifrost has its own board; this bounded target preserves that rule, with no duplicate Bifrost Issue. Independently read the addressed hub Issue and bind its relationship to the Bifrost candidate. A future tracking migration needs a separately governed contract change, not runtime fallback. |
 | Trusted workflow | Add explicit `workflow.repository = rasmustho/agentic-pkm-mvp` and `workflow.source_revision` as a separately pinned immutable commit. Its canonical artifact manifest/hash binds the CLI/launcher, executor, isolation adapter, owning skills/shared gates and verification machinery at that commit. Read these from the host's existing protected `trusted_workflow_root`, verifying its repository/commit and artifact bytes independently of Bifrost. Bind the pair into approval, effect requests, operation/readback receipts and their hashes; equal-looking revision strings do not collapse repository identities. |
 
 The frozen plan must preserve both pins, use Bifrost's governed stack/policy for validation, and
@@ -554,18 +555,27 @@ existing separate root is reuse, not evidence that the default reader already se
 repository, allowed documentation paths/effects, required checks/profile and exact credential
 identifier/rotation generation. A separately governed preparation must install and review that
 consumer policy before pilot approval; the pilot cannot add or broaden its own policy, grants,
-workflow, credential mapping or acceptance profile. Existing Bifrost inherited governance and
-tracking conventions must be reconciled for the selected local Issue by that preparation, without
-double-tracking or silently treating a hub Issue as the consumer Issue. No policy is installed here.
+workflow, credential mapping or acceptance profile. Preparation must preserve Bifrost's inherited
+governance and ADR-0050's hub tracking. No policy is installed here.
 
-The protected executor resolves credentials only with the exact consumer repository, manifest
-credential ID and rotation generation through the existing `HostCredentialResolver`. Missing,
-unavailable or inconsistent policy/credential/profile refuses before the first effect. Consumer
-permissions do not grant workflow-repository mutation; this target adds no cross-repository parent
-write. A parent evidence target, if needed, remains exact and within the consumer's admitted scope.
+For each effect, the protected executor resolves credentials only with its exact addressed
+repository, protected manifest credential ID and rotation generation through the existing
+`HostCredentialResolver`. Bifrost publication/merge and hub Issue claim/closure or explicitly bound
+hub parent evidence require their own target-base policy and effect grants. Bind both policy
+identities/hashes into the exact approval; missing, unavailable or inconsistent policy/credential/
+profile refuses before the first effect. Neither Bifrost access nor the trusted workflow pin grants
+hub writes, and hub tracking authority grants no Bifrost mutation. No ambient credential fallback,
+generic cross-repository grant or third-repository effect is admitted.
+
+The protected executor must independently inspect the entire approved-base-to-candidate tree diff
+before publication and again for the exact merge head, not just selected document blobs. Every
+changed path must be explicitly allowed; inspect both sides of renames/copies and deletions, and
+reject non-regular files, out-of-set paths, code, scripts, policy or governance-bootstrap changes.
+Bind the base/head and complete diff to verification/readback; an omitted extra file or changed
+base/head cannot pass by presenting a valid subset of documentation.
 
 **Continuing gates and readback.** Revalidate both source identities/artifacts, the target-base
-policy, consumer verification requirements, grant/epoch/expiry and destination isolation at Start,
+policies, tracking Issue binding, consumer verification requirements, grant/epoch/expiry and destination isolation at Start,
 pre-entry claim and each later effect boundary. Either-source drift, base/policy drift or a foreign
 claim withdraws further permission; obtain a new exact approval after reconciliation. Distinguish
 the operation's own expected claim/content/head changes from authority drift. Preserve the original
@@ -574,7 +584,7 @@ FCA-ID-02/03 retain their reservation, attempt, entry, stop and ambiguous-replay
 response or non-unique source lookup cannot justify another attempt, key or worker. Authorized
 historical readback survives expiry/withdrawal and carries the original version and both pins;
 it does not reopen execution. Delivery still needs independently observed Bifrost PR/head/checks,
-review, merge, closure and owner-doc evidence, not worker success text.
+review and merge, plus exact hub Issue closure and owner-doc evidence, not worker success text.
 
 The only candidate admission added to the target is
 [FCA-09-BIFROST](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target).

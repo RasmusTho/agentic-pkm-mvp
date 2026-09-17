@@ -909,10 +909,12 @@ FCA-09 outcome writer and the existing PostgreSQL receipt/outbox owner retains d
 policy must admit exactly one documentation subject/profile and a finite explicit path set drawn
 from `README.md` and `docs/**/*.md`. No glob is an executable grant: the later exact proposal must
 enumerate every permitted file, with no images, app/package code, executable scripts, governance
-bootstrap or policy changes. The source-owned profile binds repository, exact Issue subject,
+bootstrap or policy changes. The source-owned profile binds Bifrost as artifact/outcome repository
+and the independently addressed hub tracking Issue as subject, without conflating their identities,
 profile ID/version/hash, designated human owner, permission authority/version/epoch, required
 criterion IDs/content hashes, bounded limitation refs and retention policy. This slice chooses
-none of those live values. Any consumer tracking/governance preparation precedes this selection.
+none of those live values. Preserve ADR-0050 hub tracking without a duplicate consumer Issue; any
+consumer governance preparation precedes this selection.
 
 `candidate_ref` binds the Bifrost delivery merge/source commit, exact document paths, each Git blob
 OID and SHA-256 of the served bytes. `source_revision` is that Bifrost commit, never the separately
@@ -924,7 +926,11 @@ it makes no mobile-app, simulator, Xcode, deployment or whole-platform readiness
 
 **Readiness production and expiry.** The existing authenticated service's source producer must
 independently read the protected Bifrost policy/profile, exact merge/base reachability and delivery
-readback, all selected commit/tree/blob bytes and the addressed owner's read access. It may issue
+readback, the entire approved-base-to-candidate tree diff, all selected commit/tree/blob bytes and
+the addressed owner's read access. Independently enforce the same finite allowlist over every
+changed path, both sides of renames/copies and deletions; reject non-regular files and any extra
+code, script, policy, bootstrap or other out-of-set change. A passing selected-document subset is
+not sufficient. Bind the exact base/head and complete diff in the readiness evidence. It may issue
 a source-owned readiness `BuilderOpsReceipt` only if the finite documentation verification profile
 passes on that exact candidate and every required document is retrievable. Preserve the underlying
 Bifrost required-check policy; declaring image/Xcode acceptance inapplicable cannot waive a
@@ -945,7 +951,9 @@ only for this named non-image source and preserve the VM102 path. At confirmatio
 readback, re-read the same protected source and exact receipt/profile/candidate binding; a browser,
 worker, fixture or caller-authored receipt cannot attest readiness. Bind the new source through the
 existing service's `owner_outcomes:confirm` admission and guarded outcome transaction. Extend the
-closed candidate/reference validation coherently; old `builder_owner_outcome.v1` requests retain
+closed candidate/reference validation coherently, including the exact hub-subject/Bifrost-artifact
+relationship rather than the current same-repository subject assumption. A mismatched tracking
+Issue or consumer refuses; outcome confirmation grants no Issue mutation. Old `builder_owner_outcome.v1` requests retain
 their exact bytes/hash and cannot acquire non-image applicability retroactively. Unknown source or
 candidate variants refuse. No second outcome schema, confirmation service or decision store is needed.
 
