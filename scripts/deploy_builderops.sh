@@ -636,7 +636,12 @@ if ! activate_target; then
 fi
 
 if [ "${action}" = deploy ] && [ "${current_digest}" != "${placeholder_digest}" ]; then
-  cp "${pin_backup}" "${PREVIOUS_PIN_FILE}"
+  # Preserve the candidate receipt that produced the newly active release in
+  # the rollback pin. Unattended rollback validates this exact archived
+  # receipt before it can reactivate the previous pin.
+  write_pin "${PREVIOUS_PIN_FILE}" \
+    "${current_sha}" "${current_digest}" "${current_postgres_digest}" \
+    "${target_receipt_sha:-}"
 fi
 rm -f "${pin_backup}"
 record_receipt "${action}" "${target_sha}" "${target_digest}" "${target_postgres_digest}" "${current_digest}" "${current_postgres_digest}"
