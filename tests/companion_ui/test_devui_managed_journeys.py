@@ -119,6 +119,67 @@ def _capture(page, name):
         (path / (name + ".aria.txt")).write_text(page.locator("body").aria_snapshot())
 
 
+def _keyboard_navigation(page, surface):
+    """Prove the finite tab set and navigate without assuming browser-chrome focus."""
+    destination = FOCUS if surface == "overview" else "/devui/overview"
+    name = "Open Focus" if surface == "overview" else "Return to Overview"
+    link = page.get_by_role("link", name=name)
+    assert link.count() == 1
+    assert link.get_attribute("href") == destination
+    assert page.evaluate(
+        """expected => Array.from(document.querySelectorAll('*')).filter(el =>
+            (el.tabIndex >= 0 || el.isContentEditable) &&
+            !el.matches(':disabled') && !el.closest('[inert]') &&
+            el.getClientRects().length && getComputedStyle(el).visibility === 'visible'
+        ).every(el => el === expected)""",
+        link.element_handle(),
+    ), "Only the admitted navigation is keyboard interactive"
+    page.bring_to_front()
+    for _ in range(4):
+        page.keyboard.press("Tab")
+        assert page.evaluate(
+            """expected => [document.body, document.documentElement, expected]
+                .includes(document.activeElement)""",
+            link.element_handle(),
+        ), "Unexpected keyboard focus outside admitted navigation"
+        if link.evaluate("el => el === document.activeElement"):
+            break
+    else:
+        pytest.fail("Admitted navigation was not reachable by Tab")
+    page.keyboard.press("Enter")
+    page.wait_for_url(ORIGIN + destination)
+    _loaded(page, "focus" if surface == "overview" else "overview")
+
+
+@pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
+@pytest.mark.parametrize("action", ["button", "link", "tabindex", "editable"])
+def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
+    managed_sources, monkeypatch, surface, path, action  # noqa: F811 - imported pytest fixture
+):
+    with (
+        _server(managed_sources, monkeypatch),
+        _browser() as (page, context, _browser_instance, external, requests, errors, console),
+    ):
+        page.goto(ORIGIN + path)
+        _loaded(page, surface)
+        # Fault injection into the actual production-served DOM, not a substitute page.
+        page.evaluate("""kind => {
+            const el = document.createElement(kind === 'button' ? 'button' :
+                kind === 'link' ? 'a' : 'div');
+            el.textContent = 'Unexpected action';
+            if (kind === 'link') el.href = '/unexpected-action';
+            if (kind === 'tabindex') { el.tabIndex = 0; el.setAttribute('role', 'button'); }
+            if (kind === 'editable') el.contentEditable = 'true';
+            document.querySelector('main').append(el);
+        }""", action)
+        with pytest.raises(AssertionError, match="Only the admitted navigation"):
+            _keyboard_navigation(page, surface)
+        assert page.url == ORIGIN + path
+        assert all(method == "GET" for method, _ in requests)
+        assert not external and not errors and not console
+        _no_persistence(page, context)
+
+
 def test_standalone_overview_focus_return_preserves_subject_and_candidate(
     managed_sources,  # noqa: F811 - imported pytest fixture
     monkeypatch
@@ -184,14 +245,9 @@ def test_managed_journey_hostile_accessibility_and_no_effect_matrix(managed_sour
             assert "<img" in page.locator("body").inner_text()
             assert page.get_by_role("main").get_attribute("aria-labelledby") == surface + "-heading"
             assert page.get_by_role("heading", level=1).count() == 1
-            page.keyboard.press("Tab")
-            assert page.locator(":focus").get_attribute("href") == (
-                FOCUS if surface == "overview" else "/devui/overview"
-            )
-            page.keyboard.press("Tab")
-            assert (
-                page.locator(":focus").count() == 0
-            ), "Only the admitted navigation is keyboard interactive"
+            _keyboard_navigation(page, surface)
+            page.goto(ORIGIN + path)
+            _loaded(page, surface)
             assert 'heading "' in page.locator("body").aria_snapshot()
             for name, width, height, scale in (
                 ("desktop", 1280, 720, 1),
