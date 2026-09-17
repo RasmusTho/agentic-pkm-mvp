@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-09-13
+Last reviewed: 2026-09-17 (only BuilderOps Issue-delivery repository support for #5587; other sections retain their 2026-09-13 review)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, Issue #5511 / PR #5513, merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-13
 # Operations Playbook
@@ -443,9 +443,14 @@ Issue #5586 adds repository-side `fca-issue-delivery.v2` support for the bounded
 consumer, with an independently pinned trusted hub workflow, separate hub tracking Issue,
 and exact per-target protected policies and credential generations; hub-only v1 is unchanged.
 The owning contract is [FCA-ID-SECOND](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target).
+Issue #5587 adds repository-side [FCA-09-BIFROST](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target)
+candidate/readiness support: protected finite documentation profiles, complete candidate diff,
+exact blob bytes, addressed-owner access and expiring source evidence feed the existing authenticated
+human-outcome transaction and independent readback. Last verified against (this paragraph only):
+Issue #5587's production service/PostgreSQL owner-fact and Issue-delivery readback checks.
 This support does not activate a host, issue grants, deploy a transport, or establish live M2
-completion. Documentation readiness, managed UI/host activation, a real pilot and owner
-acceptance remain separately gated. Repository-only review: 2026-09-17, Issue #5586;
+completion. Live documentation source/profile preparation, managed UI/host activation, a real pilot
+and explicit human trial/acceptance remain separately gated. Repository-only review: 2026-09-17, Issues #5586/#5587;
 the live-runtime verification date and unrelated operational claims above are unchanged.
 
 ### BuilderOps cockpit live GitHub plane (#4484)

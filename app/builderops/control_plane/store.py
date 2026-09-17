@@ -42,6 +42,12 @@ _ISSUE_DELIVERY_ADMISSION_CAPABILITY = object()
 _ISSUE_DELIVERY_OPERATION_SCOPE = "issue-delivery-operation"
 _ISSUE_DELIVERY_OPERATION_RECORD_TYPE = "BuilderOpsReceipt"
 _ISSUE_DELIVERY_OPERATION_CAPABILITY = object()
+_OWNER_READINESS_CAPABILITY = object()
+
+
+def _owner_readiness_capability() -> object:
+    """In-process admission capability of the existing protected-source producer."""
+    return _OWNER_READINESS_CAPABILITY
 
 
 def _issue_delivery_admission_capability() -> object:
@@ -1020,8 +1026,20 @@ class PostgresBuilderOpsStore:
         fault_at: str | None = None,
         owner_outcome: OwnerOutcomeAdmission | None = None,
         issue_delivery_admission: object | None = None,
+        owner_readiness_admission: object | None = None,
     ) -> AuthorityObjectResult:
-        from app.builderops.owner_fact_producers import OwnerFactRefusal
+        from app.builderops.owner_fact_producers import BIFROST_AUTHORITY, BIFROST_READINESS_PREFIX, OwnerFactRefusal
+
+        body = payload.get("receipt_body", {})
+        if (envelope.scope == "owner-readiness" or record_id.startswith(BIFROST_READINESS_PREFIX)
+            or idempotency_key.startswith(BIFROST_READINESS_PREFIX)
+            or isinstance(body, Mapping) and body.get("source_owner") == BIFROST_AUTHORITY):
+            if (owner_readiness_admission is not _OWNER_READINESS_CAPABILITY
+                or envelope.scope != "owner-readiness" or envelope.actor != BIFROST_AUTHORITY
+                or record_type != "BuilderOpsReceipt" or state != "active"
+                or record_id != idempotency_key or not record_id.startswith(BIFROST_READINESS_PREFIX)
+                or lease is not None or expected_states is not None):
+                raise OwnerFactRefusal("owner_readiness_source_required", 403)
 
         _guard_idempotency_namespace(
             idempotency_key,
@@ -1948,6 +1966,43 @@ class PostgresBuilderOpsStore:
         if row is None:
             raise KeyError(record_id)
         return dict(row)
+
+    def get_owner_readiness(self, repository: str, record_id: str, subject: str) -> Mapping[str, Any]:
+        """Authenticate the immutable source receipt against the existing PG lineage."""
+        from app.builderops.owner_fact_producers import BIFROST_AUTHORITY, BIFROST_READINESS_PREFIX, BIFROST_REPOSITORY, OwnerFactRefusal
+
+        if repository != BIFROST_REPOSITORY or not record_id.startswith(BIFROST_READINESS_PREFIX):
+            raise OwnerFactRefusal("owner_readiness_conflict", 409)
+        envelope = AuthorityEnvelope(repository=repository, scope="owner-readiness",
+            stack="builderops-control-plane", actor=BIFROST_AUTHORITY, source_refs=(subject,)).as_json()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT record.record_type, record.state, record.payload, record.authority_envelope, "
+                "journal.receipt_sequence, journal.event_type, journal.authority_envelope AS journal_envelope, "
+                "idem.request_hash, idem.result, idem.authority_envelope AS idem_envelope "
+                "FROM builderops_records AS record "
+                "LEFT JOIN builderops_receipts AS journal ON journal.repository=record.repository AND journal.task_id=record.record_id "
+                "LEFT JOIN builderops_idempotency AS idem ON idem.repository=record.repository AND idem.idempotency_key=%s "
+                "WHERE record.repository=%s AND record.record_id=%s AND (journal.idempotency_key=%s OR journal.idempotency_key IS NULL)",
+                (record_id, repository, record_id, record_id),
+            ).fetchall()
+        if not rows:
+            raise KeyError(record_id)
+        if len(rows) != 1:
+            raise OwnerFactRefusal("owner_readiness_history_conflict", 409)
+        row = rows[0]
+        expected_hash = _hash({"authority_envelope": envelope, "object_kind": "record", "object_id": record_id,
+            "state": "active", "payload": row["payload"], "primary_id": None, "secondary_id": "BuilderOpsReceipt",
+            "lease_identity": None, "expected_states": None, "expected_task_version": None})
+        result = row["result"] or {}
+        if (row["record_type"] != "BuilderOpsReceipt" or row["state"] != "active"
+            or any(row[key] != envelope for key in ("authority_envelope", "journal_envelope", "idem_envelope"))
+            or row["event_type"] != "record.active" or row["receipt_sequence"] is None
+            or result.get("object_id") != record_id or result.get("object_kind") != "record"
+            or result.get("repository") != repository or result.get("state") != "active"
+            or result.get("receipt_sequence") != row["receipt_sequence"] or row["request_hash"] != expected_hash):
+            raise OwnerFactRefusal("owner_readiness_history_conflict", 409)
+        return dict(row["payload"])
 
     def get_issue_delivery_by_operation_key(
         self, repository: str, operation_key: str
@@ -3757,7 +3812,8 @@ def _read_owner_outcomes(
             if original is None:
                 raise OwnerFactRefusal("owner_authority_history_unavailable", 503)
         try:
-            binding = read_owner_binding(repository, subject_ref, authority_epoch=epoch, allow_withdrawn_readiness=True)
+            binding = read_owner_binding(repository, subject_ref, authority_epoch=epoch, allow_withdrawn_readiness=True, store=store,
+                retained_readiness_ref=original["receipt_body"]["request"]["readiness_receipt_ref"] if original else None)
         except OwnerFactRefusal:
             if original is None:
                 raise
@@ -3765,7 +3821,15 @@ def _read_owner_outcomes(
                     "receipt": original, "projection": {"status": "unavailable", "reason": "current_source_unavailable"},
                     "authority_epoch": epoch, "observed_at": store._database_now(conn).isoformat()}
         _owner_outcome_lock(conn, repository, subject_ref, binding["binding_hash"])
-        current_binding = read_owner_binding(repository, subject_ref, authority_epoch=epoch, allow_withdrawn_readiness=True)
+        try:
+            current_binding = read_owner_binding(repository, subject_ref, authority_epoch=epoch, allow_withdrawn_readiness=True, store=store,
+                retained_readiness_ref=original["receipt_body"]["request"]["readiness_receipt_ref"] if original else None)
+        except OwnerFactRefusal:
+            if original is None:
+                raise
+            return {"contract": "builder_owner_facts.v1", "repository": repository, "subject_ref": subject_ref,
+                    "receipt": original, "projection": {"status": "unavailable", "reason": "current_source_unavailable"},
+                    "authority_epoch": epoch, "observed_at": store._database_now(conn).isoformat()}
         if current_binding["binding_hash"] != binding["binding_hash"]:
             raise OwnerFactRefusal("owner_binding_changed", 409)
         binding = current_binding

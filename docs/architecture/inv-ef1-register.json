@@ -2,6 +2,27 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "app/builderops/owner_fact_producers.py",
+      "category": "iv",
+      "why_load_bearing": "The bounded documentation source names the public Bifrost constituent and exact hub tracking contract, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5587"
+    },
+    {
+      "artifact": "app/builderops/control_plane/service.py",
+      "category": "iv",
+      "why_load_bearing": "The existing authenticated writer reserves the public Bifrost readiness contract namespace against caller-forged source receipts, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5587"
+    },
+    {
+      "artifact": "tests/builderops/test_owner_fact_producers.py",
+      "category": "iv",
+      "why_load_bearing": "Production source and outcome proofs name the public Bifrost constituent and independently tracked hub Issue identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5587"
+    },
+    {
       "artifact": "docs/OPERATIONS.md",
       "category": "iv",
       "why_load_bearing": "Bounded operator companion links the public governed Bifrost delivery contract; it is constituent identity, not personal vault data.",
