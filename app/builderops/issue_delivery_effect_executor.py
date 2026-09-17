@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,13 +20,16 @@ from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal, Protocol
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator, model_serializer
 
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ControlPlaneNotFoundError,
 )
-from app.builderops.control_plane.issue_delivery import REQUIRED_WORKFLOW_ARTIFACTS
+from app.builderops.control_plane.issue_delivery import (
+    REQUIRED_WORKFLOW_ARTIFACTS, SECOND_CONTRACT_VERSION, delivery_source_pair,
+    tracking_repository,
+)
 from app.builderops.control_plane.models import canonical_repository
 from app.builderops.issue_delivery_worker_isolation import (
     ISOLATION_RECEIPT_CONTRACT,
@@ -436,7 +440,18 @@ class ClaimTarget(_StrictModel):
     expected_label: Literal["agent:ready"]
 
 
-class PublicationTarget(_StrictModel):
+class _DiffTarget(_StrictModel):
+    diff_sha256: str | None = Field(default=None, pattern=_HEX_64)
+
+    @model_serializer(mode="wrap")
+    def _legacy_bytes(self, handler: Any) -> dict[str, Any]:
+        value = handler(self)
+        if self.diff_sha256 is None:
+            value.pop("diff_sha256", None)
+        return value
+
+
+class PublicationTarget(_DiffTarget):
     kind: Literal["publication"]
     issue_number: int = Field(gt=0)
     branch: str = Field(min_length=1, max_length=512)
@@ -448,7 +463,7 @@ class PublicationTarget(_StrictModel):
     expected_remote_ref_state: Literal["absent"]
 
 
-class MergeTarget(_StrictModel):
+class MergeTarget(_DiffTarget):
     kind: Literal["merge"]
     issue_number: int = Field(gt=0)
     pr_number: int = Field(gt=0)
@@ -477,6 +492,14 @@ class ParentEvidenceTarget(_StrictModel):
     relationship_sha256: str = Field(pattern=_HEX_64)
     evidence_kind: Literal["pr_receipt_comment", "child_ledger_writeback"]
     evidence_sha256: str = Field(pattern=_HEX_64)
+    pr_number: int | None = Field(default=None, gt=0)
+
+    @model_serializer(mode="wrap")
+    def _without_absent_pr(self, handler: Any) -> dict[str, Any]:
+        value = handler(self)
+        if self.pr_number is None:
+            value.pop("pr_number", None)
+        return value
 
     @field_validator("repository")
     @classmethod
@@ -535,6 +558,14 @@ class IssueDeliveryEffectRequest(_StrictModel):
     @property
     def content_sha256(self) -> str:
         return _canonical_hash(self.model_dump(mode="json"))
+
+    @property
+    def effect_repository(self) -> str:
+        if not delivery_source_pair(self.approval):
+            return self.repository
+        if isinstance(self.target, ParentEvidenceTarget):
+            return str(self.target.repository)
+        return tracking_repository(self.approval) if self.effect_kind in {"claim", "closure"} else self.repository
 
     @property
     def effect_slot_sha256(self) -> str:
@@ -600,6 +631,14 @@ class EffectAuthorityReadback(_StrictModel):
 class EffectReadbackEvidence(_StrictModel):
     source: Literal["github-authoritative-readback"]
     observed_target_sha256: str = Field(pattern=_HEX_64)
+    effect_repository: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_absent_repository(self, handler: Any) -> dict[str, Any]:
+        value = handler(self)
+        if self.effect_repository is None:
+            value.pop("effect_repository", None)
+        return value
 
 
 class EffectReadback(_StrictModel):
@@ -619,6 +658,7 @@ class IssueDeliveryEffectReceipt:
     destination_identity_sha256: str
     worker_isolation_receipt_sha256: str
     readback: Mapping[str, object]
+    delivery_sources: Mapping[str, str] | None = None
 
     def as_dict(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -634,6 +674,8 @@ class IssueDeliveryEffectReceipt:
             "readback": dict(self.readback),
         }
         _safe_receipt_value(value)
+        if self.delivery_sources is not None:
+            value["delivery_sources"] = dict(self.delivery_sources)
         return value
 
 
@@ -652,6 +694,17 @@ class IssueDeliveryDestinationAuthority(Protocol):
 
 
 class IssueDeliveryRepositoryAuthority(Protocol):
+    def protected_base_sha(self, repository: str) -> str: ...
+
+    def issue_delivery_source(self, repository: str, number: int) -> Mapping[str, Any]: ...
+
+    def current_pr_head(self, repository: str, pr_number: int) -> str: ...
+
+    def merge_readback(self, repository: str, pr_number: int) -> Mapping[str, object]: ...
+
+    def required_gates(self, repository: str, pr_number: int, head_sha: str,
+                       *, verification_checks: tuple[str, ...] | None = None) -> Mapping[str, bool]: ...
+
     def delivery_manifest(
         self, repository: str, base_sha: str
     ) -> ProtectedDeliveryManifest: ...
@@ -709,6 +762,106 @@ class IssueDeliveryEffectLedger(Protocol):
         observed_applied: bool,
         evidence: Mapping[str, Any],
     ) -> Mapping[str, Any]: ...
+
+
+def complete_documentation_diff(root: Path, base_sha: str, head_sha: str, allowed_paths: Sequence[str]) -> dict[str, Any]:
+    """Read the full two-tree delta, including modes and both copy/rename paths."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "diff-tree", "--no-commit-id", "--raw", "-z", "-r",
+         "--no-abbrev", "-M", "-C", "--find-copies-harder", base_sha, head_sha, "--"],
+        capture_output=True, check=True,
+    )
+    parts = result.stdout.decode("utf-8", errors="strict").split("\0")
+    changes: list[dict[str, Any]] = []
+    index = 0
+    while index < len(parts) - 1:
+        fields = parts[index].split()
+        if len(fields) != 5 or not fields[0].startswith(":"):
+            raise ValueError("complete diff is malformed")
+        old_mode, new_mode, old_blob, new_blob, status = fields
+        old_mode = old_mode[1:]
+        count = 2 if status[0] in {"R", "C"} else 1
+        paths = parts[index + 1:index + 1 + count]
+        if (len(paths) != count or any(path not in allowed_paths for path in paths)
+            or old_mode not in {"100644", "000000"} or new_mode not in {"100644", "000000"}
+            or status[0] not in {"A", "M", "D", "R", "C"}):
+            raise ValueError("complete diff contains a forbidden path or non-regular mode")
+        changes.append({"old_mode": old_mode, "new_mode": new_mode, "old_blob": old_blob,
+                        "new_blob": new_blob, "status": status, "paths": paths})
+        index += count + 1
+    if not changes:
+        raise ValueError("documentation candidate has no complete diff")
+    return {"base_sha": base_sha, "head_sha": head_sha, "changes": changes}
+
+
+def _policy_binding(manifest: ProtectedDeliveryManifest) -> dict[str, Any]:
+    return {
+        "repository": manifest.repository, "base_sha": manifest.base_sha,
+        "blob_sha": manifest.blob_sha, "content_sha256": manifest.content_sha256,
+        "credential_id": manifest.credential_id,
+        "rotation_generation": manifest.credential_generation,
+        "allowed_effects": list(manifest.allowed_effects),
+        "documentation_paths": list(manifest.documentation_paths),
+        "verification_profile": manifest.verification_profile,
+        "required_checks": list(manifest.required_checks),
+    }
+
+
+def _v2_authority_bindings(
+    approval: Mapping[str, Any], *, repository_authority: IssueDeliveryRepositoryAuthority,
+    credentials: HostCredentialResolver, trusted_workflow_root: Path | None,
+    check_current_bases: bool = True, completed_merge_sha: str | None = None,
+    completed_closure: bool = False,
+) -> Mapping[str, Any]:
+    """Reread both sources and every exact target grant before any new effect."""
+    from app.builderops.issue_delivery_operation import _verify_workflow_root
+    from app.builderops.issue_delivery_readback import _source_hashes
+
+    _verify_workflow_root(approval, trusted_workflow_root)
+    destination = approval["destination"]
+    checkout = Path(destination["checkout"])
+    def git(*args: str) -> str:
+        result = subprocess.run(["git", "-C", str(checkout), *args], capture_output=True, text=True, check=False)
+        if result.returncode:
+            raise ValueError("consumer Git source unavailable")
+        return result.stdout.strip()
+    if (git("rev-parse", "HEAD") != approval["source"]["revision"]
+        or _repository_from_remote(git("remote", "get-url", "origin")) != approval["repository"]
+        or str(checkout.resolve()) != destination.get("resolved_checkout", str(checkout.resolve()))):
+        raise ValueError("consumer source identity changed")
+    for repository, expected in approval["target_policies"].items():
+        current_base = completed_merge_sha if repository == approval["repository"] and completed_merge_sha else expected["base_sha"]
+        if check_current_bases and repository_authority.protected_base_sha(repository) != current_base:
+            raise ValueError("target protected base changed")
+        observed = repository_authority.delivery_manifest(repository, current_base)
+        if _policy_binding(observed) != {**expected, "base_sha": current_base}:
+            raise ValueError("target policy or verification profile changed")
+        credentials.resolve(repository=repository, credential_id=observed.credential_id,
+                            rotation_generation=observed.credential_generation)
+    issue = approval["issue"]
+    source = repository_authority.issue_delivery_source(tracking_repository(approval), issue["number"])
+    body_hash, ac_hash = _source_hashes(source)
+    if (source.get("number") != issue["number"] or source.get("node_id") != issue["node_id"]
+        or source.get("html_url", source.get("url", "")).casefold() != issue["url"].casefold()
+        or source.get("state") != ("closed" if completed_closure else "open") or body_hash != issue["body_hash"]
+        or ac_hash != issue["acceptance_criteria_hash"]):
+        raise ValueError("hub tracking Issue identity or contract changed")
+    return source
+
+
+def validate_installed_v2_admission(approval: Mapping[str, Any], *, require_ready: bool = True) -> None:
+    """The service uses the host-installed readers; caller input cannot install them."""
+    if approval.get("contract_version") != SECOND_CONTRACT_VERSION:
+        return
+    runtime = _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
+    if runtime is None:
+        raise ValueError("v2 protected host authority readers are unavailable")
+    source = _v2_authority_bindings(approval, repository_authority=runtime.repository_authority,
+                                  credentials=runtime.credentials, trusted_workflow_root=runtime.trusted_workflow_root)
+    if require_ready:
+        labels = {item["name"] if isinstance(item, Mapping) else item for item in source.get("labels", [])}
+        if {item for item in labels if item.startswith("agent:")} != {"agent:ready"}:
+            raise ValueError("tracking Issue is not independently ready")
 
 
 class IssueDeliveryHostExecutor:
@@ -783,7 +936,7 @@ class IssueDeliveryHostExecutor:
             raise ValueError("completed worker receipt profile differs from host pin")
         self._worker_isolation = binding
 
-    def live_binding(self, approval: Mapping[str, Any]) -> Mapping[str, Any]:
+    def live_binding(self, approval: Mapping[str, Any], *, post_merge_observation: bool = False) -> Mapping[str, Any]:
         """Return fresh destination/source/profile facts for FCA-ID-B admission.
 
         The protected executor owns this seam, but the source/profile readers
@@ -797,6 +950,16 @@ class IssueDeliveryHostExecutor:
         observed = self._live_binding_reader(approval)
         if not isinstance(observed, Mapping):
             raise ValueError("protected host live source/profile binding is malformed")
+        if delivery_source_pair(approval):
+            from app.builderops.issue_delivery_operation import _default_live_binding_reader
+            current = _v2_authority_bindings(approval, repository_authority=self.repository_authority,
+                                            credentials=self.credentials, trusted_workflow_root=self.trusted_workflow_root,
+                                            check_current_bases=not post_merge_observation)
+            observed = {**observed, **_default_live_binding_reader(approval, trusted_workflow_root=self.trusted_workflow_root)}
+            observed["current_issue"] = {key: current[key] for key in ("number", "node_id", "state")}
+            from app.builderops.issue_delivery_readback import _source_hashes
+            body, ac = _source_hashes(current)
+            observed["current_issue"].update(body_hash=body, acceptance_criteria_hash=ac)
         return dict(observed)
 
     def execute(
@@ -861,7 +1024,7 @@ class IssueDeliveryHostExecutor:
             self._record_known_no_effect(claim, request, reason=type(exc).__name__)
             raise
         credential = self.credentials.resolve(
-            repository=request.repository,
+            repository=request.effect_repository,
             credential_id=final_manifest.credential_id,
             rotation_generation=final_manifest.credential_generation,
         )
@@ -963,6 +1126,8 @@ class IssueDeliveryHostExecutor:
             request.target.model_dump(mode="json")
         ):
             raise ValueError("Issue-delivery readback target changed")
+        if delivery_source_pair(request.approval) and readback.evidence.effect_repository != request.effect_repository:
+            raise ValueError("Issue-delivery readback addresses another effect repository")
         readback_evidence = readback.evidence.model_dump(mode="json")
         _safe_receipt_value(readback_evidence)
         evidence = {
@@ -1014,17 +1179,94 @@ class IssueDeliveryHostExecutor:
             raise ValueError("Issue-delivery execute authority changed")
         self._validate_static_request(request, current_artifacts=True)
         self.destination.assert_frozen(frozen, approved)
+        if delivery_source_pair(approved):
+            merge_sha, closed = self._completed_transitions(request)
+            current = _v2_authority_bindings(approved, repository_authority=self.repository_authority,
+                                            credentials=self.credentials, trusted_workflow_root=self.trusted_workflow_root,
+                                            completed_merge_sha=merge_sha, completed_closure=closed)
+            labels = {item["name"] if isinstance(item, Mapping) else item for item in current.get("labels", [])}
+            expected_labels = set() if closed else {"agent:ready"} if request.effect_kind == "claim" else {"agent:in-progress"}
+            if {item for item in labels if item.startswith("agent:")} != expected_labels:
+                raise ValueError("foreign tracking Issue claim")
+            if request.effect_kind != "claim":
+                claim_request = request.model_copy(update={"effect_kind": "claim", "target": ClaimTarget(
+                    kind="claim", issue_number=request.issue_number, issue_node_id=approved["issue"]["node_id"],
+                    expected_state="open", expected_label="agent:ready")})
+                claimed = self.ledger.status(self.ledger.operation_key(effect_slot_sha256=claim_request.effect_slot_sha256,
+                                                                     effect_type=_EFFECT_TYPES["claim"]))
+                if claimed.get("status") != "succeeded" or claimed.get("payload", {}).get("request_sha256") != claim_request.content_sha256:
+                    raise ValueError("tracking claim is not owned by this operation")
+            self._validate_complete_diff(request)
+        policy_base = (approved["target_policies"][request.effect_repository]["base_sha"]
+                       if delivery_source_pair(approved) else request.destination.base_sha)
         manifest = self.repository_authority.delivery_manifest(
-            request.repository,
-            request.destination.base_sha,
+            request.effect_repository,
+            policy_base,
         )
         if (
-            manifest.repository != request.repository
-            or manifest.base_sha != request.destination.base_sha
+            manifest.repository != request.effect_repository
+            or manifest.base_sha != policy_base
             or _EFFECT_TYPES[request.effect_kind] not in manifest.allowed_effects
         ):
             raise ValueError("protected repository manifest does not authorize effect")
         return manifest
+
+    def _completed_transitions(self, request: IssueDeliveryEffectRequest) -> tuple[str | None, bool]:
+        """Only our durable merge plus independent GitHub evidence advances the base."""
+        target = request.target
+        if not isinstance(target, (ClosureTarget, ParentEvidenceTarget)):
+            return None, False
+        if target.pr_number is None:
+            raise ValueError("post-merge evidence requires an exact consumer PR")
+        candidate = request.model_copy(update={"effect_kind": "merge", "target": MergeTarget(
+            kind="merge", issue_number=request.issue_number, pr_number=target.pr_number,
+            branch=request.destination.branch, base_ref=request.destination.base_ref,
+            base_sha=request.destination.base_sha, head_sha=request.source_revision)})
+        status = self.ledger.status(self.ledger.operation_key(
+            effect_slot_sha256=candidate.effect_slot_sha256, effect_type=_EFFECT_TYPES["merge"]))
+        payload = status.get("payload", {})
+        if status.get("status") != "succeeded" or payload.get("delivery_sources") != delivery_source_pair(request.approval):
+            raise ValueError("post-merge effect lacks its own successful merge")
+        prior_target = MergeTarget.model_validate(payload.get("target"))
+        prior = candidate.model_copy(update={"target": prior_target})
+        if payload.get("request_sha256") != prior.content_sha256:
+            raise ValueError("prior merge binding changed")
+        observed = self.repository_authority.merge_readback(request.repository, target.pr_number)
+        sha = observed.get("merge_commit_sha")
+        if (observed.get("merged") is not True or observed.get("head_sha") != prior_target.head_sha
+            or not isinstance(sha, str) or not re.fullmatch(_HEX_40, sha)
+            or isinstance(target, ClosureTarget) and sha != target.merge_commit_sha):
+            raise ValueError("independent merge readback differs from this operation")
+        closed = False
+        if isinstance(target, ParentEvidenceTarget):
+            closure = request.model_copy(update={"effect_kind": "closure", "target": ClosureTarget(
+                kind="closure", issue_number=request.issue_number, pr_number=target.pr_number,
+                merge_commit_sha=sha, expected_issue_state="open")})
+            prior_closure = self.ledger.status(self.ledger.operation_key(
+                effect_slot_sha256=closure.effect_slot_sha256, effect_type=_EFFECT_TYPES["closure"]))
+            closed = prior_closure.get("status") == "succeeded" and prior_closure.get("payload", {}).get("request_sha256") == closure.content_sha256
+        return sha, closed
+
+    def _validate_complete_diff(self, request: IssueDeliveryEffectRequest) -> None:
+        target = request.target
+        if not isinstance(target, (PublicationTarget, MergeTarget)):
+            return
+        policy = request.approval["target_policies"][request.repository]
+        observed = complete_documentation_diff(request.destination.worktree, target.base_sha,
+                                               target.head_sha, policy["documentation_paths"])
+        if target.diff_sha256 != _canonical_hash(observed):
+            raise ValueError("complete candidate diff binding changed")
+        head = subprocess.run(["git", "-C", str(request.destination.worktree), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        if head != target.head_sha:
+            raise ValueError("candidate head changed")
+        if isinstance(target, MergeTarget):
+            if self.repository_authority.current_pr_head(request.repository, target.pr_number) != target.head_sha:
+                raise ValueError("merge head changed")
+            gates = self.repository_authority.required_gates(request.repository, target.pr_number, target.head_sha,
+                                                              verification_checks=tuple(policy["required_checks"]))
+            if not gates or any(value is not True for value in gates.values()):
+                raise ValueError("consumer required verification is unavailable")
 
     def _fresh_readback_authority(
         self,
@@ -1070,7 +1312,7 @@ class IssueDeliveryHostExecutor:
         except ValueError as exc:
             raise ValueError("Issue-delivery approval destination is invalid") from exc
         if (
-            approval.get("contract_version") != "fca-issue-delivery.v1"
+            approval.get("contract_version") not in {"fca-issue-delivery.v1", SECOND_CONTRACT_VERSION}
             or approval.get("operation_type") != "deliver_ready_issue"
             or approval.get("approval_id") != request.approval_id
             or approval.get("operation_key") != request.approved_operation_key
@@ -1138,7 +1380,7 @@ class IssueDeliveryHostExecutor:
             not isinstance(parent, Mapping)
             or parent.get("kind") != "issue"
             or target.repository
-            != canonical_repository(str(approval.get("repository")))
+            != tracking_repository(approval)
             or canonical_repository(str(parent.get("repository"))) != target.repository
             or parent.get("number") != target.issue_number
             or parent.get("node_id") != target.issue_node_id
@@ -1162,6 +1404,12 @@ class IssueDeliveryHostExecutor:
         workflow: Mapping[str, Any],
     ) -> None:
         artifacts = workflow.get("artifacts")
+        if delivery_source_pair(request.approval):
+            from app.builderops.issue_delivery_operation import _verify_workflow_root
+            _verify_workflow_root(request.approval, self.trusted_workflow_root)
+            if (self.trusted_executor_artifact != self.trusted_workflow_root / EXECUTOR_ARTIFACT
+                or self.trusted_worker_isolation_artifact != self.trusted_workflow_root / WORKER_ISOLATION_ARTIFACT):
+                raise ValueError("executor artifacts are outside pinned workflow root")
         if not isinstance(artifacts, Sequence):
             raise ValueError("Issue-delivery workflow artifacts are unavailable")
         request_digests = {
@@ -1210,7 +1458,7 @@ class IssueDeliveryHostExecutor:
     ) -> None:
         expected = {
             "request_sha256": request.content_sha256,
-            "repository": request.repository,
+            "repository": request.effect_repository,
             "issue_number": request.issue_number,
             "issue_body_hash": request.issue_body_hash,
             "acceptance_criteria_hash": request.acceptance_criteria_hash,
@@ -1261,6 +1509,11 @@ class IssueDeliveryHostExecutor:
             "rotation_generation": manifest.credential_generation,
             "target": request.target.model_dump(mode="json"),
         }
+        if delivery_source_pair(request.approval):
+            payload["approval_manifest_hash"] = request.approval["approval_manifest_hash"]
+            payload["delivery_sources"] = delivery_source_pair(request.approval)
+            payload["effect_repository"] = request.effect_repository
+            payload["target_policies_sha256"] = _canonical_hash(request.approval["target_policies"])
         _safe_receipt_value(payload)
         return payload
 
@@ -1309,6 +1562,13 @@ class IssueDeliveryHostExecutor:
             or not isinstance(payload.get("protected_manifest_blob_sha"), str)
         ):
             raise ValueError("Issue-delivery recovery intent is foreign or changed")
+        if delivery_source_pair(request.approval) and (
+            payload.get("delivery_sources") != delivery_source_pair(request.approval)
+            or payload.get("effect_repository") != request.effect_repository
+            or payload.get("target_policies_sha256") != _canonical_hash(request.approval["target_policies"])
+            or payload.get("approval_manifest_hash") != request.approval["approval_manifest_hash"]
+        ):
+            raise ValueError("Issue-delivery recovery authority binding changed")
 
     @staticmethod
     def _validate_intent(
@@ -1483,6 +1743,7 @@ class IssueDeliveryHostExecutor:
             destination_identity_sha256=request.destination.frozen_identity_sha256,
             worker_isolation_receipt_sha256=request.worker_isolation.receipt_sha256,
             readback=dict(readback),
+            delivery_sources=delivery_source_pair(request.approval) or None,
         )
 
 
@@ -1994,6 +2255,7 @@ class HostIssueDeliveryExecutorRuntime:
     isolation_profile_sha256: str
     live_binding_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]]
     worker_id: str = "issue-delivery-host"
+    trusted_workflow_root: Path | None = None
 
 
 _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME: HostIssueDeliveryExecutorRuntime | None = None
@@ -2064,6 +2326,10 @@ def build_host_issue_delivery_executor(
         prepared_worker=prepared,
         expected_isolation_profile_sha256=runtime.isolation_profile_sha256,
         live_binding_reader=runtime.live_binding_reader,
+        **({"trusted_workflow_root": runtime.trusted_workflow_root,
+            "trusted_executor_artifact": runtime.trusted_workflow_root / EXECUTOR_ARTIFACT,
+            "trusted_worker_isolation_artifact": runtime.trusted_workflow_root / WORKER_ISOLATION_ARTIFACT}
+           if runtime.trusted_workflow_root is not None else {}),
     )
 
 

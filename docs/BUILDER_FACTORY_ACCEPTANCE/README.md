@@ -519,11 +519,29 @@ is an intermediate owner-value checkpoint and cannot close #5399.
 ### FCA-ID-SECOND — bounded Bifrost documentation delivery target
 
 This is the source contract for exactly one later documentation candidate in
-`RasmusTho/bifrost`, the existing ADR-0050 constituent. It is not delivered admission or a grant.
-The current `normalize_manifest` qualification remains hub-only; FCA-ID-A/B/C repository support
-and FCA-07 fixtures do not prove a live Bifrost journey. The owner's preparation mandate names
+`RasmusTho/bifrost`, the existing ADR-0050 constituent. #5586 implements bounded v2 repository
+support through authenticated admission, the default two-root reader, protected executor,
+operation/outbox receipts and native-task independent readback. v1 remains hub-only with unchanged
+approval normalization and hashes. Repository support and FCA-07 fixtures do not prove a live Bifrost journey. The owner's preparation mandate names
 this one separate consumer, but neither it nor installed deploy/rollback delegation grants
 Issue-delivery effects. No live Issue, branch, host, approval or human trial is selected here.
+FCA-09-BIFROST documentation readiness (#5587), managed UI/host activation, real consumer policy
+and credentials, a selected pilot and owner trial/acceptance remain pending. Bifrost projections
+cannot borrow VM102 candidate readiness.
+
+The v2 approval's `target_policies` binds exactly the consumer and hub protected policy snapshots,
+including blob/content identities, effect sets and credential ID/generation. The consumer snapshot
+also binds finite, explicit Markdown paths under `docs/`, its verification profile and required checks. The frozen
+context carries `delivery_sources`; approval, operation and effect receipts retain that same pair.
+Publication and merge each carry `diff_sha256` over independently read complete base/head tree
+changes, including old/new modes, blobs and every rename/copy path. The production reader requires
+an explicitly installed `trusted_workflow_root`; consumer artifacts and ambient roots cannot
+supply its workflow pin. The existing GitHub readback independently addresses the hub Issue and
+Bifrost PR, requiring an explicit `Governing-Issue: rasmustho/agentic-pkm-mvp#N` link.
+V2 target-authority and effect-readback evidence bind the addressed effect repository explicitly.
+Merge independently reads current-head collaborator reviews. Closure accepts only the exact
+operation-owned merged-base transition proven by its durable merge slot and fresh GitHub evidence;
+optional admitted hub parent evidence additionally names that consumer PR in its typed target.
 
 **Compatibility and identity.** Extend the existing operation as `fca-issue-delivery.v2`, retaining
 `deliver_ready_issue` and the same service, adapter, protected executor and receipt/outbox owners.
@@ -566,6 +584,10 @@ identities/hashes into the exact approval; missing, unavailable or inconsistent 
 profile refuses before the first effect. Neither Bifrost access nor the trusted workflow pin grants
 hub writes, and hub tracking authority grants no Bifrost mutation. No ambient credential fallback,
 generic cross-repository grant or third-repository effect is admitted.
+The presented human approval credential must itself address both the consumer and tracking
+repositories; a same-principal sibling credential cannot supply its missing repository scope.
+Preview, Start and fresh execution enforce this binding; historical readback remains available
+without projecting withdrawn or formerly over-scoped approval as current authority.
 
 The protected executor must independently inspect the entire approved-base-to-candidate tree diff
 before publication and again for the exact merge head, not just selected document blobs. Every

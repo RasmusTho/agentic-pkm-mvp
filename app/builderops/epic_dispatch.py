@@ -269,7 +269,9 @@ class CodexIssueSessionLauncher:
             effect_gate(
                 "repository_worktree",
                 target={
-                    "repository": issue.get("repository"),
+                    "repository": (context_pack["delivery_sources"]["repository"]
+                                   if context_pack.get("delivery_sources", {}).get("contract_version") == "fca-issue-delivery.v2"
+                                   else issue.get("repository")),
                     "issue_number": issue.get("number"),
                     "checkout": str(self.effect_gate_checkout_root),
                     "worktree": destination.get("worktree"),

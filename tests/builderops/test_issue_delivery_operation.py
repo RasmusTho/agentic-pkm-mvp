@@ -588,7 +588,8 @@ def _production_adapter(
     # PreparedIssueDeliveryWorker, ContentOnly launcher and protected host
     # executor.  Only the external GitHub/credential transports are replaced.
     approved = harness.approval if approval is None else approval
-    setattr(harness.executor, "_live_binding_reader", _production_binding)
+    if harness.workflow_root is None:
+        setattr(harness.executor, "_live_binding_reader", _production_binding)
     return IssueDeliveryOperationAdapter(
         approved,
         client=harness.client,
@@ -964,6 +965,77 @@ def test_terminal_unknown_effect_blocks_cross_issue_destination_reuse(
             harness,
             approval=_cross_issue_approval(harness, issue_number=5560, suffix="unknown-effect"),
         ).reserve()
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("drift", ["consumer", "workflow", "hub_policy", "consumer_policy", "credential", "foreign_claim", "base", "epoch", "expiry", "isolation"])
+def test_bifrost_source_pair_drift_refuses_production_effects(issue_delivery_production_harness, drift) -> None:
+    harness = issue_delivery_production_harness(bifrost=True, approval_ttl_seconds=7.0 if drift == "expiry" else None)
+    assert harness.source_state is not None
+    if drift in {"consumer", "workflow"}:
+        root = harness.checkout if drift == "consumer" else harness.workflow_root
+        subprocess.run(["git", "-C", str(root), "commit", "--allow-empty", "-m", "source drift"], check=True, capture_output=True)
+    elif drift in {"hub_policy", "consumer_policy"}:
+        repository = "rasmustho/agentic-pkm-mvp" if drift == "hub_policy" else "rasmustho/bifrost"
+        harness.source_state["documents"][repository]["github_credential"]["rotation_generation"] += 1
+    elif drift == "credential":
+        document = json.loads(harness.registry.manifest_path.read_text())
+        for row in document["credentials"]:
+            if row["id"] == "hub-effect":
+                row["revoked"] = True
+        harness.registry.manifest_path.write_text(json.dumps(document))
+    elif drift == "base":
+        harness.source_state["bases"][harness.approval["repository"]] = "9" * 40
+    elif drift == "epoch":
+        import psycopg
+        with psycopg.connect(harness.store.dsn) as conn:
+            conn.execute("UPDATE builderops_authority_metadata SET authority_epoch = authority_epoch + 1")
+    elif drift == "expiry":
+        expires_at = datetime.fromisoformat(harness.approval["expires_at"])
+        time.sleep(max(0.0, (expires_at - datetime.now(timezone.utc)).total_seconds()) + 0.05)
+    elif drift == "isolation":
+        artifact = harness.workflow_root / "app/builderops/issue_delivery_worker_isolation.py"
+        artifact.write_text(artifact.read_text() + "\n# changed isolation\n")
+    else:
+        harness.source_state["issue"]["labels"] = ["agent:in-progress"]
+    result = dispatch_issue_sessions(harness.approval["context"]["dispatch_plan"], _production_adapter(harness),
+                                    expected_plan_hash=harness.approval["context"]["expected_plan_hash"])
+    assert result["stopped_reason"] == "session-launch-failed"
+    assert harness.worker_transport.calls == 0
+    assert harness.transport.apply_calls == 0
+
+
+@pytest.mark.pg
+def test_bifrost_replay_preserves_original_source_pair(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True, lose_response_after_entry=True)
+    plan = harness.approval["context"]["dispatch_plan"]
+    first = dispatch_issue_sessions(plan, _production_adapter(harness), expected_plan_hash=harness.approval["context"]["expected_plan_hash"])
+    assert harness.worker_transport.calls == 1, json.dumps(first)
+    assert harness.transport.apply_calls == 1
+    assert first["sessions"][0]["fresh_session"] is True
+    # Drift after durable entry cannot supply permission for another launch.
+    subprocess.run(["git", "-C", str(harness.workflow_root), "commit", "--allow-empty", "-m", "later workflow"], check=True, capture_output=True)
+    replay = dispatch_issue_sessions(plan, _production_adapter(harness), expected_plan_hash=harness.approval["context"]["expected_plan_hash"])
+    assert replay["stopped_reason"] == "session-launch-failed"
+    assert "replacement launch is forbidden" in replay["sessions"][0]["error"]
+    assert harness.worker_transport.calls == 1
+    assert harness.transport.apply_calls == 1
+    historical = harness.host.issue_delivery_authority(manifest=harness.approval, purpose="readback")
+    assert historical["approval"]["workflow"] == harness.approval["workflow"]
+    assert historical["approval"]["issue"]["repository"] == "rasmustho/agentic-pkm-mvp"
+
+
+@pytest.mark.pg
+def test_bifrost_claim_readback_base_drift_refuses_worker_spawn(issue_delivery_production_harness) -> None:
+    harness = issue_delivery_production_harness(bifrost=True)
+    def drift_after_claim():
+        harness.source_state["bases"][harness.approval["repository"]] = "9" * 40
+    harness.transport.on_readback = drift_after_claim
+    result = dispatch_issue_sessions(harness.approval["context"]["dispatch_plan"], _production_adapter(harness),
+                                    expected_plan_hash=harness.approval["context"]["expected_plan_hash"])
+    assert result["stopped_reason"] == "session-launch-failed"
+    assert harness.transport.apply_calls == 1
+    assert harness.worker_transport.calls == 0
 
 
 @pytest.mark.pg

@@ -36,6 +36,9 @@ from app.builderops.control_plane.client import (
     StaleLeaseError,
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
+from app.builderops.control_plane.issue_delivery import (
+    QUALIFIED_REPOSITORY, SECOND_CONTRACT_VERSION, SECOND_REPOSITORY,
+)
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}\Z")
 _SHA = re.compile(r"[a-f0-9]{40}\Z")
@@ -151,10 +154,29 @@ def _reference(row: dict[str, Any], *, repository: str) -> dict[str, Any]:
 def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
     _reference(row, repository=repository)
     payload = row.get("payload")
+    delivery = payload.get("issue_delivery") if isinstance(payload, dict) else None
+    sources = delivery.get("delivery_sources") if isinstance(delivery, dict) else None
+    issue_repository = repository
+    if isinstance(delivery, dict) and "delivery_sources" in delivery:
+        if (
+            not isinstance(sources, dict)
+            or set(sources) != {"contract_version", "repository", "source_revision",
+                                "issue_repository", "workflow_repository", "workflow_source_revision"}
+            or repository != SECOND_REPOSITORY
+            or sources.get("repository") != repository
+            or sources.get("contract_version") != SECOND_CONTRACT_VERSION
+            or sources.get("issue_repository") != QUALIFIED_REPOSITORY
+            or sources.get("workflow_repository") != QUALIFIED_REPOSITORY
+            or sources.get("source_revision") != delivery.get("source_revision")
+            or any(not isinstance(sources.get(key), str) or _SHA.fullmatch(sources[key]) is None
+                   for key in ("source_revision", "workflow_source_revision"))
+        ):
+            raise SourceReadRefusal("issue_delivery_task_binding_invalid")
+        issue_repository = QUALIFIED_REPOSITORY
     if (
         row.get("repository") != repository
         or not isinstance(payload, dict)
-        or ("repo" in payload and payload["repo"] != repository)
+        or ("repo" in payload and payload["repo"] != issue_repository)
     ):
         raise SourceReadRefusal("task_scope_mismatch")
     task_id = row.get("task_id")
@@ -243,6 +265,8 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
             "issue_node_id", "issue_body_hash", "acceptance_criteria_hash",
             "source_revision",
         }
+        if sources is not None:
+            expected.add("delivery_sources")
         if (
             not isinstance(delivery, dict)
             or set(delivery) != expected

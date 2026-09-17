@@ -2,6 +2,69 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "docs/OPERATIONS.md",
+      "category": "iv",
+      "why_load_bearing": "Bounded operator companion links the public governed Bifrost delivery contract; it is constituent identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "app/builderops/cockpit_github_plane.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "app/builderops/control_plane/issue_delivery.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "app/builderops/issue_delivery_readback.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "tests/builderops/issue_delivery_production_harness.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "tests/builderops/test_control_plane_issue_delivery.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "tests/builderops/test_issue_delivery_effect_executor.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "tests/builderops/test_issue_delivery_operation.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
+      "artifact": "tests/builderops/test_issue_delivery_readback.py",
+      "category": "iv",
+      "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
       "artifact": ".codex/agents/verification-closer.toml",
       "category": "iii",
       "why_load_bearing": "The BCP-05 verification adapter names the accepted Demerzel execution host so the installed-main pilot and privileged boundary remain explicit.",

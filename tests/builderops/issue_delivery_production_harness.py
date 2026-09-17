@@ -314,9 +314,11 @@ def _request(
 class _Transport:
     def __init__(self) -> None:
         self.apply_calls = 0
+        self.applied_requests: list[IssueDeliveryEffectRequest] = []
         self.raise_on_apply = False
         self.target_override: Mapping[str, Any] | None = None
         self.readback_target_override: str | None = None
+        self.readback_repository_override: str | None = None
         # Production dispatch always consumes the mandatory pre-entry claim
         # readback and may then consume one worker-proposed effect readback.
         self.readbacks = ["applied", "applied"]
@@ -326,7 +328,7 @@ class _Transport:
     def validate_target(self, request: IssueDeliveryEffectRequest) -> EffectAuthorityReadback:
         value = {
             "request_sha256": request.content_sha256,
-            "repository": request.repository,
+            "repository": request.effect_repository,
             "issue_number": request.issue_number,
             "issue_body_hash": request.issue_body_hash,
             "acceptance_criteria_hash": request.acceptance_criteria_hash,
@@ -340,7 +342,8 @@ class _Transport:
         return EffectAuthorityReadback.model_validate(value)
 
     def apply(self, request: IssueDeliveryEffectRequest, credential: object) -> None:
-        del request, credential
+        del credential
+        self.applied_requests.append(request)
         self.apply_calls += 1
         if self.on_apply is not None:
             self.on_apply()
@@ -355,6 +358,7 @@ class _Transport:
             outcome=self.readbacks.pop(0),
             evidence={
                 "source": "github-authoritative-readback",
+                **({"effect_repository": self.readback_repository_override or request.effect_repository} if request.approval.get("contract_version") == "fca-issue-delivery.v2" else {}),
                 "observed_target_sha256": self.readback_target_override
                 or canonical_hash(request.target.model_dump(mode="json")),
             },
@@ -388,7 +392,7 @@ def issue_delivery_pg_store() -> PostgresBuilderOpsStore:
             conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
 
 
-def _production_registry(tmp_path: Path) -> CredentialRegistry:
+def _production_registry(tmp_path: Path, *, bifrost: bool = False) -> CredentialRegistry:
     entries: list[dict[str, Any]] = []
     for credential_id, principal, token, scopes, principal_kind in (
         (
@@ -424,6 +428,8 @@ def _production_registry(tmp_path: Path) -> CredentialRegistry:
             "agent",
         ),
     ):
+        if bifrost and credential_id == "issue-delivery-host":
+            scopes.append("tasks:read")
         secret = tmp_path / f"{credential_id}.secret"
         secret.write_text(token, encoding="utf-8")
         secret.chmod(0o600)
@@ -434,11 +440,19 @@ def _production_registry(tmp_path: Path) -> CredentialRegistry:
                 "secret_ref": f"host-secret:{credential_id}",
                 "secret_file": str(secret),
                 "scopes": scopes,
-                "repositories": [REPOSITORY],
+                "repositories": [REPOSITORY, "rasmustho/bifrost"] if bifrost else [REPOSITORY],
                 "rotation_generation": 1,
                 "principal_kind": principal_kind,
             }
         )
+    if bifrost:
+        for credential_id, repository in (("consumer-effect", "rasmustho/bifrost"), ("hub-effect", REPOSITORY)):
+            secret = tmp_path / f"{credential_id}.secret"
+            secret.write_text(f"fixture-{credential_id}", encoding="utf-8")
+            secret.chmod(0o600)
+            entries.append({"id": credential_id, "principal": credential_id, "secret_ref": f"host-secret:{credential_id}",
+                            "secret_file": str(secret), "scopes": ["issue_delivery:execute"],
+                            "repositories": [repository], "rotation_generation": 1, "principal_kind": "agent"})
     manifest_path = tmp_path / "builderops-credentials.json"
     manifest_path.write_text(json.dumps({"credentials": entries}), encoding="utf-8")
     return CredentialRegistry(manifest_path)
@@ -580,9 +594,12 @@ class _ProductionWorkerTransport:
         self.calls = 0
         self.entry_observed_during_call = False
         self.pre_entry_check: Callable[[], None] | None = None
+        self.effect_targets: dict[str, dict[str, Any]] = {}
 
     def _effect_target(self, effect_kind: str | None = None) -> dict[str, Any]:
         effect_kind = effect_kind or self.effect_kind
+        if effect_kind in self.effect_targets:
+            return self.effect_targets[effect_kind]
         issue = self.approval["issue"]
         destination = self.approval["destination"]
         number = int(issue["number"])
@@ -974,6 +991,8 @@ class _ProductionHarness:
     checkout: Path
     worktree: Path
     preparation_observed: tuple[bool, ...]
+    workflow_root: Path | None = None
+    source_state: dict[str, Any] | None = None
 
     def completed_request(self) -> IssueDeliveryEffectRequest:
         """Launch the fixture worker once, then derive its actual host binding."""
@@ -999,6 +1018,7 @@ class _ProductionHarness:
 def issue_delivery_production_harness(
     issue_delivery_pg_store: PostgresBuilderOpsStore,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Callable[..., _ProductionHarness]:
     counter = 0
 
@@ -1011,6 +1031,7 @@ def issue_delivery_production_harness(
         approval_ttl_seconds: float | None = None,
         issue_body: str | None = None,
         preview_observer: Callable[[Mapping[str, Any]], None] | None = None,
+        bifrost: bool = False,
     ) -> _ProductionHarness:
         nonlocal counter
         counter += 1
@@ -1037,7 +1058,7 @@ def issue_delivery_production_harness(
         # its real checkout before creating the pinned base commit; a host
         # live-binding reader may verify those bytes rather than trusting the
         # coordinator checkout or a substituted artifact map.
-        for artifact in REQUIRED_WORKFLOW_ARTIFACTS:
+        for artifact in (() if bifrost else REQUIRED_WORKFLOW_ARTIFACTS):
             source = REPO_ROOT / artifact
             destination_path = checkout / artifact
             destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1057,7 +1078,7 @@ def issue_delivery_production_harness(
                 "remote",
                 "add",
                 "origin",
-                "https://github.com/RasmusTho/agentic-pkm-mvp.git",
+                "https://github.com/rasmustho/bifrost.git" if bifrost else "https://github.com/RasmusTho/agentic-pkm-mvp.git",
             ],
             check=True,
         )
@@ -1067,7 +1088,7 @@ def issue_delivery_production_harness(
             capture_output=True,
             text=True,
         ).stdout.strip()
-        registry = _production_registry(case)
+        registry = _production_registry(case, bifrost=bifrost)
         owner = _production_client(issue_delivery_pg_store, registry, "owner-pg-token")
         client = _production_client(issue_delivery_pg_store, registry, "operation-pg-token")
         host = _production_client(issue_delivery_pg_store, registry, "executor-pg-token")
@@ -1087,7 +1108,104 @@ def issue_delivery_production_harness(
                 datetime.now(timezone.utc) + timedelta(seconds=approval_ttl_seconds)
             ).isoformat()
         if parent:
-            raise ValueError("production parent fixture is not yet required")
+            if not bifrost:
+                raise ValueError("production parent fixture is not yet required")
+            manifest["parent_evidence"] = {
+                "kind": "issue", "repository": REPOSITORY, "number": 5399, "node_id": "I_parent5399",
+                "relationship": {"kind": "parent", "child_issue_number": manifest["issue"]["number"], "authenticated": True},
+                "contract_version": "fca-parent.v1", "contract_hash": "e" * 64,
+                "write_permission": {"scope": "parent_evidence:write", "writes": ["pr_receipt_comments", "child_generated_ledger_writeback"]},
+            }
+        workflow_root = None
+        source_state = None
+        runtime = None
+        if bifrost:
+            from app.builderops import issue_delivery_effect_executor as executor_module
+            from app.builderops.control_plane.issue_delivery import delivery_source_pair
+            from tests.builderops.test_control_plane_issue_delivery import _bifrost_manifest
+            workflow_root = case / "trusted-hub"
+            workflow_root.mkdir()
+            subprocess.run(["git", "init", "--initial-branch=main", str(workflow_root)], check=True, capture_output=True)
+            for key, val in (("user.email", "test@example.com"), ("user.name", "Host Test")):
+                subprocess.run(["git", "-C", str(workflow_root), "config", key, val], check=True)
+            for path in REQUIRED_WORKFLOW_ARTIFACTS:
+                target = workflow_root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(REPO_ROOT / path, target)
+            subprocess.run(["git", "-C", str(workflow_root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(workflow_root), "commit", "-m", "trusted workflow"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(workflow_root), "remote", "add", "origin", f"https://github.com/{REPOSITORY}.git"], check=True)
+            workflow_sha = subprocess.run(["git", "-C", str(workflow_root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            template = _bifrost_manifest()
+            if parent:
+                template["target_policies"][REPOSITORY]["allowed_effects"].append("github.issue-delivery.parent-evidence.v1")
+            manifest["contract_version"] = template["contract_version"]
+            manifest["repository"] = template["repository"]
+            manifest["issue"]["repository"] = REPOSITORY
+            manifest["workflow"].update(version=template["contract_version"], repository=REPOSITORY, source_revision=workflow_sha)
+            source_state = {"bases": {manifest["repository"]: base_sha, REPOSITORY: workflow_sha},
+                            "documents": {}, "issue": deepcopy(manifest["issue"]), "head": "f" * 40, "reads": []}
+            manifest["target_policies"] = {}
+            for repository, policy in template["target_policies"].items():
+                document = {"repository": repository, "allowed_effects": policy["allowed_effects"],
+                            "github_credential": {"credential_id": "hub-effect" if repository == REPOSITORY else "consumer-effect", "rotation_generation": 1},
+                            "documentation_paths": policy["documentation_paths"],
+                            "verification_profile": policy["verification_profile"], "required_checks": policy["required_checks"]}
+                source_state["documents"][repository] = document
+                from app.dispatcher.verification_merge import ProtectedDeliveryManifest
+                manifest["target_policies"][repository] = executor_module._policy_binding(ProtectedDeliveryManifest.from_document(
+                    document, repository=repository, base_sha=source_state["bases"][repository], blob_sha="c" * 40))
+            pack = manifest["context"]["dispatch_plan"]["context_packs"][0]
+            pack["delivery_sources"] = delivery_source_pair(manifest)
+            manifest["context"]["content_hash"] = canonical_hash(pack)
+            manifest["context"]["expected_plan_hash"] = canonical_hash(manifest["context"]["dispatch_plan"])
+
+            def source_http(request: httpx.Request) -> httpx.Response:
+                assert source_state is not None
+                path = request.url.path
+                source_state["reads"].append(path)
+                repository = "/".join(path.split("/")[2:4])
+                endpoint = "/".join(path.split("/")[4:])
+                if endpoint == "":
+                    data = {"default_branch": "main"}
+                elif endpoint == "git/ref/heads/main":
+                    data = {"object": {"sha": source_state["bases"][repository]}}
+                elif endpoint == "contents/.builderops/delivery-manifest.json":
+                    content = json.dumps(source_state["documents"][repository], sort_keys=True, separators=(",", ":")).encode()
+                    data = {"type": "file", "encoding": "base64", "sha": "c" * 40, "content": base64.b64encode(content).decode()}
+                elif endpoint == f"issues/{manifest['issue']['number']}" and repository == REPOSITORY:
+                    data = source_state["issue"]
+                elif endpoint == "pulls/6000":
+                    data = {"head": {"sha": source_state["head"]}, "base": {"ref": "main", "repo": {"full_name": repository}},
+                            "merged": source_state.get("merged", False), "merge_commit_sha": "3" * 40}
+                elif endpoint == "pulls/6000/reviews":
+                    data = source_state.get("reviews", [{"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED",
+                            "commit_id": source_state["head"], "author_association": "COLLABORATOR", "submitted_at": "2026-09-17T10:00:00Z"}])
+                elif "/commits/" in path and path.endswith("3" * 40):
+                    data = {"commit": {"message": "Approved documentation"}}
+                elif endpoint.endswith("/check-runs"):
+                    data = {"total_count": 1, "check_runs": [{"id": 1, "name": "documentation", "head_sha": source_state["head"],
+                            "status": "completed", "conclusion": "success", "app": {"id": 7, "slug": "github-actions"}, "check_suite": {"id": 9}, "completed_at": "2026-09-17T10:00:00Z"}]}
+                elif endpoint.endswith("/status"):
+                    data = {"total_count": 0, "statuses": []}
+                elif endpoint == "actions/runs":
+                    data = {"total_count": 1, "workflow_runs": [{"id": 8, "check_suite_id": 9, "workflow_id": 10,
+                            "path": ".github/workflows/documentation.yml", "event": "pull_request", "head_sha": source_state["head"],
+                            "run_attempt": 1, "status": "completed", "conclusion": "success", "updated_at": "2026-09-17T10:00:00Z"}]}
+                elif endpoint == "branches/main/protection":
+                    data = {"required_status_checks": {"contexts": ["documentation"], "checks": []}}
+                else:
+                    return httpx.Response(404, json={"message": "fixture source unavailable"})
+                return httpx.Response(200, json=data)
+
+            repository_authority = GitHubProtectedRepositoryAuthority("fixture-reader", http_client=httpx.Client(
+                base_url="https://api.github.com", transport=httpx.MockTransport(source_http)))
+            credentials = _RegistryCredentialResolver(registry)
+            def current_facts(approved: Mapping[str, Any]) -> Mapping[str, Any]:
+                return {"current_source": deepcopy(manifest["source"]), "current_profile": deepcopy(manifest["profile"])}
+            runtime = executor_module.HostIssueDeliveryExecutorRuntime(repository_authority=repository_authority, credentials=credentials,
+                transport=_Transport(), isolation_profile_sha256="1" * 64, live_binding_reader=current_facts, trusted_workflow_root=workflow_root)
+            monkeypatch.setattr(executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime)
         preview = owner.issue_delivery_preview(manifest=manifest)
         if preview_observer is not None:
             preview_observer(preview)
@@ -1140,14 +1258,26 @@ def issue_delivery_production_harness(
         frozen = prepared_worker.frozen_destination
         ledger = BuilderOpsIssueDeliveryEffectLedger(
             host,
-            repository=REPOSITORY,
+            repository=str(approval["repository"]),
             run_id=str(approval["destination"]["run_id"]),
             approval_id=str(approval["approval_id"]),
             worker_id="issue-delivery-host",
         )
-        credentials = _RegistryCredentialResolver(registry)
-        transport = _Transport()
-        repository_authority = _production_repository_authority()
+        credentials = runtime.credentials if runtime is not None else _RegistryCredentialResolver(registry)
+        transport = runtime.transport if runtime is not None else _Transport()
+        repository_authority = runtime.repository_authority if runtime is not None else _production_repository_authority()
+        if source_state is not None:
+            def applied() -> None:
+                assert source_state is not None
+                kind = transport.applied_requests[-1].effect_kind
+                if kind == "claim":
+                    source_state["issue"]["labels"] = ["agent:in-progress"]
+                elif kind == "merge":
+                    source_state["merged"] = True
+                    source_state["bases"][manifest["repository"]] = "3" * 40
+                elif kind == "closure":
+                    source_state["issue"].update(state="closed", labels=[])
+            transport.on_apply = applied
         executor = IssueDeliveryHostExecutor(
             authority=host,
             ledger=ledger,
@@ -1158,7 +1288,16 @@ def issue_delivery_production_harness(
             transport=transport,
             prepared_worker=prepared_worker,
             expected_isolation_profile_sha256=launcher.expected_profile_sha256,
+            **({"trusted_workflow_root": workflow_root, "trusted_executor_artifact": workflow_root / EXECUTOR_ARTIFACT,
+                "trusted_worker_isolation_artifact": workflow_root / WORKER_ISOLATION_ARTIFACT,
+                "live_binding_reader": runtime.live_binding_reader} if workflow_root is not None and runtime is not None else {}),
         )
+        if runtime is not None:
+            from dataclasses import replace
+            runtime = replace(runtime, isolation_profile_sha256=launcher.expected_profile_sha256)
+            monkeypatch.setattr(executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime)
+            executor = executor_module.build_host_issue_delivery_executor(approval=approval, client=host, prepared=prepared_worker)
+            ledger = executor.ledger
         return _ProductionHarness(
             store=issue_delivery_pg_store,
             registry=registry,
@@ -1179,6 +1318,8 @@ def issue_delivery_production_harness(
             checkout=checkout,
             worktree=worktree,
             preparation_observed=tuple(preparation_observed),
+            workflow_root=workflow_root,
+            source_state=source_state,
         )
 
     return build

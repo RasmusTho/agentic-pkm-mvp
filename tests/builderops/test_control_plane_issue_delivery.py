@@ -46,6 +46,73 @@ pytestmark = pytest.mark.pg
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 
 
+def _bifrost_manifest():
+    """The public constituent identity, with an independently tracked hub Issue."""
+    value = _manifest()
+    value["contract_version"] = "fca-issue-delivery.v2"
+    value["repository"] = "rasmustho/bifrost"
+    value["destination"]["base_sha"] = value["source"]["revision"]
+    value["issue"]["repository"] = REPOSITORY.lower()
+    value["workflow"].update(
+        version="fca-issue-delivery.v2", repository=REPOSITORY.lower(),
+        source_revision="b" * 40,
+    )
+    value["target_policies"] = {}
+    for repository, effects in (
+        ("rasmustho/bifrost", ["publication", "merge"]),
+        (REPOSITORY.lower(), ["claim", "closure"]),
+    ):
+        value["target_policies"][repository] = {
+            "repository": repository,
+            "base_sha": value["destination"]["base_sha"] if "bifrost" in repository else "b" * 40,
+            "blob_sha": "c" * 40,
+            "content_sha256": "d" * 64,
+            "credential_id": "consumer-writer" if "bifrost" in repository else "hub-writer",
+            "rotation_generation": 1,
+            "allowed_effects": [f"github.issue-delivery.{effect}.v1" for effect in effects],
+            "documentation_paths": ["docs/guide.md"] if "bifrost" in repository else [],
+            "verification_profile": deepcopy(value["profile"]["verification_profile"]) if "bifrost" in repository else None,
+            "required_checks": ["documentation"] if "bifrost" in repository else [],
+        }
+    pack = value["context"]["dispatch_plan"]["context_packs"][0]
+    pack["delivery_sources"] = {
+        "contract_version": value["contract_version"],
+        "repository": value["repository"],
+        "source_revision": value["source"]["revision"],
+        "issue_repository": value["issue"]["repository"],
+        "workflow_repository": value["workflow"]["repository"],
+        "workflow_source_revision": value["workflow"]["source_revision"],
+    }
+    value["context"]["content_hash"] = canonical_hash(pack)
+    value["context"]["expected_plan_hash"] = canonical_hash(value["context"]["dispatch_plan"])
+    return value
+
+
+def test_issue_delivery_v1_compatibility_and_v2_scope() -> None:
+    from app.builderops.control_plane.issue_delivery import IssueDeliveryContractError
+
+    legacy = _manifest()
+    legacy["expires_at"] = "2099-01-01T00:00:00+00:00"
+    assert canonical_hash(normalize_issue_delivery_manifest(legacy)) == (
+        "114f9b5bbaa7baea1d10834031b29535336e97d772a1f7c103b382d98b0c43ec"
+    )
+    v2 = _bifrost_manifest()
+    normalized = normalize_issue_delivery_manifest(v2)
+    assert normalized["issue"]["repository"] == REPOSITORY.lower()
+    assert normalized["workflow"]["source_revision"] != normalized["source"]["revision"]
+    assert normalize_issue_delivery_manifest(normalized) == normalized
+    for field, bad in (("repository", "other/third"), ("repository", REPOSITORY),
+                       ("contract_version", "fca-issue-delivery.v3"),
+                       ("target_policies", {})):
+        changed = deepcopy(v2)
+        changed[field] = bad
+        with pytest.raises(IssueDeliveryContractError):
+            normalize_issue_delivery_manifest(changed)
+    legacy["repository"] = "rasmustho/bifrost"
+    with pytest.raises(IssueDeliveryContractError):
+        normalize_issue_delivery_manifest(legacy)
+
+
 def _dsn() -> str:
     value = os.getenv("BUILDEROPS_DATABASE_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
     if not value:
@@ -448,7 +515,7 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
     monkeypatch.setattr(
         adapter,
         "_live_binding",
-        lambda *, include_current_facts=True: (
+        lambda *, include_current_facts=True, post_merge_observation=False: (
             _operation_live_binding(approval)
             if include_current_facts
             else immutable_binding
@@ -613,7 +680,126 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
     assert "owner is unavailable" in str(service_errors[-1])
 
 
-def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("boundary", ["preview", "start", "execute", "withdrawal"])
+def test_bifrost_presented_owner_cannot_borrow_hub_scope(
+    issue_delivery_production_harness, tmp_path, boundary,
+) -> None:
+    from app.builderops.control_plane.issue_delivery import (
+        approval_digest, receipt_ref, record_id, strip_server_fields,
+    )
+
+    harness = issue_delivery_production_harness(bifrost=True)
+    raw = strip_server_fields(harness.approval)
+    raw.pop("contract", None)
+    preview = harness.owner.issue_delivery_preview(manifest=raw)["manifest"]
+    # Positive control: this actual bearer holds both repositories and the
+    # service admits/replays it before the repository grant is withdrawn.
+    assert harness.owner.issue_delivery_start(decision="start", manifest=harness.approval)["replayed"]
+    original = json.loads(harness.registry.manifest_path.read_text())
+    document = deepcopy(original)
+    owner = next(row for row in document["credentials"] if row["id"] == "owner")
+    sibling = deepcopy(owner)
+    secret = tmp_path / "separate-hub-owner.secret"
+    secret.write_text("separate-hub-owner-token", encoding="utf-8")
+    secret.chmod(0o600)
+    sibling.update(id="hub-owner", secret_ref="host-secret:hub-owner",
+                   secret_file=str(secret), repositories=[REPOSITORY.lower()])
+    owner["repositories"] = ["rasmustho/bifrost"]
+    document["credentials"].append(sibling)
+    harness.registry.manifest_path.write_text(json.dumps(document))
+    current = harness.registry.current_credential("owner")
+    assert current is not None and not current.may_address(REPOSITORY)
+    assert harness.registry.has_issue_delivery_approval_grant(REPOSITORY, current.principal)
+
+    if boundary == "preview":
+        with pytest.raises(ControlPlaneScopeError):
+            harness.owner.issue_delivery_preview(manifest=raw)
+    elif boundary == "withdrawal":
+        with pytest.raises(ControlPlaneConflictError):
+            harness.host.issue_delivery_authority(manifest=harness.approval, purpose="execute")
+        historical = harness.host.issue_delivery_authority(manifest=harness.approval, purpose="readback")
+        assert historical["approval"] == harness.approval
+    else:
+        # Reproduce public metadata emitted by the formerly vulnerable preview,
+        # not an unrelated hash/rotation mismatch. No service verdict is mocked.
+        permission = preview["permission"]
+        permission["repositories"] = sorted(current.repositories)
+        permission.pop("permission_version")
+        permission["permission_version"] = canonical_hash(permission)
+        if boundary == "start":
+            preview["approval_id"] += "-split"
+            preview["operation_key"] += "-split"
+            preview["approval_receipt_ref"] = receipt_ref(preview["repository"], preview["approval_id"])
+            preview["approval_manifest_hash"] = issue_delivery_manifest_hash(preview)
+            with pytest.raises(ControlPlaneScopeError):
+                harness.owner.issue_delivery_start(decision="start", manifest=preview)
+            with pytest.raises(KeyError):
+                harness.store.get_record(preview["repository"], record_id(preview["approval_id"]))
+        else:
+            # Retained database state created by the former vulnerable Start.
+            # Inject only persisted input; execute/readback use the real service.
+            retained = {**harness.approval, "permission": permission}
+            retained["approval_manifest_hash"] = issue_delivery_manifest_hash(retained)
+            retained["approval_digest"] = approval_digest(retained)
+            with psycopg.connect(harness.store.dsn) as conn:
+                conn.execute(
+                    "UPDATE builderops_records SET payload = %s::jsonb "
+                    "WHERE repository = %s AND record_id = %s",
+                    (json.dumps(retained), retained["repository"], record_id(retained["approval_id"])),
+                )
+            historical = harness.host.issue_delivery_authority(manifest=retained, purpose="readback")
+            assert historical["approval"] == retained
+            current_readback = harness.owner.issue_delivery_readback(
+                repository=retained["repository"], approval_id=retained["approval_id"],
+            )
+            assert current_readback["state"] == "invalidated"
+            assert current_readback["approval"] == retained
+            with pytest.raises(ControlPlaneScopeError):
+                harness.host.issue_delivery_authority(manifest=retained, purpose="execute")
+    assert harness.transport.apply_calls == 0
+    assert harness.worker_transport.calls == 0
+
+
+@pytest.mark.parametrize("bifrost", [False, True])
+def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path, issue_delivery_production_harness, bifrost) -> None:
+    if bifrost:
+        from app.builderops.control_plane.issue_delivery import strip_server_fields
+        from app.builderops.control_plane.client import ControlPlaneClientError
+        harness = issue_delivery_production_harness(bifrost=True)
+        assert harness.approval["contract_version"] == "fca-issue-delivery.v2"
+        assert harness.approval["owner_principal"] == "owner:human"
+        manifest = strip_server_fields(harness.approval)
+        manifest.pop("contract", None)
+        preview = harness.owner.issue_delivery_preview(manifest=manifest)
+        assert preview["contract_version"] == "fca-issue-delivery.v2"
+        for repository in ("rasmustho/bifrost", REPOSITORY.lower()):
+            original = harness.source_state["documents"][repository]
+            harness.source_state["documents"][repository] = {}
+            with pytest.raises(ControlPlaneClientError):
+                harness.owner.issue_delivery_start(decision="start", manifest=preview["manifest"])
+            harness.source_state["documents"][repository] = original
+        document = json.loads(harness.registry.manifest_path.read_text())
+        for credential_id in ("consumer-effect", "hub-effect", "owner"):
+            changed = deepcopy(document)
+            for row in changed["credentials"]:
+                if row["id"] == credential_id:
+                    if credential_id == "owner":
+                        row["repositories"] = ["rasmustho/bifrost"]
+                    else:
+                        row["revoked"] = True
+            harness.registry.manifest_path.write_text(json.dumps(changed))
+            with pytest.raises(ControlPlaneClientError):
+                harness.owner.issue_delivery_preview(manifest=manifest)
+            harness.registry.manifest_path.write_text(json.dumps(document))
+        for version, repo in (("fca-issue-delivery.v1", "rasmustho/bifrost"),
+                              ("fca-issue-delivery.v2", "other/third"),
+                              ("fca-issue-delivery.v3", "rasmustho/bifrost")):
+            changed = deepcopy(manifest)
+            changed.update(contract_version=version, repository=repo)
+            with pytest.raises(ControlPlaneClientError):
+                harness.owner.issue_delivery_preview(manifest=changed)
+        assert harness.transport.apply_calls == 0
+        return
     owner = _client(store, registry, "owner-token")
     reader = _client(store, registry, "reader-token")
     executor_low = _client(store, registry, "executor-low-token")

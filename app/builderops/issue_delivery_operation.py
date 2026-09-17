@@ -31,6 +31,9 @@ from app.builderops.control_plane.issue_delivery import (
     destination_resource_key,
     manifest_hash,
     normalize_manifest,
+    delivery_source_pair,
+    SECOND_CONTRACT_VERSION,
+    tracking_repository,
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
 from app.builderops.epic_dispatch import CodexIssueSessionLauncher, IssueSessionLauncher
@@ -430,7 +433,43 @@ def observe_issue_delivery_operation(
     )
 
 
-def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, Any]:
+def _verify_workflow_root(approval: Mapping[str, Any], root: Path | None) -> list[dict[str, str]]:
+    """Independently authenticate the protected hub checkout and pinned Git bytes."""
+    from app.builderops.issue_delivery_effect_executor import _repository_from_remote
+
+    if root is None or not root.is_absolute() or root.is_symlink():
+        raise IssueDeliveryOperationRefused("explicit protected workflow root is required")
+    root = root.resolve(strict=True)
+    workflow = approval["workflow"]
+
+    def git(*args: str) -> bytes:
+        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+        if result.returncode:
+            raise IssueDeliveryOperationRefused("trusted workflow Git identity is unavailable")
+        return result.stdout
+
+    if (Path(git("rev-parse", "--show-toplevel").decode().strip()).resolve() != root
+        or _repository_from_remote(git("remote", "get-url", "origin").decode().strip()) != workflow["repository"]
+        or git("rev-parse", "HEAD").decode().strip() != workflow["source_revision"]
+        or root == Path(approval["destination"]["checkout"]).resolve()):
+        raise IssueDeliveryOperationRefused("trusted workflow repository or commit changed")
+    artifacts = []
+    for artifact in workflow["artifacts"]:
+        path = root / artifact["path"]
+        tree = git("ls-tree", workflow["source_revision"], "--", artifact["path"]).decode()
+        if (not tree.startswith("100644 blob ") or not path.is_file() or path.is_symlink()
+            or any(parent.is_symlink() for parent in path.parents if parent != root)):
+            raise IssueDeliveryOperationRefused("trusted workflow artifact is non-regular or unavailable")
+        digest = hashlib.sha256(git("show", f"{workflow['source_revision']}:{artifact['path']}")).hexdigest()
+        if digest != artifact["sha256"] or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise IssueDeliveryOperationRefused("trusted workflow artifact differs from immutable pin")
+        artifacts.append({"path": artifact["path"], "sha256": digest})
+    return sorted(artifacts, key=lambda item: item["path"])
+
+
+def _default_live_binding_reader(
+    approval: Mapping[str, Any], *, trusted_workflow_root: Path | None = None,
+) -> Mapping[str, Any]:
     """Re-read the approved checkout/worktree/Git/artifact identity."""
 
     destination = approval.get("destination")
@@ -487,7 +526,7 @@ def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, An
     if remote_repository != approved_repository:
         raise IssueDeliveryOperationRefused("destination repository remote identity changed")
     artifacts: list[dict[str, str]] = []
-    for artifact in workflow.get("artifacts", []):
+    for artifact in ([] if approval.get("contract_version") == SECOND_CONTRACT_VERSION else workflow.get("artifacts", [])):
         if not isinstance(artifact, Mapping):
             raise IssueDeliveryOperationRefused("approved workflow artifact is malformed")
         path = checkout / str(artifact["path"])
@@ -495,6 +534,8 @@ def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, An
             raise IssueDeliveryOperationRefused("approved workflow artifact is unavailable")
         artifacts.append({"path": str(artifact["path"]), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     artifacts.sort(key=lambda item: item["path"])
+    if approval.get("contract_version") == SECOND_CONTRACT_VERSION:
+        artifacts = _verify_workflow_root(approval, trusted_workflow_root)
     return {
         "checkout": str(checkout),
         "worktree": str(worktree),
@@ -503,6 +544,7 @@ def _default_live_binding_reader(approval: Mapping[str, Any]) -> Mapping[str, An
         "base_sha": str(destination["base_sha"]),
         "workflow_hash": str(workflow["content_hash"]),
         "workflow_artifacts": artifacts,
+        **({"delivery_sources": delivery_source_pair(approval)} if delivery_source_pair(approval) else {}),
     }
 
 
@@ -647,7 +689,7 @@ class IssueDeliveryOperationAdapter:
         destination = self.approval["destination"]
         issue = self.approval["issue"]
         target: dict[str, Any] = {
-            "repository": self.repository,
+            "repository": tracking_repository(self.approval) if delivery_source_pair(self.approval) and effect in {"issue_claim", "closure_reconciliation"} else self.repository,
             "issue_number": issue["number"],
             "checkout": str(Path(str(destination["checkout"])).resolve()),
             "worktree": str(Path(str(destination["worktree"])).resolve()),
@@ -756,7 +798,7 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationRefused("effect target PR repository is malformed") from exc
             if (
                 type(raw_target["pr_number"]) is not int or raw_target["pr_number"] <= 0
-                or pr_repository != expected["repository"]
+                or pr_repository != self.repository
                 or type(raw_target["pr_issue_number"]) is not int
                 or raw_target["pr_issue_number"] != expected["issue_number"]
                 or raw_target["pr_head_ref"] != expected["branch"]
@@ -765,7 +807,7 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationRefused("effect target PR differs from approved destination")
         return {**expected, **raw_target} if partial_resource_target else dict(raw_target)
 
-    def _live_binding(self, *, include_current_facts: bool = True) -> dict[str, Any]:
+    def _live_binding(self, *, include_current_facts: bool = True, post_merge_observation: bool = False) -> dict[str, Any]:
         destination = self.approval["destination"]
         workflow = self.approval["workflow"]
         if include_current_facts:
@@ -797,6 +839,8 @@ class IssueDeliveryOperationAdapter:
                 key=lambda item: item["path"],
             ),
         }
+        if delivery_source_pair(self.approval):
+            expected_base["delivery_sources"] = delivery_source_pair(self.approval)
         # Entry/terminal are observations of an already-started process.  Do
         # not re-read mutable paths, Git, artifacts, or current authority for
         # those receipts: their exact approval and predecessor hashes are
@@ -815,7 +859,14 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationRefused(
                     f"approved destination {raw_name} identity changed after approval"
                 )
-        observed = dict(self.live_binding_reader(self.approval))
+        if post_merge_observation and self.require_protected_composition and delivery_source_pair(self.approval):
+            # Closure observes the immutable source pair; the protected closure
+            # executor alone validates the operation-owned merged-base transition
+            # against its durable merge slot and independent GitHub readback.
+            observed = dict(_require_protected_host_executor(self.protected_executor).live_binding(
+                self.approval, post_merge_observation=True))
+        else:
+            observed = dict(self.live_binding_reader(self.approval))
         # Protected composition adds fresh Issue/source/profile facts to the
         # same observation.  Compare the immutable destination binding as its
         # own exact field set first; comparing the entire mapping here would
@@ -875,7 +926,7 @@ class IssueDeliveryOperationAdapter:
             "authority_epoch": reply["authority_epoch"],
             "observed_at": reply.get("observed_at"),
             "approval_manifest_hash": self.approval_manifest_hash,
-            "live_binding": self._live_binding(),
+            "live_binding": self._live_binding(post_merge_observation=effect == "closure_reconciliation"),
         }
 
     def authorize_effect(self, effect: str, *, target: Mapping[str, Any] | None = None) -> dict[str, Any]:
