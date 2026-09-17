@@ -709,6 +709,39 @@ class GitHubProtectedRepositoryAuthority:
             head_sha=head_sha,
         )
 
+    def _delivery_reviews_ready(self, repository: str, pr_number: int, head_sha: str,
+                                protection: Mapping[str, Any]) -> bool:
+        """Issue delivery has no verification-loop ledger to supply this gate."""
+        policy = protection.get("required_pull_request_reviews")
+        count = policy.get("required_approving_review_count", 1) if isinstance(policy, Mapping) else 1
+        if type(count) is not int or count < 0:
+            raise MergeAuthorityError("GitHub review policy is malformed")
+        latest: dict[str, Mapping[str, Any]] = {}
+        seen: set[int] = set()
+        for page in range(1, 11):
+            rows = self._get_list(f"/repos/{repository}/pulls/{pr_number}/reviews", per_page=100, page=page)
+            for row in rows:
+                actor = row.get("user")
+                login = actor.get("login") if isinstance(actor, Mapping) else None
+                identifier, submitted = row.get("id"), row.get("submitted_at")
+                if (type(identifier) is not int or identifier in seen or not isinstance(login, str)
+                    or not login or not isinstance(submitted, str) or not submitted
+                    or row.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED"}):
+                    raise MergeAuthorityError("GitHub review evidence is malformed or ambiguous")
+                seen.add(identifier)
+                if row["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+                    previous = latest.get(login.casefold())
+                    if previous is None or (submitted, identifier) > (previous["submitted_at"], previous["id"]):
+                        latest[login.casefold()] = row
+            if len(rows) < 100:
+                break
+        else:
+            raise MergeAuthorityError("GitHub review evidence exceeds its bounded read")
+        return (sum(row.get("state") == "APPROVED" and row.get("commit_id") == head_sha
+                    and row.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+                    for row in latest.values()) >= max(1, count)
+                and not any(row.get("state") == "CHANGES_REQUESTED" for row in latest.values()))
+
     def required_gates(
         self, repository: str, pr_number: int, head_sha: str,
         *, verification_checks: tuple[str, ...] | None = None,
@@ -1003,9 +1036,10 @@ class GitHubProtectedRepositoryAuthority:
         )
         return {
             "ci": ci,
-            # The executor independently requires ledger.closure_ready(); this
-            # flag records that the repository adapter did not weaken it.
-            "review": True,
+            # The verification-loop caller independently requires its ledger's
+            # closure_ready. The bounded Issue-delivery caller has no such ledger.
+            "review": True if verification_checks is None else self._delivery_reviews_ready(
+                canonical, pr_number, head_sha, protection_document),
             "protection": protection,
             "scope": (
                 isinstance(base_full_name, str)

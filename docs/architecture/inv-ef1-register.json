@@ -2,6 +2,13 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "docs/OPERATIONS.md",
+      "category": "iv",
+      "why_load_bearing": "Bounded operator companion links the public governed Bifrost delivery contract; it is constituent identity, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5586"
+    },
+    {
       "artifact": "app/builderops/cockpit_github_plane.py",
       "category": "iv",
       "why_load_bearing": "Builder delivery code/proof names the public governed Bifrost constituent and its bounded v2 contract identity, not personal vault data.",

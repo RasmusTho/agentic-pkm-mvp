@@ -968,10 +968,9 @@ def test_terminal_unknown_effect_blocks_cross_issue_destination_reuse(
 
 
 @pytest.mark.pg
-@pytest.mark.pg
-@pytest.mark.parametrize("drift", ["consumer", "workflow", "hub_policy", "consumer_policy", "credential", "foreign_claim"])
+@pytest.mark.parametrize("drift", ["consumer", "workflow", "hub_policy", "consumer_policy", "credential", "foreign_claim", "base", "epoch", "expiry", "isolation"])
 def test_bifrost_source_pair_drift_refuses_production_effects(issue_delivery_production_harness, drift) -> None:
-    harness = issue_delivery_production_harness(bifrost=True)
+    harness = issue_delivery_production_harness(bifrost=True, approval_ttl_seconds=7.0 if drift == "expiry" else None)
     assert harness.source_state is not None
     if drift in {"consumer", "workflow"}:
         root = harness.checkout if drift == "consumer" else harness.workflow_root
@@ -985,6 +984,18 @@ def test_bifrost_source_pair_drift_refuses_production_effects(issue_delivery_pro
             if row["id"] == "hub-effect":
                 row["revoked"] = True
         harness.registry.manifest_path.write_text(json.dumps(document))
+    elif drift == "base":
+        harness.source_state["bases"][harness.approval["repository"]] = "9" * 40
+    elif drift == "epoch":
+        import psycopg
+        with psycopg.connect(harness.store.dsn) as conn:
+            conn.execute("UPDATE builderops_authority_metadata SET authority_epoch = authority_epoch + 1")
+    elif drift == "expiry":
+        expires_at = datetime.fromisoformat(harness.approval["expires_at"])
+        time.sleep(max(0.0, (expires_at - datetime.now(timezone.utc)).total_seconds()) + 0.05)
+    elif drift == "isolation":
+        artifact = harness.workflow_root / "app/builderops/issue_delivery_worker_isolation.py"
+        artifact.write_text(artifact.read_text() + "\n# changed isolation\n")
     else:
         harness.source_state["issue"]["labels"] = ["agent:in-progress"]
     result = dispatch_issue_sessions(harness.approval["context"]["dispatch_plan"], _production_adapter(harness),
@@ -1014,6 +1025,7 @@ def test_bifrost_replay_preserves_original_source_pair(issue_delivery_production
     assert historical["approval"]["issue"]["repository"] == "rasmustho/agentic-pkm-mvp"
 
 
+@pytest.mark.pg
 @pytest.mark.parametrize("effect_kind", ["claim", "publication", "merge", "closure"])
 def test_delivery_effect_boundaries_recheck_authority(
     issue_delivery_production_harness: Callable[..., _ProductionHarness],

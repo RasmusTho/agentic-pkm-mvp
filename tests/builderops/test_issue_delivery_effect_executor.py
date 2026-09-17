@@ -171,7 +171,7 @@ def test_bifrost_closure_requires_owned_merge_transition(issue_delivery_producti
 
 @pytest.mark.pg
 @pytest.mark.parametrize("effect_kind", ["publication", "merge"])
-@pytest.mark.parametrize("change", ["allowed", "swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "head", "diff"])
+@pytest.mark.parametrize("change", ["allowed", "swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "head", "diff", "review"])
 def test_bifrost_publication_and_merge_enforce_complete_diff(issue_delivery_production_harness, effect_kind, change) -> None:
     harness = issue_delivery_production_harness(bifrost=True)
     harness.executor.execute(harness.completed_request())
@@ -180,6 +180,11 @@ def test_bifrost_publication_and_merge_enforce_complete_diff(issue_delivery_prod
         request = request.model_copy(update={"target": request.target.model_copy(update={"diff_sha256": "0" * 64})})
     elif change == "head":
         request = request.model_copy(update={"target": request.target.model_copy(update={"head_sha": harness.approval["source"]["revision"]})})
+    elif change == "review":
+        if effect_kind == "publication":
+            # Publication need not already have review; merge does.
+            change = "allowed"
+        harness.source_state["reviews"] = []
     if change == "allowed":
         result = harness.executor.execute(request)
         assert result.outcome == "applied"
@@ -1125,7 +1130,7 @@ def test_unknown_effect_requires_readback_before_retry(
         assert harness.transport.apply_calls == 1
         credential_manifest = json.loads(harness.registry.manifest_path.read_text())
         for row in credential_manifest["credentials"]:
-            if row["credential_id"] in {"consumer-effect", "hub-effect"}:
+            if row["id"] in {"consumer-effect", "hub-effect"}:
                 row["revoked"] = True
         harness.registry.manifest_path.write_text(json.dumps(credential_manifest))
         assert harness.executor.execute(request).outcome == "applied"

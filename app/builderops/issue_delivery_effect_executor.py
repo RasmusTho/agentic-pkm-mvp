@@ -631,6 +631,14 @@ class EffectAuthorityReadback(_StrictModel):
 class EffectReadbackEvidence(_StrictModel):
     source: Literal["github-authoritative-readback"]
     observed_target_sha256: str = Field(pattern=_HEX_64)
+    effect_repository: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_absent_repository(self, handler: Any) -> dict[str, Any]:
+        value = handler(self)
+        if self.effect_repository is None:
+            value.pop("effect_repository", None)
+        return value
 
 
 class EffectReadback(_StrictModel):
@@ -1118,6 +1126,8 @@ class IssueDeliveryHostExecutor:
             request.target.model_dump(mode="json")
         ):
             raise ValueError("Issue-delivery readback target changed")
+        if delivery_source_pair(request.approval) and readback.evidence.effect_repository != request.effect_repository:
+            raise ValueError("Issue-delivery readback addresses another effect repository")
         readback_evidence = readback.evidence.model_dump(mode="json")
         _safe_receipt_value(readback_evidence)
         evidence = {
@@ -1448,7 +1458,7 @@ class IssueDeliveryHostExecutor:
     ) -> None:
         expected = {
             "request_sha256": request.content_sha256,
-            "repository": request.repository,
+            "repository": request.effect_repository,
             "issue_number": request.issue_number,
             "issue_body_hash": request.issue_body_hash,
             "acceptance_criteria_hash": request.acceptance_criteria_hash,
@@ -1500,6 +1510,7 @@ class IssueDeliveryHostExecutor:
             "target": request.target.model_dump(mode="json"),
         }
         if delivery_source_pair(request.approval):
+            payload["approval_manifest_hash"] = request.approval["approval_manifest_hash"]
             payload["delivery_sources"] = delivery_source_pair(request.approval)
             payload["effect_repository"] = request.effect_repository
             payload["target_policies_sha256"] = _canonical_hash(request.approval["target_policies"])

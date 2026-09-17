@@ -437,6 +437,17 @@ Companion docs:
   live in `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md` and
   `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
 
+### BuilderOps Issue-delivery repository support
+
+Issue #5586 adds repository-side `fca-issue-delivery.v2` support for the bounded Bifrost
+consumer, with an independently pinned trusted hub workflow, separate hub tracking Issue,
+and exact per-target protected policies and credential generations; hub-only v1 is unchanged.
+The owning contract is [FCA-ID-SECOND](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target).
+This support does not activate a host, issue grants, deploy a transport, or establish live M2
+completion. Documentation readiness, managed UI/host activation, a real pilot and owner
+acceptance remain separately gated. Repository-only review: 2026-09-17, Issue #5586;
+the live-runtime verification date and unrelated operational claims above are unchanged.
+
 ### BuilderOps cockpit live GitHub plane (#4484)
 - The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the
   `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside

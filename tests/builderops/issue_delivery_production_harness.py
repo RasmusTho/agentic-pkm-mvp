@@ -327,7 +327,7 @@ class _Transport:
     def validate_target(self, request: IssueDeliveryEffectRequest) -> EffectAuthorityReadback:
         value = {
             "request_sha256": request.content_sha256,
-            "repository": request.repository,
+            "repository": request.effect_repository,
             "issue_number": request.issue_number,
             "issue_body_hash": request.issue_body_hash,
             "acceptance_criteria_hash": request.acceptance_criteria_hash,
@@ -357,6 +357,7 @@ class _Transport:
             outcome=self.readbacks.pop(0),
             evidence={
                 "source": "github-authoritative-readback",
+                **({"effect_repository": request.effect_repository} if request.approval.get("contract_version") == "fca-issue-delivery.v2" else {}),
                 "observed_target_sha256": self.readback_target_override
                 or canonical_hash(request.target.model_dump(mode="json")),
             },
@@ -1167,6 +1168,9 @@ def issue_delivery_production_harness(
                 elif endpoint == "pulls/6000":
                     data = {"head": {"sha": source_state["head"]}, "base": {"ref": "main", "repo": {"full_name": repository}},
                             "merged": source_state.get("merged", False), "merge_commit_sha": "3" * 40}
+                elif endpoint == "pulls/6000/reviews":
+                    data = source_state.get("reviews", [{"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED",
+                            "commit_id": source_state["head"], "author_association": "COLLABORATOR", "submitted_at": "2026-09-17T10:00:00Z"}])
                 elif "/commits/" in path and path.endswith("3" * 40):
                     data = {"commit": {"message": "Approved documentation"}}
                 elif endpoint.endswith("/check-runs"):

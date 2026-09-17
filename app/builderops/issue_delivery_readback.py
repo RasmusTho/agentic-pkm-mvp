@@ -462,7 +462,8 @@ def compose_issue_delivery_readback(
         for effect in host_effects:
             payload = effect["payload"]
             if (payload.get("delivery_sources") != delivery_source_pair(approval)
-                or payload.get("approval_manifest_hash", approval["approval_manifest_hash"]) != approval["approval_manifest_hash"]):
+                or payload.get("approval_manifest_hash") != approval["approval_manifest_hash"]
+                or payload.get("effect_repository") != (approval["repository"] if payload["effect_kind"] in {"publication", "merge"} else tracking_repository(approval))):
                 raise IssueDeliveryReadbackRefused("host effect source pair changed")
     github = _mapping(github_evidence, "GitHub evidence")
     issue = _mapping(github.get("issue"), "GitHub Issue evidence")
