@@ -604,7 +604,12 @@ action = sys.argv[1]
 if action == 'validate':
     print('f' * 64)
 elif action in {'secure-file', 'verify-candidate'}:
-    pass
+    if action == 'verify-candidate':
+        args = sys.argv[2:]
+        values = {args[index]: args[index + 1] for index in range(0, len(args), 2)}
+        assert values['--source-sha'] == 'a' * 40
+        assert values['--image-digest'] == 'sha256:' + 'b' * 64
+        assert values['--postgres-digest'] == 'sha256:' + 'e' * 64
 else:
     raise SystemExit(2)
 """,
@@ -640,6 +645,57 @@ else:
     )
     assert receipt["action"] == "rollback"
     assert receipt["authorization_mode"] == "unattended"
+
+
+def test_unattended_rollback_refuses_candidate_identity_drift(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["BUILDEROPS_AUTHORIZATION_FILE"] = str(tmp_path / "owner-authorization.json")
+    Path(env["BUILDEROPS_AUTHORIZATION_FILE"]).write_text("{}", encoding="utf-8")
+    (root / "scripts/builderops/owner_authorization.py").write_text(
+        """#!/usr/bin/env python3
+import sys
+action = sys.argv[1]
+if action == 'validate':
+    print('f' * 64)
+elif action in {'secure-file', 'verify-candidate'}:
+    if action == 'verify-candidate':
+        args = sys.argv[2:]
+        values = {args[index]: args[index + 1] for index in range(0, len(args), 2)}
+        if values['--source-sha'] != 'a' * 40:
+            raise SystemExit(78)
+else:
+    raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    deploy = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "deploy", env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert deploy.returncode == 0, deploy.stdout + deploy.stderr
+    pin_path = root / "config/deploy/builderops.env"
+    pin_path.write_text(
+        pin_path.read_text(encoding="utf-8").replace("a" * 40, "c" * 40),
+        encoding="utf-8",
+    )
+    rollback = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "unattended-rollback"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rollback.returncode == 78
+    refusal = json.loads(
+        (Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text()
+    )
+    assert refusal["refusals"] == ["rollback_candidate_provenance_refused", "no_mutation_performed"]
 
 
 def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:

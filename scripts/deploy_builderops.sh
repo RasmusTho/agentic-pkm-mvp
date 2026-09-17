@@ -508,28 +508,32 @@ validate_unattended_authorization() {
 }
 
 validate_unattended_rollback_candidate() {
-  local previous_receipt_sha candidate_file
+  local active_receipt_sha previous_receipt_sha candidate_file active_source_sha active_digest active_postgres_digest
   python3 "${ROOT}/scripts/builderops/owner_authorization.py" secure-file \
     --file "${PREVIOUS_PIN_FILE}" >/dev/null 2>&1 || {
     record_preflight_refusal "rollback_pin_custody_refused" 78
     exit 78
   }
+  active_receipt_sha="$(read_pin "${PIN_FILE}" BUILDEROPS_CANDIDATE_RECEIPT_SHA)"
   previous_receipt_sha="$(read_pin "${PREVIOUS_PIN_FILE}" BUILDEROPS_CANDIDATE_RECEIPT_SHA)"
-  [[ "${previous_receipt_sha}" =~ ^[0-9a-f]{64}$ ]] || {
+  [[ "${active_receipt_sha}" =~ ^[0-9a-f]{64}$ && "${previous_receipt_sha}" = "${active_receipt_sha}" ]] || {
     record_preflight_refusal "rollback_candidate_provenance_missing" 78
     exit 78
   }
-  candidate_file="${RECEIPT_DIR}/candidate-pairs/${previous_receipt_sha}.json"
+  active_source_sha="$(read_pin "${PIN_FILE}" BUILDEROPS_SOURCE_SHA)"
+  active_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_IMAGE_DIGEST)"
+  active_postgres_digest="$(read_pin "${PIN_FILE}" BUILDEROPS_POSTGRES_IMAGE_DIGEST)"
+  candidate_file="${RECEIPT_DIR}/candidate-pairs/${active_receipt_sha}.json"
   python3 "${ROOT}/scripts/builderops/owner_authorization.py" verify-candidate \
     --file "${candidate_file}" \
-    --receipt-sha "${previous_receipt_sha}" \
-    --source-sha "${target_sha}" \
-    --image-digest "${target_digest}" \
-    --postgres-digest "${target_postgres_digest}" >/dev/null 2>&1 || {
+    --receipt-sha "${active_receipt_sha}" \
+    --source-sha "${active_source_sha}" \
+    --image-digest "${active_digest}" \
+    --postgres-digest "${active_postgres_digest}" >/dev/null 2>&1 || {
     record_preflight_refusal "rollback_candidate_provenance_refused" 78
     exit 78
   }
-  target_receipt_sha="${previous_receipt_sha}"
+  target_receipt_sha="${active_receipt_sha}"
   target_receipt_file="${candidate_file}"
   export target_receipt_sha target_receipt_file
 }
