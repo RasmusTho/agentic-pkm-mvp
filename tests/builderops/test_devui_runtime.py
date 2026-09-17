@@ -837,12 +837,13 @@ def test_managed_source_packaging_and_isolation_contract(managed_sources) -> Non
     assert "app.builderops.devui_sources" in dockerfile
     assert "SOURCE_REPOSITORY" in dockerfile
     assert "FROM scratch AS devui-source-inputs" in dockerfile
+    assert "COPY AGENTS.md /devui-candidate/AGENTS.md" in dockerfile
     assert "COPY --from=devui-source-inputs /devui-candidate" in dockerfile
     capability_path = "app/builderops/ckm/seed/capabilities.yaml"
     assert f"--capabilities {capability_path}" in dockerfile
     assert f"/devui-candidate/{capability_path}" in dockerfile
     ignore = (ROOT / "Dockerfile.builderops.dockerignore").read_text().splitlines()
-    assert "**" in ignore and "!docs/**" in ignore and "!app/**" in ignore
+    assert "**" in ignore and "!AGENTS.md" in ignore and "!docs/**" in ignore and "!app/**" in ignore
     assert (ROOT / capability_path).is_file()
     assert (ROOT / "docs/architecture/traceability-matrix.md").is_file()
     assert "httpx==" in requirements and "PyYAML==" in requirements

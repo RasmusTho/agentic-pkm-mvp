@@ -1,4 +1,5 @@
 FROM scratch AS devui-source-inputs
+COPY AGENTS.md /devui-candidate/AGENTS.md
 COPY companion-ui/companion-app/companion_ui/workspace/devui_candidate /devui-candidate/assets
 COPY app/builderops/devui_managed.css /devui-candidate/assets/devui.css
 COPY docs /devui-candidate/docs
