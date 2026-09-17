@@ -717,6 +717,9 @@ def create_app(
     def issue_delivery_permission(credential: Credential, repository: str) -> dict[str, Any]:
         """Resolve the current, repository-scoped Issue approval grant."""
 
+        # A same-principal sibling grant cannot widen the presented token.
+        # This also fences the v2 tracking repository on preview and execute.
+        _enforce_repo_scope(credential, repository)
         if credential.principal_kind != "human" or not credentials.has_issue_delivery_approval_grant(
             repository, credential.principal
         ):
@@ -928,6 +931,8 @@ def create_app(
             credential_id = permission.get("credential_id") if isinstance(permission, Mapping) else None
             current = credentials.current_credential(credential_id) if isinstance(credential_id, str) else None
             current_permission = issue_delivery_permission(current, canonical) if current is not None else None
+            if current is not None and delivery_source_pair(payload):
+                issue_delivery_permission(current, tracking_repository(payload))
             if (
                 current is None
                 or current.principal != payload.get("owner_principal")

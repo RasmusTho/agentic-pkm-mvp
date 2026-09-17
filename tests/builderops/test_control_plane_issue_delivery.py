@@ -680,6 +680,86 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
     assert "owner is unavailable" in str(service_errors[-1])
 
 
+@pytest.mark.parametrize("boundary", ["preview", "start", "execute", "withdrawal"])
+def test_bifrost_presented_owner_cannot_borrow_hub_scope(
+    issue_delivery_production_harness, tmp_path, boundary,
+) -> None:
+    from app.builderops.control_plane.issue_delivery import (
+        approval_digest, receipt_ref, record_id, strip_server_fields,
+    )
+
+    harness = issue_delivery_production_harness(bifrost=True)
+    raw = strip_server_fields(harness.approval)
+    raw.pop("contract", None)
+    preview = harness.owner.issue_delivery_preview(manifest=raw)["manifest"]
+    # Positive control: this actual bearer holds both repositories and the
+    # service admits/replays it before the repository grant is withdrawn.
+    assert harness.owner.issue_delivery_start(decision="start", manifest=harness.approval)["replayed"]
+    original = json.loads(harness.registry.manifest_path.read_text())
+    document = deepcopy(original)
+    owner = next(row for row in document["credentials"] if row["id"] == "owner")
+    sibling = deepcopy(owner)
+    secret = tmp_path / "separate-hub-owner.secret"
+    secret.write_text("separate-hub-owner-token", encoding="utf-8")
+    secret.chmod(0o600)
+    sibling.update(id="hub-owner", secret_ref="host-secret:hub-owner",
+                   secret_file=str(secret), repositories=[REPOSITORY.lower()])
+    owner["repositories"] = ["rasmustho/bifrost"]
+    document["credentials"].append(sibling)
+    harness.registry.manifest_path.write_text(json.dumps(document))
+    current = harness.registry.current_credential("owner")
+    assert current is not None and not current.may_address(REPOSITORY)
+    assert harness.registry.has_issue_delivery_approval_grant(REPOSITORY, current.principal)
+
+    if boundary == "preview":
+        with pytest.raises(ControlPlaneScopeError):
+            harness.owner.issue_delivery_preview(manifest=raw)
+    elif boundary == "withdrawal":
+        with pytest.raises(ControlPlaneConflictError):
+            harness.host.issue_delivery_authority(manifest=harness.approval, purpose="execute")
+        historical = harness.host.issue_delivery_authority(manifest=harness.approval, purpose="readback")
+        assert historical["approval"] == harness.approval
+    else:
+        # Reproduce public metadata emitted by the formerly vulnerable preview,
+        # not an unrelated hash/rotation mismatch. No service verdict is mocked.
+        permission = preview["permission"]
+        permission["repositories"] = sorted(current.repositories)
+        permission.pop("permission_version")
+        permission["permission_version"] = canonical_hash(permission)
+        if boundary == "start":
+            preview["approval_id"] += "-split"
+            preview["operation_key"] += "-split"
+            preview["approval_receipt_ref"] = receipt_ref(preview["repository"], preview["approval_id"])
+            preview["approval_manifest_hash"] = issue_delivery_manifest_hash(preview)
+            with pytest.raises(ControlPlaneScopeError):
+                harness.owner.issue_delivery_start(decision="start", manifest=preview)
+            with pytest.raises(KeyError):
+                harness.store.get_record(preview["repository"], record_id(preview["approval_id"]))
+        else:
+            # Retained database state created by the former vulnerable Start.
+            # Inject only persisted input; execute/readback use the real service.
+            retained = {**harness.approval, "permission": permission}
+            retained["approval_manifest_hash"] = issue_delivery_manifest_hash(retained)
+            retained["approval_digest"] = approval_digest(retained)
+            with psycopg.connect(harness.store.dsn) as conn:
+                conn.execute(
+                    "UPDATE builderops_records SET payload = %s::jsonb "
+                    "WHERE repository = %s AND record_id = %s",
+                    (json.dumps(retained), retained["repository"], record_id(retained["approval_id"])),
+                )
+            historical = harness.host.issue_delivery_authority(manifest=retained, purpose="readback")
+            assert historical["approval"] == retained
+            current_readback = harness.owner.issue_delivery_readback(
+                repository=retained["repository"], approval_id=retained["approval_id"],
+            )
+            assert current_readback["state"] == "invalidated"
+            assert current_readback["approval"] == retained
+            with pytest.raises(ControlPlaneScopeError):
+                harness.host.issue_delivery_authority(manifest=retained, purpose="execute")
+    assert harness.transport.apply_calls == 0
+    assert harness.worker_transport.calls == 0
+
+
 @pytest.mark.parametrize("bifrost", [False, True])
 def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path, issue_delivery_production_harness, bifrost) -> None:
     if bifrost:

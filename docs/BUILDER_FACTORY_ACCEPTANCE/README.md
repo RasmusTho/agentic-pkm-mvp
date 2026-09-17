@@ -584,6 +584,10 @@ identities/hashes into the exact approval; missing, unavailable or inconsistent 
 profile refuses before the first effect. Neither Bifrost access nor the trusted workflow pin grants
 hub writes, and hub tracking authority grants no Bifrost mutation. No ambient credential fallback,
 generic cross-repository grant or third-repository effect is admitted.
+The presented human approval credential must itself address both the consumer and tracking
+repositories; a same-principal sibling credential cannot supply its missing repository scope.
+Preview, Start and fresh execution enforce this binding; historical readback remains available
+without projecting withdrawn or formerly over-scoped approval as current authority.
 
 The protected executor must independently inspect the entire approved-base-to-candidate tree diff
 before publication and again for the exact merge head, not just selected document blobs. Every
