@@ -479,8 +479,6 @@ def test_bifrost_restart_and_source_outage_preserve_durable_fact(bifrost_writer,
 
 @pytest.mark.parametrize("damage", ["journal", "idempotency", "envelope", "record_type", "payload"])
 def test_bifrost_retained_readiness_requires_durable_lineage(bifrost_writer, damage):
-    from psycopg.types.json import Jsonb
-
     w = bifrost_writer
     request = w.request(outcome="unable_to_try", observation=[])
     identity = request["readiness_receipt_ref"]["id"]
@@ -491,7 +489,7 @@ def test_bifrost_retained_readiness_requires_durable_lineage(bifrost_writer, dam
         elif damage == "idempotency":
             conn.execute("DELETE FROM builderops_idempotency WHERE repository=%s AND idempotency_key=%s", (w.repository, identity))
         elif damage == "envelope":
-            conn.execute("UPDATE builderops_records SET authority_envelope=%s WHERE record_id=%s", (Jsonb({"actor": "forged"}), identity))
+            conn.execute("UPDATE builderops_records SET authority_envelope=jsonb_set(authority_envelope, '{actor}', '\"forged\"'::jsonb) WHERE record_id=%s", (identity,))
         elif damage == "record_type":
             conn.execute("UPDATE builderops_records SET record_type='Untrusted' WHERE record_id=%s", (identity,))
         else:
