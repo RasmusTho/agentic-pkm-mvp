@@ -271,6 +271,7 @@ def _harness(tmp_path: Path) -> tuple[Path, dict[str, str], str, str, str]:
         "scripts/lib/builderops_compose.sh",
         "scripts/builderops/deployment_lock.py",
         "scripts/deploy_builderops.sh",
+        "scripts/builderops/owner_authorization.py",
         "scripts/builderops/preflight_app_password_secret.sh",
         "scripts/builderops/configure_tailnet_tls.sh",
         "config/deploy/builderops.env",
@@ -530,6 +531,11 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     ).read_bytes()
     assert receipt["candidate_receipt_sha"] == candidate_sha
 
+    previous_pin = (
+        root / "config/deploy/builderops.previous.env"
+    ).read_text(encoding="utf-8")
+    assert f"BUILDEROPS_CANDIDATE_RECEIPT_SHA={candidate_sha}" in previous_pin
+
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "probe-secret" not in events
     assert "Authorization: Bearer" not in events
@@ -579,6 +585,61 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert rollback_receipt["action"] == "rollback"
     assert rollback_receipt["database_rebuild_required"] is False
     assert rollback_receipt["rollback_data_rewind"] == "forbidden"
+
+
+def test_unattended_rollback_consumes_persisted_candidate_provenance(
+    tmp_path: Path,
+) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
+    env["BUILDEROPS_AUTHORIZATION_FILE"] = str(tmp_path / "owner-authorization.json")
+    Path(env["BUILDEROPS_AUTHORIZATION_FILE"]).write_text("{}", encoding="utf-8")
+
+    # The real helper is root-custody-bound; this fixture isolates deploy.sh's
+    # unattended provenance handoff while retaining the real script logic.
+    (root / "scripts/builderops/owner_authorization.py").write_text(
+        """#!/usr/bin/env python3
+import sys
+action = sys.argv[1]
+if action == 'validate':
+    print('f' * 64)
+elif action in {'secure-file', 'verify-candidate'}:
+    pass
+else:
+    raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+
+    deploy = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert deploy.returncode == 0, deploy.stdout + deploy.stderr
+
+    rollback = subprocess.run(
+        ["bash", "scripts/deploy_builderops.sh", "unattended-rollback"],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rollback.returncode == 0, rollback.stdout + rollback.stderr
+    receipt = json.loads(
+        (Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text()
+    )
+    assert receipt["action"] == "rollback"
+    assert receipt["authorization_mode"] == "unattended"
 
 
 def test_deploy_preflight_accepts_root_0400_app_secret(tmp_path: Path) -> None:
