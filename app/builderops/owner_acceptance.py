@@ -165,10 +165,19 @@ def read_owner_acceptance(
             for kind in ("owner_trial", "owner_acceptance")
         ):
             raise ValueError("owner evidence changed during composition")
+        # Source/status reads can consume the observation window. Freeze one
+        # final clock only after all I/O, then revalidate the whole joined chain.
+        stage = "evidence_expired_during_read"
+        final_observed_at = now()
+        for stamp in (first["observed_at"], last["observed_at"]):
+            _fresh(stamp, final_observed_at, max_age_seconds)
+        for evidence in delivery["evidence"]:
+            _fresh(evidence["captured_at"], final_observed_at, max_age_seconds)
         if not result["missing"]:
             result["status"] = "evidence_complete"
     except Exception:
         # Do not leak transport errors or credentials through an owner view.
         result["missing"].append(stage)
+        result["delivery"] = None
         result["owner_trial_ref"] = result["owner_acceptance_ref"] = None
     return result

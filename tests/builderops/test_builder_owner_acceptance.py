@@ -1,7 +1,7 @@
 """FCA-07 composed proof; external transports are doubles, authorities are real."""
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -279,6 +279,51 @@ def test_composed_owner_flow_preserves_real_effect_and_trial_evidence(composed_c
     assert changed_profile["status"] == "incomplete"
     assert changed_profile["owner_trial_ref"] is None
     assert changed_profile["owner_acceptance_ref"] is None
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("slow_read", ["owner", "status"])
+def test_final_read_cannot_outlive_evidence_window(composed_case, monkeypatch, slow_read):
+    h, w, read, github, task = composed_case
+    confirm_outcomes(w)
+    assert read()["status"] == "evidence_complete"
+    elapsed = 0
+    reads = 0
+
+    def now():
+        return datetime.now(timezone.utc) + timedelta(seconds=elapsed)
+
+    def owner_reader():
+        nonlocal elapsed, reads
+        value = w.read().json()  # actual authenticated producer read
+        reads += 1
+        if slow_read == "owner" and reads == 2:
+            elapsed = 301
+            # A slow final read can itself be fresh while earlier evidence has
+            # expired. Only its transport observation time is advanced.
+            value["observed_at"] = now().isoformat()
+        return value
+
+    real_status = h.host.status
+
+    def status_reader():
+        nonlocal elapsed
+        value = real_status()  # retain the real authenticated epoch read
+        if slow_read == "status":
+            elapsed = 301
+        return value
+
+    with monkeypatch.context() as patch:
+        patch.setattr(h.host, "status", status_reader)
+        result = read(outcome_reader=owner_reader, now=now)
+    assert reads == 2
+    assert result["status"] == "incomplete", result
+    assert result["missing"] == ["evidence_expired_during_read"]
+    assert result["delivery"] is None
+    assert result["owner_trial_ref"] is None
+    assert result["owner_acceptance_ref"] is None
+    assert read()["status"] == "evidence_complete"
+    assert h.transport.apply_calls == 4
 
 
 @pytest.mark.pg

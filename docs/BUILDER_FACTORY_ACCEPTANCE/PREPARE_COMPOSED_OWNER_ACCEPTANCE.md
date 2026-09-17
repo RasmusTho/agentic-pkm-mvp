@@ -82,7 +82,9 @@ authenticated current-owner-outcome reader, connection state and observation clo
 inputs. It returns `builder_owner_acceptance_evidence.v1`, exact receipt references and a bounded
 missing-evidence list. It checks source freshness (default 300 seconds), production delivery
 readback, candidate/profile/epoch identity, outcome integrity and current trial/decision lineage,
-then rereads owner selection and epoch to detect change during composition. Its result is
+then rereads owner selection and epoch to detect change during composition. After the last source
+I/O, all joined observations are checked against one final clock so slow reads cannot extend their
+freshness window; expiry withdraws delivery and owner references. Its result is
 rebuildable and unpersisted; failures return `incomplete`. `evidence_complete` means only that
 the supplied current source chain joined consistently. Hashes are not source authentication.
 The caller must use authenticated source owners; arbitrary offline JSON is not trusted proof.
