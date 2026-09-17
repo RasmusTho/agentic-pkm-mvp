@@ -262,6 +262,10 @@ class BifrostWriter(OwnerWriter):
         elif change == "copy":
             old = self.git("rev-parse", f"{head}:tracked.txt")
             self.git("update-index", "--add", "--cacheinfo", f"100644,{old},docs/copied.md", env=env)
+        elif change == "markdown":
+            self.git("update-index", "--cacheinfo", f"100644,{oid},docs/guide.md", env=env)
+        elif change == "identical_tree":
+            pass  # Distinct merge commit; the checked document tree is unchanged.
         else:
             mode = "120000" if change == "symlink" else "100755"
             old = self.git("rev-parse", f"{head}:docs/guide.md")
@@ -288,11 +292,15 @@ def bifrost_writer(issue_delivery_production_harness, monkeypatch):
     return BifrostWriter(issue_delivery_production_harness, monkeypatch)
 
 
-def test_bifrost_documentation_readiness_uses_protected_source(bifrost_writer):
-    w = bifrost_writer
+@pytest.mark.parametrize("merge_style", [None, "identical_tree"])
+def test_bifrost_documentation_readiness_uses_protected_source(issue_delivery_production_harness, monkeypatch, merge_style):
+    w = BifrostWriter(issue_delivery_production_harness, monkeypatch, merge_change=merge_style)
     binding = w.binding()
     assert binding["source_revision"] == w.merge
     assert binding["source_revision"] != w.harness.approval["workflow"]["source_revision"]
+    if merge_style == "identical_tree":
+        assert w.merge != w.head
+        assert w.git("rev-parse", f"{w.merge}^{{tree}}") == w.git("rev-parse", f"{w.head}^{{tree}}")
     assert binding["repository"] == "rasmustho/bifrost"
     assert binding["subject_ref"].startswith("github:rasmustho/agentic-pkm-mvp#")
     assert binding["candidate_ref"]["image_digests"] == "not_applicable"
@@ -362,7 +370,7 @@ def test_bifrost_documentation_admission_rechecks_current_source(bifrost_writer,
                    for row in w.read().json().get("history", []))
 
 
-@pytest.mark.parametrize("change", ["swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "base_substitution", "head_substitution", "remote_tree_substitution", "ancestry_substitution"])
+@pytest.mark.parametrize("change", ["swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "base_substitution", "head_substitution", "remote_tree_substitution", "ancestry_substitution", "markdown"])
 def test_bifrost_readiness_enforces_complete_candidate_diff(issue_delivery_production_harness, monkeypatch, change):
     from app.builderops.owner_fact_producers import OwnerFactRefusal
     substitution = change.endswith("_substitution")
@@ -376,7 +384,9 @@ def test_bifrost_readiness_enforces_complete_candidate_diff(issue_delivery_produ
     elif change == "ancestry_substitution":
         w.responses[f"compare/{w.harness.approval['destination']['base_sha']}...{w.merge}"]["merge_base_commit"]["sha"] = "0" * 40
     baseline = w.count("builderops_records")
-    with pytest.raises(OwnerFactRefusal, match="owner_delivery_conflict|owner_readiness_withdrawn|owner_source_unavailable|owner_complete_tree_conflict" if substitution else "owner_complete_diff_conflict"):
+    expected = "owner_candidate_checks_conflict" if change == "markdown" else (
+        "owner_delivery_conflict|owner_readiness_withdrawn|owner_source_unavailable|owner_complete_tree_conflict" if substitution else "owner_complete_diff_conflict")
+    with pytest.raises(OwnerFactRefusal, match=expected):
         w.binding()
     assert w.count("builderops_records") == baseline
 
@@ -387,6 +397,13 @@ def test_bifrost_outcome_requires_human_and_current_exact_trial(bifrost_writer):
     assert w.submit(request, principal="facts-agent").status_code == 403
     assert w.submit(request, confirm=None).status_code == 400
     assert w.submit(request, confirmation_ref={"human_principal": "owner:human"}).status_code == 400
+    foreign = copy.deepcopy(request)
+    foreign["candidate_ref"]["kind"] = "unknown_source"
+    assert w.submit(foreign, "unknown-source").status_code == 400
+    counts = tuple(w.count(table) for table in ("builderops_records", "builderops_receipts", "builderops_outbox"))
+    current_inability = w.submit(w.request(outcome="unable_to_try", observation=[]), "current-inability")
+    assert current_inability.status_code == 409, current_inability.text
+    assert tuple(w.count(table) for table in ("builderops_records", "builderops_receipts", "builderops_outbox")) == counts
     no_trial = w.request("owner_acceptance", "accepted")
     assert w.submit(no_trial, "premature").status_code == 409
     trial = w.submit(request, "trial").json()["receipt"]

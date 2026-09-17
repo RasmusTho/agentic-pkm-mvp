@@ -978,6 +978,8 @@ and its finite paths and required checks remain those independently admitted by 
 The producer consumes the real v2 native task, approval, operation and host-effect readbacks;
 independent GitHub reads confirm merge/closure, reachability, document blob bytes, regular modes,
 owner access and required checks. It inspects the entire approved-base-to-merge Git tree delta.
+The merge tree must equal the independently verified PR-head tree; otherwise head checks cannot
+attest the candidate's document bytes, even when the changed Markdown paths remain allowed.
 The closed `git_documentation` candidate binds base/merge, complete-diff hash, each path/blob/byte
 digest and the exact delivery operation/approval/PR/head; image and runtime configuration are
 explicitly `not_applicable`. The GitHub document-view environment binds that immutable merge and

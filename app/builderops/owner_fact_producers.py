@@ -479,6 +479,10 @@ def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
         raise OwnerFactRefusal("owner_complete_diff_conflict", 409) from exc
     tree = _reconcile_complete_tree(authority, root, head)
     _reconcile_complete_tree(authority, root, base)
+    checked_tree = subprocess.run(["git", "-C", str(root), "rev-parse", f"{projection['head_sha']}^{{tree}}"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    if checked_tree != tree["sha"]:
+        raise OwnerFactRefusal("owner_candidate_checks_conflict", 409)
     documents = []
     for path in policy.documentation_paths:
         content, oid = _git_blob(authority, path, head)
@@ -696,6 +700,9 @@ def _validate_documentation_candidate(value: dict[str, Any]) -> None:
 
 
 def validate_current_binding(request: dict[str, Any], binding: dict[str, Any]) -> None:
+    if (request["repository"] == BIFROST_REPOSITORY and request["outcome"] == "unable_to_try"
+        and binding["readiness_status"] != "withdrawn"):
+        raise OwnerFactRefusal("owner_withdrawn_readiness_required", 409)
     for key in BINDING_FIELDS:
         if key == "criterion_refs":
             if any(ref not in binding[key] for ref in request[key]):
