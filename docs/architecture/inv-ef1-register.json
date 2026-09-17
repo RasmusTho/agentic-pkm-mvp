@@ -2303,6 +2303,34 @@
       "why_load_bearing": "Governance tests assert that personal host/client references remain separated from the TARS Product Runtime contract.",
       "disposition": "stay",
       "issue": "#5237"
+    },
+    {
+      "artifact": "docs/BUILDER_FACTORY_ACCEPTANCE/README.md",
+      "category": "iv",
+      "why_load_bearing": "The bounded qualification source contract names Bifrost as the public governed constituent and exact consumer identity, not a personal vault or secret.",
+      "disposition": "stay",
+      "issue": "#5583"
+    },
+    {
+      "artifact": "docs/DEVUI.md",
+      "category": "iv",
+      "why_load_bearing": "The milestone distinguishes the public governed Bifrost constituent source-contract target from current hub support and full-platform acceptance, not a personal vault or secret.",
+      "disposition": "stay",
+      "issue": "#5583"
+    },
+    {
+      "artifact": "docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md",
+      "category": "iv",
+      "why_load_bearing": "The non-image candidate source contract names the public governed Bifrost constituent as documentation artifact owner, not a personal vault or secret.",
+      "disposition": "stay",
+      "issue": "#5583"
+    },
+    {
+      "artifact": "docs/plans/DEVUI_IMPLEMENTATION.md",
+      "category": "iv",
+      "why_load_bearing": "The dependency plan links implementation boundaries to the public governed Bifrost constituent source-contract identity, not a personal vault or secret.",
+      "disposition": "stay",
+      "issue": "#5583"
     }
   ]
 }
