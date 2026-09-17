@@ -861,8 +861,15 @@ routes may remain available for diagnostics and recovery, but devUI is the norma
 
 ### First-repository milestone
 
-The first useful owner loop is one owner, this repository, one named feature/Issue, and one existing
-Builder workflow. It follows the accepted see → decide → act → verify functions: source-linked
+The original first-repository contract is one owner, this hub repository, one named feature/Issue,
+and one existing Builder workflow. Current v1 Issue-delivery repository support is hub-only and
+current FCA-09 candidate admission is VM102-only; neither is a live M2 completion claim.
+The separately requested bounded M2 target is exactly one Bifrost documentation candidate under
+[FCA-ID-SECOND](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target)
+and [FCA-09-BIFROST](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target).
+That target requires new versioned admission, separate consumer/workflow pins, consumer preparation
+and non-image source readiness. It does not widen existing approvals or prove native-app readiness.
+Both scopes follow the accepted see → decide → act → verify functions: source-linked
 intent, acceptance criteria and relevant architecture requirements; scoped external reasoning;
 approval of one exact permitted action; actual delivery/readback; and the owner's trial and explicit
 acceptance or rejection of the exact candidate against the applicable requirements.
@@ -872,7 +879,10 @@ Start Model Inquiry is an earlier integration exercise and retains its no-reposi
 boundary; an inquiry receipt is not a code-delivery or owner-acceptance receipt. The separate Stage A
 pilot remains read-only. The [Factory Acceptance milestone](BUILDER_FACTORY_ACCEPTANCE/README.md#first-repository-milestone)
 reuses the existing parent evidence surfaces and leaves full platform acceptance, second-consumer
-qualification and #5399 closure requirements intact.
+qualification and #5399 closure requirements intact. Preparing the Bifrost source contract grants
+no live operation or human outcome. Managed Overview/Focus activation must be demonstrated
+separately: composed-library fixtures do not widen M1's selected-Issue read-only route. A bounded
+Bifrost result contributes only its exact evidence to the full-platform target; it cannot close it.
 
 ### Full owner-experience target
 

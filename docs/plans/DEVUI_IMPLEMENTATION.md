@@ -400,6 +400,43 @@ FCA-07/#5406 now supplies the [composed harness, read-only validator and incompl
 over the currently admitted hub operation. Its tests prove source composition and refusal cases;
 they neither qualify a second repository nor provide live owner/platform acceptance.
 
+The separately requested Bifrost documentation target is defined by
+[FCA-ID-SECOND](../BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target)
+and [FCA-09-BIFROST](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifrost--non-image-documentation-candidate-target).
+Current v1 hub-only delivery and VM102-only outcome support remain unchanged. Use the following
+two serial repository slices; these are extraction boundaries, not sibling Issues created here.
+Keep coupled identity fields and their consumers together instead of creating a new architecture.
+
+| Stable source anchor | Small implementation boundary and consumed seams | Decisive verification target for later extraction |
+| --- | --- | --- |
+| **FCA-ID-SECOND** | First: versioned Bifrost admission, separate immutable consumer/workflow pins, hub tracking Issue identity, per-effect target policy/credential binding and complete-diff enforcement across `control_plane/issue_delivery.py::normalize_manifest`, existing service/client/operation receipts, `issue_delivery_operation.py::_default_live_binding_reader`, `issue_delivery_effect_executor.py::IssueDeliveryHostExecutor` and its host composition, native task/readback and DevUI's existing pure projection. Reuse RepoRef, protected target-base manifests and workflow root; no registry or alternate launcher. | Extend `tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission`, `tests/builderops/test_issue_delivery_operation.py::test_delivery_effect_boundaries_recheck_authority` and `tests/builderops/test_issue_delivery_readback.py::test_production_readback_uses_independent_github_evidence`. Enter actual admission/adapter/executor/readback callers with two distinct Git roots; assert unchanged v1 hashes/scope, Bifrost PR/merge with exact hub Issue claim/closure, no duplicate tracking, independent workflow pins and per-effect grants, third-repo and missing-policy/credential refusal, either-source drift and ambiguous replay with zero extra effects. Reject an otherwise valid documentation candidate with an extra Swift/script/policy path, out-of-set rename/copy/delete or non-regular file at publication and merge. Substitute external transport only, never the gate verdict. |
+| **FCA-09-BIFROST** | Second: one Bifrost documentation profile/readiness producer and non-image candidate validation in `owner_fact_producers.py`, consumed by the existing service's guarded FCA-09 writer/readback and exact hub-Issue/Bifrost-candidate join. Build on the first slice's independently reconciled Bifrost delivery. No VM102 readiness borrowing or new outcome writer. | Extend `tests/builderops/test_issue_delivery_readback.py::test_issue_delivery_candidate_profile_linkage` and `tests/builderops/test_owner_fact_producers.py::{test_production_writer_is_authorized_version_bound_and_idempotent,test_conflicting_submissions_require_explicit_correction,test_restart_reconciles_written_fact_before_projection}` through the real service/store path. Prove exact tracking subject/consumer/commit/blob/profile/access/expiry, independent complete-diff refusal of extra code/script/policy paths and out-of-set rename/copy/delete or non-regular files, missing or withdrawn source, rejection of forged readiness/agent confirmation, current-trial requirement, corrections, lost-response replay and restart with no fabricated outcome. Extraction must name each exact existing or test-first added node ID after checking the current test inventory. |
+
+These production-callsite proofs precede #5405's consumed Bifrost seam qualification. #5405 still
+owns `test_standalone_consumer_conformance.py`, the hub/Bifrost/third-repository conformance matrix
+and `builder_second_consumer_pilot_plan.v1`; its own fixtures/procedure are not external
+prerequisites. #5406 retains its existing composed acceptance harness and parent procedure scope.
+Neither child requires live credentials, a selected pilot, human observations or deployed bob
+before its fixture/conformance work can merge.
+
+**Later activation dependencies, not child pre-merge proof.** Repository source inspection finds
+`HostIssueDeliveryExecutorRuntime`, `install_host_issue_delivery_executor_runtime` and
+`build_host_issue_delivery_executor`, but no repository production installer caller; the effect
+transport remains a protocol at that seam. This is dormant host-bootstrap work, not proof that
+an external host lacks a composition. Before live Start, the separately authorized host owner must
+provide and qualify the concrete transport/runtime installation, protected workflow root, isolation
+profile and credentials, plus Bifrost's independently prepared protected policy. The future
+host-profile producer and bob activation remain with FCA-ID-03/04's existing owners. Actual managed
+Overview/Focus integration must consume the addressed delivery/candidate readback and be observed
+on the approved runtime; a bounded caller supplying a pure projection is not that integration.
+Preserve M1 throughout. #4168's DDO reducer/outbox and #5352's Product operation HTTP kernel do not
+become prerequisites of this agent-led documentation route.
+
+Only after those gates may a separately selected and approved real hub-tracked Bifrost documentation Issue
+produce independent delivery/readiness, explicit human trial and accept/reject evidence. Deploy/
+rollback delegation cannot supply operation grants. Full #5399/M4 authority, health and platform
+acceptance remain open even after a successful bounded candidate.
+
 There is no #5405/#5406 → live evidence → same child pickup cycle. There is also no waiver of
 complete-system health or owner acceptance: an incomplete live plan stays incomplete on its parent.
 The bounded first-read observation and full read-only pilot never launch actions or write
