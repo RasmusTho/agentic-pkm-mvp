@@ -180,6 +180,59 @@ def test_effective_builderops_compose_has_no_recovery_egress_or_wal_secrets() ->
     assert '"previous_image_digest": os.environ["PREVIOUS_DIGEST"]' in deploy
 
 
+def test_unattended_deploy_path_requires_durable_owner_authorization() -> None:
+    deploy = (ROOT / "scripts/deploy_builderops.sh").read_text(encoding="utf-8")
+    authorization = (ROOT / "scripts/builderops/owner_authorization.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "unattended-deploy" in deploy
+    assert "unattended-rollback" in deploy
+    assert "owner_authorization.py" in deploy
+    assert "verify-candidate" in deploy
+    assert "BUILDEROPS_CANDIDATE_RECEIPT_SHA" in deploy
+    assert "rollback_candidate_provenance_missing" in deploy
+    assert "owner_authorization_refused" in deploy
+    assert '"authorization_fingerprint": os.environ.get' in deploy
+    assert "EXPECTED_REPOSITORY" in authorization
+    assert "EXPECTED_SOCKET" in authorization
+    assert "expires_at - authorized_at > dt.timedelta(days=90)" in authorization
+    assert "metadata.st_uid != 0" in authorization
+
+
+def test_unattended_deploy_refuses_without_owner_profile_before_mutation(tmp_path: Path) -> None:
+    root, env, _source_sha, _digest, _postgres_digest = _harness(tmp_path)
+    env["BUILDEROPS_AUTHORIZATION_FILE"] = str(tmp_path / "missing-owner-profile.json")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy_builderops.sh",
+            "unattended-deploy",
+            env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"],
+        ],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 78
+    events_path = Path(env["FAKE_EVENT_LOG"])
+    events = events_path.read_text(encoding="utf-8") if events_path.exists() else ""
+    assert " pull " not in events
+    assert " up " not in events
+    refusal = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
+    assert refusal["refusals"] == ["owner_authorization_refused", "no_mutation_performed"]
+    assert refusal["authorization_mode"] == "unattended"
+    assert refusal["authorization_fingerprint"] is None
+    refusal_schema = json.loads(
+        (ROOT / "config/platform/builderops_vm_rebuild_activation_refusal.v1.schema.json").read_text()
+    )
+    assert not list(Draft202012Validator(refusal_schema).iter_errors(refusal))
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
@@ -466,6 +519,16 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
     assert receipt["external_effect_reconciliation_required"] is True
     assert receipt["rollback_data_rewind"] == "forbidden"
     assert receipt["database_rebuild_required"] is False
+    candidate_sha = hashlib.sha256(
+        Path(env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]).read_bytes()
+    ).hexdigest()
+    archived_candidate = (
+        Path(env["BUILDEROPS_RECEIPT_DIR"]) / "candidate-pairs" / f"{candidate_sha}.json"
+    )
+    assert archived_candidate.read_bytes() == Path(
+        env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]
+    ).read_bytes()
+    assert receipt["candidate_receipt_sha"] == candidate_sha
 
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "probe-secret" not in events
@@ -1457,6 +1520,14 @@ def test_funnel_appearing_after_serve_fails_without_a_receipt(tmp_path: Path) ->
     assert events.count("tailscale serve status --json") >= 2
     assert "tailscale serve --bg" in events
     assert not (Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").exists()
+    candidate_sha = hashlib.sha256(
+        Path(env["BUILDEROPS_TEST_CANDIDATE_RECEIPT"]).read_bytes()
+    ).hexdigest()
+    assert (
+        Path(env["BUILDEROPS_RECEIPT_DIR"])
+        / "candidate-pairs"
+        / f"{candidate_sha}.json"
+    ).exists()
 
 
 def test_candidate_pair_receipt_provenance_is_strict_before_docker(tmp_path: Path) -> None:

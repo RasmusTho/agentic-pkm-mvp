@@ -79,7 +79,9 @@
     "secret_material": {"const": "absent"},
     "gaps": {"const": ["activation_not_proven", "fencing_not_proven", "no_dual_writer_not_proven"]},
     "refusals": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-    "preflight_exit_code": {"type": "integer", "minimum": 70, "maximum": 75},
+    "preflight_exit_code": {"enum": [70, 71, 72, 73, 74, 75, 78]},
+    "authorization_mode": {"enum": ["manual", "unattended"]},
+    "authorization_fingerprint": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
     "evidence_fingerprint": {"$ref": "#/$defs/digest"}
   },
   "$defs": {
