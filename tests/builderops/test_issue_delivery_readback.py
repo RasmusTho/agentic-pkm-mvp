@@ -13,7 +13,7 @@ from app.builderops.devui_focus_inputs import read_focus_inputs
 from app.builderops.devui_focus import compose_focus_view
 from app.builderops.devui_overview import compose_overview_view
 from app.builderops.devui_overview_inputs import derive_overview_inputs
-from app.builderops.devui_sources import _task
+from app.builderops.devui_sources import SourceReadRefusal, _task
 from app.builderops.issue_delivery_readback import (
     IssueDeliveryReadbackRefused,
     admit_issue_delivery_task,
@@ -50,6 +50,21 @@ def test_bifrost_delivery_projection_preserves_source_pair(issue_delivery_produc
                                     issue_reader=issue_reader, observed_at="2026-09-17T17:00:00Z")
     assert reads == [(REPOSITORY, number)] * 2
     assert task["payload"]["issue_delivery"]["delivery_sources"] == delivery_source_pair(approval)
+    item = _task(task, repository=repository)
+    assert item is not None
+    assert item["issue_delivery"]["delivery_sources"] == delivery_source_pair(approval)
+    for field, value in (("contract_version", "fca-issue-delivery.v1"),
+                         ("repository", REPOSITORY), ("issue_repository", repository),
+                         ("workflow_repository", repository), ("source_revision", "0" * 40),
+                         ("workflow_source_revision", "main")):
+        corrupted = deepcopy(task)
+        corrupted["payload"]["issue_delivery"]["delivery_sources"][field] = value
+        with pytest.raises(SourceReadRefusal, match="binding_invalid"):
+            _task(corrupted, repository=repository)
+    missing = deepcopy(task)
+    del missing["payload"]["issue_delivery"]["delivery_sources"]
+    with pytest.raises(SourceReadRefusal, match="scope_mismatch"):
+        _task(missing, repository=repository)
     proposed = {}
     def worker_content():
         request = _bifrost_candidate_request(harness, "publication")
@@ -85,6 +100,9 @@ def test_bifrost_delivery_projection_preserves_source_pair(issue_delivery_produc
     assert projection["delivery_sources"] == delivery_source_pair(approval)
     assert projection["subject_ref"] == f"github:{REPOSITORY}#{number}"
     assert projection["candidate"]["ready_to_try"] is False
+    item["issue_delivery_readback"] = projection
+    overview = derive_overview_inputs(work_provider=_provider(item))
+    assert overview["now"][0]["delivery_facts"]["delivery"]["state"] == "evidenced"
     github["issue_repository"] = repository
     with pytest.raises(IssueDeliveryReadbackRefused, match="repository"):
         read_issue_delivery_projection(client=harness.host, task=task, github_reader=github_reader,
