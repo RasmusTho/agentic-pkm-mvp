@@ -977,7 +977,8 @@ and its finite paths and required checks remain those independently admitted by 
 
 The producer consumes the real v2 native task, approval, operation and host-effect readbacks;
 retained nonterminal tasks and authenticated terminal operations with incomplete effects from
-earlier approvals are not delivery candidates. Exactly one
+earlier approvals are not delivery candidates. Native task/approval/source-pair/version bindings
+are authenticated before any history is excluded. Exactly one
 independently delivered task must qualify; multiple deliveries or unavailable/malformed history
 remain a conflict, never permission to select a convenient historical success.
 independent GitHub reads confirm merge/closure, reachability, document blob bytes, regular modes,

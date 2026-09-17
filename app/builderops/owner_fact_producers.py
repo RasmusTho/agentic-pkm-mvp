@@ -427,7 +427,7 @@ def _read_bifrost_binding(subject: str, *, authority_epoch: int, store: Any,
 def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
                       policy: Any, config: dict[str, Any]) -> dict[str, Any]:
     from app.builderops.cockpit_github_plane import read_issue_delivery_github
-    from app.builderops.issue_delivery_readback import read_issue_delivery_projection
+    from app.builderops.issue_delivery_readback import read_issue_delivery_projection, _task_binding
     from app.builderops.issue_delivery_effect_executor import complete_documentation_diff
     from app.builderops.issue_delivery_operation import observe_issue_delivery_operation
     from app.builderops.control_plane.issue_delivery import delivery_source_pair
@@ -436,10 +436,14 @@ def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
     for task in client.list_tasks(repository=BIFROST_REPOSITORY):
         delivery = task.get("payload", {}).get("issue_delivery")
         if not isinstance(delivery, dict):
+            if ("issue_delivery" in task.get("payload", {})
+                or task.get("authority_envelope", {}).get("stack") == "builderops-issue-delivery"):
+                raise OwnerFactRefusal("owner_delivery_conflict", 409)
             continue
         readback = client.issue_delivery_readback(repository=BIFROST_REPOSITORY,
                                                   approval_id=delivery["approval_id"])
         approval = readback.get("approval", {})
+        _task_binding(task, approval)
         issue = approval.get("issue", {})
         if f"github:{issue.get('repository')}#{issue.get('number')}" != profile["subject_ref"]:
             continue

@@ -379,7 +379,7 @@ def test_bifrost_ambiguous_independent_deliveries_fail_closed(issue_delivery_pro
     assert result.json()["detail"] == "owner_delivery_conflict"
 
 
-def test_bifrost_reapproval_excludes_authenticated_incomplete_terminal_history(issue_delivery_production_harness, monkeypatch):
+def _incomplete_bifrost_history(issue_delivery_production_harness, monkeypatch):
     from app.builderops.epic_dispatch import dispatch_issue_sessions
     from app.builderops.issue_delivery_readback import admit_issue_delivery_task
     from tests.builderops.test_issue_delivery_readback import BODY, _issue
@@ -392,17 +392,57 @@ def test_bifrost_reapproval_excludes_authenticated_incomplete_terminal_history(i
         "title": approved["title"], "html_url": approved["url"],
         "url": f"https://api.github.com/repos/rasmustho/agentic-pkm-mvp/issues/{approved['number']}"}
     prior.source_state["issue"] = source
-    admit_issue_delivery_task(client=prior.host, repository=prior.approval["repository"],
+    task = admit_issue_delivery_task(client=prior.host, repository=prior.approval["repository"],
         approval_id=prior.approval["approval_id"], issue_reader=lambda *a: copy.deepcopy(source),
         observed_at=datetime.now(timezone.utc).isoformat())
     result = dispatch_issue_sessions(prior.approval["context"]["dispatch_plan"], _production_adapter(prior),
         expected_plan_hash=prior.approval["context"]["expected_plan_hash"])
     assert result["stopped_reason"] == "worker-handoff"
     assert prior.transport.apply_calls == 1  # terminal, but only an independently applied claim
+    return prior, task
+
+
+def test_bifrost_reapproval_excludes_authenticated_incomplete_terminal_history(issue_delivery_production_harness, monkeypatch):
+    _incomplete_bifrost_history(issue_delivery_production_harness, monkeypatch)
     current = BifrostWriter(issue_delivery_production_harness, monkeypatch)
     ready = current.read()
     assert ready.status_code == 200, ready.text
     assert ready.json()["binding"]["candidate_ref"]["delivery_ref"]["approval_id"] == current.harness.approval["approval_id"]
+
+
+@pytest.mark.parametrize("history", ["pending", "incomplete_terminal"])
+def test_bifrost_malformed_native_history_cannot_be_excluded(issue_delivery_production_harness, monkeypatch, history):
+    from psycopg.types.json import Jsonb
+
+    if history == "pending":
+        current = BifrostWriter(issue_delivery_production_harness, monkeypatch, prior_approval=True)
+        task = current.prior_task
+    else:
+        _, task = _incomplete_bifrost_history(issue_delivery_production_harness, monkeypatch)
+        current = BifrostWriter(issue_delivery_production_harness, monkeypatch)
+    request = current.request()
+    counts = tuple(current.count(table) for table in ("builderops_records", "builderops_receipts", "builderops_outbox"))
+    original = current.store.get_task(current.repository, task["task_id"])["payload"]
+    for field, value in (("approval_manifest_hash", "0" * 64), ("delivery_sources", {}), ("task_record_version", 999),
+                         ("binding_absent", None), ("binding_type", "malformed")):
+        broken = copy.deepcopy(original)
+        if field == "binding_absent":
+            broken.pop("issue_delivery")
+        elif field == "binding_type":
+            broken["issue_delivery"] = value
+        else:
+            broken["issue_delivery"][field] = value
+        with current.store._connect() as conn:
+            conn.execute("UPDATE builderops_tasks SET payload=%s WHERE repository=%s AND task_id=%s",
+                (Jsonb(broken), current.repository, task["task_id"]))
+        refused = current.read()
+        assert refused.status_code in {409, 503}, refused.text
+        assert current.submit(request, "malformed-history-" + field).status_code in {409, 503}
+        assert tuple(current.count(table) for table in ("builderops_records", "builderops_receipts", "builderops_outbox")) == counts
+        with current.store._connect() as conn:
+            conn.execute("UPDATE builderops_tasks SET payload=%s WHERE repository=%s AND task_id=%s",
+                (Jsonb(original), current.repository, task["task_id"]))
+    assert current.read().status_code == 200
 
 
 @pytest.mark.parametrize("merge_style", [None, "identical_tree"])
