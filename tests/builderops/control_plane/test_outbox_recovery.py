@@ -287,7 +287,7 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
         evidence={"readback": "not-found"},
     )
     assert reconciled["status"] == "pending"
-    assert reconciled == control_plane_store.reconcile_post_effect(
+    replay = control_plane_store.reconcile_post_effect(
         repository=envelope.repository,
         operation_key=result.operation_key,
         minimum_fencing_token=claim.fencing_token,
@@ -295,6 +295,12 @@ def test_post_effect_reconcile_and_replay_reject_forged_or_stale_claim_lsns(
         observed_applied=False,
         evidence={"readback": "not-found"},
     )
+    assert reconciled["replayed"] is False
+    assert replay["replayed"] is True
+    identity_fields = ("status", "fencing_token", "receipt_sequence", "recovery_lsn")
+    assert {key: reconciled[key] for key in identity_fields} == {
+        key: replay[key] for key in identity_fields
+    }
     with pytest.raises(ValueError, match="contradicts"):
         control_plane_store.reconcile_post_effect(
             repository=envelope.repository,

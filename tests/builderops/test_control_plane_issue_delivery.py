@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from psycopg import sql
 
 from app.builderops.control_plane.auth import CredentialRegistry
+from app.builderops.control_plane import service as control_plane_service
 from app.builderops.control_plane.client import (
     BuilderOpsControlPlaneClient,
     ClientConfig,
@@ -94,14 +95,14 @@ def registry(tmp_path: Path) -> CredentialRegistry:
             "executor-low",
             "destination:shared",
             "executor-low-token",
-            ["issue_delivery:read"],
+            ["issue_delivery:read", "status:read"],
             "agent",
         ),
         (
             "executor-high",
             "destination:shared",
             "executor-high-token",
-            ["issue_delivery:execute"],
+            ["issue_delivery:execute", "status:read"],
             "agent",
         ),
         (
@@ -422,6 +423,15 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
     registry: CredentialRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    service_errors: list[Exception] = []
+    original_error = control_plane_service._control_plane_error
+
+    def observe_error(exc: Exception):
+        # Preserve the real HTTP mapping while checking the precise refusal reason.
+        service_errors.append(exc)
+        return original_error(exc)
+
+    monkeypatch.setattr(control_plane_service, "_control_plane_error", observe_error)
     owner = _client(store, registry, "owner-token")
     reader = _client(store, registry, "executor-low-token")
     writer = _client(store, registry, "executor-high-token")
@@ -450,6 +460,7 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
 
     terminal_body = {
         "attempt_receipt_hash": entry["payload"]["attempt_receipt_hash"],
+        "destination_resource_key": entry["payload"]["destination_resource_key"],
         "entry_receipt_hash": entry["payload"]["receipt_hash"],
         "session_id": "session-observation-write-scope",
         "worker_receipt": {"final_state": "handoff"},
@@ -472,9 +483,8 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
             },
         )
     assert isinstance(forged_receipt.value.__cause__, ControlPlaneConflictError)
-    assert "worker receipt must not supply protected host effect fields" in str(
-        forged_receipt.value.__cause__
-    )
+    assert isinstance(service_errors[-1], StateConflict)
+    assert "worker receipt must not supply protected host effect fields" in str(service_errors[-1])
     assert adapter._read("terminal") is None
     with pytest.raises(
         IssueDeliveryOperationRefused,
@@ -495,7 +505,8 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
             },
         )
     assert isinstance(unavailable_reference.value.__cause__, ControlPlaneConflictError)
-    assert "reference is unavailable" in str(unavailable_reference.value.__cause__)
+    assert isinstance(service_errors[-1], StateConflict)
+    assert "reference is unavailable" in str(service_errors[-1])
     assert adapter._read("terminal") is None
 
     monkeypatch.setattr(store, "outbox_status", lambda *_args: "succeeded")
@@ -537,10 +548,13 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
             },
         )
     assert isinstance(foreign_reference.value.__cause__, ControlPlaneConflictError)
-    assert "reference is foreign or changed" in str(foreign_reference.value.__cause__)
+    assert isinstance(service_errors[-1], StateConflict)
+    assert "reference is foreign or changed" in str(service_errors[-1])
     assert adapter._read("terminal") is None
     monkeypatch.undo()
+    monkeypatch.setattr(control_plane_service, "_control_plane_error", observe_error)
 
+    assert reader.authority_epoch == writer.authority_epoch
     with pytest.raises(ControlPlaneScopeError):
         reader.issue_delivery_operation_record(
             envelope={
@@ -579,7 +593,7 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
         repository=str(approval["repository"]),
         record_id=f"issue-delivery-terminal:{approval['operation_key']}",
     )["state"] == "terminal"
-    with pytest.raises(ControlPlaneConflictError, match="owner is unavailable"):
+    with pytest.raises(ControlPlaneConflictError, match="StateConflict"):
         writer.issue_delivery_operation_record(
             envelope={
                 "repository": approval["repository"],
@@ -595,6 +609,8 @@ def test_issue_operation_observations_require_execute_but_survive_invalidation(
             approval_id=approval["approval_id"],
             approval_manifest_hash=approval["approval_manifest_hash"],
         )
+    assert isinstance(service_errors[-1], StateConflict)
+    assert "owner is unavailable" in str(service_errors[-1])
 
 
 def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_path) -> None:
