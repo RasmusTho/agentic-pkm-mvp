@@ -161,6 +161,14 @@ jobs:
               "test_managed_journey_hostile_accessibility_and_no_effect_matrix",
               "test_managed_journey_preserves_focus_failures_and_fresh_return",
               "test_first_read_issue_journey_precedes_observation_without_effects",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[button-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[button-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[link-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[link-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[tabindex-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[tabindex-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[editable-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[editable-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
           }
           assert len(cases) == len(expected)
           assert {case.get("name") for case in cases} == expected
