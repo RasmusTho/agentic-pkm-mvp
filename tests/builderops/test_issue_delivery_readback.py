@@ -294,7 +294,7 @@ PR_BODY_HASH = hashlib.sha256(PR_BODY.encode()).hexdigest()
 
 def _approval() -> dict:
     return {
-        "contract_version": "builderops.issue-delivery.v1",
+        "contract_version": "fca-issue-delivery.v1",
         "approval_id": "approval-5552",
         "approval_manifest_hash": APPROVAL_HASH,
         "authority_epoch": 7,

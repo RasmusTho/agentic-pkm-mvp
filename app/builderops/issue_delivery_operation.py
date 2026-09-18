@@ -651,8 +651,8 @@ class IssueDeliveryOperationAdapter:
                 PreparedIssueDeliveryWorker,
             )
 
-            protected_executor = _require_protected_host_executor(protected_executor)
             if recovering:
+                protected_executor = _require_protected_host_executor(protected_executor)
                 protected_executor.restore_candidate_binding(protected_executor.recovered_candidate_terminal)
             elif not isinstance(self.launcher, PreparedIssueDeliveryWorker):
                 raise IssueDeliveryOperationRefused(
