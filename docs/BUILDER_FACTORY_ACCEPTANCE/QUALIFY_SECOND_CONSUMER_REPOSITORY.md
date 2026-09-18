@@ -111,6 +111,12 @@ HEAD, while the content worker cannot write Git metadata. Test-side Git preparat
 implement this host producer. The launcher reports stop as unsupported; that limitation and an
 existing bob deployment rollback cannot substitute for real selected-operation rollback proof.
 
+The single future producer/continuation owner is
+[FCA-ID-HOST-CANDIDATE](README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract).
+It defines the local-effect fence, versioned candidate/readback chain and smallest next dormant
+implementation slice. This source contract does not implement the missing host path or complete
+this pilot; the live requirements above remain pending.
+
 Consumer preparation must preserve Bifrost Issue25/PR26's local-Issue and foreign-auto-closer
 policy. Hub-tracked v2 needs its own bounded preparation, not retargeting or policy weakening.
 The permitted envelope remains exact regular non-executable `docs/*.md` files; root README is
