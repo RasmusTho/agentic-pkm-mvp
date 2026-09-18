@@ -22,8 +22,12 @@ from app.builderops.control_plane.client_cli import (
     validate_import_response,
 )
 from app.builderops.control_plane.models import canonical_repository
+from app.builderops.control_plane.client import ControlPlaneClientError
 from app.builderops.control_plane.issue_delivery import delivery_source_pair, tracking_repository
-from app.builderops.owner_fact_producers import OwnerFactRefusal, read_owner_binding
+from app.builderops.owner_fact_producers import (
+    BIFROST_AUTHORITY, BIFROST_REPOSITORY, OwnerFactRefusal,
+    _validate_documentation_candidate, read_owner_binding,
+)
 from app.builderops.devui_receipts import AUTHORITY as OWNER_BINDING_AUTHORITY
 
 
@@ -322,7 +326,7 @@ def read_issue_delivery_projection(
     client: Any,
     task: Mapping[str, Any],
     github_reader: Callable[..., Mapping[str, Any]],
-    owner_binding_reader: Callable[..., Mapping[str, Any]] = read_owner_binding,
+    owner_binding_reader: Callable[..., Mapping[str, Any] | None] = read_owner_binding,
 ) -> dict[str, Any]:
     """Read all existing authorities for one strict native delivery task."""
 
@@ -388,13 +392,16 @@ def read_issue_delivery_projection(
                               if delivery_source_pair(approval) else {}))
     subject = f"github:{tracking_repository(approval)}#{issue['number']}"
     try:
-        owner = owner_binding_reader(
-            repository,
-            subject,
-            authority_epoch=int(approval["authority_epoch"]),
-            allow_withdrawn_readiness=True,
-        )
-    except (OwnerFactRefusal, TypeError, ValueError):
+        if delivery_source_pair(approval) and owner_binding_reader is read_owner_binding:
+            owner = client.get_owner_outcomes(repository=repository, subject_ref=subject).get("binding")
+        else:
+            owner = owner_binding_reader(
+                repository,
+                subject,
+                authority_epoch=int(approval["authority_epoch"]),
+                allow_withdrawn_readiness=True,
+            )
+    except (OwnerFactRefusal, ControlPlaneClientError, TypeError, ValueError):
         owner = None
     return compose_issue_delivery_readback(
         task=task,
@@ -419,13 +426,20 @@ def _candidate(owner_binding: Any, *, repository: str, subject: str, head_sha: s
         return unavailable
     candidate_ref = _mapping(owner_binding.get("candidate_ref"), "candidate binding")
     profile_ref = _mapping(owner_binding.get("acceptance_profile_ref"), "acceptance profile")
+    if repository == BIFROST_REPOSITORY:
+        try:
+            _validate_documentation_candidate(dict(owner_binding))
+        except (OwnerFactRefusal, KeyError, TypeError, ValueError):
+            return unavailable
+    elif candidate_ref.get("kind") is not None:
+        return unavailable
     if (
         candidate_ref.get("source_sha") != head_sha
         or not isinstance(profile_ref.get("id"), str)
         or not profile_ref["id"]
         or not isinstance(profile_ref.get("version"), str)
         or not profile_ref["version"]
-        or profile_ref.get("source_owner") != OWNER_BINDING_AUTHORITY
+        or profile_ref.get("source_owner") != (BIFROST_AUTHORITY if candidate_ref.get("kind") == "git_documentation" else OWNER_BINDING_AUTHORITY)
     ):
         return unavailable
     return {
@@ -557,8 +571,15 @@ def compose_issue_delivery_readback(
         "limitation": "Repository delivery is not deployment, trial, or owner acceptance.",
     }
     candidate = _candidate(
-        owner_binding, repository=repository, subject=subject, head_sha=head_sha
-    ) if not delivery_source_pair(approval) else {"ready_to_try": False, "reason": "FCA-09-BIFROST readiness is not implemented"}
+        owner_binding, repository=repository, subject=subject,
+        head_sha=merge_sha if delivery_source_pair(approval) else head_sha
+    )
+    if delivery_source_pair(approval) and candidate.get("ready_to_try"):
+        expected_delivery = {"operation_key": approval["operation_key"], "approval_id": approval["approval_id"],
+            "approval_manifest_hash": approval["approval_manifest_hash"], "pr_number": pull["number"], "head_sha": head_sha}
+        if (candidate["candidate_ref"]["delivery_ref"] != expected_delivery
+            or candidate["candidate_ref"]["base_sha"] != approval["destination"]["base_sha"]):
+            candidate = {"ready_to_try": False, "reason": "exact delivery/candidate binding changed"}
     evidence_rows: list[dict[str, Any]] = [evidence]
     delivery_facts: dict[str, Any] = {
         "delivery": {
@@ -575,7 +596,7 @@ def compose_issue_delivery_readback(
             candidate.get("observed_at"), "candidate observation time"
         )
         readiness_ref = {
-            "source_type": "builderops_vm102_receipt",
+            "source_type": "builderops_bifrost_documentation_receipt" if delivery_source_pair(approval) else "builderops_vm102_receipt",
             "source_id": receipt_id,
             "locator": receipt_id,
             "version": receipt_sha,
@@ -584,7 +605,8 @@ def compose_issue_delivery_readback(
         evidence_rows.append(
             {
                 "evidence_id": readiness_evidence_id,
-                "claim": "The deployment owner's current FCA-09 binding makes this exact delivered head ready to try.",
+                "claim": ("The documentation source owner's current FCA-09 binding makes this exact delivered candidate ready to try."
+                          if delivery_source_pair(approval) else "The deployment owner's current FCA-09 binding makes this exact delivered head ready to try."),
                 "source_ref": readiness_ref,
                 "availability": "available",
                 "freshness": "fresh",

@@ -1032,6 +1032,7 @@ def issue_delivery_production_harness(
         issue_body: str | None = None,
         preview_observer: Callable[[Mapping[str, Any]], None] | None = None,
         bifrost: bool = False,
+        documentation_owner: bool = False,
     ) -> _ProductionHarness:
         nonlocal counter
         counter += 1
@@ -1151,10 +1152,24 @@ def issue_delivery_production_harness(
                             "github_credential": {"credential_id": "hub-effect" if repository == REPOSITORY else "consumer-effect", "rotation_generation": 1},
                             "documentation_paths": policy["documentation_paths"],
                             "verification_profile": policy["verification_profile"], "required_checks": policy["required_checks"]}
+                if documentation_owner and repository == manifest["repository"]:
+                    document["owner_documentation"] = {
+                        "profile": {"id": "profile:documentation", "version": "1", "repository": repository,
+                            "subject_ref": f"github:{REPOSITORY}#{manifest['issue']['number']}",
+                            "source_owner": "bifrost_git_documentation_source",
+                            "owner_actor": {"actor_type": "human", "id": "owner:human"},
+                            "authorization_ref": {"ref": "policy:document-owner", "version": "1", "authority_epoch": 1},
+                            "criterion_refs": [{"id": key, "sha256": value} for key, value in policy["verification_profile"]["criterion_hashes"].items()],
+                            "limitation_refs": [{"id": "limit:documentation-only", "sha256": "e" * 64}],
+                            "retention_policy_ref": {"ref": "BuilderOpsReceipt", "version": "1"}},
+                        "owner_login": "fixture-owner", "readiness_generation": "1", "readiness_ttl_seconds": 3600,
+                        "access_policy": {"ref": "policy:document-access", "version": "1"}}
                 source_state["documents"][repository] = document
                 from app.dispatcher.verification_merge import ProtectedDeliveryManifest
+                raw = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+                blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() if documentation_owner else "c" * 40
                 manifest["target_policies"][repository] = executor_module._policy_binding(ProtectedDeliveryManifest.from_document(
-                    document, repository=repository, base_sha=source_state["bases"][repository], blob_sha="c" * 40))
+                    document, repository=repository, base_sha=source_state["bases"][repository], blob_sha=blob))
             pack = manifest["context"]["dispatch_plan"]["context_packs"][0]
             pack["delivery_sources"] = delivery_source_pair(manifest)
             manifest["context"]["content_hash"] = canonical_hash(pack)
@@ -1166,22 +1181,31 @@ def issue_delivery_production_harness(
                 source_state["reads"].append(path)
                 repository = "/".join(path.split("/")[2:4])
                 endpoint = "/".join(path.split("/")[4:])
-                if endpoint == "":
+                if source_state.get("unavailable"):
+                    return httpx.Response(503, json={"message": "source unavailable"})
+                if endpoint.startswith("collaborators/") and source_state.get("fail_access_at"):
+                    source_state["access_reads"] = source_state.get("access_reads", 0) + 1
+                    if source_state["access_reads"] >= source_state["fail_access_at"]:
+                        return httpx.Response(503, json={"message": "late source outage"})
+                if endpoint in source_state.get("responses", {}):
+                    data = source_state["responses"][endpoint]
+                elif endpoint == "":
                     data = {"default_branch": "main"}
                 elif endpoint == "git/ref/heads/main":
                     data = {"object": {"sha": source_state["bases"][repository]}}
                 elif endpoint == "contents/.builderops/delivery-manifest.json":
                     content = json.dumps(source_state["documents"][repository], sort_keys=True, separators=(",", ":")).encode()
-                    data = {"type": "file", "encoding": "base64", "sha": "c" * 40, "content": base64.b64encode(content).decode()}
+                    blob = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest() if documentation_owner else "c" * 40
+                    data = {"type": "file", "encoding": "base64", "sha": blob, "content": base64.b64encode(content).decode()}
                 elif endpoint == f"issues/{manifest['issue']['number']}" and repository == REPOSITORY:
                     data = source_state["issue"]
                 elif endpoint == "pulls/6000":
                     data = {"head": {"sha": source_state["head"]}, "base": {"ref": "main", "repo": {"full_name": repository}},
-                            "merged": source_state.get("merged", False), "merge_commit_sha": "3" * 40}
+                            "merged": source_state.get("merged", False), "merge_commit_sha": source_state.get("merge_sha", "3" * 40)}
                 elif endpoint == "pulls/6000/reviews":
                     data = source_state.get("reviews", [{"id": 1, "user": {"login": "reviewer"}, "state": "APPROVED",
                             "commit_id": source_state["head"], "author_association": "COLLABORATOR", "submitted_at": "2026-09-17T10:00:00Z"}])
-                elif "/commits/" in path and path.endswith("3" * 40):
+                elif "/commits/" in path and path.endswith(source_state.get("merge_sha", "3" * 40)):
                     data = {"commit": {"message": "Approved documentation"}}
                 elif endpoint.endswith("/check-runs"):
                     data = {"total_count": 1, "check_runs": [{"id": 1, "name": "documentation", "head_sha": source_state["head"],
@@ -1274,7 +1298,7 @@ def issue_delivery_production_harness(
                     source_state["issue"]["labels"] = ["agent:in-progress"]
                 elif kind == "merge":
                     source_state["merged"] = True
-                    source_state["bases"][manifest["repository"]] = "3" * 40
+                    source_state["bases"][manifest["repository"]] = source_state.get("merge_sha", "3" * 40)
                 elif kind == "closure":
                     source_state["issue"].update(state="closed", labels=[])
             transport.on_apply = applied

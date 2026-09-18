@@ -128,6 +128,7 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     job = workflow[
         workflow.index("pr-index-pg-contracts:") : workflow.index("contract-validation:")
     ]
+    assert "\n    timeout-minutes: 30\n" in job
     assert "github.event_name == 'pull_request'" in job
     assert "pgvector/pgvector:pg16" in job
     assert "dorny/paths-filter@v3" in job

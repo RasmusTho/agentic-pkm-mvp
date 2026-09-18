@@ -525,9 +525,10 @@ operation/outbox receipts and native-task independent readback. v1 remains hub-o
 approval normalization and hashes. Repository support and FCA-07 fixtures do not prove a live Bifrost journey. The owner's preparation mandate names
 this one separate consumer, but neither it nor installed deploy/rollback delegation grants
 Issue-delivery effects. No live Issue, branch, host, approval or human trial is selected here.
-FCA-09-BIFROST documentation readiness (#5587), managed UI/host activation, real consumer policy
-and credentials, a selected pilot and owner trial/acceptance remain pending. Bifrost projections
-cannot borrow VM102 candidate readiness.
+FCA-09-BIFROST repository documentation readiness and guarded outcome support are implemented by
+#5587. Managed UI/host activation, real consumer policy and credentials, a selected pilot and
+explicit human trial/acceptance remain pending. Bifrost projections cannot borrow VM102 candidate
+readiness; #5405 owns the separate consumed-seam conformance matrix and pilot-plan artifact.
 
 The v2 approval's `target_policies` binds exactly the consumer and hub protected policy snapshots,
 including blob/content identities, effect sets and credential ID/generation. The consumer snapshot

@@ -305,6 +305,7 @@ class StorePort(Protocol):
         fault_at: str | None = None,
         owner_outcome: OwnerOutcomeAdmission | None = None,
         issue_delivery_admission: object | None = None,
+        owner_readiness_admission: object | None = None,
     ) -> AuthorityObjectResult: ...
 
     def get_owner_outcomes(

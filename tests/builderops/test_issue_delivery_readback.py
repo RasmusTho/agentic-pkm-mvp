@@ -8,6 +8,7 @@ import hashlib
 import json
 
 import pytest
+from tests.builderops.test_owner_fact_producers import bifrost_writer as bifrost_writer
 
 from app.builderops import cockpit_github_plane
 from app.builderops.devui_focus_inputs import read_focus_inputs
@@ -706,7 +707,8 @@ def test_production_readback_uses_independent_github_evidence(monkeypatch: pytes
     assert _projection() == _projection()  # reconnect/readback is deterministic
 
 
-def test_issue_delivery_candidate_profile_linkage() -> None:
+@pytest.mark.pg
+def test_issue_delivery_candidate_profile_linkage(bifrost_writer) -> None:  # noqa: F811
     current = _projection()
     assert current["candidate"]["ready_to_try"] is True
     assert current["candidate"]["source_revision"] == HEAD_SHA
@@ -723,3 +725,17 @@ def test_issue_delivery_candidate_profile_linkage() -> None:
         assert projection["candidate"]["ready_to_try"] is False
         assert "ready_to_try" not in projection["delivery_facts"]
         assert "owner_outcome" not in projection
+    from app.builderops.issue_delivery_readback import read_issue_delivery_projection
+    w = bifrost_writer
+    projected = read_issue_delivery_projection(client=w.harness.host, task=w.task,
+        github_reader=cockpit_github_plane.read_issue_delivery_github)
+    assert projected["candidate"]["ready_to_try"] is True
+    assert projected["candidate"]["source_revision"] == w.merge
+    assert projected["subject_ref"] == w.subject
+    assert projected["candidate"]["candidate_ref"]["delivery_ref"]["approval_id"] == w.harness.approval["approval_id"]
+    ready_evidence = projected["evidence"][-1]
+    assert ready_evidence["source_ref"]["source_type"] == "builderops_bifrost_documentation_receipt"
+    w.responses[f"git/commits/{w.merge}"]["sha"] = "0" * 40
+    refused = read_issue_delivery_projection(client=w.harness.host, task=w.task,
+        github_reader=cockpit_github_plane.read_issue_delivery_github)
+    assert refused["candidate"]["ready_to_try"] is False

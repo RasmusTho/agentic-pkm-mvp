@@ -406,7 +406,9 @@ and [FCA-09-BIFROST](../builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#fca-09-bifro
 Current v1 hub-only delivery and VM102-only outcome support remain unchanged. #5586 implements the
 first serial repository slice: bounded v2 Bifrost delivery with independent workflow/tracking pins,
 per-target policy/credential checks, complete-diff enforcement and native delivery readback.
-#5587 owns the still-pending documentation readiness/outcome slice. #5405 conformance, managed
+#5587 implements the documentation readiness/outcome slice through the protected source and existing
+authenticated receipt/store path, including exact complete-diff/blob/access/expiry and human-outcome
+admission, correction and replay checks. #5405 conformance, managed
 UI/host activation, real policy/grants and pilot, and owner trial/acceptance remain later gates.
 The following boundaries remain the scope and verification map for those two serial slices.
 Keep coupled identity fields and their consumers together instead of creating a new architecture.

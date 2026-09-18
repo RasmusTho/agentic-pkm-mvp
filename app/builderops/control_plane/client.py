@@ -315,6 +315,14 @@ class BuilderOpsControlPlaneClient:
             pin_epoch=False,
         )
 
+    def get_owner_outcomes(self, *, repository: str, subject_ref: str,
+                           idempotency_key: str | None = None) -> dict[str, Any]:
+        params = {"repository": repository, "subject_ref": subject_ref}
+        if idempotency_key is not None:
+            params["idempotency_key"] = idempotency_key
+        return self._request("GET", f"/{API_VERSION}/receipts/owner-outcomes/current",
+                             params=params, pin_epoch=False)
+
     def get_task(self, *, repository: str, task_id: str) -> dict[str, Any]:
         return self._request(
             "GET",

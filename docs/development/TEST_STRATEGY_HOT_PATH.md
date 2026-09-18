@@ -18,6 +18,12 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
+- The `pr-index-pg-contracts` job has a finite 30-minute execution budget for its full qualified
+  PostgreSQL acceptance surface (#5587). This ceiling does not change test selection, commands,
+  plugins, assertions, refusal/skip protections, or required-check rules. The existing
+  `tests/ops/test_ci_workflow.py::test_pr_index_pg_contracts_run_exact_acceptance_surface` guards
+  the budget; delivery still requires an executed successful Index PG check on the final PR head,
+  not a cancelled run or skipped metadata duplicate.
 - Pure PR title/body metadata edits are validated by `Issue and PR Governance` while CI Smoke jobs
   remain skipped. An `edited` event carrying `changes.base.ref.from` is a merge-input retarget and
   therefore keeps full CI Smoke enabled. Metadata events use a separate concurrency suffix so a

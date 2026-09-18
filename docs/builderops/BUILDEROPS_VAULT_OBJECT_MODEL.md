@@ -858,8 +858,8 @@ existing `DEVUI_VM102_RECEIPT_DIR/devui-runtime-prerequisites.json` may carry a 
 `source_owner`, `owner_actor`, `authorization_ref`, `criterion_refs`, `limitation_refs`, and
 `retention_policy_ref`; their shapes are the finite references above. Its immutable digest binds
 the owner designation and required criteria to that exact repository/subject. The source owner is
-`builderops_vm102_receipt_source`; no client, label or model creates a profile. Other candidate or
-environment owners remain unadmitted. An exact retained chain whose freshness expired can support
+`builderops_vm102_receipt_source`; no client, label or model creates a profile. The only additional
+source is the bounded documentation owner under FCA-09-BIFROST below. An exact retained chain whose freshness expired can support
 only `unable_to_try`; deleted or incompatible source history remains unavailable.
 
 The human sends `{record_type: BuilderOpsReceipt, owner_outcome: {contract, request,
@@ -891,11 +891,12 @@ the separately gated Issue-delivery operation.
 <!-- anchor: FCA-09-BIFROST -->
 #### FCA-09-BIFROST — non-image documentation candidate target
 
-This is a bounded target extension of FCA-09 for exactly one documentation candidate in
+Issue #5587 implements repository support for this bounded extension of FCA-09 for exactly one documentation candidate in
 `RasmusTho/bifrost`, under
 [FCA-ID-SECOND](../BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-second--bounded-bifrost-documentation-delivery-target).
-The implemented producer above remains VM102-only. This contract adds no live source, grant,
-trial or acceptance, and does not widen old VM102 profiles or receipts.
+The existing VM102 producer remains unchanged. This repository support adds no live source, grant,
+trial or acceptance, and does not widen old VM102 profiles or receipts. #5405 separately owns the
+consumed-seam conformance matrix and pilot-plan artifact; its fixtures do not supply live readiness.
 
 **One source owner.** Bifrost's protected GitHub repository is the documentation artifact owner.
 Name its one bounded source adapter `bifrost_git_documentation_source`, implemented within the
@@ -966,6 +967,42 @@ turn merge/readiness into acceptance. Changed material limits/profile/bytes or r
 withdraw current projection without rewriting history. During source outage, authorized keyed
 lookup may return an intact historical outcome with unavailable projection. Only an independently
 retained exact withdrawn readiness binding can support `unable_to_try`; missing history cannot.
+
+**Repository implementation (#5587).** The protected delivery manifest may carry one closed
+`owner_documentation` object: `profile` (the FCA-09 fields), the designated owner's `owner_login`,
+`readiness_generation`, `readiness_ttl_seconds` (1–86400), and versioned `access_policy` (`ref`,
+`version`). This is source configuration inside the existing protected policy, never a caller
+assertion or an installed live grant. Its criteria must equal the delivery verification profile,
+and its finite paths and required checks remain those independently admitted by FCA-ID-SECOND.
+
+The producer consumes the real v2 native task, approval, operation and host-effect readbacks;
+retained nonterminal tasks and authenticated terminal operations with incomplete effects from
+earlier approvals are not delivery candidates. Native task/approval/source-pair/version bindings
+are authenticated before any history is excluded. Exactly one
+independently delivered task must qualify; multiple deliveries or unavailable/malformed history
+remain a conflict, never permission to select a convenient historical success.
+independent GitHub reads confirm merge/closure, reachability, document blob bytes, regular modes,
+owner access and required checks. It inspects the entire approved-base-to-merge Git tree delta.
+The merge tree must equal the independently verified PR-head tree; otherwise head checks cannot
+attest the candidate's document bytes, even when the changed Markdown paths remain allowed.
+Approved-base, merge and checked-head trees are independently reconciled with the protected remote
+source. Local tree and complete-diff reads disable Git replacement objects, including alternate
+replacement namespaces, so local refs cannot substitute unchecked bytes for an immutable candidate.
+The closed `git_documentation` candidate binds base/merge, complete-diff hash, each path/blob/byte
+digest and the exact delivery operation/approval/PR/head; image and runtime configuration are
+explicitly `not_applicable`. The GitHub document-view environment binds that immutable merge and
+access-policy version. DevUI joins this consumer commit, not the trusted workflow commit.
+
+Only the existing service/store owner persists source-owned readiness in `BuilderOpsReceipt`.
+The deterministic source-evidence key includes its UTC observation window, bounded by the policy
+TTL; it retains its first server observation and expiry, and rereading never extends that receipt.
+Fresh independent observation in a later window produces different readiness and cannot inherit a
+trial or acceptance. Generic service and store ingestion cannot create readiness under this reserved
+source namespace, including task, attempt and lease idempotency write boundaries. Both current
+and retained reads authenticate record/journal/idempotency lineage.
+Confirmation and readback independently revalidate source evidence;
+`unable_to_try` can refer only to an exact retained withdrawn binding. Authenticated keyed history
+survives an unavailable current source. No document content is retained in readiness or outcomes.
 
 ### PromotionIntent
 

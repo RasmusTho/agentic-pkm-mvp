@@ -1825,6 +1825,11 @@ def create_app(
             raise HTTPException(status_code=403, detail="insufficient BuilderOps credential scope")
         _enforce_repo_scope(credential, request.envelope.repository)
         receipt_body = request.payload.get("receipt_body")
+        if (request.record_id.startswith("bifrost-readiness:")
+            or request.idempotency_key.startswith("bifrost-readiness:")
+            or request.envelope.scope == "owner-readiness"
+            or isinstance(receipt_body, Mapping) and receipt_body.get("source_owner") == "bifrost_git_documentation_source"):
+            raise HTTPException(status_code=403, detail="documentation readiness requires protected source admission")
         if request.record_id.startswith("owner-ask:") or isinstance(receipt_body, Mapping) and receipt_body.get("contract") == "builder_owner_ask.v1":
             raise HTTPException(status_code=403, detail="owner asks require source admission")
         if request.record_type == "ModelInquiryApproval" or request.record_id.startswith("inquiry-approval:"):
@@ -1884,7 +1889,8 @@ def create_app(
             if current != credential or current is None or not {"records:write", "owner_outcomes:confirm"}.issubset(current.scopes) or not current.may_address(repo) or current.principal_kind != "human":
                 raise OwnerFactRefusal("owner_confirmation_not_authorized", 403)
             binding = read_owner_binding(repo, subject, authority_epoch=epoch,
-                allow_withdrawn_readiness=immutable["outcome"] == "unable_to_try")
+                allow_withdrawn_readiness=immutable["outcome"] == "unable_to_try",
+                store=store, retained_readiness_ref=immutable["readiness_receipt_ref"])
             if binding["owner_actor"] != immutable["owner_actor"] or binding["owner_actor"]["id"] != current.principal:
                 raise OwnerFactRefusal("owner_principal_mismatch", 403)
             validate_current_binding(immutable, binding)
@@ -2233,7 +2239,7 @@ def create_app(
                 asks = await run_in_threadpool(current_owner_asks, canonical)
                 outcome_source_status = "available"
                 try:
-                    profiles = await run_in_threadpool(read_owner_profiles)
+                    profiles = await run_in_threadpool(read_owner_profiles, canonical)
                 except OwnerFactRefusal:
                     if not any(ask["status"] == "current" for ask in asks):
                         raise
