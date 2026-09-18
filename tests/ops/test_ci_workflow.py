@@ -156,6 +156,11 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
         INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
     )
     assert '-m "pg"' in job
+    # FCA-06 conformance must execute in PG CI, not merely collect/deselect
+    # in the not-pg lane. Bind both change selectors and the actual invocation.
+    assert "- 'app/builderops/second_consumer.py'" in job
+    assert "- 'tests/builderops/test_standalone_consumer_conformance.py'" in job
+    assert "            tests/builderops/test_standalone_consumer_conformance.py \\\n" in job
 
 
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:

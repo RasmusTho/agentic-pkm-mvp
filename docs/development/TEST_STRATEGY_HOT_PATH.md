@@ -24,6 +24,10 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   `tests/ops/test_ci_workflow.py::test_pr_index_pg_contracts_run_exact_acceptance_surface` guards
   the budget; delivery still requires an executed successful Index PG check on the final PR head,
   not a cancelled run or skipped metadata duplicate.
+- FCA-06 (#5405) adds `app/builderops/second_consumer.py` and
+  `tests/builderops/test_standalone_consumer_conformance.py` to that job's path filter and runs
+  the latter module in its existing PG invocation. The same workflow assertion guards selection
+  and execution enrollment; these are finite repository conformance proofs, not live acceptance.
 - Pure PR title/body metadata edits are validated by `Issue and PR Governance` while CI Smoke jobs
   remain skipped. An `edited` event carrying `changes.base.ref.from` is a merge-input retarget and
   therefore keeps full CI Smoke enabled. Metadata events use a separate concurrency suffix so a

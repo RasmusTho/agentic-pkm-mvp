@@ -1,0 +1,71 @@
+{
+  "contract": "builder_second_consumer_pilot_plan.v1",
+  "authority": "preparation_only",
+  "status": "incomplete",
+  "start_authorized": false,
+  "parent_issue": 5399,
+  "repository": "rasmustho/bifrost",
+  "issue_repository": "rasmustho/agentic-pkm-mvp",
+  "workflow_repository": "rasmustho/agentic-pkm-mvp",
+  "operation": {"type": "deliver_ready_issue", "contract_version": "fca-issue-delivery.v2", "ddo_required": false},
+  "selection": null,
+  "path_envelope": {
+    "allowed": "explicit regular non-executable docs/*.md paths",
+    "selected_paths": [],
+    "root_readme_allowed": false
+  },
+  "prerequisites_before_start": {
+    "independent_authority": "UNPROVED parent #5399/#3793/#5181: exact bob-1 VM102 builder-system identity, immutable source/image/config, API-only PostgreSQL authority/epoch and complete applicable qualification/deploy/health. Product DB, vault, service and laptop-owner runtime are not dependencies. M1 and component liveness do not establish this gate.",
+    "host_runtime": "UNPROVED host integration: install and qualify a concrete IssueDeliveryEffectTransport and HostCredentialResolver via HostIssueDeliveryExecutorRuntime/install_host_issue_delivery_executor_runtime. Protocols and test composition do not prove a production bootstrap caller. Declare protected workflow checkout, separate consumer checkout/worktree, Linux systemd distinct-UID isolation profile, executables/Git, network, BuilderOps API/PostgreSQL and host-secret/model-login custody. Resolve configured model access without a model override or API-key billing fallback.",
+    "host_candidate_preparation": "UNPROVED host integration: name and qualify the authorized host producer that prepares the consumer destination, stages only approved documentation and commits an exact candidate HEAD. PublicationTarget requires an existing head and executor._validate_complete_diff checks worktree HEAD. The content worker cannot write Git metadata; test-side commits do not implement this producer. Do not grant the worker Git-metadata or host credentials to bridge this gap.",
+    "authenticated_m2_ui": "UNPROVED parent integration: admitted authenticated preview/Start/Hold and real selected-operation/readback in managed Overview/Focus on the approved runtime. A read-only M1 page, direct test client or pure projection is not the M2 owner experience. Closing the owner browser must preserve server operation identity and independent observation.",
+    "consumer_preparation": "UNPROVED separately governed preparation: preserve Bifrost Issue25/PR26 local-Issue and foreign-auto-closer policy. A hub-tracked v2 pilot needs a distinct bounded preparation that explicitly reconciles that policy, installs/reviews the protected .builderops/delivery-manifest.json, exact docs/*.md paths, documentation verification checks/profile and owner-documentation access/readiness policy. Do not retarget prior work, weaken governance, use root README, or clear lrn_20260917192047_850a746b without its own resolution. Pilot effects cannot prepare or broaden their own policy.",
+    "source_admission": "UNPROVED: independently pin Bifrost consumer source/base and hub trusted workflow source/artifact digest; independently import/read the exact hub tracking Issue/body/ACs and permitted parent target or explicit none. Select a new bounded docs-only candidate after consumer preparation. No CWD, unpinned main, default repository or credential-derived source reference.",
+    "credentials": "UNPROVED: protected policy snapshots bind separate Bifrost and hub credential ID/generation and effect grants. The presented human approval credential itself addresses both repos; a sibling credential cannot lend scope. Install via the existing host-secret owner outside the pilot; record references only. No raw tokens/DSNs, ambient fallback, third-repo grants or credential activation by this plan.",
+    "selected_operation_recovery": "UNPROVED and required BEFORE Start: the selected real operation's authorized stop, interruption reconstruction, unknown-effect reconciliation and recovery/rollback must have exact candidate/operation-bound proof and an accountable operator. Current launcher stop is unsupported. Existing bob deployment rollback is not selected-operation rollback proof. Neither truthful unsupported status, fixture crash tests nor deploy delegation satisfies this requirement. Parent owns qualification or bounded prerequisite repair; this child requests no new authority.",
+    "exact_human_approval": "UNPROVED: after all preceding gates, independently preview the exact v2 manifest and obtain authenticated human Start or Hold. Bind repo/issue/workflow pins, branch/worktree/run, base, both policies/credential generations, documentation paths, verification profile/checks, permitted effects, epoch, expiry and idempotency key. Start authorizes only its exact operation; Hold has no delivery effect. This plan supplies neither decision."
+  },
+  "procedure": {
+    "prepare": "Parent gathers and independently verifies every prerequisite above. Stop before Start while any is absent, stale or contradictory. Use existing owners for host/consumer/grant preparation; do not run a live operation from this file.",
+    "select": "Record exact Bifrost repository, immutable consumer SHA, main base/SHA, distinct pinned hub workflow SHA/artifact manifest, hub Issue/node/body/AC hashes, destination host/system/channel/checkout/worktree/branch/run, finite concrete regular docs/*.md files, verification checks/profile, policies, credential references/generations and optional admitted parent target. Record permitted effects explicitly: repository_worktree, issue_claim, publication, review_merge, closure_reconciliation; parent evidence only if separately present in both approval and policy. No provider/tenant platform, repo creation, policy/grant/bootstrap changes or root README.",
+    "preview": "Use the authenticated production issue_delivery_preview and inspect exact source/policy/credential identities. Re-read independent source authority and required recovery proof. Any changed source, policy, base, epoch, expiry, claim or credential invalidates this preview; reapprove only after reconciliation.",
+    "start": "Only the selected human may confirm the exact manifest through issue_delivery_start. Record approval ID/hash, authority epoch, operation key, source pair and decision receipt. A read-only acknowledgement, model proposal, test pass or this plan cannot supply Start.",
+    "observe": "Admit the exact native task through admit_issue_delivery_task, use the production IssueDeliveryOperationAdapter/protected executor and preserve reservation, attempt, entry/session and effect-slot identities. Observe after owner UI disconnect using server readback; do not create a replacement launch on ambiguity.",
+    "reconcile": "On drift, interruption or unknown effect stop further effects and use the previously qualified operation-specific recovery path. Preserve original approval and completed effects. Re-read outbox/destination/GitHub before retry; never mint another key/attempt to erase uncertainty. Unsupported launcher stop remains a limitation, not confirmation that the operation stopped.",
+    "readback": "Independently read consumer PR/head/full base-to-head tree diff, all old/new rename/copy paths and modes/blobs, checks/reviews/merge, exact hub Issue closure and owner-doc result. Use read_issue_delivery_projection with production GitHub authority and authenticated API/outbox readers. Worker text, Git commits made by a fixture, matching hashes alone or a closed issue are insufficient. Preserve mismatched/stale/unavailable evidence as incomplete.",
+    "try": "Obtain the production FCA-09-BIFROST exact git_documentation readiness binding from independently read protected policy/source/blobs/access and current profile. Let the authorized human inspect that exact documentation candidate and explicitly record tried/not-tried. Image/VM readiness, automated observation and M1 acknowledgement cannot supply the trial.",
+    "accept": "The same admitted human explicitly accepts or rejects the exact current candidate/profile with current trial lineage through existing outcome authority. Re-read correction/withdrawal/history. Record result and residual limits on parent #5399; a successful bounded documentation candidate does not close full platform acceptance. Leave this preparation receipt incomplete; retain real authenticated receipts under their existing owners."
+  },
+  "expected_receipts": {
+    "authority_and_host": "Parent refs to exact VM102 qualification/deploy/health, API-only authority/epoch, qualified concrete host bootstrap/transport/candidate producer and authenticated M2 UI evidence.",
+    "consumer_preparation": "Separate reviewed/merged preparation receipt binding Bifrost governance compatibility, protected policy/base/blob and docs-only profile; preserves prior Issue25/PR26.",
+    "source_and_policy": "Independent consumer and workflow repository/revision/artifact identities, hub Issue/body/AC hashes, both target policy hashes, exact credential IDs/generations, paths/profile/checks; references only.",
+    "selected_operation_recovery": "Before-Start exact operation-specific stop/recovery/real rollback proof, authority, operator, source/candidate and readback. No replacement with deployment rollback.",
+    "approval": "Authenticated fca-issue-delivery.v2 Start decision receipt binding approval_manifest_hash, operation_key, authority_epoch, destination/run, source pair, expiry and allowed effects.",
+    "run": "Durable reservation/attempt/entry and session identity from authenticated Issue-delivery operation readback; survives UI disconnect; unknown entry remains non-retryable without reconciliation.",
+    "result": "Protected host effect/outbox receipts and exact source/run/result linkage. Applied/unknown/refused remain distinct; no credential material or worker-claimed success as proof.",
+    "independent_readback": "fca-issue-delivery-readback.v1 from production independent GitHub/API/outbox reads; exact Bifrost PR/head/checks/reviews/merge, full diff and hub Issue closure/owner-doc evidence.",
+    "candidate_readiness": "FCA-09-BIFROST source-owned git_documentation candidate readiness with independent immutable Git/blob/access/profile linkage and current expiry/generation.",
+    "human_trial": "Authenticated human-only builder_owner_outcome.v1 trial for the exact current Bifrost documentation candidate/profile, preserved under correction/replay.",
+    "human_acceptance": "Authenticated human-only accept/reject linked to that current trial and exact candidate/profile. Independent parent validation decides full-platform completion."
+  },
+  "live_evidence": {
+    "authority_and_host": null,
+    "consumer_preparation": null,
+    "source_and_policy": null,
+    "selected_operation_recovery": null,
+    "approval": null,
+    "run": null,
+    "result": null,
+    "independent_readback": null,
+    "candidate_readiness": null,
+    "human_trial": null,
+    "human_acceptance": null
+  },
+  "source_contracts": [
+    "docs/BUILDER_FACTORY_ACCEPTANCE/QUALIFY_SECOND_CONSUMER_REPOSITORY.md :: Pickup, owned work and later validation",
+    "docs/BUILDER_FACTORY_ACCEPTANCE/README.md :: FCA-ID-SECOND — bounded Bifrost documentation delivery target",
+    "docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md :: FCA-09-BIFROST — non-image documentation candidate target",
+    "docs/plans/DEVUI_IMPLEMENTATION.md :: Dependency graph"
+  ]
+}
