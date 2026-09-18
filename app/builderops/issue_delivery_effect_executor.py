@@ -767,7 +767,7 @@ class IssueDeliveryEffectLedger(Protocol):
 def complete_documentation_diff(root: Path, base_sha: str, head_sha: str, allowed_paths: Sequence[str]) -> dict[str, Any]:
     """Read the full two-tree delta, including modes and both copy/rename paths."""
     result = subprocess.run(
-        ["git", "-C", str(root), "diff-tree", "--no-commit-id", "--raw", "-z", "-r",
+        ["git", "--no-replace-objects", "-C", str(root), "diff-tree", "--no-commit-id", "--raw", "-z", "-r",
          "--no-abbrev", "-M", "-C", "--find-copies-harder", base_sha, head_sha, "--"],
         capture_output=True, check=True,
     )

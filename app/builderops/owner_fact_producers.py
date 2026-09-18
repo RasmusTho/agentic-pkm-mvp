@@ -516,9 +516,8 @@ def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
         raise OwnerFactRefusal("owner_complete_diff_conflict", 409) from exc
     tree = _reconcile_complete_tree(authority, root, head)
     _reconcile_complete_tree(authority, root, base)
-    checked_tree = subprocess.run(["git", "-C", str(root), "rev-parse", f"{projection['head_sha']}^{{tree}}"],
-        check=True, capture_output=True, text=True).stdout.strip()
-    if checked_tree != tree["sha"]:
+    checked_tree = _reconcile_complete_tree(authority, root, projection["head_sha"])
+    if checked_tree["sha"] != tree["sha"]:
         raise OwnerFactRefusal("owner_candidate_checks_conflict", 409)
     documents = []
     for path in policy.documentation_paths:
@@ -561,11 +560,11 @@ def _bifrost_evidence(authority: Any, client: Any, profile: dict[str, Any],
 def _reconcile_complete_tree(authority: Any, root: Path, revision: str) -> dict[str, Any]:
     """Require full remote tree identity and inventory to agree with immutable Git objects."""
     tree = authority._get(f"/repos/{BIFROST_REPOSITORY}/git/trees/{revision}", recursive=1)
-    tree_oid = subprocess.run(["git", "-C", str(root), "rev-parse", f"{revision}^{{tree}}"],
+    tree_oid = subprocess.run(["git", "--no-replace-objects", "-C", str(root), "rev-parse", f"{revision}^{{tree}}"],
         check=True, capture_output=True, text=True).stdout.strip()
     if tree.get("truncated") is not False or tree.get("sha") != tree_oid:
         raise OwnerFactRefusal("owner_complete_tree_conflict", 409)
-    raw = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-t", "-z", revision],
+    raw = subprocess.run(["git", "--no-replace-objects", "-C", str(root), "ls-tree", "-r", "-t", "-z", revision],
         check=True, capture_output=True).stdout.decode("utf-8", errors="strict")
     local = []
     for entry in raw.split("\0"):

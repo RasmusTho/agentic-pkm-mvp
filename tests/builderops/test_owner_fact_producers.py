@@ -212,7 +212,7 @@ class BifrostWriter(OwnerWriter):
             "contents/docs/guide.md": {"type": "file", "encoding": "base64", "sha": oid, "content": base64.encodebytes(content_bytes).decode()},
             "collaborators/fixture-owner/permission": {"permission": "read", "user": {"login": "fixture-owner"}},
         }
-        for revision in (self.merge, h.approval["destination"]["base_sha"]):
+        for revision in (self.merge, self.head, h.approval["destination"]["base_sha"]):
             rows = []
             for entry in self.git("ls-tree", "-r", "-t", "-z", revision).split("\0"):
                 if entry:
@@ -523,11 +523,19 @@ def test_bifrost_documentation_admission_rechecks_current_source(bifrost_writer,
                    for row in w.read().json().get("history", []))
 
 
-@pytest.mark.parametrize("change", ["swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "base_substitution", "head_substitution", "remote_tree_substitution", "ancestry_substitution", "markdown"])
+@pytest.mark.parametrize("change", ["swift", "script", "policy", "rename", "copy", "delete", "symlink", "executable", "base_substitution", "head_substitution", "remote_tree_substitution", "ancestry_substitution", "markdown", "checked_head_replacement", "checked_head_replacement_alt", "remote_checked_tree_substitution"])
 def test_bifrost_readiness_enforces_complete_candidate_diff(issue_delivery_production_harness, monkeypatch, change):
     from app.builderops.owner_fact_producers import OwnerFactRefusal
     substitution = change.endswith("_substitution")
-    w = BifrostWriter(issue_delivery_production_harness, monkeypatch, merge_change=None if substitution else change)
+    replacement = change.startswith("checked_head_replacement")
+    w = BifrostWriter(issue_delivery_production_harness, monkeypatch,
+        merge_change="identical_tree" if change == "remote_checked_tree_substitution" else None if substitution else "markdown" if replacement else change)
+    if replacement:
+        assert w.git("rev-parse", f"{w.head}^{{tree}}") != w.git("rev-parse", f"{w.merge}^{{tree}}")
+        if change.endswith("_alt"):
+            monkeypatch.setenv("GIT_REPLACE_REF_BASE", "refs/adversarial-replace/")
+        w.git("replace", w.head, w.merge)
+        assert w.git("rev-parse", f"{w.head}^{{tree}}") == w.git("rev-parse", f"{w.merge}^{{tree}}")
     if change == "base_substitution":
         w.harness.source_state["pr_base_sha"] = "0" * 40
     elif change == "head_substitution":
@@ -536,12 +544,35 @@ def test_bifrost_readiness_enforces_complete_candidate_diff(issue_delivery_produ
         w.responses[f"git/trees/{w.merge}"]["tree"].append({"path": "Extra.swift", "mode": "100644", "type": "blob", "sha": "0" * 40})
     elif change == "ancestry_substitution":
         w.responses[f"compare/{w.harness.approval['destination']['base_sha']}...{w.merge}"]["merge_base_commit"]["sha"] = "0" * 40
+    elif change == "remote_checked_tree_substitution":
+        w.responses[f"git/trees/{w.head}"]["sha"] = "0" * 40
     baseline = w.count("builderops_records")
-    expected = "owner_candidate_checks_conflict" if change == "markdown" else (
+    tables = ("builderops_records", "builderops_receipts", "builderops_idempotency", "builderops_outbox")
+    counts = tuple(w.count(table) for table in tables)
+    expected = "owner_candidate_checks_conflict" if change == "markdown" or replacement else (
         "owner_delivery_conflict|owner_readiness_withdrawn|owner_source_unavailable|owner_complete_tree_conflict" if substitution else "owner_complete_diff_conflict")
     with pytest.raises(OwnerFactRefusal, match=expected):
         w.binding()
     assert w.count("builderops_records") == baseline
+    if replacement:
+        response = w.read()
+        assert response.status_code == 409, response.text
+        assert tuple(w.count(table) for table in tables) == counts
+
+
+def test_bifrost_immutable_objects_ignore_local_replacement_refs(bifrost_writer, monkeypatch):
+    w = bifrost_writer
+    binding = w.binding()
+    replacement = w.corrupt_merge(w.merge, "swift")
+    base = w.harness.approval["destination"]["base_sha"]
+    for namespace in ("refs/replace/", "refs/adversarial-replace/"):
+        monkeypatch.setenv("GIT_REPLACE_REF_BASE", namespace)
+        for original, substituted in ((base, replacement), (w.merge, replacement),
+            (w.git("rev-parse", f"{w.merge}^{{tree}}"), w.git("rev-parse", f"{replacement}^{{tree}}"))):
+            w.git("replace", original, substituted)
+            assert w.binding() == binding
+            assert w.read().status_code == 200
+            w.git("replace", "-d", original)
 
 
 def test_bifrost_outcome_requires_human_and_current_exact_trial(bifrost_writer):

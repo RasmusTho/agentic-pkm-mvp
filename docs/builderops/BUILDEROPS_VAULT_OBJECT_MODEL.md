@@ -985,6 +985,9 @@ independent GitHub reads confirm merge/closure, reachability, document blob byte
 owner access and required checks. It inspects the entire approved-base-to-merge Git tree delta.
 The merge tree must equal the independently verified PR-head tree; otherwise head checks cannot
 attest the candidate's document bytes, even when the changed Markdown paths remain allowed.
+Approved-base, merge and checked-head trees are independently reconciled with the protected remote
+source. Local tree and complete-diff reads disable Git replacement objects, including alternate
+replacement namespaces, so local refs cannot substitute unchecked bytes for an immutable candidate.
 The closed `git_documentation` candidate binds base/merge, complete-diff hash, each path/blob/byte
 digest and the exact delivery operation/approval/PR/head; image and runtime configuration are
 explicitly `not_applicable`. The GitHub document-view environment binds that immutable merge and
