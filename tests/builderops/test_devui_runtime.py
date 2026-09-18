@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.builderops.devui_runtime import RuntimeConfigurationError, create_app, load_configuration
+from app.builderops.control_plane.issue_delivery import SECOND_REPOSITORY
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -437,12 +438,12 @@ def _native_unprojected_tasks(source):
 
 
 @pytest.mark.pg
-@pytest.mark.parametrize("managed_sources", [{"repository": "rasmustho/bifrost", "epoch": 1, "delivery_read": True}], indirect=True)
+@pytest.mark.parametrize("managed_sources", [{"repository": SECOND_REPOSITORY, "epoch": 1, "delivery_read": True}], indirect=True)
 def test_managed_source_preserves_v3_candidate_binding(managed_sources, issue_delivery_production_harness, monkeypatch):
     from copy import deepcopy
     from tests.builderops.test_issue_delivery_operation import _production_adapter
     source = managed_sources
-    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    harness = issue_delivery_production_harness(host_candidate=True)
     approval = harness.approval
     result = _production_adapter(harness).launch(approval["context"]["dispatch_plan"]["context_packs"][0])
     assert result["candidate_state"] == "candidate_ready"

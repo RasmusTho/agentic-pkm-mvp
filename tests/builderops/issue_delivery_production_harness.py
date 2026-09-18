@@ -1070,6 +1070,8 @@ def issue_delivery_production_harness(
         host_candidate: bool = False,
     ) -> _ProductionHarness:
         nonlocal counter
+        # Candidate-v3 is the explicitly bounded second-consumer composition.
+        bifrost = bifrost or host_candidate
         counter += 1
         case = tmp_path / f"production-{counter}"
         checkout = case / "checkout"
