@@ -615,6 +615,282 @@ It proves availability of exact documentation for an owner trial, never native-a
 Xcode readiness or a human outcome. Repository work and later activation are ordered in the
 [implementation dependency graph](../plans/DEVUI_IMPLEMENTATION.md#dependency-graph).
 
+<!-- anchor: FCA-ID-HOST-CANDIDATE -->
+### FCA-ID-HOST-CANDIDATE — protected candidate and continuation contract
+
+**Target state only; source clarification #5591.** This finite extension supplies the missing
+content-to-candidate and observed-result continuation contract for FCA-ID-SECOND. It implements
+nothing and selects no host, pilot, path, credential or grant. FCA-ID-01/02/03/04 and the
+[PostgreSQL/outbox owner](../BUILDEROPS_CONTROL_PLANE/POSTGRES_TRANSACTION_KERNEL.md#constraints)
+retain authority. The consumer remains Bifrost, the tracking Issue and trusted workflow remain the
+hub, and only the explicitly enumerated regular non-executable `docs/*.md` paths are eligible.
+No root README, third repository, generic host framework, new store, queue or workflow engine is
+introduced. Bifrost Issue25/PR26's local-Issue/foreign-auto-closer policy remains intentional;
+separate consumer preparation must reconcile hub-tracked delivery without weakening that policy.
+
+#### Existing callers and finite delta
+
+Paths in this table are relative to `app/`; names denote existing callers unless marked proposed.
+These are repository mechanisms, not evidence of an installed host composition.
+
+| Production boundary | Delivered behavior | Needed bounded change |
+| --- | --- | --- |
+| `builderops/cli.py::dispatch_sessions` → `issue_delivery_operation.py::observe_issue_delivery_operation` | Reads approval and durable operation before fresh preparation; active/unknown/terminal returns without another worker. | Add an explicit version-gated continuation branch after that observation. Reconciliation must construct a readback-capable host executor from authenticated persisted bindings, without `PreparedIssueDeliveryWorker.create`, clean-base probes or another launch. Missing historical bindings refuse. |
+| `epic_dispatch.py::dispatch_issue_sessions` → `IssueDeliveryOperationAdapter.launch` → `PreparedIssueDeliveryWorker.launch` → `ContentOnlyIssueDeliverySessionLauncher` | One attempt/entry, distinct worker UID/GID, host isolation receipt and applied pre-entry claim. `GitIssueDeliveryDestination.prepare` freezes an already prepared worktree; it does not stage or commit. | Worker returns bounded content/validation evidence only. Host captures actual bytes and modes and proposes candidate preparation after verified worker quiescence. Do not require a worker-supplied HEAD, PR number, merge SHA or chain of future effects. |
+| `issue_delivery_operation.py::_execute_proposed_effects`, `_build_effect_request`, `_execute_bound_effect` | Consumes up to four complete post-worker proposals; `PublicationTarget` already requires `head_sha`; `MergeTarget` and `ClosureTarget` require identities not yet observed. | Replace this eager list only for the new contract with one candidate request, then a finite host continuation selecting one currently eligible effect from committed predecessor readback. Legacy parsing stays unchanged. |
+| `epic_dispatch.py::CodexIssueSessionLauncher.launch`, `dispatch_issue_sessions`, `_validated_worker_receipt` | Outer launch selects consumer worktree authority only for exactly v2; session dispatch consumes the legacy handoff `final_state` and at most five host refs. | Include v3 in the exact two-repository predicate. Version-dispatch the v3 content-result parser and session projection without treating content completion as delivery or weakening legacy handoff validation. Carry the v3 host-ref bound through this outer consumer too. |
+| `issue_delivery_effect_executor.py::IssueDeliveryHostExecutor.execute`, `_commit_dispatch`, `_readback_and_reconcile` | Stable semantic slot, fresh authority, durable intent/claim, exact fence consumed into `unknown`, transport, independent readback. `_validate_complete_diff` reads committed objects and checks worktree HEAD. | Admit the typed local candidate effect through this same executor and ledger, with a local Git readback variant; retain complete-diff validation for publication/merge. No local write belongs in `validate_target`, destination freeze, credentials resolution or request construction. |
+| `BuilderOpsIssueDeliveryEffectLedger.begin` → `control_plane/client.py` task/outbox API → `control_plane/service.py` → `PostgresBuilderOpsStore` | Atomic task/receipt/outbox intent, fenced eligibility and append-only reconciliation; existing terminal refs are closed and limited to five. | Version the finite payload/readback/ref consumers together. Persist candidate and subsequent effect references in the existing native delivery task through expected-version/lease transitions; never amend the worker-terminal record into a later delivery result. |
+| `control_plane/store.py::PostgresBuilderOpsStore._issue_delivery_terminal_is_reusable` and both reservation/conflict callers | Reuse checks the immutable worker-terminal refs and their succeeded outbox rows; it does not know about later task continuation. | For v3, retain the physical destination reservation until the complete authenticated continuation is terminal and all required effects are reconciled. Worker exit or candidate-ready is insufficient; a missing/partial continuation refuses reuse. Keep v1/v2 reuse semantics unchanged. |
+| `issue_delivery_readback.py::read_issue_delivery_projection`, `_targets`, `compose_issue_delivery_readback` → existing DevUI projection | Requires independently observed publication/merge/closure and exact candidate/profile; ignores worker success claims. | Read the new task's authenticated continuation refs, resolve candidate/publication results and withhold delivery until the entire required chain agrees. An incomplete continuation is pending/unknown evidence, not a successful delivery. |
+
+Reuse `dispatcher/verification_github.py::HostCredentialManifestResolver` and
+`GitHubProtectedRepositoryAuthority` for exact credential ID/generation, protected manifests,
+Issue, PR-head, check and merge reads where their contracts match. Add only bounded missing PR
+identity/readback fields at that seam. The supplied `IssueDeliveryEffectTransport` still lacks a
+concrete production write implementation and installer caller; a fake transport is not that
+implementation. `HostIssueDeliveryExecutorRuntime`, `install_host_issue_delivery_executor_runtime`
+and `build_host_issue_delivery_executor` remain the host-owned composition seam, with no worker
+factory selector, ambient GitHub credential or provider/billing fallback.
+
+For v3, `ContentOnlyIssueDeliverySessionLauncher.prompt` and
+`IssueDeliveryOperationAdapter.launch` use a closed
+`builderops.issue-delivery-content-result.v1` payload: `contract`, `status` (`completed` or
+`failed`), `summary` and bounded `validation` entries (`name`, `outcome`, `summary`). These are
+advisory worker assertions, not host receipts. Reject unknown fields, including nested
+`effect_requests`, `effect_receipts`, `host_effect_refs` and supplied Git/PR/merge identities,
+before any post-worker host effect. The pre-entry host-owned claim is unchanged. A failed or
+malformed result cannot produce a candidate. Candidate bytes come only from the host snapshot
+below, never worker text. The earlier FCA-ID-04 proposal-list contract and its parsers remain
+unchanged for stored v1/v2 operations; v3 never falls back to that list.
+
+#### Candidate request, effect fence and exact result
+
+The existing `repository_worktree` permission owns local Git preparation; the consumer protected
+policy must explicitly admit its finite local effect. This is narrower implementation of the
+already specified host responsibility, not permission to install that policy or broaden grants.
+The host must have positive, operation-bound evidence that the content worker and its descendants
+can no longer mutate the candidate input. Exit of the launcher alone does not establish this.
+The current isolation receipt proves pre-entry isolation, not post-exit quiescence. The next slice
+must add read-only completion observation at `issue_delivery_worker_isolation.py`'s launcher
+boundary; if the selected containment cannot prove quiescence, candidate preparation refuses.
+This adds no stop, kill, cancellation or permission-repair operation.
+
+Specifically, the proposed `LinuxSystemdCodexIssueSessionLauncher.completed_worker_observation`
+reads the protected runner/manager, not worker output. Its closed
+`builderops.issue-delivery-worker-completion.v1` witness binds approval/key/run, attempt/entry
+receipt hashes, session, isolation-receipt/profile hashes, frozen destination hash, host boot ID,
+systemd unit and invocation ID, worker UID/GID, observation time, manager terminal state/result,
+and affirmative whole-cgroup-empty evidence. The observer must prove that the same invocation
+cannot restart or spawn another member and that no other writer has the admitted content aperture;
+mere PID absence, launcher exit or unit disappearance is insufficient. Unsupported observation,
+lost/recycled identities or uncertain exclusivity refuses candidate preparation. Persist the
+canonical witness and hash through the existing operation terminal record; it grants no new
+permission. Host snapshot construction and the last pre-effect gate recheck that binding and
+exclusive aperture. On restart, authenticate the stored witness and positively re-observe the
+same containment; absent evidence stays unresolved, never relaunches, kills or repairs permissions.
+
+Before any Git write, host-only inspection captures a bounded immutable **in-memory** snapshot of
+the complete tracked/untracked content delta against the approved base, including deletions and
+both rename/copy paths. Bind each explicit path, old/new mode, old blob identity, new bytes hash
+and length; reject symlinks, executable bits, special files, path escapes, out-of-envelope changes,
+foreign index/ref state and an empty delta. Read without index refresh, hooks, filters, replacement
+objects or ambient configuration effects. Worker validation text is advisory. Hashing a proposed
+tree/commit without writing objects is permitted; staging, temporary index creation, object writes,
+commit creation and ref/index updates are all effects and must wait for the fence below.
+
+Proposed closed `candidate_prepare` target: Issue number, approved branch/base ref/base SHA,
+`expected_head_sha` equal to that base, snapshot digest, ordered path/blob/mode/length entries,
+exact commit-message hash, fixed author/committer identity and timestamp bindings, expected tree
+and commit OIDs computed from those exact bytes, and the host quiescence-evidence digest. Bind it
+to the existing approval/key/run, source pair, workflow/profile/verification hashes, both protected
+policies and credential generations, epoch, frozen destination and host isolation receipt. Raw
+credentials, local filesystem paths and document bytes do not enter receipts; host memory supplies
+bytes only while their hashes match the durable request. Loss of bytes before dispatch requires
+fresh exact read/validation; it cannot change the request or create another semantic slot.
+
+`IssueDeliveryHostExecutor.execute` owns the whole local transaction boundary: fresh permissions,
+expiry/epoch/source/policy/topology and owned-claim checks → `BuilderOpsIssueDeliveryEffectLedger.begin`
+commits the existing task/intent/receipt → exact claim revalidation → `_commit_dispatch` durably
+consumes the fence into `unknown` → protected local application. A missing commit acknowledgement
+permits no Git write. Use only the captured bytes, a host-owned index and non-hook/non-filter Git
+operations; create the exact objects/commit, compare-and-swap the approved branch from the expected
+base to that commit and reconcile the index. There is one writer for this admitted destination;
+the existing physical destination reservation and task/outbox fencing own serialization. No
+history rewrite, reset, checkout cleanup or worker Git aperture is permitted. A changed ref, index,
+destination or content observation refuses further writes; it is not repaired implicitly.
+
+Local authoritative readback must independently bind the request/slot, repository and frozen Git
+identity, expected versus observed parent/tree/commit, complete diff, branch HEAD, index and content
+agreement, and whether any local step is partial or unobservable. `candidate_ready` requires all
+of them, not merely an existing commit object. Only then may the host construct `PublicationTarget`
+from the observed HEAD and the existing `complete_documentation_diff` result. A candidate receipt
+proves local preparation only; it does not prove publication, review, delivery or owner acceptance.
+
+#### Version and continuation bindings
+
+Use a fresh **`fca-issue-delivery.v3`** approval for this bounded Bifrost extension, retaining the v2
+consumer/tracking/workflow split and all five permission groups. Its closed workflow binding also
+names `host_candidate_contract: fca-host-candidate.v1`; its pinned artifact manifest includes the
+changed admission, operation, executor, isolation, service/client and readback callers. This
+distinguishes executable semantics without silently upgrading any stored v1/v2 approval. Preview
+and authenticated Start must select v3 explicitly after all destination support is qualified.
+
+The semantic dispatch is exact: v1 remains hub-only; the two-consumer semantics apply to the
+explicit set `{fca-issue-delivery.v2, fca-issue-delivery.v3}`; candidate/continuation semantics
+apply only to v3. `delivery_source_pair` must preserve the actual declared version, never stamp
+v3 as v2. Update `tracking_repository`, `_second_consumer_bindings`, normalization and frozen
+context checks, `_v2_authority_bindings`, every operation/executor/service/readback source-pair
+predicate and artifact-pin producer together. Preserve v2 bytes and hashes exactly. Both versions
+still require Bifrost content, exact hub Issue/workflow/parent identities, both protected policies
+and credential generations, and third-repository refusal. An unknown version is rejected, not
+treated as v1; admitting v3 in normalization alone is forbidden.
+This includes the outer `epic_dispatch.py::CodexIssueSessionLauncher.launch` target predicate and
+`dispatch_issue_sessions` receipt/ref consumers. For v3 only, `_validated_worker_receipt` must
+select the closed content-result validator and project content status, not a legacy handoff or
+delivery final state. `IssueDeliveryOperationAdapter.launch` bypasses `_execute_proposed_effects`
+for v3; that eager list remains exclusively on the unchanged v1/v2 branch.
+
+The finite wire delta is `builderops.issue-delivery-effect.v2` and
+`builderops.issue-delivery-effect-receipt.v2`, with the existing five effect kinds plus
+`candidate_prepare` (`git.issue-delivery.candidate-prepare.v1`). Retain existing remote effect-type
+identities and slot keys for their existing meanings; the new candidate slot binds approval/key/run,
+repository, frozen destination, branch and approved base, **not** mutable snapshot/commit content.
+Changed content conflicts in that slot; it never allocates a parallel attempt. Request hashes bind
+the complete versioned request. Remote requests additionally bind their predecessor's operation,
+request, reconciliation-receipt and result hashes. Versions must be explicit, not inferred from
+optional fields or a new runtime default.
+
+The exact new mapping is `_EFFECT_TYPES["candidate_prepare"] =
+"git.issue-delivery.candidate-prepare.v1"`, `_PERMISSIONS["candidate_prepare"] =
+"repository_worktree"`, with effect repository Bifrost. Only v3's consumer policy allowlist adds
+that type to its existing publication/merge types; the hub list is unchanged. The fresh protected
+manifest must independently contain the same type and bind the approved base, paths and exact
+credential ID/generation. Reuse `HostCredentialManifestResolver` for that identity and current
+generation check; the local Git applicator receives no bearer credential and uses no remote
+authentication, ambient credential helper or fallback. Keep the existing authenticated control-plane
+execute grant, epoch, owned claim and consumer/hub policy checks. A missing local-effect allowlist
+or unavailable credential binding refuses. This specifies the already admitted
+`repository_worktree` responsibility, not authority to provision a credential, alter a protected
+policy/grant, select a host or enable v3 Start. Those remain separately admitted live inputs.
+
+V2 effect readback is a closed union: local-Git candidate evidence above, or authoritative GitHub
+evidence. Publication's GitHub result contains independently read repository, PR number/node/URL,
+head repository/ref/OID, base ref/OID, Issue relationship, title/body digests and observation/source
+identity. Preserve the distinction between expected target hash and observed result hash; today's
+`observed_target_sha256` alone cannot carry a newly allocated PR identity. Merge readback includes
+the actual merge commit and fixed non-closing text required by its owner. Missing, duplicate or
+contradictory identities remain unknown. A worker guess or a successful POST response cannot bind
+a later effect.
+
+The same existing operation record endpoints gain explicit v2 entry/terminal payload readers only
+where needed to retain the host completion witness and candidate reference. They preserve append-only
+predecessor hashes and the meaning of worker terminality. The existing native delivery task gains a
+versioned continuation binding: original approval/operation/run/source pair, immutable worker-terminal
+receipt hash, monotonically accumulated host refs and exact predecessor result hashes. Its existing
+task version/CAS and lease protect each append; outbox reconciliation is the effect authority, not
+the task projection. A crash between successful reconciliation and ref append repairs only that
+append from the exact deterministic slot. Bound the new chain to seven refs: claim, candidate,
+publication, merge, closure, and at most two separately approved parent evidence kinds. Do not
+increase legacy v1 terminal's five-ref bound or rewrite its hash. Update the adapter, service
+terminal validator, native-task producer and `_targets`/readback consumers as one versioned change;
+old readers refuse the new version rather than dropping its fields.
+
+The task's closed `builderops.issue-delivery-continuation.v1` binding also retains the physical
+destination reservation identity. Extend `PostgresBuilderOpsStore._issue_delivery_terminal_is_reusable`
+and its reservation/conflict callers in the same candidate slice: under the existing destination
+serialization transaction, lock and authenticate that exact task/approval/run/worker-terminal
+binding before deciding reuse. The reservation remains held for worker-terminal, candidate-ready,
+pending, refused-but-unreconciled or unknown states, including gaps between outbox settlement and
+task-ref append. Lease expiry, missing task, empty refs or successful candidate refs cannot release
+it. Only independently verified full-chain terminality, with every required reference settled
+and no unresolved effect, permits v3 reuse. The dormant candidate-only slice therefore never
+releases a started v3 destination as delivered. Use the existing store lock order and task CAS,
+not a second lock/store or a new release/abort operation. This tightens existing reservation
+authority; it does not add cancellation, compensation or recovery capability. Retained v1/v2
+terminal lookup and reuse remain unchanged.
+
+After candidate readback, a **new later** `IssueDeliveryOperationAdapter.continue_delivery`
+entrypoint, called by the v3 observation branch in `cli.py::dispatch_sessions`, advances at
+most one eligible effect per invocation. Neither this method nor that CLI branch exists today;
+they are outside the dormant candidate slice. It reads durable state first and uses the host executor;
+it never launches another content worker. Publication binds the actual candidate and exact title/
+body bytes available to the protected transport. The transport must reconcile branch push and PR
+creation separately within the one publication slot: absent → exact remote head → unique exact PR.
+A pushed branch without a PR is partial, not applied; after a committed dispatch, a lost response
+or negative PR lookup does not authorize another push/create. Qualification must supply positive
+completion/recovery evidence before any missing substep can resume. Until that concrete capability
+exists, retain `unknown`; do not paper over the transport gap with a retry.
+
+Only independently bound publication results may construct the next merge target. Fresh checks
+must use the consumer's protected verification profile and authenticated PR workflow-suite identity;
+independent collaborator review must address the same head. Pending checks/review create no merge
+intent. Head/base/policy/contract drift withdraws continuation, preserving historical effects.
+The [BCP-05 conditional/queue merge fence](../BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md#constraints)
+must be supplied when using that owner: protected base + manifest + PR head + repository + credential
+generation are enforced at GitHub's effect boundary. Ordinary REST merge is not a substitute.
+Full-path body neutralization, closing-set authentication, fixed merge text and body restoration
+remain required. Later closure uses only the operation-owned merge and independently read merge
+SHA; it closes the exact hub Issue, removes its agent/action labels and records owner-doc evidence.
+Parent evidence is only the originally admitted target/kind; parent closure is excluded.
+
+#### Phase and failure matrix
+
+| Phase / failure | Durable evidence and permitted continuation |
+| --- | --- |
+| Pre-effect refusal, missing quiescence, stale grant/epoch/expiry/source/policy or invalid content | No repository/Git or GitHub mutation. The existing control-plane transaction may persist intent, claim, refusal and reconciliation records. Preserve original approval; changed authority requires a fresh exact approval after predecessor reconciliation. Only proved pre-transport refusal may return an intent to pending; uncertainty after the dispatch fence stays unknown. |
+| Local index/object write is partial; process or response lost | Candidate slot stays `unknown`; read the same Git identities and exact objects/ref/index. Even an unchanged branch cannot prove no object/index effects. No retry, reset, deletion or new candidate/worker. |
+| Exact candidate commit/ref/index read back | Settle candidate once; prepare publication from its observed result. Replay returns that result, never another commit. Additional content or ref movement invalidates later effects. |
+| Push succeeds but PR absent; PR create response lost | Reconcile exact remote ref and bounded all-state PR identities under the original publication slot. Positive unique complete result may settle; missing/duplicate/unavailable result stays `unknown`, never a guessed PR or new create. |
+| Check/review not ready or changes during wait | Keep candidate/PR evidence; no merge intent until current-head independent gates pass. Changed head, source or policy requires reconciliation and reapproval, not rebase or silently refreshed pins. |
+| Merge timeout or base/manifest race | Conditional/queue fence rejects stale authority. If dispatch may have happened, read actual merge/head/text; remain unknown without positive exact proof. Do not repeat merge or equate process absence with refusal. |
+| Merge proved; closure or owner-doc/parent evidence partial | Resume only the missing exact effect with current authority and owned predecessor readback. Verify exact Issue state, labels and PR-specific receipt; retain open parent and unrelated children. |
+| Host/API/client restart after any committed effect | Authenticate original version/key/approval/run and deterministic slots; obtain readback-only recovery fence. Repair missing task ref from committed reconciliation. No worker creation, recovered `effect_eligible` claim or resubmission of unknown effects. |
+| Expiry/revocation after effect, unsupported stop, or unavailable recovery | Separate historical reads from fresh execute grants. Keep actual partial/unknown result. Stop remains `unsupported`; deployment rollback is not selected-operation recovery. A new approval cannot erase or race an unresolved predecessor. |
+
+#### Smallest next executable slice and proof boundary
+
+Implement **v3 dormant candidate preparation only**, ending at authenticated `candidate_ready` or
+explicit refusal/unknown. This is the first useful integration: actual content-worker output to an
+exact committed candidate through the existing protected fence. Do not bundle production GitHub
+write transport, host installation or the later continuation runner into that slice. New v3 live
+Start remains unavailable until the full selected workflow and recovery are qualified. Test setup
+may prepare the approved clean base worktree; it must never pre-create the candidate commit.
+
+The closed producer/caller set is `control_plane/issue_delivery.py::{normalize_manifest,delivery_source_pair,tracking_repository,_second_consumer_bindings}` (explicit
+v3 admission, complete semantic-version predicates and frozen-plan/artifact bindings), `control_plane/service.py` and `client.py` (versioned
+operation/native-task/ref validation), `control_plane/store.py::PostgresBuilderOpsStore._issue_delivery_terminal_is_reusable`
+and its reservation/conflict callers, `cli.py::dispatch_sessions`,
+`epic_dispatch.py::{CodexIssueSessionLauncher.launch,dispatch_issue_sessions,_validated_worker_receipt}`,
+`issue_delivery_operation.py::{launch,_execute_proposed_effects,_build_effect_request,_execute_bound_effect,observe_issue_delivery_operation}`,
+`issue_delivery_effect_executor.py::{ContentOnlyIssueDeliverySessionLauncher.prompt,IssueDeliveryHostExecutor,BuilderOpsIssueDeliveryEffectLedger,build_host_issue_delivery_executor}`,
+`issue_delivery_worker_isolation.py` (read-only completion observation), and
+`issue_delivery_readback.py::{read_issue_delivery_projection,_targets,compose_issue_delivery_readback}`.
+Use the existing transaction/outbox API unchanged; no migration or storage lineage is required.
+The same test harness producers in `tests/builderops/issue_delivery_production_harness.py` must
+produce the new version without changing old fixtures' serialized meaning. Planned test names
+below are test-first commitments, not claims of tests or runtime support already delivered.
+
+| Next-slice behavioral obligation | Exact Verify target to add |
+| --- | --- |
+| Real CLI/adapter/isolated completion → host capture → fenced candidate; worker cannot write Git and no candidate exists in setup; production local Git application and readback produce the exact parent/tree/HEAD/diff | Verify: `tests/builderops/test_issue_delivery_operation.py::test_content_worker_to_fenced_candidate_production_path` |
+| Reject v3 worker effect proposals/unknown fields, extra untracked/code/policy/root-README paths, executable/symlink, changed bytes/index/ref, absent/foreign/recycled completion witness, nonempty/restartable containment, nonexclusive aperture, missing candidate allowlist and either-source/policy/credential/grant drift before Git writes | Verify: `tests/builderops/test_issue_delivery_effect_executor.py::test_candidate_prepare_rejects_unbound_content_or_authority` |
+| Faults before intent/dispatch commit cause zero Git writes; faults after index/object/commit/ref write, response loss, stale fence and restart preserve the exact slot and unknown state; positive full readback settles once | Verify: `tests/builderops/test_issue_delivery_effect_executor.py::test_candidate_prepare_fence_and_partial_write_recovery` |
+| Service/native-task CAS repairs a lost reference after durable reconciliation; duplicate/changed proposal cannot create another candidate; candidate-ready/unknown/missing-ref/expired-lease states cannot release the physical destination to another operation or Issue; reconnect never launches a worker or projects delivery from candidate-ready | Verify: `tests/builderops/test_issue_delivery_readback.py::test_candidate_reference_restart_is_not_delivery` |
+| Retained v1/v2 normalized bytes/hashes, proposal parsing, approval/key replay, five-ref terminal and historical readback remain identical; v3 retains both policies/source identities and third-repository refusal through every predicate; new payloads cannot be accepted by legacy readers or old approval pins | Verify: `tests/builderops/test_control_plane_issue_delivery.py::test_host_candidate_versions_preserve_v1_v2_history` |
+
+Pre-merge proof uses the real service/store transaction contract, adapter, protected executor and
+local Git; substitute only external transport/host observation fixtures, never authority gate
+verdicts. The later continuation slice must add
+`tests/builderops/test_issue_delivery_operation.py::test_continuation_uses_observed_publication_identity`
+and `tests/builderops/test_issue_delivery_operation.py::test_continuation_restart_never_relaunches_worker`,
+covering partial publication, real PR result binding, current-head checks/review, conditional merge,
+exact closure/parent receipts and readback-only recovery. Its concrete remote transport and
+conditional/queue capability remain explicit unimplemented inputs, not fixture-derived facts.
+Separately admitted consumer preparation, host activation, authenticated M2 UI, selected-operation
+recovery/rollback before Start and actual result/readback/human trial/acceptance remain parent gates.
+No design package or live host/credential input is a prerequisite for this nonvisual source slice.
+
 ### First-repository milestone
 
 M2 narrows the first observed journey to one owner, this repository, one named feature/Issue and

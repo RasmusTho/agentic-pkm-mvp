@@ -408,8 +408,9 @@ first serial repository slice: bounded v2 Bifrost delivery with independent work
 per-target policy/credential checks, complete-diff enforcement and native delivery readback.
 #5587 implements the documentation readiness/outcome slice through the protected source and existing
 authenticated receipt/store path, including exact complete-diff/blob/access/expiry and human-outcome
-admission, correction and replay checks. #5405 conformance, managed
-UI/host activation, real policy/grants and pilot, and owner trial/acceptance remain later gates.
+admission, correction and replay checks. #5405's repository conformance and incomplete pilot
+procedure are delivered; managed UI/host activation, real policy/grants and pilot, and owner
+trial/acceptance remain later gates.
 The following boundaries remain the scope and verification map for those two serial slices.
 Keep coupled identity fields and their consumers together instead of creating a new architecture.
 
@@ -442,6 +443,16 @@ Overview/Focus integration must consume the addressed delivery/candidate readbac
 on the approved runtime; a bounded caller supplying a pure projection is not that integration.
 Preserve M1 throughout. #4168's DDO reducer/outbox and #5352's Product operation HTTP kernel do not
 become prerequisites of this agent-led documentation route.
+
+The finite future host path is now specified by
+[FCA-ID-HOST-CANDIDATE](../BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract)
+under #5591. The next executable slice is dormant, versioned protected candidate preparation from
+actual content-worker output through the existing API/outbox fence to exact local Git readback;
+its closed caller set and test-first Verify targets live only in that owner. Concrete publication
+transport and observed-PR continuation follow separately. Stored v1/v2 semantics remain unchanged;
+source publication supplies no live v3 support. Consumer preparation, qualified host composition,
+authenticated M2 UI, selected-operation recovery before Start and real result/human evidence remain
+unproved parent gates. This clarification neither reopens #5405 nor completes M2 or #5399.
 
 Only after those gates may a separately selected and approved real hub-tracked Bifrost documentation Issue
 produce independent delivery/readiness, explicit human trial and accept/reject evidence. Deploy/
