@@ -2415,6 +2415,34 @@
       "why_load_bearing": "The dependency plan links implementation boundaries to the public governed Bifrost constituent source-contract identity, not a personal vault or secret.",
       "disposition": "stay",
       "issue": "#5583"
+    },
+    {
+      "artifact": "app/builderops/second_consumer.py",
+      "category": "iv",
+      "why_load_bearing": "The bounded preparation-plan validator identifies Bifrost as the public governed constituent for qualification, not a personal vault or secret; it grants no live authority.",
+      "disposition": "stay",
+      "issue": "#5405"
+    },
+    {
+      "artifact": "tests/builderops/test_standalone_consumer_conformance.py",
+      "category": "iv",
+      "why_load_bearing": "The production-composed qualification harness names Bifrost as the public governed second-consumer constituent, not a personal vault or secret; fixture proof is not live acceptance.",
+      "disposition": "stay",
+      "issue": "#5405"
+    },
+    {
+      "artifact": "docs/BUILDER_FACTORY_ACCEPTANCE/second_consumer_pilot_plan.json",
+      "category": "iv",
+      "why_load_bearing": "The explicitly incomplete pilot preparation plan references the public governed Bifrost constituent qualification boundary, not a personal vault or secret; live selection and authority remain absent.",
+      "disposition": "stay",
+      "issue": "#5405"
+    },
+    {
+      "artifact": "docs/BUILDER_FACTORY_ACCEPTANCE/QUALIFY_SECOND_CONSUMER_REPOSITORY.md",
+      "category": "iv",
+      "why_load_bearing": "The bounded qualification owner document distinguishes repository conformance for the public governed Bifrost constituent from unproved live acceptance, not a personal vault or secret.",
+      "disposition": "stay",
+      "issue": "#5405"
     }
   ]
 }

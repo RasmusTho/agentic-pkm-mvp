@@ -419,8 +419,8 @@ Keep coupled identity fields and their consumers together instead of creating a 
 | **FCA-09-BIFROST** | Second: one Bifrost documentation profile/readiness producer and non-image candidate validation in `owner_fact_producers.py`, consumed by the existing service's guarded FCA-09 writer/readback and exact hub-Issue/Bifrost-candidate join. Build on the first slice's independently reconciled Bifrost delivery. No VM102 readiness borrowing or new outcome writer. | Extend `tests/builderops/test_issue_delivery_readback.py::test_issue_delivery_candidate_profile_linkage` and `tests/builderops/test_owner_fact_producers.py::{test_production_writer_is_authorized_version_bound_and_idempotent,test_conflicting_submissions_require_explicit_correction,test_restart_reconciles_written_fact_before_projection}` through the real service/store path. Prove exact tracking subject/consumer/commit/blob/profile/access/expiry, independent complete-diff refusal of extra code/script/policy paths and out-of-set rename/copy/delete or non-regular files, missing or withdrawn source, rejection of forged readiness/agent confirmation, current-trial requirement, corrections, lost-response replay and restart with no fabricated outcome. Extraction must name each exact existing or test-first added node ID after checking the current test inventory. |
 
 These production-callsite proofs precede #5405's consumed Bifrost seam qualification. #5405 still
-owns `test_standalone_consumer_conformance.py`, the hub/Bifrost/third-repository conformance matrix
-and `builder_second_consumer_pilot_plan.v1`; its own fixtures/procedure are not external
+supplies `test_standalone_consumer_conformance.py`, the hub/Bifrost/third-repository conformance matrix
+and the [incomplete `builder_second_consumer_pilot_plan.v1` with read-only validator](../BUILDER_FACTORY_ACCEPTANCE/QUALIFY_SECOND_CONSUMER_REPOSITORY.md#pilot-procedure-and-receipt-validator); its fixtures/procedure are not external
 prerequisites. #5406 retains its existing composed acceptance harness and parent procedure scope.
 Neither child requires live credentials, a selected pilot, human observations or deployed bob
 before its fixture/conformance work can merge.
@@ -431,7 +431,12 @@ before its fixture/conformance work can merge.
 transport remains a protocol at that seam. This is dormant host-bootstrap work, not proof that
 an external host lacks a composition. Before live Start, the separately authorized host owner must
 provide and qualify the concrete transport/runtime installation, protected workflow root, isolation
-profile and credentials, plus Bifrost's independently prepared protected policy. The future
+profile and credentials, plus Bifrost's independently prepared protected policy. The host must also
+qualify its candidate preparation/stage/commit producer: publication requires an existing head and
+complete-diff validation checks worktree HEAD, while the content worker cannot write Git metadata.
+The selected real operation's recovery/rollback proof is required before Start; unsupported launcher
+stop and existing bob deployment rollback do not provide it. These remain unproved parent inputs,
+not fixture-derived support or additional #5405 effect authority. The future
 host-profile producer and bob activation remain with FCA-ID-03/04's existing owners. Actual managed
 Overview/Focus integration must consume the addressed delivery/candidate readback and be observed
 on the approved runtime; a bounded caller supplying a pure projection is not that integration.

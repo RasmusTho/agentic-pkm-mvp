@@ -749,6 +749,10 @@ different product or require a horizontal delivery graph.
 
 Delivered now:
 
+- the #5405 [second-consumer conformance harness and incomplete pilot procedure](BUILDER_FACTORY_ACCEPTANCE/QUALIFY_SECOND_CONSUMER_REPOSITORY.md#pilot-procedure-and-receipt-validator),
+  exercising production hub/Bifrost admission/read/launch with external I/O substitutions. This is
+  repository proof, not live transport/bootstrap, candidate preparation, authenticated M2 UI,
+  consumer grants, operation recovery or owner acceptance;
 - CKM core, query/snapshot contracts, and generated Development Overview;
 - static, inert CKM Cockpit Direction B;
 - BuilderOps Cockpit `/cockpit` as a fresh, read-only work register;

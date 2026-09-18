@@ -453,6 +453,17 @@ completion. Live documentation source/profile preparation, managed UI/host activ
 and explicit human trial/acceptance remain separately gated. Repository-only review: 2026-09-17, Issues #5586/#5587;
 the live-runtime verification date and unrelated operational claims above are unchanged.
 
+Issue #5405 adds repository-only production-composed hub/Bifrost admission, read and launch
+conformance, including refusal of borrowed policy/credentials and disconnected-owner replay.
+The [FCA-06 procedure](BUILDER_FACTORY_ACCEPTANCE/QUALIFY_SECOND_CONSUMER_REPOSITORY.md)
+and its validated `builder_second_consumer_pilot_plan.v1` remain explicitly incomplete: concrete
+host transport/bootstrap and candidate preparation/stage/commit, authenticated M2 UI, exact
+consumer preparation, selected-operation stop/recovery/rollback proof before Start, and actual
+result/readback and human trial/acceptance are unproved parent-owned prerequisites. Unsupported
+launcher stop and deployment rollback are not operation recovery evidence. Repository-only
+review (this entry only): 2026-09-18, Issue #5405, composed PostgreSQL conformance and plan-validator
+checks; no live-runtime verification or unrelated operational metadata is updated.
+
 ### BuilderOps cockpit live GitHub plane (#4484)
 - The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the
   `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside

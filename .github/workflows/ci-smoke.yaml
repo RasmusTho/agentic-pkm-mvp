@@ -1136,6 +1136,8 @@ jobs:
               - 'tests/builderops/test_issue_delivery_effect_executor.py'
               - 'tests/builderops/test_issue_delivery_operation.py'
               - 'tests/builderops/test_issue_delivery_readback.py'
+              - 'app/builderops/second_consumer.py'
+              - 'tests/builderops/test_standalone_consumer_conformance.py'
               - '.github/workflows/ci-smoke.yaml'
 
       - uses: actions/setup-python@v5
@@ -1223,6 +1225,7 @@ jobs:
             tests/builderops/test_issue_delivery_effect_executor.py \
             tests/builderops/test_issue_delivery_operation.py \
             tests/builderops/test_issue_delivery_readback.py \
+            tests/builderops/test_standalone_consumer_conformance.py \
             --tb=short \
             | tee pytest-index-pg.log
 

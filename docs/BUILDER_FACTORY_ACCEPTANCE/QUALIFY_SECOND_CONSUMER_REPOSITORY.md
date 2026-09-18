@@ -10,7 +10,7 @@ depends_on: [ISOLATE_BUILDER_PACKAGE_BOOT.md]
 can_parallelize_with: []
 ---
 
-State: Target-state pre-merge conformance task; harness not implemented and live second-consumer acceptance remains parent-owned.
+State: Implemented pre-merge conformance harness and incomplete pilot-plan validator; live second-consumer acceptance remains parent-owned.
 Doc role: Specification
 Authority: Accepted research-to-backlog handoff; existing owner contracts remain binding.
 
@@ -58,6 +58,66 @@ A component or proposal must not be mistaken for a working owner platform. This 
 ## How to Verify (Pre-Merge)
 
 Run the composed conformance tests plus existing delivery-manifest routing tests and affected code baseline. Publish the fixture/procedure and exact entrypoints. Parent validation records the real repo/commit and authorized effect readback; fixture success alone is not live acceptance.
+
+The delivered `tests/builderops/test_standalone_consumer_conformance.py` composes authenticated
+`issue_delivery_preview`/`issue_delivery_start`, `admit_issue_delivery_task`, native TaskRecord
+and DevUI Overview/Focus reads, `dispatch_issue_sessions`, `IssueDeliveryOperationAdapter`, the
+content-only launcher and protected host executor. The shared production harness uses real
+PostgreSQL, credential registry and temporary Git roots. External GitHub/model/OS/secret-provider
+I/O is substituted; production admission, source-pair, policy, credential and launch verdicts are
+not replaced. Hub v1 and Bifrost v2 stay distinct; missing/borrowed policy, credential, workflow
+reference and an unavailable source refuse before entry. A clean interpreter boots without
+Product configuration; closing the approving client preserves the server workflow identity.
+Host dependencies are explicitly listed in the plan below, not assumed to exist on a laptop.
+
+Run the two exact AC targets and the module's refusal/validator cases with the explicit disposable
+PostgreSQL configuration described in `docs/development/DEV_WORKFLOW.md`. Never record raw DSNs.
+The tests prove finite repository conformance, not installation of a real host transport, live
+candidate preparation or a second-consumer delivery. Existing production routing and affected
+admission/read/launch regression suites remain required.
+The existing `pr-index-pg-contracts` CI job selects the validator/test paths and executes this
+module's PostgreSQL cases. Its enrollment is guarded by
+`tests/ops/test_ci_workflow.py::test_pr_index_pg_contracts_run_exact_acceptance_surface`;
+the unchanged 30-minute job budget and a not-pg pass do not replace executed PG evidence.
+
+## Pilot procedure and receipt validator
+
+The self-contained [pilot plan](second_consumer_pilot_plan.json) is the
+`builder_second_consumer_pilot_plan.v1` receipt. It enumerates the ordered procedure, the finite
+repository/path/effect envelope, host dependencies, separate credential/policy boundaries and
+expected source/run/result/readback and human outcome receipts. No real branch, candidate,
+operation, credential or human decision is selected. All live evidence is explicitly absent.
+
+```sh
+python3 -m app.builderops.second_consumer \
+  docs/BUILDER_FACTORY_ACCEPTANCE/second_consumer_pilot_plan.json
+```
+
+`validate_pilot_plan` is an active, read-only preparation validator for operators and conformance
+tests. It accepts the closed plan shape, returns a content digest and explicit missing-evidence
+list, and has no I/O, persistence, side effects or model dependency. Malformed input returns
+`invalid` (CLI exit 1); a valid preparation receipt returns `incomplete` (CLI exit 0), always with
+`start_authorized: false`. Exit 0 validates structure, not evidence authenticity or live readiness.
+The validator rejects offline completion claims and populated live-evidence fields. Later live
+receipts remain under their existing authenticated production readers and parent validation;
+do not rewrite this preparation artifact into a signed approval or a second authority store.
+Replacing this validator must preserve that fail-closed distinction and its receipt contract.
+
+Before any live Start, parent #5399 must supply qualified independent authority, concrete host
+transport/bootstrap **and host candidate preparation/stage/commit**, an authenticated M2 UI,
+separately prepared Bifrost policy/governance and exact selected-operation stop/recovery/rollback
+proof. `PublicationTarget` expects an existing head; `_validate_complete_diff` verifies worktree
+HEAD, while the content worker cannot write Git metadata. Test-side Git preparation does not
+implement this host producer. The launcher reports stop as unsupported; that limitation and an
+existing bob deployment rollback cannot substitute for real selected-operation rollback proof.
+
+Consumer preparation must preserve Bifrost Issue25/PR26's local-Issue and foreign-auto-closer
+policy. Hub-tracked v2 needs its own bounded preparation, not retargeting or policy weakening.
+The permitted envelope remains exact regular non-executable `docs/*.md` files; root README is
+outside it. Learning `lrn_20260917192047_850a746b` remains unresolved here. No preparation,
+credential activation, host deployment, recovery operation or live pilot is performed by #5405.
+Only independently observed source/result/readback and candidate-bound human trial/acceptance
+can satisfy the later pilot. Parent #5399 remains open even after this child is merged.
 
 ## Out of Scope
 
