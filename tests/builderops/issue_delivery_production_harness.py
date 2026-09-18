@@ -66,6 +66,15 @@ from app.dispatcher.verification_github import GitHubProtectedRepositoryAuthorit
 REPOSITORY = "rasmustho/agentic-pkm-mvp"
 BASE_SHA = "a" * 40
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CANDIDATE_ARTIFACTS = REQUIRED_WORKFLOW_ARTIFACTS | {
+    "app/builderops/control_plane/issue_delivery.py",
+    "app/builderops/control_plane/service.py",
+    "app/builderops/control_plane/client.py",
+    "app/builderops/control_plane/store.py",
+    "app/builderops/issue_delivery_operation.py",
+    "app/builderops/issue_delivery_readback.py",
+    "app/builderops/devui_sources.py",
+}
 
 
 def _sha(value: bytes) -> str:
@@ -358,7 +367,7 @@ class _Transport:
             outcome=self.readbacks.pop(0),
             evidence={
                 "source": "github-authoritative-readback",
-                **({"effect_repository": self.readback_repository_override or request.effect_repository} if request.approval.get("contract_version") == "fca-issue-delivery.v2" else {}),
+                **({"effect_repository": self.readback_repository_override or request.effect_repository} if request.approval.get("contract_version") in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"} else {}),
                 "observed_target_sha256": self.readback_target_override
                 or canonical_hash(request.target.model_dump(mode="json")),
             },
@@ -593,8 +602,11 @@ class _ProductionWorkerTransport:
         self.lose_response_after_entry = lose_response_after_entry
         self.calls = 0
         self.entry_observed_during_call = False
+        self.completed = False
         self.pre_entry_check: Callable[[], None] | None = None
         self.effect_targets: dict[str, dict[str, Any]] = {}
+        self.content_result: dict[str, Any] | None = None
+        self.content_change: Callable[[Path], None] | None = None
 
     def _effect_target(self, effect_kind: str | None = None) -> dict[str, Any]:
         effect_kind = effect_kind or self.effect_kind
@@ -675,8 +687,20 @@ class _ProductionWorkerTransport:
         if self.revoke_before_effect:
             self._revoke_destination()
         receipt = _production_worker_receipt()
-        receipt["worktree"] = "approved-worktree"
-        if self.effect_kind != "claim":
+        if self.approval["contract_version"] == "fca-issue-delivery.v3":
+            root = Path(self.approval["destination"]["worktree"])
+            (root / "docs").mkdir(exist_ok=True)
+            (root / "docs/guide.md").write_text("# Candidate\n\nPrepared content.\n")
+            if self.content_change:
+                self.content_change(root)
+            receipt = self.content_result or {
+                "contract": "builderops.issue-delivery-content-result.v1",
+                "status": "completed", "summary": "Prepared documentation",
+                "validation": [{"name": "documentation", "outcome": "passed", "summary": "Content checked"}],
+            }
+        if self.approval["contract_version"] != "fca-issue-delivery.v3":
+            receipt["worktree"] = "approved-worktree"
+        if self.effect_kind != "claim" and self.approval["contract_version"] != "fca-issue-delivery.v3":
             kinds = ("publication", "merge", "closure") if self.effect_kind == "delivery" else (self.effect_kind,)
             receipt["effect_requests"] = [
                 {"effect_kind": kind, "target": self._effect_target(kind)} for kind in kinds
@@ -692,6 +716,7 @@ class _ProductionWorkerTransport:
             sort_keys=True,
         )
         callback(completed + "\n")
+        self.completed = True
         return subprocess.CompletedProcess(
             args=[],
             returncode=0,
@@ -966,6 +991,15 @@ def _production_worker_components(
         unit_token=lambda: "0123456789abcdef",
         clock=lambda: "2026-09-16T00:00:00Z",
         platform_name="linux",
+        completion_reader=(lambda unit: {
+            "boot_id": "fixture-boot-1", "unit": unit, "invocation_id": "fixture-invocation-1",
+            "cgroup": "fixture-cgroup-1", "worker_uid": worker.uid, "worker_gid": worker.gid,
+            "observed_at": datetime.now(timezone.utc).isoformat(), "load_state": "loaded",
+            "active_state": "inactive" if runner.completed else "active",
+            "sub_state": "dead" if runner.completed else "running", "result": "success", "restart": "no", "job": "",
+            "cgroup_populated": 0 if runner.completed else 1, "worker_processes": [] if runner.completed else [123],
+            "aperture_writer_uids": [worker.uid],
+        }) if approval["contract_version"] == "fca-issue-delivery.v3" else None,
     )
     return launcher, runner
 
@@ -1033,8 +1067,11 @@ def issue_delivery_production_harness(
         preview_observer: Callable[[Mapping[str, Any]], None] | None = None,
         bifrost: bool = False,
         documentation_owner: bool = False,
+        host_candidate: bool = False,
     ) -> _ProductionHarness:
         nonlocal counter
+        # Candidate-v3 is the explicitly bounded second-consumer composition.
+        bifrost = bifrost or host_candidate
         counter += 1
         case = tmp_path / f"production-{counter}"
         checkout = case / "checkout"
@@ -1099,6 +1136,9 @@ def issue_delivery_production_harness(
             base_sha=base_sha,
             operation_key=f"operation-pg-{uuid4().hex}",
         )
+        if host_candidate and issue_body is None:
+            from tests.builderops.test_issue_delivery_readback import BODY
+            issue_body = BODY
         if issue_body is not None:
             criteria = re.search(r"^## Acceptance Criteria\s*\n(.*?)(?=^## |\Z)", issue_body, re.MULTILINE | re.DOTALL)
             assert criteria is not None
@@ -1129,7 +1169,7 @@ def issue_delivery_production_harness(
             subprocess.run(["git", "init", "--initial-branch=main", str(workflow_root)], check=True, capture_output=True)
             for key, val in (("user.email", "test@example.com"), ("user.name", "Host Test")):
                 subprocess.run(["git", "-C", str(workflow_root), "config", key, val], check=True)
-            for path in REQUIRED_WORKFLOW_ARTIFACTS:
+            for path in (CANDIDATE_ARTIFACTS if host_candidate else REQUIRED_WORKFLOW_ARTIFACTS):
                 target = workflow_root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(REPO_ROOT / path, target)
@@ -1138,6 +1178,14 @@ def issue_delivery_production_harness(
             subprocess.run(["git", "-C", str(workflow_root), "remote", "add", "origin", f"https://github.com/{REPOSITORY}.git"], check=True)
             workflow_sha = subprocess.run(["git", "-C", str(workflow_root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
             template = _bifrost_manifest()
+            if host_candidate:
+                template["contract_version"] = "fca-issue-delivery.v3"
+                template["target_policies"]["rasmustho/bifrost"]["allowed_effects"].append(
+                    "git.issue-delivery.candidate-prepare.v1")
+                manifest["workflow"]["host_candidate_contract"] = "fca-host-candidate.v1"
+                artifacts = [{"path": path, "sha256": _sha((workflow_root / path).read_bytes())}
+                             for path in sorted(CANDIDATE_ARTIFACTS)]
+                manifest["workflow"].update(artifacts=artifacts, content_hash=canonical_hash(artifacts))
             if parent:
                 template["target_policies"][REPOSITORY]["allowed_effects"].append("github.issue-delivery.parent-evidence.v1")
             manifest["contract_version"] = template["contract_version"]
@@ -1146,6 +1194,13 @@ def issue_delivery_production_harness(
             manifest["workflow"].update(version=template["contract_version"], repository=REPOSITORY, source_revision=workflow_sha)
             source_state = {"bases": {manifest["repository"]: base_sha, REPOSITORY: workflow_sha},
                             "documents": {}, "issue": deepcopy(manifest["issue"]), "head": "f" * 40, "reads": []}
+            if host_candidate:
+                from tests.builderops.test_issue_delivery_readback import _issue
+                number = manifest["issue"]["number"]
+                source_state["issue"] = {**_issue(), "number": number, "body": issue_body,
+                    "node_id": manifest["issue"]["node_id"], "title": manifest["issue"]["title"],
+                    "html_url": manifest["issue"]["url"],
+                    "url": f"https://api.github.com/repos/{REPOSITORY}/issues/{number}"}
             manifest["target_policies"] = {}
             for repository, policy in template["target_policies"].items():
                 document = {"repository": repository, "allowed_effects": policy["allowed_effects"],
@@ -1226,7 +1281,8 @@ def issue_delivery_production_harness(
                 base_url="https://api.github.com", transport=httpx.MockTransport(source_http)))
             credentials = _RegistryCredentialResolver(registry)
             def current_facts(approved: Mapping[str, Any]) -> Mapping[str, Any]:
-                return {"current_source": deepcopy(manifest["source"]), "current_profile": deepcopy(manifest["profile"])}
+                source = source_state.get("operation_sources", {}).get(approved["operation_key"], manifest["source"])
+                return {"current_source": deepcopy(source), "current_profile": deepcopy(manifest["profile"])}
             runtime = executor_module.HostIssueDeliveryExecutorRuntime(repository_authority=repository_authority, credentials=credentials,
                 transport=_Transport(), isolation_profile_sha256="1" * 64, live_binding_reader=current_facts, trusted_workflow_root=workflow_root)
             monkeypatch.setattr(executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime)
@@ -1318,7 +1374,8 @@ def issue_delivery_production_harness(
         )
         if runtime is not None:
             from dataclasses import replace
-            runtime = replace(runtime, isolation_profile_sha256=launcher.expected_profile_sha256)
+            runtime = replace(runtime, isolation_profile_sha256=launcher.expected_profile_sha256,
+                              completion_reader=launcher._completion_reader)
             monkeypatch.setattr(executor_module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", runtime)
             executor = executor_module.build_host_issue_delivery_executor(approval=approval, client=host, prepared=prepared_worker)
             ledger = executor.ledger

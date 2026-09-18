@@ -161,6 +161,19 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     assert "- 'app/builderops/second_consumer.py'" in job
     assert "- 'tests/builderops/test_standalone_consumer_conformance.py'" in job
     assert "            tests/builderops/test_standalone_consumer_conformance.py \\\n" in job
+    # #5593: exact new PG-only nodes plus the existing full effect modules.
+    for path in ("cli", "epic_dispatch", "issue_delivery_operation", "issue_delivery_effect_executor",
+                 "issue_delivery_worker_isolation", "issue_delivery_readback", "devui_sources"):
+        assert f"- 'app/builderops/{path}.py'" in job
+    for module in ("test_issue_delivery_effect_executor", "test_issue_delivery_operation", "test_issue_delivery_readback"):
+        assert f"- 'tests/builderops/{module}.py'" in job
+        assert f"            tests/builderops/{module}.py \\\n" in job
+    for module, node in (("test_control_plane_issue_delivery", "test_host_candidate_versions_preserve_v1_v2_history"),
+                         ("test_control_plane_issue_delivery", "test_v3_live_start_refuses_unqualified_continuation"),
+                         ("test_devui_runtime", "test_managed_source_preserves_v3_candidate_binding")):
+        assert f"- 'tests/builderops/{module}.py'" in job
+        assert f"            tests/builderops/{module}.py::{node} \\\n" in job
+    assert "- 'tests/builderops/issue_delivery_production_harness.py'" in job
 
 
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:

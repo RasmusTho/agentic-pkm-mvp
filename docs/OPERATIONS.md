@@ -464,6 +464,17 @@ launcher stop and deployment rollback are not operation recovery evidence. Repos
 review (this entry only): 2026-09-18, Issue #5405, composed PostgreSQL conformance and plan-validator
 checks; no live-runtime verification or unrelated operational metadata is updated.
 
+Issue #5593 adds dormant repository-side `fca-issue-delivery.v3` content-to-candidate preparation:
+the real protected host path observes quiescence, captures immutable documentation bytes, crosses
+the existing durable fence, and independently reads back exact local Git effects. Authenticated
+native-task CAS retains candidate references and the physical destination, including unknown and
+missing-reference states; it never releases candidate-only work as delivered. The managed source
+reader preserves this lineage without delivery/trial facts. This implements the repository producer,
+not the live qualification still required above: no host installation, policy/grant/credential change,
+remote continuation/transport, recovery control action, live Start or human acceptance is supplied.
+See [FCA-ID-HOST-CANDIDATE](BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract).
+Repository-only proof does not update the live-runtime verification date or close parent #5399.
+
 ### BuilderOps cockpit live GitHub plane (#4484)
 - The cockpit's `github-live` source reads GitHub REST from **inside the `api` container** via the
   `gh` CLI, which the runtime image installs (`Dockerfile`, runtime-stage apt layer) alongside

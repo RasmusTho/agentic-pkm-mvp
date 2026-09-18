@@ -28,6 +28,12 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   `tests/builderops/test_standalone_consumer_conformance.py` to that job's path filter and runs
   the latter module in its existing PG invocation. The same workflow assertion guards selection
   and execution enrollment; these are finite repository conformance proofs, not live acceptance.
+- Dormant host-candidate support (#5593) enrolls its exact PG admission/history/live-refusal and
+  managed-source Verify nodes in the same job, alongside the existing complete operation, executor
+  and readback modules. Finite CLI/operation/executor/isolation/readback and harness paths trigger
+  it; control-plane and managed-source selectors remain enrolled. The workflow assertion checks
+  both trigger and executed surface, with the same 30-minute budget. Actual final-head PG execution
+  is required; non-PG selection, collected nodes and earlier focused JUnits do not substitute.
 - Pure PR title/body metadata edits are validated by `Issue and PR Governance` while CI Smoke jobs
   remain skipped. An `edited` event carrying `changes.base.ref.from` is a merge-input retarget and
   therefore keeps full CI Smoke enabled. Metadata events use a separate concurrency suffix so a

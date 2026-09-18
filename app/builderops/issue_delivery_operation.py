@@ -32,7 +32,7 @@ from app.builderops.control_plane.issue_delivery import (
     manifest_hash,
     normalize_manifest,
     delivery_source_pair,
-    SECOND_CONTRACT_VERSION,
+    CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS,
     tracking_repository,
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
@@ -64,6 +64,8 @@ def _require_protected_host_executor(value: Any) -> Any:
 
 
 class _OperationClient(Protocol):
+    def get_task(self, *, repository: str, task_id: str) -> dict[str, Any]: ...
+
     def issue_delivery_authority(
         self, *, manifest: Mapping[str, Any], purpose: str
     ) -> dict[str, Any]: ...
@@ -154,6 +156,8 @@ def _bound_issue_delivery_approval(
     except Exception as exc:
         raise IssueDeliveryOperationRefused("committed Issue-delivery approval is invalid") from exc
     value = dict(approval)
+    if value.get("contract_version") not in {"fca-issue-delivery.v1", *TWO_SOURCE_VERSIONS}:
+        raise IssueDeliveryOperationRefused("unsupported Issue-delivery approval version")
     if value.get("approval_manifest_hash") != manifest_hash(value):
         raise IssueDeliveryOperationRefused("Issue-delivery approval hash is corrupt")
     destination = value.get("destination")
@@ -224,8 +228,10 @@ def _read_operation_record(
     if not isinstance(record, dict) or record.get("record_type") != "BuilderOpsReceipt":
         raise IssueDeliveryOperationRefused("destination receipt is malformed")
     payload = record.get("payload")
+    version = 2 if approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION and kind == "terminal" else 1
     if (
         not isinstance(payload, Mapping)
+        or payload.get("schema") != f"builderops.issue-delivery-{kind}.v{version}"
         or payload.get("repository") != repository
         or payload.get("operation_key") != operation_key
         or payload.get("approval_id") != approval_id
@@ -239,8 +245,8 @@ def _read_operation_record(
     return record
 
 
-def _valid_host_effect_refs(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list) or len(value) > 5:
+def _valid_host_effect_refs(value: Any, *, maximum: int = 5) -> list[dict[str, str]]:
+    if not isinstance(value, list) or len(value) > maximum:
         raise IssueDeliveryOperationRefused("protected host effect references are malformed")
     refs: list[dict[str, str]] = []
     for ref in value:
@@ -392,7 +398,7 @@ def observe_issue_delivery_operation(
     terminal_payload = terminal["payload"]
     if terminal_payload.get("attempt_receipt_hash") != _record_hash(attempt):
         raise IssueDeliveryOperationRefused("destination terminal receipt is malformed")
-    refs = _valid_host_effect_refs(terminal_payload.get("host_effect_refs"))
+    refs = _valid_host_effect_refs(terminal_payload.get("host_effect_refs"), maximum=7 if value["contract_version"] == CANDIDATE_CONTRACT_VERSION else 5)
     if terminal["state"] == "launch_unknown":
         if terminal_payload.get("worker_receipt") is not None:
             raise IssueDeliveryOperationRefused("launch-unknown receipt cannot claim a worker outcome")
@@ -424,6 +430,15 @@ def observe_issue_delivery_operation(
         or entry["payload"].get("session_id") != session_id
     ):
         raise IssueDeliveryOperationRefused("destination terminal receipt is malformed")
+    if value["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+        from app.builderops.issue_delivery_readback import candidate_continuation
+        try:
+            task = client.get_task(repository=repository, task_id=f"issue-delivery-{approval_id}")
+        except ControlPlaneNotFoundError:
+            task = None
+        if task is not None and task.get("payload", {}).get("continuation") is not None:
+            continuation = candidate_continuation(task, value, terminal)
+            refs = _valid_host_effect_refs(continuation["host_effect_refs"], maximum=7)
     return IssueDeliveryOperationObservation(
         state="terminal",
         session_id=session_id,
@@ -526,7 +541,7 @@ def _default_live_binding_reader(
     if remote_repository != approved_repository:
         raise IssueDeliveryOperationRefused("destination repository remote identity changed")
     artifacts: list[dict[str, str]] = []
-    for artifact in ([] if approval.get("contract_version") == SECOND_CONTRACT_VERSION else workflow.get("artifacts", [])):
+    for artifact in ([] if approval.get("contract_version") in TWO_SOURCE_VERSIONS else workflow.get("artifacts", [])):
         if not isinstance(artifact, Mapping):
             raise IssueDeliveryOperationRefused("approved workflow artifact is malformed")
         path = checkout / str(artifact["path"])
@@ -534,7 +549,7 @@ def _default_live_binding_reader(
             raise IssueDeliveryOperationRefused("approved workflow artifact is unavailable")
         artifacts.append({"path": str(artifact["path"]), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
     artifacts.sort(key=lambda item: item["path"])
-    if approval.get("contract_version") == SECOND_CONTRACT_VERSION:
+    if approval.get("contract_version") in TWO_SOURCE_VERSIONS:
         artifacts = _verify_workflow_root(approval, trusted_workflow_root)
     return {
         "checkout": str(checkout),
@@ -596,8 +611,16 @@ class IssueDeliveryOperationAdapter:
             raw_worktree_root,
         }:
             raise IssueDeliveryOperationRefused("launcher repository root differs from approval")
-        bound_launcher: IssueSessionLauncher
-        if launcher is None:
+        bound_launcher: IssueSessionLauncher | None
+        recovering = (
+            value["contract_version"] == CANDIDATE_CONTRACT_VERSION
+            and launcher is None
+            and protected_executor is not None
+            and getattr(protected_executor, "recovered_candidate_terminal", None) is not None
+        )
+        if recovering:
+            bound_launcher = None
+        elif launcher is None:
             bound_launcher = CodexIssueSessionLauncher(
                 repo_root=self.repo_root,
                 effect_gate_approval_file=approval_file,
@@ -628,13 +651,16 @@ class IssueDeliveryOperationAdapter:
                 PreparedIssueDeliveryWorker,
             )
 
-            if not isinstance(self.launcher, PreparedIssueDeliveryWorker):
+            if recovering:
+                protected_executor = _require_protected_host_executor(protected_executor)
+                protected_executor.restore_candidate_binding(protected_executor.recovered_candidate_terminal)
+            elif not isinstance(self.launcher, PreparedIssueDeliveryWorker):
                 raise IssueDeliveryOperationRefused(
                     "production Issue delivery requires the prepared content-only launcher"
                 )
-            if not isinstance(
+            if not recovering and (not isinstance(self.launcher, PreparedIssueDeliveryWorker) or not isinstance(
                 self.launcher.launcher, ContentOnlyIssueDeliverySessionLauncher
-            ):
+            )):
                 raise IssueDeliveryOperationRefused(
                     "production Issue delivery requires the isolated content-only launcher"
                 )
@@ -668,6 +694,8 @@ class IssueDeliveryOperationAdapter:
         """A real child must carry the same committed approval into its gates."""
 
         launcher = self.launcher
+        if launcher is None:
+            raise IssueDeliveryOperationRefused("readback recovery cannot launch a worker")
         if not isinstance(launcher, CodexIssueSessionLauncher):
             nested = getattr(launcher, "launcher", None)
             if isinstance(nested, CodexIssueSessionLauncher):
@@ -967,7 +995,7 @@ class IssueDeliveryOperationAdapter:
                 "worker effect proposal must contain only effect_kind and target"
             )
         effect_kind = proposal.get("effect_kind")
-        if effect_kind not in {"claim", "publication", "merge", "closure", "parent_evidence"}:
+        if effect_kind not in {"claim", "publication", "merge", "closure", "parent_evidence", "candidate_prepare"}:
             raise IssueDeliveryOperationRefused("worker effect proposal kind is unsupported")
         target = proposal.get("target")
         if not isinstance(target, Mapping):
@@ -979,6 +1007,8 @@ class IssueDeliveryOperationAdapter:
         )
 
         frozen = getattr(self.launcher, "frozen_destination", None)
+        if self.launcher is None:
+            frozen = _require_protected_host_executor(self.protected_executor).frozen_destination
         if not isinstance(frozen, FrozenIssueDeliveryDestination):
             raise IssueDeliveryOperationRefused(
                 "typed effect proposal requires the frozen host destination"
@@ -1012,7 +1042,7 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationRefused("approved effect executor artifacts are unavailable")
         request = IssueDeliveryEffectRequest.model_validate(
             {
-                "contract": "builderops.issue-delivery-effect.v1",
+                "contract": "builderops.issue-delivery-effect.v2" if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else "builderops.issue-delivery-effect.v1",
                 "effect_kind": effect_kind,
                 "approval": self.approval,
                 "approval_id": self.approval_id,
@@ -1070,6 +1100,7 @@ class IssueDeliveryOperationAdapter:
         expected_operation_key = protected_executor.ledger.operation_key(
             effect_slot_sha256=request.effect_slot_sha256,
             effect_type={
+                "candidate_prepare": "git.issue-delivery.candidate-prepare.v1",
                 "claim": "github.issue-delivery.claim.v1",
                 "publication": "github.issue-delivery.publication.v1",
                 "merge": "github.issue-delivery.merge.v1",
@@ -1087,7 +1118,7 @@ class IssueDeliveryOperationAdapter:
             or receipt.issue_number != self.approval["issue"]["number"]
             or status.get("operation_key") != expected_operation_key
             or not isinstance(payload, Mapping)
-            or payload.get("contract") != "builderops.issue-delivery-effect.v1"
+            or payload.get("contract") != request.contract
             or payload.get("request_sha256") != request.content_sha256
             or payload.get("effect_slot_sha256") != request.effect_slot_sha256
             or payload.get("approval_id") != self.approval_id
@@ -1219,7 +1250,7 @@ class IssueDeliveryOperationAdapter:
         if state != _RECORD_STATES[kind] and not (kind == "terminal" and state == "launch_unknown"):
             raise IssueDeliveryOperationRefused("destination receipt state is invalid")
         payload = {
-            "schema": f"builderops.issue-delivery-{kind}.v1",
+            "schema": f"builderops.issue-delivery-{kind}.v{2 if self.approval['contract_version'] == CANDIDATE_CONTRACT_VERSION and kind == 'terminal' else 1}",
             "repository": self.repository,
             "operation_type": OPERATION_TYPE,
             "operation_key": self.operation_key,
@@ -1333,6 +1364,7 @@ class IssueDeliveryOperationAdapter:
         worker_receipt: Mapping[str, Any] | None,
         host_effect_refs: list[dict[str, str]] | None = None,
         state: str = "terminal",
+        candidate_binding: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         existing = self._read("terminal")
         if existing is not None:
@@ -1360,8 +1392,9 @@ class IssueDeliveryOperationAdapter:
         )
         if not isinstance(destination_resource_key, str) or len(destination_resource_key) != 64:
             raise IssueDeliveryOperationRefused("destination attempt resource identity is malformed")
-        refs = _valid_host_effect_refs(list(host_effect_refs or []))
-        return self._write("terminal", state, {"attempt_receipt_hash": _record_hash(attempt), "destination_resource_key": destination_resource_key, "entry_receipt_hash": _record_hash(entry) if state == "terminal" and entry is not None else None, "session_id": session_id, "worker_receipt": terminal_worker_receipt, "host_effect_refs": refs, "observed_at": self.now()})
+        refs = _valid_host_effect_refs(list(host_effect_refs or []), maximum=7 if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else 5)
+        return self._write("terminal", state, {"attempt_receipt_hash": _record_hash(attempt), "destination_resource_key": destination_resource_key, "entry_receipt_hash": _record_hash(entry) if state == "terminal" and entry is not None else None, "session_id": session_id, "worker_receipt": terminal_worker_receipt, "host_effect_refs": refs, "observed_at": self.now(),
+            **({"candidate_binding": dict(candidate_binding) if candidate_binding else None} if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else {})})
 
     def _selected_context(self, context_pack: Mapping[str, Any]) -> None:
         context = self.approval["context"]
@@ -1369,6 +1402,71 @@ class IssueDeliveryOperationAdapter:
         selected = plan["context_packs"]
         if not isinstance(selected, list) or len(selected) != 1 or canonical_hash(selected[0]) != canonical_hash(context_pack):
             raise IssueDeliveryOperationRefused("launch context differs from approved context")
+
+    def _candidate_task(self) -> Mapping[str, Any]:
+        executor = _require_protected_host_executor(self.protected_executor)
+        client = executor.ledger.client
+        task_id = f"issue-delivery-{self.approval_id}"
+        try:
+            return client.get_task(repository=self.repository, task_id=task_id)
+        except ControlPlaneNotFoundError:
+            from app.builderops.issue_delivery_readback import admit_issue_delivery_task
+            return admit_issue_delivery_task(client=client, repository=self.repository, approval_id=self.approval_id,
+                issue_reader=executor.repository_authority.issue_delivery_source, observed_at=self.now())
+
+    def _append_candidate_reference(self, terminal: Mapping[str, Any], ref: Mapping[str, str]) -> Mapping[str, Any]:
+        """Append only authenticated outbox facts, under the native task lease/CAS."""
+        from copy import deepcopy
+        from app.builderops.issue_delivery_readback import CONTINUATION_CONTRACT, candidate_continuation, _task_binding
+        executor = _require_protected_host_executor(self.protected_executor)
+        client = executor.ledger.client
+        task_id = f"issue-delivery-{self.approval_id}"
+        row = client.get_task(repository=self.repository, task_id=task_id)
+        _task_binding(row, self.approval)
+        payload = deepcopy(row["payload"])
+        witness = terminal["payload"]
+        continuation = payload.get("continuation")
+        if continuation is not None:
+            candidate_continuation(row, self.approval, terminal)
+        else:
+            continuation = {"contract": CONTINUATION_CONTRACT, "approval_id": self.approval_id,
+                "approval_manifest_hash": self.approval_manifest_hash, "operation_key": self.operation_key,
+                "run_id": self.run_id, "delivery_sources": delivery_source_pair(self.approval),
+                "worker_terminal_sha256": _record_hash(terminal),
+                "destination_resource_key": witness["destination_resource_key"],
+                "host_effect_refs": deepcopy(witness["host_effect_refs"]), "results": {}}
+        if ref not in continuation["host_effect_refs"]:
+            continuation["host_effect_refs"].append(dict(ref))
+        _valid_host_effect_refs(continuation["host_effect_refs"], maximum=7)
+        for item in continuation["host_effect_refs"]:
+            status = executor.ledger.status(item["operation_key"])
+            effect = status.get("payload", {})
+            if (effect.get("request_sha256") != item["request_sha256"] or effect.get("effect_slot_sha256") != item["effect_slot_sha256"]
+                or effect.get("approved_operation_key") != self.operation_key or effect.get("approval_id") != self.approval_id):
+                raise IssueDeliveryOperationRefused("candidate continuation effect changed")
+            if status.get("status") == "succeeded":
+                continuation["results"][item["operation_key"]] = {
+                    "receipt_sequence": status["reconciliation_receipt_sequence"],
+                    "result_sha256": canonical_hash(status["reconciliation_evidence"])}
+        if continuation == row["payload"].get("continuation"):
+            return row
+        envelope = {"repository": self.repository, "scope": f"issue:{self.approval['issue']['number']}",
+                    "stack": "builderops-issue-delivery", "source_refs": [f"builderops:issue-delivery:{self.approval_id}"]}
+        # Claim retains the old payload; the append is a separate expected-version transition.
+        claim_payload = deepcopy(row["payload"])
+        claim_payload["status"] = "claimed"
+        claim_payload["issue_delivery"]["task_record_version"] = row["version"] + 1
+        claimed = client.claim_task(envelope=envelope, task_id=task_id,
+            idempotency_key=f"candidate-native-claim:{self.operation_key}:{row['version']}", request=claim_payload)
+        payload["continuation"] = continuation
+        payload["status"] = "claimed"
+        payload["issue_delivery"]["task_record_version"] = row["version"] + 2
+        client.transition_task(envelope=envelope, task_id=task_id, to_state="claimed",
+            idempotency_key=f"candidate-native-append:{self.operation_key}:{canonical_hash(continuation)}:{row['version']}",
+            request=payload, lease=claimed["lease"], expected_states=["claimed"], expected_version=row["version"] + 1)
+        result = client.get_task(repository=self.repository, task_id=task_id)
+        candidate_continuation(result, self.approval, terminal)
+        return result
 
     def launch(
         self,
@@ -1387,6 +1485,23 @@ class IssueDeliveryOperationAdapter:
             if terminal.get("state") != "terminal":
                 raise IssueDeliveryOperationError("existing launch is unresolved; replacement launch is forbidden", session_id=(entry or {}).get("payload", {}).get("session_id"))
             payload = terminal["payload"]
+            if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+                executor = _require_protected_host_executor(self.protected_executor)
+                refs = list(payload["host_effect_refs"])
+                state = "unknown"
+                if payload.get("candidate_binding") is not None:
+                    executor.restore_candidate_binding(terminal)
+                    request = self._build_effect_request({"effect_kind": "candidate_prepare", "target": payload["candidate_binding"]["target"]})
+                    receipt = executor.read_candidate(request)
+                    if executor.ledger.status(receipt.operation_key).get("status") != "missing":
+                        ref = {"operation_key": receipt.operation_key, "request_sha256": request.content_sha256,
+                               "effect_slot_sha256": request.effect_slot_sha256}
+                        row = self._append_candidate_reference(terminal, ref)
+                        refs = row["payload"]["continuation"]["host_effect_refs"]
+                    state = "candidate_ready" if receipt.outcome == "applied" else "unknown"
+                return {"session_id": payload["session_id"], "worker_receipt": payload["worker_receipt"],
+                    "host_effect_refs": refs, "candidate_state": state, "operation_state": "terminal",
+                    "fresh_session": False, "stop_support": "unsupported"}
             reservation = self._read("reservation")
             attempt = self._read("attempt")
             return {
@@ -1406,6 +1521,8 @@ class IssueDeliveryOperationAdapter:
             raise IssueDeliveryOperationError("existing launch attempt has no observed entry; replacement launch is forbidden")
         self._require_launcher_binding()
         self.reserve()
+        if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+            self._candidate_task()
         _attempt, owns_attempt = self._record_attempt()
         if not owns_attempt:
             raise IssueDeliveryOperationError("another dispatcher owns the launch attempt; reconciliation is required")
@@ -1440,6 +1557,8 @@ class IssueDeliveryOperationAdapter:
                     "repository_worktree",
                     target=self._default_target("repository_worktree"),
                 )
+            if self.launcher is None:
+                raise IssueDeliveryOperationRefused("readback recovery cannot launch a worker")
             result = self.launcher.launch(context_pack, **launch_kwargs)
             if not isinstance(result, Mapping):
                 raise IssueDeliveryOperationError("launcher returned a non-object result")
@@ -1454,6 +1573,28 @@ class IssueDeliveryOperationAdapter:
                 raise IssueDeliveryOperationError("launcher returned no observed session entry")
             entry = self.record_entry(session_id=session_id)
             receipt = result.get("worker_receipt")
+            if self.approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+                from app.builderops.control_plane.issue_delivery import validate_content_result
+                receipt = validate_content_result(receipt)
+                if receipt["status"] != "completed":
+                    raise IssueDeliveryOperationRefused("content worker did not complete")
+                executor = _require_protected_host_executor(self.protected_executor)
+                target = executor.prepare_candidate(self.approval, {
+                    "approval_id": self.approval_id, "operation_key": self.operation_key,
+                    "run_id": self.run_id, "session_id": session_id,
+                    "attempt_receipt_sha256": _record_hash(_attempt),
+                    "entry_receipt_sha256": _record_hash(entry),
+                    "destination_sha256": executor.frozen_destination.identity_sha256,
+                })
+                request = self._build_effect_request({"effect_kind": "candidate_prepare", "target": target.model_dump(mode="json")})
+                terminal = self.record_terminal(session_id=session_id, worker_receipt=receipt,
+                    host_effect_refs=pre_entry_host_refs, candidate_binding=executor.candidate_binding(target))
+                candidate_ref, candidate_receipt = self._execute_bound_effect(request)
+                host_refs = [*pre_entry_host_refs, candidate_ref]
+                self._append_candidate_reference(terminal, candidate_ref)
+                return {**dict(result), "worker_receipt": receipt, "host_effect_refs": host_refs,
+                        "candidate_state": "candidate_ready" if candidate_receipt.outcome == "applied" else "unknown",
+                        "operation_state": "terminal", "fresh_session": True, "stop_support": "unsupported"}
             if isinstance(receipt, Mapping):
                 if _worker_supplies_host_effect_field(receipt):
                     raise IssueDeliveryOperationRefused(

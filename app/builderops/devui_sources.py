@@ -24,6 +24,7 @@ from app.builderops.devui_focus_inputs import FocusInputError, read_focus_inputs
 from app.builderops.devui_assets import validate_packaged_assets
 from app.builderops.issue_delivery_readback import (
     TASK_CONTRACT as ISSUE_DELIVERY_TASK_CONTRACT,
+    CANDIDATE_TASK_CONTRACT,
     read_issue_delivery_projection,
 )
 from app.builderops.cockpit_registry import _SourceRead, _Sources, compose_registry
@@ -37,7 +38,7 @@ from app.builderops.control_plane.client import (
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
 from app.builderops.control_plane.issue_delivery import (
-    QUALIFIED_REPOSITORY, SECOND_CONTRACT_VERSION, SECOND_REPOSITORY,
+    QUALIFIED_REPOSITORY, CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS, SECOND_REPOSITORY,
 )
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}\Z")
@@ -164,7 +165,7 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
                                 "issue_repository", "workflow_repository", "workflow_source_revision"}
             or repository != SECOND_REPOSITORY
             or sources.get("repository") != repository
-            or sources.get("contract_version") != SECOND_CONTRACT_VERSION
+            or sources.get("contract_version") not in TWO_SOURCE_VERSIONS
             or sources.get("issue_repository") != QUALIFIED_REPOSITORY
             or sources.get("workflow_repository") != QUALIFIED_REPOSITORY
             or sources.get("source_revision") != delivery.get("source_revision")
@@ -270,9 +271,10 @@ def _task(row: dict[str, Any], *, repository: str) -> dict[str, Any] | None:
         if (
             not isinstance(delivery, dict)
             or set(delivery) != expected
-            or delivery.get("contract") != ISSUE_DELIVERY_TASK_CONTRACT
+            or delivery.get("contract") != (CANDIDATE_TASK_CONTRACT if isinstance(sources, dict) and sources.get("contract_version") == CANDIDATE_CONTRACT_VERSION else ISSUE_DELIVERY_TASK_CONTRACT)
             or type(delivery.get("task_record_version")) is not int
             or delivery["task_record_version"] < 1
+            or (delivery.get("contract") == CANDIDATE_TASK_CONTRACT and delivery["task_record_version"] != row["version"])
             or type(delivery.get("authority_epoch")) is not int
             or delivery["authority_epoch"] < 1
             or any(

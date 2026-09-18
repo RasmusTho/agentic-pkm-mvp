@@ -1123,6 +1123,11 @@ jobs:
               # real PostgreSQL; the not-pg lane cannot execute these ACs.
               - 'app/builderops/control_plane/**'
               - 'app/builderops/epic_dispatch.py'
+              - 'app/builderops/cli.py'
+              - 'app/builderops/issue_delivery_operation.py'
+              - 'app/builderops/issue_delivery_effect_executor.py'
+              - 'app/builderops/issue_delivery_worker_isolation.py'
+              - 'app/builderops/issue_delivery_readback.py'
               - 'docs/settings/models/providers.yaml'
               - 'app/builderops/owner_fact_producers.py'
               - 'app/builderops/devui_owner_facts.py'
@@ -1136,6 +1141,8 @@ jobs:
               - 'tests/builderops/test_issue_delivery_effect_executor.py'
               - 'tests/builderops/test_issue_delivery_operation.py'
               - 'tests/builderops/test_issue_delivery_readback.py'
+              - 'tests/builderops/test_devui_runtime.py'
+              - 'tests/builderops/issue_delivery_production_harness.py'
               - 'app/builderops/second_consumer.py'
               - 'tests/builderops/test_standalone_consumer_conformance.py'
               - '.github/workflows/ci-smoke.yaml'
@@ -1221,6 +1228,9 @@ jobs:
             tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_transaction_recovery \
             tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_identical_start_replays_winner \
             tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_competing_start_preserves_conflict \
+            tests/builderops/test_control_plane_issue_delivery.py::test_host_candidate_versions_preserve_v1_v2_history \
+            tests/builderops/test_control_plane_issue_delivery.py::test_v3_live_start_refuses_unqualified_continuation \
+            tests/builderops/test_devui_runtime.py::test_managed_source_preserves_v3_candidate_binding \
             tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries \
             tests/builderops/test_issue_delivery_effect_executor.py \
             tests/builderops/test_issue_delivery_operation.py \

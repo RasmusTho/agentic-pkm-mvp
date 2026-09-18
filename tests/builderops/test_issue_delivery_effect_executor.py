@@ -1,7 +1,6 @@
 """Protected host execution contract for one approved Issue delivery."""
 
 from __future__ import annotations
-
 import json
 import subprocess
 from copy import deepcopy
@@ -64,6 +63,230 @@ from tests.builderops.issue_delivery_production_harness import (
     _request,
     _sha,
 )
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("fault", ["worker_effect", "nested_effect", "worker_failed", "extra_path", "code", "policy_file", "unreadable_directory", "late_unreadable_directory", "executable", "symlink", "hardlink", "index", "ref", "empty", "policy", "hub_policy", "consumer_base", "hub_base", "source", "consumer_credential", "hub_credential", "owner_grant", "missing_witness", "invocation", "boot", "populated", "restart", "job", "unit_gone", "writer", "process", "stale_time", "future_time", "late_bytes", "late_index"])
+def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_production_harness, monkeypatch, fault):
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+    from app.builderops.issue_delivery_operation import IssueDeliveryOperationError
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    approval = harness.approval
+    base = approval["destination"]["base_sha"]
+    writes = []
+    applicator = harness.executor.candidate_applicator
+    index_before = applicator.git("ls-files", "--stage", "-z")
+    unreadable = harness.worktree / "hidden"
+    def hide_untracked_code():
+        unreadable.mkdir()
+        (unreadable / "module.py").write_text("outside envelope")
+        unreadable.chmod(0)
+        # Real OS denial, not a substituted capture/admission verdict.
+        with pytest.raises(PermissionError):
+            list(unreadable.iterdir())
+    original_write = applicator.write_object
+    def write_object(*args):
+        writes.append(args[0])
+        return original_write(*args)
+    monkeypatch.setattr(applicator, "write_object", write_object)
+    if fault in {"worker_effect", "nested_effect", "worker_failed"}:
+        value = {"contract": "builderops.issue-delivery-content-result.v1",
+            "status": "completed", "summary": "invalid", "validation": []}
+        if fault == "worker_effect":
+            value["effect_requests"] = []
+        elif fault == "nested_effect":
+            value["validation"] = [{"name": "check", "outcome": "passed", "summary": "x", "host_effect_refs": []}]
+        else:
+            value["status"] = "failed"
+        harness.worker_transport.content_result = value
+    launcher = harness.prepared_worker.launcher
+    reader = launcher._completion_reader
+    changes = {"invocation": {"invocation_id": "recycled"},
+        "boot": {"boot_id": "other"}, "populated": {"cgroup_populated": 1},
+        "restart": {"restart": "always"}, "job": {"job": "start"},
+        "unit_gone": {"load_state": "not-found"}, "writer": {"aperture_writer_uids": [1, 2]},
+        "process": {"worker_processes": [123]}, "stale_time": {"observed_at": "2000-01-01T00:00:00Z"},
+        "future_time": {"observed_at": "2999-01-01T00:00:00Z"}}
+    def observe(unit):
+        value = reader(unit)
+        if harness.worker_transport.completed:
+            if fault == "missing_witness":
+                return {}
+            value.update(changes.get(fault, {}))
+        return value
+    monkeypatch.setattr(launcher, "_completion_reader", observe)
+    def change(root):
+        if fault in {"extra_path", "code", "policy_file"}:
+            name = {"extra_path": "README.md", "code": "module.py", "policy_file": ".builderops/policy.md"}[fault]
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("outside envelope")
+        elif fault == "unreadable_directory":
+            hide_untracked_code()
+        elif fault == "executable":
+            (root / "docs/guide.md").chmod(0o755)
+        elif fault == "symlink":
+            (root / "docs/guide.md").unlink()
+            (root / "docs/guide.md").symlink_to(root / "tracked.txt")
+        elif fault == "hardlink":
+            (root / "other.md").hardlink_to(root / "docs/guide.md")
+        elif fault == "index":
+            subprocess.run(["git", "-C", str(root), "add", "docs/guide.md"], check=True)
+        elif fault == "ref":
+            subprocess.run(["git", "-C", str(root), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+        elif fault == "empty":
+            (root / "docs/guide.md").unlink()
+        elif fault == "policy":
+            harness.source_state["documents"][approval["repository"]]["allowed_effects"].remove(
+                "git.issue-delivery.candidate-prepare.v1")
+        elif fault == "hub_policy":
+            harness.source_state["documents"][REPOSITORY]["allowed_effects"] = []
+        elif fault in {"consumer_base", "hub_base"}:
+            harness.source_state["bases"][approval["repository"] if fault == "consumer_base" else REPOSITORY] = "e" * 40
+        elif fault == "source":
+            harness.source_state["issue"]["body"] += "\nChanged"
+        elif fault in {"consumer_credential", "hub_credential", "owner_grant"}:
+            document = json.loads(harness.registry.manifest_path.read_text())
+            identifier = {"consumer_credential": "consumer-effect", "hub_credential": "hub-effect", "owner_grant": "owner"}[fault]
+            for item in document["credentials"]:
+                if item["id"] == identifier:
+                    item["revoked"] = True
+            harness.registry.manifest_path.write_text(json.dumps(document))
+    harness.worker_transport.content_change = change
+    begin = harness.ledger.begin
+    def late_change(**kwargs):
+        result = begin(**kwargs)
+        if kwargs["effect_type"] == "git.issue-delivery.candidate-prepare.v1":
+            if fault == "late_bytes":
+                (harness.worktree / "docs/guide.md").write_text("changed after intent")
+            elif fault == "late_index":
+                subprocess.run(["git", "-C", str(harness.worktree), "add", "docs/guide.md"], check=True)
+            elif fault == "late_unreadable_directory":
+                hide_untracked_code()
+        return result
+    monkeypatch.setattr(harness.ledger, "begin", late_change)
+    try:
+        result = _production_adapter(harness).launch(approval["context"]["dispatch_plan"]["context_packs"][0])
+    except IssueDeliveryOperationError:
+        result = {"candidate_state": "refused"}
+    finally:
+        if unreadable.exists():
+            unreadable.chmod(0o700)
+    assert result.get("candidate_state") in {"refused", "unknown"}
+    assert writes == []
+    assert subprocess.check_output(["git", "-C", str(harness.worktree), "rev-parse", "HEAD"], text=True).strip() == base
+    assert all(request.effect_kind == "claim" for request in harness.transport.applied_requests)
+    if fault in {"unreadable_directory", "late_unreadable_directory"}:
+        assert applicator.git("ls-files", "--stage", "-z") == index_before
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("fault", ["intent", "intent_ack", "dispatch", "dispatch_ack", "blob", "tree", "commit", "ref", "index", "response", "stale_fence"])
+def test_candidate_prepare_fence_and_partial_write_recovery(issue_delivery_production_harness, monkeypatch, fault):
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+    from app.builderops.issue_delivery_operation import IssueDeliveryOperationError
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    approval = harness.approval
+    boundary = harness.executor.candidate_applicator
+    writes = []
+    original_write = boundary.write_object
+    def write_object(kind, content):
+        oid = original_write(kind, content)
+        writes.append(kind)
+        if kind == fault:
+            raise OSError("injected partial local object write")
+        return oid
+    monkeypatch.setattr(boundary, "write_object", write_object)
+    original_git = boundary.git
+    def git(*args, **kwargs):
+        result = original_git(*args, **kwargs)
+        if args[0] in {"update-ref", "read-tree"}:
+            writes.append(args[0])
+            if (args[0], fault) in {("update-ref", "ref"), ("read-tree", "index")}:
+                raise OSError("injected lost local Git acknowledgement")
+        return result
+    monkeypatch.setattr(boundary, "git", git)
+    begin = harness.ledger.begin
+    def begin_fault(**kwargs):
+        candidate = kwargs["effect_type"] == "git.issue-delivery.candidate-prepare.v1"
+        if candidate and fault == "intent":
+            raise OSError("injected intent failure")
+        result = begin(**kwargs)
+        if candidate and fault == "intent_ack":
+            raise OSError("injected intent acknowledgement loss")
+        return result
+    monkeypatch.setattr(harness.ledger, "begin", begin_fault)
+    mark_unknown = harness.ledger.mark_unknown
+    def dispatch_fault(claim, **kwargs):
+        candidate = harness.ledger.status(claim["operation_key"])["payload"]["effect_kind"] == "candidate_prepare"
+        if candidate and fault == "dispatch":
+            raise OSError("injected dispatch commit failure")
+        result = mark_unknown(claim, **kwargs)
+        if candidate and fault == "dispatch_ack":
+            raise OSError("injected committed dispatch acknowledgement loss")
+        return result
+    monkeypatch.setattr(harness.ledger, "mark_unknown", dispatch_fault)
+    revalidate = harness.ledger.revalidate_effect_claim
+    def stale_claim(claim):
+        if fault == "stale_fence" and harness.ledger.status(claim["operation_key"])["payload"]["effect_kind"] == "candidate_prepare":
+            with harness.store._connect() as conn:
+                conn.execute("UPDATE builderops_outbox SET claim_expires_at=clock_timestamp()-interval '1 second' WHERE operation_key=%s",
+                             (claim["operation_key"],))
+        return revalidate(claim)
+    monkeypatch.setattr(harness.ledger, "revalidate_effect_claim", stale_claim)
+    readback = boundary.readback
+    read_count = 0
+    def lost_readback(request):
+        nonlocal read_count
+        read_count += 1
+        if fault == "response" and read_count == 1:
+            raise OSError("injected independent observation outage")
+        return readback(request)
+    monkeypatch.setattr(boundary, "readback", lost_readback)
+    adapter = _production_adapter(harness)
+    context = approval["context"]["dispatch_plan"]["context_packs"][0]
+    try:
+        first_result = adapter.launch(context)
+    except IssueDeliveryOperationError:
+        first_result = {"candidate_state": "unknown"}
+    before_dispatch = fault in {"intent", "intent_ack", "dispatch", "dispatch_ack", "stale_fence"}
+    assert bool(writes) is not before_dispatch
+    terminal = adapter._read("terminal")
+    assert terminal["payload"]["candidate_binding"]["completion_sha256"]
+    terminal_hash = terminal["payload"]["receipt_hash"]
+    request = adapter._build_effect_request({"effect_kind": "candidate_prepare",
+        "target": terminal["payload"]["candidate_binding"]["target"]})
+    operation = harness.ledger.operation_key(effect_slot_sha256=request.effect_slot_sha256,
+        effect_type="git.issue-delivery.candidate-prepare.v1")
+    if fault == "intent":
+        assert harness.ledger.status(operation)["status"] == "missing"
+    elif fault in {"blob", "tree", "commit", "ref", "response", "dispatch_ack"}:
+        assert harness.ledger.status(operation)["status"] == "unknown"
+    if fault not in {"index"}:
+        assert first_result["candidate_state"] == "unknown"
+    original_writes = tuple(writes)
+    # Reconstruct the executor/ledger/adapter without any prepared worker object.
+    from tests.builderops.test_issue_delivery_operation import _recovered_candidate_adapter
+    from app.builderops.issue_delivery_effect_executor import PreparedIssueDeliveryWorker, LocalCandidateApplicator
+    monkeypatch.setattr(PreparedIssueDeliveryWorker, "create", lambda **kwargs: pytest.fail("restart prepared a worker"))
+    monkeypatch.setattr(LocalCandidateApplicator, "apply", lambda *args: pytest.fail("restart attempted Git writes"))
+    restarted = _recovered_candidate_adapter(harness)
+    replay = restarted.launch(context)
+    if fault == "response":
+        # A restarted client cannot steal the departed dispatcher's live fence.
+        assert replay["candidate_state"] == "unknown"
+        with harness.store._connect() as conn:
+            conn.execute("UPDATE builderops_outbox SET claim_expires_at=clock_timestamp()-interval '1 second' WHERE operation_key=%s",
+                         (operation,))
+        restarted = _recovered_candidate_adapter(harness)
+        replay = restarted.launch(context)
+    assert replay["candidate_state"] == ("candidate_ready" if fault in {"index", "response"} else "unknown")
+    assert tuple(writes) == original_writes
+    assert harness.worker_transport.calls == 1
+    assert restarted._read("terminal")["payload"]["receipt_hash"] == terminal_hash
+    assert request.effect_slot_sha256 == restarted._build_effect_request({"effect_kind": "candidate_prepare",
+        "target": terminal["payload"]["candidate_binding"]["target"]}).effect_slot_sha256
+
 
 @pytest.mark.pg
 def test_bifrost_executor_binds_distinct_consumer_and_workflow_roots(issue_delivery_production_harness) -> None:
