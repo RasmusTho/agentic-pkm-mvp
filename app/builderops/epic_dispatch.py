@@ -262,6 +262,9 @@ class CodexIssueSessionLauncher:
         effect_gate: Callable[..., Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]:
         if effect_gate is not None:
+            sources = context_pack.get("delivery_sources")
+            if sources is not None and (not isinstance(sources, Mapping) or sources.get("contract_version") not in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"}):
+                raise EpicDispatchError("unsupported Issue-delivery source version")
             issue = context_pack.get("issue_contract")
             destination = context_pack.get("branch_worktree_plan")
             if not isinstance(issue, Mapping) or not isinstance(destination, Mapping):
@@ -270,7 +273,7 @@ class CodexIssueSessionLauncher:
                 "repository_worktree",
                 target={
                     "repository": (context_pack["delivery_sources"]["repository"]
-                                   if context_pack.get("delivery_sources", {}).get("contract_version") == "fca-issue-delivery.v2"
+                                   if context_pack.get("delivery_sources", {}).get("contract_version") in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"}
                                    else issue.get("repository")),
                     "issue_number": issue.get("number"),
                     "checkout": str(self.effect_gate_checkout_root),
@@ -826,6 +829,7 @@ def dispatch_issue_sessions(
             worker_receipt = _validated_worker_receipt(
                 launch_result.get("worker_receipt"),
                 session_id=session_id,
+                contract_version=context_pack.get("delivery_sources", {}).get("contract_version"),
             )
             fresh_session = launch_result.get("fresh_session", True)
             if type(fresh_session) is not bool:
@@ -833,7 +837,8 @@ def dispatch_issue_sessions(
                     "launch_result.fresh_session must be a boolean",
                     session_id=session_id,
                 )
-            final_state = worker_receipt["final_state"]
+            candidate_version = context_pack.get("delivery_sources", {}).get("contract_version") == "fca-issue-delivery.v3"
+            final_state = worker_receipt["status"] if candidate_version else worker_receipt["final_state"]
             session_record: dict[str, Any] = {
                 "issue_number": issue_number,
                 "context_pack_id": context_pack_id,
@@ -842,12 +847,14 @@ def dispatch_issue_sessions(
                 "status": final_state,
                 "worker_receipt": worker_receipt,
             }
+            if candidate_version:
+                session_record["candidate_state"] = launch_result.get("candidate_state", "unknown")
             # The operation adapter separately produces these bounded,
             # host-validated references.  Preserve that field verbatim; it
             # must never be reconstructed from worker diagnostics here.
             if "host_effect_refs" in launch_result:
                 host_effect_refs = launch_result["host_effect_refs"]
-                if not isinstance(host_effect_refs, list) or len(host_effect_refs) > 5:
+                if not isinstance(host_effect_refs, list) or len(host_effect_refs) > (7 if candidate_version else 5):
                     raise IssueSessionLaunchError(
                         "launch_result.host_effect_refs must be a bounded list",
                         session_id=session_id,
@@ -1640,7 +1647,13 @@ def _validated_worker_receipt(
     receipt: object,
     *,
     session_id: str,
+    contract_version: str | None = None,
 ) -> dict[str, Any]:
+    if contract_version not in {None, "fca-issue-delivery.v1", "fca-issue-delivery.v2", "fca-issue-delivery.v3"}:
+        raise IssueSessionLaunchError("unsupported Issue-delivery result version", session_id=session_id)
+    if contract_version == "fca-issue-delivery.v3":
+        from app.builderops.control_plane.issue_delivery import validate_content_result
+        return validate_content_result(receipt)
     if not isinstance(receipt, Mapping):
         raise IssueSessionLaunchError(
             "worker returned no structured handoff receipt",

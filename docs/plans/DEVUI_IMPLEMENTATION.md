@@ -444,13 +444,14 @@ on the approved runtime; a bounded caller supplying a pure projection is not tha
 Preserve M1 throughout. #4168's DDO reducer/outbox and #5352's Product operation HTTP kernel do not
 become prerequisites of this agent-led documentation route.
 
-The finite future host path is now specified by
+The finite host path is owned by
 [FCA-ID-HOST-CANDIDATE](../BUILDER_FACTORY_ACCEPTANCE/README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract)
-under #5591. The next executable slice is dormant, versioned protected candidate preparation from
+under source #5591. Issue #5593 implements dormant, versioned protected candidate preparation from
 actual content-worker output through the existing API/outbox fence to exact local Git readback;
-its closed caller set and test-first Verify targets live only in that owner. Concrete publication
+its closed caller set and Verify targets live only in that owner. The existing managed source reader
+preserves exact v3 candidate lineage without projecting delivery or adding a UI action. Concrete publication
 transport and observed-PR continuation follow separately. Stored v1/v2 semantics remain unchanged;
-source publication supplies no live v3 support. Consumer preparation, qualified host composition,
+dormant repository proof supplies no live v3 support. Consumer preparation, qualified host composition,
 authenticated M2 UI, selected-operation recovery before Start and real result/human evidence remain
 unproved parent gates. This clarification neither reopens #5405 nor completes M2 or #5399.
 

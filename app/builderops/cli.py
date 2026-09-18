@@ -2554,7 +2554,14 @@ def dispatch_sessions(
             }
             if observation.worker_receipt is not None:
                 session["worker_receipt"] = observation.worker_receipt
-                session["status"] = observation.worker_receipt.get("final_state")
+                if approval.get("contract_version") == "fca-issue-delivery.v3":
+                    from app.builderops.control_plane.issue_delivery import validate_content_result
+                    session["status"] = validate_content_result(observation.worker_receipt)["status"]
+                    # Observation is historical; no local readback-capable executor
+                    # or later continuation runner is implicitly installed here.
+                    session["candidate_state"] = "readback_required"
+                else:
+                    session["status"] = observation.worker_receipt.get("final_state")
             else:
                 session["status"] = observation.state
             if observation.host_effect_refs is not None:

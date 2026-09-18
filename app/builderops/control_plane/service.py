@@ -95,7 +95,7 @@ from app.builderops.control_plane.issue_delivery import (
     receipt_ref as issue_delivery_receipt_ref,
     record_id as issue_delivery_record_id,
     delivery_source_pair,
-    SECOND_CONTRACT_VERSION,
+    CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS,
     tracking_repository,
 )
 
@@ -1475,10 +1475,13 @@ def create_app(
             "entry": {"attempt_receipt_hash", "attempt_id", "destination_resource_key", "session_id", "entered_at"},
             "terminal": {"attempt_receipt_hash", "destination_resource_key", "entry_receipt_hash", "session_id", "worker_receipt", "host_effect_refs", "observed_at"},
         }[kind]
+        candidate_terminal = approved["contract_version"] == CANDIDATE_CONTRACT_VERSION and kind == "terminal"
+        if candidate_terminal:
+            expected_specific = expected_specific | {"candidate_binding"}
         if set(payload) != expected_common | expected_specific:
             raise StateConflict("Issue-delivery operation receipt fields are not closed")
         if (
-            payload.get("schema") != f"builderops.issue-delivery-{kind}.v1"
+            payload.get("schema") != f"builderops.issue-delivery-{kind}.v{2 if candidate_terminal else 1}"
             or payload.get("repository") != repository
             or payload.get("operation_type") != ISSUE_DELIVERY_OPERATION
             or payload.get("operation_key") != request.operation_key
@@ -1568,7 +1571,31 @@ def create_app(
                     "worker receipt must not supply protected host effect fields"
                 )
             refs = payload.get("host_effect_refs")
-            if not isinstance(refs, list) or len(refs) > 5:
+            if candidate_terminal and payload.get("candidate_binding") is not None:
+                from app.builderops.control_plane.issue_delivery import validate_content_result, validate_worker_completion
+                from app.builderops.issue_delivery_effect_executor import CandidateTarget, WorkerIsolationBinding
+                candidate = payload["candidate_binding"]
+                if not isinstance(candidate, Mapping) or set(candidate) != {"completion", "completion_sha256", "target", "worker_isolation"}:
+                    raise StateConflict("candidate terminal binding is not closed")
+                validate_content_result(payload["worker_receipt"])
+                witness = validate_worker_completion(candidate["completion"])
+                if "repository_credential_probe" in candidate["worker_isolation"]:
+                    raise StateConflict("retained worker binding is not closed")
+                isolation = WorkerIsolationBinding.model_validate({**candidate["worker_isolation"], "repository_credential_probe": "denied"})
+                target = CandidateTarget.model_validate(candidate["target"])
+                if (candidate["completion_sha256"] != canonical_hash(witness)
+                    or target.completion_sha256 != candidate["completion_sha256"]
+                    or witness["approval_id"] != request.approval_id or witness["operation_key"] != request.operation_key
+                    or witness["run_id"] != destination["run_id"] or witness["session_id"] != session_id
+                    or witness["attempt_receipt_sha256"] != payload["attempt_receipt_hash"]
+                    or witness["entry_receipt_sha256"] != payload["entry_receipt_hash"]
+                    or witness["profile_sha256"] != isolation.profile_sha256
+                    or witness["isolation_receipt_sha256"] != isolation.receipt_sha256
+                    or witness["observation"]["worker_uid"] != isolation.worker_uid
+                    or witness["observation"]["worker_gid"] != isolation.worker_gid
+                    or payload["worker_receipt"]["status"] != "completed"):
+                    raise StateConflict("candidate terminal witness binding changed")
+            if not isinstance(refs, list) or len(refs) > (7 if candidate_terminal else 5):
                 raise StateConflict("Issue-delivery host effect references are malformed")
             seen_refs: set[tuple[str, str, str]] = set()
             effect_types = {
@@ -1578,6 +1605,8 @@ def create_app(
                 "closure": "github.issue-delivery.closure.v1",
                 "parent_evidence": "github.issue-delivery.parent-evidence.v1",
             }
+            if approved["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+                effect_types["candidate_prepare"] = "git.issue-delivery.candidate-prepare.v1"
             for ref in refs:
                 if not isinstance(ref, Mapping) or set(ref) != {
                     "operation_key", "request_sha256", "effect_slot_sha256"
@@ -1616,7 +1645,7 @@ def create_app(
                 if (
                     outbox_status not in {"pending", "claimed", "unknown", "succeeded"}
                     or effect_payload.get("contract")
-                    != "builderops.issue-delivery-effect.v1"
+                    != ("builderops.issue-delivery-effect.v2" if approved["contract_version"] == CANDIDATE_CONTRACT_VERSION else "builderops.issue-delivery-effect.v1")
                     or effect_payload.get("request_sha256") != request_sha256
                     or effect_payload.get("effect_slot_sha256") != effect_slot_sha256
                     or effect_payload.get("approval_id") != request.approval_id
@@ -1842,7 +1871,7 @@ def create_app(
         if (
             request.record_type == ISSUE_DELIVERY_RECORD_TYPE
             or request.record_id.startswith("issue-delivery-approval:")
-            or request.payload.get("contract") in {ISSUE_DELIVERY_CONTRACT, SECOND_CONTRACT_VERSION}
+            or request.payload.get("contract") in {ISSUE_DELIVERY_CONTRACT, *TWO_SOURCE_VERSIONS}
             or request.payload.get("operation_type") == ISSUE_DELIVERY_OPERATION
         ):
             raise HTTPException(

@@ -1855,7 +1855,10 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         .datetime.now(__import__("datetime").timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
         platform_name: str = platform.system(),
+        completion_reader: Callable[[str], Mapping[str, Any]] | None = None,
     ) -> None:
+        self._completion_reader = completion_reader
+        self._entered_containment: dict[str, Any] | None = None
         self._expected_profile_sha256 = expected_profile_sha256
         self._isolation_runner = _SystemdWorkerRunner(
             profile_file=profile_file,
@@ -1899,6 +1902,42 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
             raise IssueWorkerIsolationError("worker isolation entry receipt is unavailable")
         return dict(receipt)
 
+    def completed_worker_observation(self, bindings: Mapping[str, Any]) -> dict[str, Any]:
+        """Read the host manager; absence, recycled identity and ambiguity refuse.
+
+        This read-only seam has no default manager installation and never stops a
+        worker. The host must supply observations of the whole containment and
+        exclusive content aperture, not a worker-returned success assertion.
+        """
+        receipt = self.completed_isolation_receipt()
+        if self._completion_reader is None or self._entered_containment is None:
+            raise IssueWorkerIsolationError("host completion observation is unavailable")
+        observed = dict(self._completion_reader(str(receipt["unit_identity"])))
+        worker = receipt["worker"]
+        if not isinstance(worker, Mapping):
+            raise IssueWorkerIsolationError("worker isolation principal is unavailable")
+        identity_fields = ("boot_id", "unit", "invocation_id", "cgroup", "worker_uid", "worker_gid")
+        if any(observed.get(key) != self._entered_containment.get(key) for key in identity_fields):
+            raise IssueWorkerIsolationError("worker containment identity changed")
+        if (observed.get("unit") != receipt["unit_identity"]
+            or observed.get("worker_uid") != worker["uid"]
+            or observed.get("worker_gid") != worker["gid"]
+            or any(not isinstance(observed.get(key), str) or not observed[key] for key in ("boot_id", "invocation_id", "cgroup", "observed_at"))
+            or observed.get("load_state") != "loaded"
+            or observed.get("active_state") != "inactive"
+            or observed.get("sub_state") != "dead"
+            or observed.get("result") != "success"
+            or observed.get("restart") != "no"
+            or observed.get("job") != ""
+            or observed.get("cgroup_populated") != 0
+            or observed.get("worker_processes") != []
+            or observed.get("aperture_writer_uids") != [worker["uid"]]):
+            raise IssueWorkerIsolationError("worker completion is not quiescent and exclusive")
+        from app.builderops.control_plane.issue_delivery import canonical_hash, validate_worker_completion
+        return validate_worker_completion({"contract": "builderops.issue-delivery-worker-completion.v1", **dict(bindings),
+                "isolation_receipt_sha256": canonical_hash(receipt),
+                "profile_sha256": receipt["profile_sha256"], "observation": observed})
+
     def launch(
         self,
         context_pack: Mapping[str, Any],
@@ -1912,12 +1951,18 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         self._isolation_runner.reset()
         self._isolation_runner.set_pre_process_entry(pre_process_entry)
         self._isolation_runner.set_pre_spawn_entry(pre_spawn_entry)
+        def entered(session_id: str) -> None:
+            if self._completion_reader is not None:
+                unit = str(self.completed_isolation_receipt()["unit_identity"])
+                self._entered_containment = dict(self._completion_reader(unit))
+            if on_entry is not None:
+                on_entry(session_id)
         try:
             result = dict(
                 super().launch(
                     context_pack,
                     execution_routing=execution_routing,
-                    on_entry=on_entry,
+                    on_entry=entered,
                     effect_gate=effect_gate,
                 )
             )
@@ -1928,6 +1973,29 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
         # the protected executor binds only through its direct launcher read.
         result["isolation_receipt"] = self.completed_isolation_receipt()
         return result
+
+    def reobserve_completed_worker(self, witness: Mapping[str, Any]) -> dict[str, Any]:
+        """Read the same containment after restart; no runner creation or control action."""
+        if self._completion_reader is None:
+            raise IssueWorkerIsolationError("host completion observer is unavailable")
+        return reobserve_worker_completion(witness, self._completion_reader)
+
+
+def reobserve_worker_completion(
+    witness: Mapping[str, Any], reader: Callable[[str], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Authenticate current raw containment facts without constructing a launcher."""
+    from datetime import datetime, timezone
+    from app.builderops.control_plane.issue_delivery import validate_worker_completion
+    retained = validate_worker_completion(witness)
+    observed = validate_worker_completion({**retained, "observation": dict(reader(retained["observation"]["unit"]))})
+    observed_at = datetime.fromisoformat(observed["observation"]["observed_at"].replace("Z", "+00:00"))
+    if abs((datetime.now(timezone.utc) - observed_at).total_seconds()) > 60:
+        raise IssueWorkerIsolationError("host completion observation is stale")
+    observed["observation"]["observed_at"] = retained["observation"]["observed_at"]
+    if observed != retained:
+        raise IssueWorkerIsolationError("retained worker containment or exclusivity changed")
+    return retained
 
 
 __all__ = [

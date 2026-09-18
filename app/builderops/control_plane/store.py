@@ -752,7 +752,7 @@ class PostgresBuilderOpsStore:
                     self._assert_lease(conn, envelope.repository, task_id, lease)
                     self._assert_task_lease_provenance(conn, envelope.repository, task_id, lease)
                 previous = conn.execute(
-                    "SELECT state, version FROM builderops_tasks "
+                    "SELECT state, version, payload FROM builderops_tasks "
                     "WHERE repository = %s AND task_id = %s FOR UPDATE",
                     (envelope.repository, task_id),
                 ).fetchone()
@@ -774,6 +774,7 @@ class PostgresBuilderOpsStore:
                     )
                 if previous is not None and lease is None and claim_holder is None:
                     raise LeaseRequired("an existing task mutation requires a fenced lease")
+                self._validate_candidate_task_transition(conn, envelope.repository, task_id, to_state, request, previous)
                 conn.execute(
                     "INSERT INTO builderops_tasks(repository, task_id, state, payload, authority_envelope) "
                     "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (repository, task_id) DO UPDATE SET "
@@ -1168,6 +1169,64 @@ class PostgresBuilderOpsStore:
         )
 
     @staticmethod
+    def _validate_candidate_task_transition(conn: Any, repository: str, task_id: str, state: str,
+                                           request: Mapping[str, Any], previous: Mapping[str, Any] | None) -> None:
+        """Use the native task lock/version for v3 projection integrity, never effect authority."""
+        from app.builderops.control_plane.issue_delivery import CANDIDATE_CONTRACT_VERSION
+        from app.builderops.issue_delivery_readback import CANDIDATE_TASK_CONTRACT, _task_binding, candidate_continuation
+        old = previous.get("payload", {}) if previous else {}
+        binding = request.get("issue_delivery", {})
+        old_binding = old.get("issue_delivery", {})
+        if not (isinstance(binding, Mapping) and binding.get("contract") == CANDIDATE_TASK_CONTRACT
+                or isinstance(old_binding, Mapping) and old_binding.get("contract") == CANDIDATE_TASK_CONTRACT):
+            return
+        if not isinstance(binding, Mapping) or binding.get("contract") != CANDIDATE_TASK_CONTRACT:
+            raise StateConflict("candidate native task cannot downgrade its binding")
+        version = int(previous["version"]) + 1 if previous else 1
+        row = conn.execute("SELECT payload FROM builderops_records WHERE repository=%s AND record_id=%s",
+                           (repository, f"issue-delivery-approval:{binding.get('approval_id')}")).fetchone()
+        approval = row.get("payload") if row else None
+        if (not isinstance(approval, Mapping) or approval.get("contract_version") != CANDIDATE_CONTRACT_VERSION
+            or task_id != f"issue-delivery-{approval['approval_id']}" or state not in {"ready", "claimed"}):
+            raise StateConflict("candidate native task requires its admitted v3 approval")
+        proposed = {"repository": repository, "state": state, "version": version, "payload": request}
+        try:
+            _task_binding(proposed, approval)
+            if previous:
+                if {k: v for k, v in binding.items() if k != "task_record_version"} != {k: v for k, v in old_binding.items() if k != "task_record_version"}:
+                    raise ValueError("native task identity changed")
+            continuation = request.get("continuation")
+            prior = old.get("continuation")
+            if prior is not None and continuation is None:
+                raise ValueError("continuation cannot be removed")
+            if continuation is not None:
+                terminal = conn.execute("SELECT payload FROM builderops_records WHERE repository=%s AND record_id=%s",
+                    (repository, f"issue-delivery-terminal:{approval['operation_key']}")).fetchone()
+                if terminal is None:
+                    raise ValueError("worker terminal missing")
+                candidate_continuation(proposed, approval, terminal)
+                if prior is not None and (continuation["host_effect_refs"][:len(prior["host_effect_refs"])] != prior["host_effect_refs"]
+                    or any(continuation["results"].get(k) != v for k, v in prior["results"].items())):
+                    raise ValueError("continuation is not monotonic")
+                for ref in continuation["host_effect_refs"]:
+                    outbox = conn.execute("SELECT status,payload,reconciliation_evidence,reconciliation_receipt_sequence FROM builderops_outbox WHERE repository=%s AND operation_key=%s",
+                        (repository, ref["operation_key"])).fetchone()
+                    effect = outbox.get("payload") if outbox else None
+                    if (not isinstance(effect, Mapping) or effect.get("approval_id") != approval["approval_id"]
+                        or effect.get("approved_operation_key") != approval["operation_key"]
+                        or effect.get("run_id") != approval["destination"]["run_id"]
+                        or effect.get("delivery_sources") != continuation["delivery_sources"]
+                        or any(effect.get(k) != ref[k] for k in ("request_sha256", "effect_slot_sha256"))):
+                        raise ValueError("continuation references a foreign effect")
+                    result = continuation["results"].get(ref["operation_key"])
+                    if result is not None and (outbox["status"] != "succeeded"
+                        or result["receipt_sequence"] != outbox["reconciliation_receipt_sequence"]
+                        or result["result_sha256"] != _hash(outbox["reconciliation_evidence"])):
+                        raise ValueError("continuation result is not reconciled")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StateConflict("candidate native task binding changed") from exc
+
+    @staticmethod
     def _issue_delivery_terminal_is_reusable(
         conn: Any,
         *,
@@ -1195,6 +1254,22 @@ class PostgresBuilderOpsStore:
             and payload.get("receipt_hash")
             == _hash({key: value for key, value in payload.items() if key != "receipt_hash"})
         ):
+            return False
+        if payload.get("schema") == "builderops.issue-delivery-terminal.v2":
+            # Native task projection is authenticated while the physical-destination
+            # serialization transaction remains held. No v3 full-chain terminal
+            # state is implemented by this dormant candidate slice.
+            from app.builderops.issue_delivery_readback import candidate_continuation
+            approval_row = conn.execute("SELECT payload FROM builderops_records WHERE repository=%s AND record_id=%s FOR UPDATE",
+                (repository, f"issue-delivery-approval:{approval_id}")).fetchone()
+            task = conn.execute("SELECT repository,state,version,payload FROM builderops_tasks WHERE repository=%s AND task_id=%s FOR UPDATE",
+                (repository, f"issue-delivery-{approval_id}")).fetchone()
+            try:
+                if approval_row is None or task is None:
+                    return False
+                candidate_continuation(task, approval_row["payload"], terminal)
+            except (KeyError, TypeError, ValueError):
+                return False
             return False
         refs = payload.get("host_effect_refs")
         if not isinstance(refs, list):

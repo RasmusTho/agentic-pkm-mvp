@@ -604,6 +604,90 @@ def _production_adapter(
     )
 
 
+def _recovered_candidate_adapter(harness: _ProductionHarness) -> IssueDeliveryOperationAdapter:
+    from app.builderops.issue_delivery_effect_executor import build_host_issue_delivery_executor
+    executor = build_host_issue_delivery_executor(approval=harness.approval, client=harness.host)
+    assert executor._prepared_worker is None
+    return IssueDeliveryOperationAdapter(harness.approval, client=harness.client,
+        repo_root=harness.worktree, protected_executor=executor,
+        live_binding_reader=executor.live_binding, require_protected_composition=True)
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("caller", ["dispatcher", "cli"])
+def test_content_worker_to_fenced_candidate_production_path(issue_delivery_production_harness, monkeypatch, tmp_path, caller):
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    approval = harness.approval
+    git = lambda *args: subprocess.check_output(["git", "-C", str(harness.worktree), *args], text=True).strip()
+    assert git("rev-parse", "HEAD") == approval["destination"]["base_sha"]
+    assert not (harness.worktree / "docs/guide.md").exists()
+    adapter = _production_adapter(harness)
+    plan = approval["context"]["dispatch_plan"]
+    failures = []
+    from app.builderops.control_plane import service
+    error_response = service._control_plane_error
+    def traced_error(exc):
+        if isinstance(exc, ValueError):
+            import traceback
+            failures.append("".join(traceback.format_exception(exc)))
+        return error_response(exc)
+    monkeypatch.setattr(service, "_control_plane_error", traced_error)
+    def failed_response(response):
+        if response.status_code >= 400 and response.status_code != 404:
+            response.read()
+            failures.append(response.text)
+    harness.host._http.event_hooks["response"].append(failed_response)
+    harness.client._http.event_hooks["response"].append(failed_response)
+    launch = adapter.launch
+    def traced_launch(*args, **kwargs):
+        try:
+            return launch(*args, **kwargs)
+        except Exception as exc:
+            import traceback
+            failures.append("".join(traceback.format_exception(exc)))
+            raise
+    monkeypatch.setattr(adapter, "launch", traced_launch)
+    if caller == "cli":
+        from tests.builderops.issue_delivery_production_harness import _production_client
+        launcher = harness.prepared_worker.launcher
+        profile_file = launcher._isolation_runner._profile_file
+        approval_file = launcher.effect_gate_approval_file
+        plan_file = tmp_path / "dispatch.json"
+        plan_file.write_text(json.dumps(plan))
+        # Substitute external HTTP and host runtime composition only. The CLI,
+        # Prepared.create, adapter, executor, authority and Git gates stay real.
+        monkeypatch.setattr("app.builderops.cli.ClientConfig.from_env", lambda: object())
+        monkeypatch.setattr("app.builderops.cli.BuilderOpsControlPlaneClient",
+            lambda *args, **kwargs: _production_client(harness.store, harness.registry, "executor-pg-token"))
+        monkeypatch.setattr("app.builderops.cli.ContentOnlyIssueDeliverySessionLauncher", lambda **kwargs: launcher)
+        def invoke():
+            run = CliRunner().invoke(builderops_standalone_root, ["builderops", "epic-run-state", "dispatch-sessions",
+                "--plan-file", str(plan_file), "--repo-root", str(harness.worktree),
+                "--approval-file", str(approval_file), "--expected-plan-hash", approval["context"]["expected_plan_hash"],
+                "--worker-isolation-profile-file", str(profile_file),
+                "--worker-isolation-profile-sha256", launcher.expected_profile_sha256, "--json"])
+            assert run.exit_code == 0, (run.output, run.exception)
+            return json.loads(run.output)
+        result = invoke()
+    else:
+        invoke = lambda: dispatch_issue_sessions(plan, launcher=adapter)
+        result = invoke()
+    assert not failures, "\n".join(failures)
+    assert harness.worker_transport.calls == 1, (result, failures)
+    head = git("rev-parse", "HEAD")
+    assert head != approval["destination"]["base_sha"]
+    assert git("rev-parse", "HEAD^") == approval["destination"]["base_sha"]
+    assert git("diff", "--name-only", "HEAD^", "HEAD") == "docs/guide.md"
+    assert git("status", "--porcelain") == ""
+    assert "candidate_ready" in json.dumps(result)
+    from app.builderops.issue_delivery_effect_executor import WorkerIsolationBinding
+    assert WorkerIsolationBinding.from_receipt(harness.prepared_worker.launcher.completed_isolation_receipt()).git_metadata_write_denied
+    replay = invoke()
+    assert harness.worker_transport.calls == 1
+    assert git("rev-parse", "HEAD") == head
+    assert "delivered" not in json.dumps(replay)
+
+
 def _cross_issue_approval(
     harness: _ProductionHarness, *, issue_number: int, suffix: str
 ) -> Mapping[str, Any]:
@@ -643,6 +727,13 @@ def _cross_issue_approval(
     plan["scope"] = {**plan["scope"], "issue_numbers": [issue_number]}
     manifest["context"]["content_hash"] = canonical_hash(context)
     manifest["context"]["expected_plan_hash"] = canonical_hash(plan)
+    if manifest["contract_version"] == "fca-issue-delivery.v3":
+        raw = deepcopy(harness.source_state["issue"])
+        raw.update(number=issue_number, node_id=manifest["issue"]["node_id"],
+                   html_url=manifest["issue"]["url"],
+                   url=f"https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/{issue_number}")
+        harness.source_state.setdefault("responses", {})[f"issues/{issue_number}"] = raw
+        harness.source_state.setdefault("operation_sources", {})[manifest["operation_key"]] = deepcopy(manifest["source"])
     preview = harness.owner.issue_delivery_preview(manifest=manifest)
     return harness.owner.issue_delivery_start(decision="start", manifest=preview["manifest"])[
         "approval"

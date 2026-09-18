@@ -113,6 +113,51 @@ def test_issue_delivery_v1_compatibility_and_v2_scope() -> None:
         normalize_issue_delivery_manifest(legacy)
 
 
+def test_host_candidate_versions_preserve_v1_v2_history(issue_delivery_production_harness):
+    from app.builderops.control_plane.issue_delivery import delivery_source_pair, tracking_repository
+    old = _manifest()
+    old["expires_at"] = "2099-01-01T00:00:00+00:00"
+    assert canonical_hash(normalize_issue_delivery_manifest(old)) == "114f9b5bbaa7baea1d10834031b29535336e97d772a1f7c103b382d98b0c43ec"
+    v2 = _bifrost_manifest()
+    v2["expires_at"] = "2099-01-01T00:00:00+00:00"
+    # Golden read independently from the unchanged 433bef18 source checkout.
+    assert canonical_hash(normalize_issue_delivery_manifest(v2)) == "5f74553cf63984bbade030652765fa8952395f819549f48de49457362d957e1d"
+    assert normalize_issue_delivery_manifest(normalize_issue_delivery_manifest(v2)) == normalize_issue_delivery_manifest(v2)
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    approved = harness.approval
+    assert delivery_source_pair(approved)["contract_version"] == "fca-issue-delivery.v3"
+    assert tracking_repository(approved) == REPOSITORY.lower()
+    assert set(approved["target_policies"]) == {"rasmustho/bifrost", REPOSITORY.lower()}
+    from app.builderops.control_plane.issue_delivery import strip_server_fields, IssueDeliveryContractError
+    for mutation in ("third", "old_pins", "v2_policy"):
+        changed = deepcopy(strip_server_fields(approved))
+        if mutation == "third":
+            changed["repository"] = "other/third"
+        elif mutation == "old_pins":
+            changed["workflow"] = v2["workflow"]
+        else:
+            changed["target_policies"]["rasmustho/bifrost"]["allowed_effects"].remove("git.issue-delivery.candidate-prepare.v1")
+        with pytest.raises(IssueDeliveryContractError):
+            normalize_issue_delivery_manifest(changed)
+    replay = harness.owner.issue_delivery_start(decision="start", manifest=approved)
+    assert replay["replayed"] and replay["approval"] == approved
+
+
+def test_v3_live_start_refuses_unqualified_continuation(issue_delivery_production_harness, monkeypatch):
+    from app.builderops import issue_delivery_effect_executor as module
+    from app.builderops.control_plane.client import ControlPlaneClientError
+    from app.builderops.control_plane.issue_delivery import strip_server_fields
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    # The disposable composition passed real gates; removing the installed host binding
+    # must make those same preview/Start gates refuse, including exact Start replay.
+    monkeypatch.setattr(module, "_HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME", None)
+    with pytest.raises(ControlPlaneClientError):
+        harness.owner.issue_delivery_preview(manifest=strip_server_fields(harness.approval))
+    with pytest.raises(ControlPlaneClientError):
+        harness.owner.issue_delivery_start(decision="start", manifest=harness.approval)
+    assert harness.worker_transport.calls == harness.transport.apply_calls == 0
+
+
 def _dsn() -> str:
     value = os.getenv("BUILDEROPS_DATABASE_URL", "").strip() or os.getenv("DATABASE_URL", "").strip()
     if not value:

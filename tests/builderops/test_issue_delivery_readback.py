@@ -27,6 +27,118 @@ REPOSITORY = "rasmustho/agentic-pkm-mvp"
 
 
 @pytest.mark.pg
+@pytest.mark.parametrize("phase", ["candidate_ready", "missing_ref", "unknown", "missing_task", "expired_lease"])
+def test_candidate_reference_restart_is_not_delivery(issue_delivery_production_harness, monkeypatch, phase):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from tests.builderops.test_issue_delivery_operation import _production_adapter, _cross_issue_approval, _recovered_candidate_adapter
+    from app.builderops.issue_delivery_operation import observe_issue_delivery_operation, IssueDeliveryOperationError
+    from app.builderops.issue_delivery_readback import read_issue_delivery_projection
+    from app.builderops.control_plane.client import ControlPlaneClientError
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    approval = harness.approval
+    successors = [_production_adapter(harness, approval=_cross_issue_approval(harness, issue_number=number, suffix=str(number)))
+                  for number in (5561, 5562)]
+    adapter = _production_adapter(harness)
+    context = approval["context"]["dispatch_plan"]["context_packs"][0]
+    transition = harness.host.transition_task
+    lost = False
+    def lose_append(**kwargs):
+        nonlocal lost
+        if phase == "missing_ref" and kwargs["request"].get("continuation") and not lost:
+            lost = True
+            raise ControlPlaneClientError("injected lost native reference append")
+        return transition(**kwargs)
+    monkeypatch.setattr(harness.host, "transition_task", lose_append)
+    applicator = harness.executor.candidate_applicator
+    write = applicator.write_object
+    writes = []
+    def write_object(kind, data):
+        result = write(kind, data)
+        writes.append(kind)
+        if phase == "unknown":
+            raise OSError("injected partial object write")
+        return result
+    monkeypatch.setattr(applicator, "write_object", write_object)
+    try:
+        result = adapter.launch(context)
+    except IssueDeliveryOperationError:
+        assert phase == "missing_ref"
+        result = {"candidate_state": "unknown"}
+    assert result["candidate_state"] == ("unknown" if phase in {"unknown", "missing_ref"} else "candidate_ready")
+    terminal = adapter._read("terminal")
+    terminal_hash = terminal["payload"]["receipt_hash"]
+    task_id = f"issue-delivery-{approval['approval_id']}"
+    if phase == "missing_task":
+        with harness.store._connect() as conn:
+            conn.execute("DELETE FROM builderops_tasks WHERE repository=%s AND task_id=%s", (approval["repository"], task_id))
+    elif phase == "expired_lease":
+        with harness.store._connect() as conn:
+            conn.execute("UPDATE builderops_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE repository=%s AND resource_id=%s",
+                         (approval["repository"], task_id))
+    checked = []
+    store_class = type(harness.store)
+    reuse = store_class._issue_delivery_terminal_is_reusable
+    def observed_reuse(conn, **kwargs):
+        verdict = reuse(conn, **kwargs)
+        checked.append((kwargs["operation_key"], verdict))
+        return verdict
+    monkeypatch.setattr(store_class, "_issue_delivery_terminal_is_reusable", staticmethod(observed_reuse))
+    barrier = threading.Barrier(2)
+    def reserve(other):
+        barrier.wait(timeout=10)
+        try:
+            other.reserve()
+        except IssueDeliveryOperationError:
+            return "refused"
+        return "reserved"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(reserve, other) for other in successors]
+        assert [future.result(timeout=30) for future in futures] == ["refused", "refused"]
+    assert checked and all(key == approval["operation_key"] and verdict is False for key, verdict in checked)
+    observed = observe_issue_delivery_operation(approval, client=harness.host,
+        plan=approval["context"]["dispatch_plan"], expected_plan_hash=approval["context"]["expected_plan_hash"],
+        repo_root=harness.worktree)
+    assert observed.state == "terminal"
+    original_writes = tuple(writes)
+    if phase != "missing_task":
+        if phase == "missing_ref":
+            # Competing repair callers share the native fence and expected-version CAS.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(_recovered_candidate_adapter(harness).launch, context) for _ in range(2)]
+                replays = []
+                for future in futures:
+                    try:
+                        replays.append(future.result(timeout=30))
+                    except (ControlPlaneClientError, IssueDeliveryOperationError):
+                        pass
+            assert replays and any(item["candidate_state"] == "candidate_ready" for item in replays)
+        else:
+            assert _recovered_candidate_adapter(harness).launch(context)["fresh_session"] is False
+        task = harness.host.get_task(repository=approval["repository"], task_id=task_id)
+        refs = task["payload"]["continuation"]["host_effect_refs"]
+        assert len(refs) == 2
+        candidate = harness.ledger.status(refs[-1]["operation_key"])
+        assert candidate["status"] == ("unknown" if phase == "unknown" else "succeeded")
+        projection = read_issue_delivery_projection(client=harness.host, task=task,
+            github_reader=lambda *args, **kwargs: pytest.fail("candidate readback must not guess remote delivery"))
+        assert projection["state"] == ("unknown" if phase == "unknown" else "candidate_ready")
+        assert projection["delivery_facts"] == {}
+        assert projection["candidate"]["ready_to_try"] is False
+        if phase != "unknown":
+            request = adapter._build_effect_request({"effect_kind": "candidate_prepare",
+                "target": terminal["payload"]["candidate_binding"]["target"]})
+            assert harness.executor.execute(request).outcome == "applied"
+            changed = request.model_copy(update={"target": request.target.model_copy(update={"timestamp": request.target.timestamp + 1})})
+            assert changed.effect_slot_sha256 == request.effect_slot_sha256
+            with pytest.raises(ValueError, match="foreign or changed"):
+                harness.executor.execute(changed)
+    assert tuple(writes) == original_writes
+    assert adapter._read("terminal")["payload"]["receipt_hash"] == terminal_hash
+    assert harness.worker_transport.calls == 1
+
+
+@pytest.mark.pg
 def test_native_admission_refuses_withdrawal_during_readback(issue_delivery_production_harness) -> None:
     harness = issue_delivery_production_harness(bifrost=True, issue_body=BODY)
     approval = harness.approval

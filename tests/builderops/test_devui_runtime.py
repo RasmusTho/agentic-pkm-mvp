@@ -113,7 +113,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     from app.builderops.control_plane.store import PostgresBuilderOpsStore
     from app.dispatcher.models import TaskRecord
 
-    repo = "example/fixture"
+    settings = getattr(request, "param", {})
+    repo = settings.get("repository", "example/fixture")
     stamp = datetime.now(timezone.utc).isoformat()
     source_ref = f"/v1/receipts/records/evidence-1?repository={repo}"
     envelope = {
@@ -151,10 +152,15 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
         )
     )
     state = SimpleNamespace(
-        mode="ok", epoch=7, calls=[], http_calls=[], tasks=[task], addressed_tasks=[]
+        mode="ok", epoch=settings.get("epoch", 7), calls=[], http_calls=[], tasks=[task], addressed_tasks=[]
     )
 
     class Store:
+        def __getattr__(self, name):
+            if hasattr(state, "native_store"):
+                return getattr(state.native_store, name)
+            raise AttributeError(name)
+
         def readiness(self):
             state.calls.append("status")
             if state.mode == "receipt_timeout" and any(
@@ -192,6 +198,8 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
 
         def get_record(self, repository, record_id):
             state.calls.append(("get_receipt", repository, record_id))
+            if hasattr(state, "native_store"):
+                return state.native_store.get_record(repository, record_id)
             if state.mode == "receipt_missing":
                 raise KeyError(record_id)
             if state.mode == "receipt_timeout":
@@ -220,6 +228,10 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
         "repositories": [repo],
         "rotation_generation": 1,
     }
+    if settings.get("delivery_read"):
+        # The existing status endpoint uses outbox:write. This disposable
+        # external credential enables observation, not a new production grant.
+        credential["scopes"].extend(["issue_delivery:read", "outbox:write"])
     auth = tmp_path / "source-auth.json"
     auth.write_text(json.dumps({"credentials": [credential]}))
     # Ordinary cases exercise the actual default policy. A cap-specific case
@@ -343,7 +355,7 @@ print(json.dumps(result))
     env = {
         **_environment(receipts),
         "DEVUI_REPOSITORY": repo,
-        "DEVUI_BUILDEROPS_AUTHORITY_EPOCH": "7",
+        "DEVUI_BUILDEROPS_AUTHORITY_EPOCH": str(state.epoch),
         "BUILDEROPS_API_URL": f"http://127.0.0.1:{listener.getsockname()[1]}",
         "BUILDEROPS_API_TOKEN_FILE": str(secret),
         "DEVUI_GITHUB_ENABLED": "true",
@@ -422,6 +434,73 @@ def _native_unprojected_tasks(source):
         row["authority_envelope"]["source_refs"] = ["github-issue:501"]
         rows.append(dict(PostgresBuilderOpsStore._task_snapshot(row)))
     return rows
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("managed_sources", [{"repository": "rasmustho/bifrost", "epoch": 1, "delivery_read": True}], indirect=True)
+def test_managed_source_preserves_v3_candidate_binding(managed_sources, issue_delivery_production_harness, monkeypatch):
+    from copy import deepcopy
+    from tests.builderops.test_issue_delivery_operation import _production_adapter
+    source = managed_sources
+    harness = issue_delivery_production_harness(bifrost=True, host_candidate=True)
+    approval = harness.approval
+    result = _production_adapter(harness).launch(approval["context"]["dispatch_plan"]["context_packs"][0])
+    assert result["candidate_state"] == "candidate_ready"
+    # Actual managed reader -> HTTP service -> the real isolated PostgreSQL rows.
+    source.native_store = harness.store
+    source.environment["DEVUI_GITHUB_ENABLED"] = "false"
+    from app.builderops import devui_sources
+    read_projection = devui_sources.read_issue_delivery_projection
+    projections, failures = [], []
+    def observed_projection(**kwargs):
+        try:
+            result = read_projection(**kwargs)
+            projections.append(result)
+            return result
+        except Exception as exc:
+            import traceback
+            failures.append("".join(traceback.format_exception(exc)))
+            raise
+    monkeypatch.setattr(devui_sources, "read_issue_delivery_projection", observed_projection)
+    with source.client() as client:
+        response = client.get("/api/devui/overview")
+    assert response.status_code == 200
+    payload = response.json()
+    work = _managed_source(payload, "dispatcher-store")
+    assert work["state"] == "fresh", work
+    assert ("get_task", approval["repository"], f"issue-delivery-{approval['approval_id']}") in source.calls
+    assert not failures, "\n".join(failures)
+    assert projections and projections[0]["state"] == "candidate_ready"
+    assert projections[0]["delivery_sources"]["contract_version"] == "fca-issue-delivery.v3"
+    assert projections[0]["approval_id"] == approval["approval_id"]
+    assert projections[0]["operation_key"] == approval["operation_key"]
+    assert projections[0]["delivery_facts"] == {}
+    # The unchanged full-delivery-only adapter cannot display this as delivery.
+    assert payload["now"] == []
+    assert "issue-delivery-unavailable" not in json.dumps(payload)
+    assert all(method == "GET" or (method, path) == ("POST", "/v1/issue-delivery/authority")
+               for method, path in source.http_calls), source.http_calls
+    assert all(item.get("delivery_facts", {}).get("delivery", {}).get("state") != "evidenced" for item in payload["now"])
+    # Mutate only raw external read observations, not gates or admitted source rows.
+    task = harness.store.get_task(approval["repository"], f"issue-delivery-{approval['approval_id']}")
+    del source.native_store
+    for field, value in (("version", "fca-issue-delivery.v9"), ("foreign", "foreign/repository"),
+                         ("task_contract", "fca-issue-delivery-task.v1"), ("field", "unexpected")):
+        changed = deepcopy(task)
+        binding = changed["payload"]["issue_delivery"]
+        if field == "version":
+            binding["delivery_sources"]["contract_version"] = value
+        elif field == "foreign":
+            binding["delivery_sources"]["issue_repository"] = value
+        elif field == "task_contract":
+            binding["contract"] = value
+        else:
+            binding[value] = True
+        source.tasks[:] = [changed]
+        with source.client() as client:
+            withdrawn = client.get("/api/devui/overview").json()
+        assert _managed_source(withdrawn, "dispatcher-store")["state"] == "unavailable"
+        assert not withdrawn["now"]
 
 
 def test_managed_overview_reads_admitted_sources(managed_sources) -> None:

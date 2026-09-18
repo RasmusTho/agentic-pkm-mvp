@@ -23,7 +23,7 @@ from app.builderops.control_plane.client_cli import (
 )
 from app.builderops.control_plane.models import canonical_repository
 from app.builderops.control_plane.client import ControlPlaneClientError
-from app.builderops.control_plane.issue_delivery import delivery_source_pair, tracking_repository
+from app.builderops.control_plane.issue_delivery import CANDIDATE_CONTRACT_VERSION, canonical_hash, delivery_source_pair, tracking_repository
 from app.builderops.owner_fact_producers import (
     BIFROST_AUTHORITY, BIFROST_REPOSITORY, OwnerFactRefusal,
     _validate_documentation_candidate, read_owner_binding,
@@ -33,6 +33,8 @@ from app.builderops.devui_receipts import AUTHORITY as OWNER_BINDING_AUTHORITY
 
 CONTRACT = "fca-issue-delivery-readback.v1"
 TASK_CONTRACT = "fca-issue-delivery-task.v1"
+CANDIDATE_TASK_CONTRACT = "fca-issue-delivery-task.v2"
+CONTINUATION_CONTRACT = "builderops.issue-delivery-continuation.v1"
 _HEX_40 = re.compile(r"[0-9a-f]{40}\Z")
 _HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 _AC = re.compile(r"^## Acceptance Criteria\s*\n(.*?)(?=^## |\Z)", re.MULTILINE | re.DOTALL)
@@ -174,7 +176,7 @@ def admit_issue_delivery_task(
         status="ready",
         why_now="An approved Issue delivery is ready for independent readback.",
         issue_delivery={
-            "contract": TASK_CONTRACT,
+            "contract": CANDIDATE_TASK_CONTRACT if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else TASK_CONTRACT,
             "task_record_version": 1,
             "approval_id": approval_id,
             "approval_manifest_hash": approval["approval_manifest_hash"],
@@ -258,7 +260,7 @@ def _task_binding(task: Any, approval: Mapping[str, Any]) -> None:
         or row.get("state") not in {"ready", "claimed", "completed"}
         or type(row.get("version")) is not int
         or row["version"] < 1
-        or binding.get("contract") != TASK_CONTRACT
+        or binding.get("contract") != (CANDIDATE_TASK_CONTRACT if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else TASK_CONTRACT)
         or binding.get("task_record_version") != row["version"]
         or binding.get("approval_id") != approval.get("approval_id")
         or binding.get("approval_manifest_hash") != approval.get("approval_manifest_hash")
@@ -271,10 +273,41 @@ def _task_binding(task: Any, approval: Mapping[str, Any]) -> None:
         raise IssueDeliveryReadbackRefused("native Issue-delivery task binding changed")
 
 
-def _targets(host_effects: Any, refs: Any) -> dict[str, Mapping[str, Any]]:
+def candidate_continuation(task: Mapping[str, Any], approval: Mapping[str, Any], terminal: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Authenticate the finite task projection against the immutable worker terminal."""
+    _task_binding(task, approval)
+    payload = _mapping(terminal.get("payload"), "worker terminal")
+    continuation = _mapping(task["payload"].get("continuation"), "candidate continuation")
+    expected = {"contract": CONTINUATION_CONTRACT, "approval_id": approval["approval_id"],
+        "approval_manifest_hash": approval["approval_manifest_hash"], "operation_key": approval["operation_key"],
+        "run_id": approval["destination"]["run_id"], "delivery_sources": delivery_source_pair(approval),
+        "worker_terminal_sha256": payload.get("receipt_hash"),
+        "destination_resource_key": payload.get("destination_resource_key")}
+    if (set(continuation) != set(expected) | {"host_effect_refs", "results"}
+        or any(continuation.get(key) != value for key, value in expected.items())
+        or payload.get("receipt_hash") != canonical_hash({k: v for k, v in payload.items() if k != "receipt_hash"})):
+        raise IssueDeliveryReadbackRefused("candidate continuation binding changed")
+    from app.builderops.issue_delivery_operation import _valid_host_effect_refs
+    refs = _valid_host_effect_refs(continuation["host_effect_refs"], maximum=7)
+    if refs[:len(payload["host_effect_refs"])] != payload["host_effect_refs"]:
+        raise IssueDeliveryReadbackRefused("candidate continuation lost worker-terminal references")
+    results = _mapping(continuation["results"], "candidate results")
+    if not set(results) <= {ref["operation_key"] for ref in refs}:
+        raise IssueDeliveryReadbackRefused("candidate continuation has foreign results")
+    for result in results.values():
+        value = _mapping(result, "candidate result")
+        if set(value) != {"receipt_sequence", "result_sha256"} or type(value["receipt_sequence"]) is not int or value["receipt_sequence"] <= 0:
+            raise IssueDeliveryReadbackRefused("candidate result binding malformed")
+        _sha(value["result_sha256"], "candidate result hash")
+    return continuation
+
+
+def _targets(host_effects: Any, refs: Any, *, candidate: bool = False) -> dict[str, Mapping[str, Any]]:
     if not isinstance(host_effects, list) or not isinstance(refs, list):
         raise IssueDeliveryReadbackRefused("host effect evidence is unavailable")
     ref_by_operation: dict[str, Mapping[str, Any]] = {}
+    if len(refs) > (7 if candidate else 5):
+        raise IssueDeliveryReadbackRefused("host effect reference bound exceeded")
     for raw_ref in refs:
         ref = _mapping(raw_ref, "host effect reference")
         operation_key = ref.get("operation_key")
@@ -299,23 +332,23 @@ def _targets(host_effects: Any, refs: Any) -> dict[str, Mapping[str, Any]]:
         kind = payload.get("effect_kind")
         target = _mapping(payload.get("target"), "host effect target")
         if (
-            effect.get("status") != "succeeded"
+            effect.get("status") not in ({"pending", "claimed", "unknown", "succeeded"} if candidate else {"succeeded"})
             or matched_ref is None
             or operation_key in seen_operations
             or payload.get("request_sha256") != matched_ref.get("request_sha256")
             or payload.get("effect_slot_sha256") != matched_ref.get("effect_slot_sha256")
-            or kind not in {"claim", "publication", "merge", "closure", "parent_evidence"}
+            or kind not in ({"claim", "candidate_prepare"} if candidate else {"claim", "publication", "merge", "closure", "parent_evidence"})
             or target.get("kind") != kind
         ):
             raise IssueDeliveryReadbackRefused("host effect evidence is incomplete or contradictory")
         seen_operations.add(str(operation_key))
-        if kind in {"publication", "merge", "closure"}:
+        if kind in {"publication", "merge", "closure", "candidate_prepare"}:
             if kind in targets:
                 raise IssueDeliveryReadbackRefused("host effect evidence is incomplete or contradictory")
             targets[str(kind)] = target
     if (
         seen_operations != set(ref_by_operation)
-        or set(targets) != {"publication", "merge", "closure"}
+        or (not candidate and set(targets) != {"publication", "merge", "closure"})
     ):
         raise IssueDeliveryReadbackRefused("host effect evidence is incomplete or contradictory")
     return targets
@@ -337,7 +370,7 @@ def read_issue_delivery_projection(
 
     payload = _mapping(task.get("payload"), "Issue-delivery task payload")
     binding = _mapping(payload.get("issue_delivery"), "Issue-delivery task binding")
-    if binding.get("contract") != TASK_CONTRACT:
+    if binding.get("contract") not in {TASK_CONTRACT, CANDIDATE_TASK_CONTRACT}:
         raise IssueDeliveryReadbackRefused("task is not a native Issue-delivery task")
     repository = canonical_repository(_text(task.get("repository"), "task repository"))
     approval_id = _text(binding.get("approval_id"), "task approval")
@@ -375,7 +408,7 @@ def read_issue_delivery_projection(
         value = _mapping(status, "host effect status")
         effect_payload = _mapping(value.get("payload"), "host effect payload")
         if (
-            value.get("status") != "succeeded"
+            value.get("status") not in ({"pending", "claimed", "unknown", "succeeded"} if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION else {"succeeded"})
             or effect_payload.get("request_sha256") != ref["request_sha256"]
             or effect_payload.get("effect_slot_sha256") != ref["effect_slot_sha256"]
             or effect_payload.get("approval_id") != approval_id
@@ -384,6 +417,9 @@ def read_issue_delivery_projection(
         ):
             raise IssueDeliveryReadbackRefused("host effect readback changed")
         host_effects.append(deepcopy(dict(value)))
+    if approval["contract_version"] == CANDIDATE_CONTRACT_VERSION:
+        return compose_issue_delivery_readback(task=task, approval_readback=approval_readback,
+            operation=operation, host_effects=host_effects, github_evidence=None, owner_binding=None)
     issue = _mapping(approval.get("issue"), "approved Issue")
     branch = _text(destination.get("branch"), "approved branch")
     github = github_reader(repository, int(issue["number"]), branch=branch,
@@ -471,7 +507,43 @@ def compose_issue_delivery_readback(
     if op.get("state") != "terminal" or op.get("operation_key") != approval.get("operation_key"):
         raise IssueDeliveryReadbackRefused("destination operation is not terminal for this approval")
     # Deliberately do not consult op["worker_receipt"] for any outcome.
-    targets = _targets(host_effects, op.get("host_effect_refs"))
+    candidate_version = approval["contract_version"] == CANDIDATE_CONTRACT_VERSION
+    targets = _targets(host_effects, op.get("host_effect_refs"), candidate=candidate_version)
+    if candidate_version:
+        # This finite readback cannot establish remote delivery or owner facts.
+        state = "unknown"
+        continuation = _mapping(_mapping(task, "candidate task")["payload"].get("continuation"), "candidate continuation")
+        if continuation["host_effect_refs"] != op.get("host_effect_refs"):
+            raise IssueDeliveryReadbackRefused("candidate task references changed")
+        for effect in host_effects:
+            payload = effect["payload"]
+            if payload.get("delivery_sources") != delivery_source_pair(approval) or payload.get("approval_manifest_hash") != approval["approval_manifest_hash"]:
+                raise IssueDeliveryReadbackRefused("candidate source binding changed")
+            if payload["effect_kind"] == "candidate_prepare" and effect["status"] == "succeeded":
+                from app.builderops.issue_delivery_effect_executor import LocalCandidateReadbackEvidence
+                raw = effect.get("reconciliation_evidence", {})
+                local_evidence = LocalCandidateReadbackEvidence.model_validate({k: v for k, v in raw.items() if k not in {"outcome", "request_sha256"}})
+                target = targets["candidate_prepare"]
+                result = continuation["results"].get(effect["operation_key"])
+                if (raw.get("outcome") != "applied" or raw.get("request_sha256") != payload["request_sha256"]
+                    or result != {"receipt_sequence": effect["reconciliation_receipt_sequence"], "result_sha256": canonical_hash(raw)}
+                    or local_evidence.observed_target_sha256 != canonical_hash(target)
+                    or local_evidence.effect_repository != approval["repository"]
+                    or local_evidence.effect_slot_sha256 != payload["effect_slot_sha256"]
+                    or local_evidence.destination_identity_sha256 != payload["destination_identity_sha256"]
+                    or local_evidence.expected_parent != local_evidence.observed_parent or local_evidence.expected_parent != target["base_sha"]
+                    or local_evidence.expected_tree != local_evidence.observed_tree or local_evidence.expected_tree != target["tree_oid"]
+                    or local_evidence.expected_commit != local_evidence.observed_commit or local_evidence.expected_commit != target["commit_oid"]
+                    or local_evidence.observed_head != local_evidence.observed_commit or local_evidence.index_tree != local_evidence.observed_tree
+                    or local_evidence.content_snapshot_sha256 != target["snapshot_sha256"]):
+                    raise IssueDeliveryReadbackRefused("candidate result binding changed")
+                state = "candidate_ready"
+        return {"contract": "fca-issue-delivery-readback.v2", "state": state,
+                "subject_ref": f"github:{tracking_repository(approval)}#{approval['issue']['number']}",
+                "approval_id": approval["approval_id"], "operation_key": approval["operation_key"],
+                "delivery_sources": delivery_source_pair(approval), "task_record_version": task["version"],
+                "delivery_facts": {}, "evidence": [], "candidate": {"ready_to_try": False},
+                "limitations": ["Local candidate only; remote delivery, live activation and owner outcomes remain unproved."]}
     if delivery_source_pair(approval):
         for effect in host_effects:
             payload = effect["payload"]

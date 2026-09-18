@@ -324,12 +324,31 @@ class BuilderOpsControlPlaneClient:
                              params=params, pin_epoch=False)
 
     def get_task(self, *, repository: str, task_id: str) -> dict[str, Any]:
-        return self._request(
+        row = self._request(
             "GET",
             f"/{API_VERSION}/tasks/{task_id}",
             params={"repository": repository},
             pin_epoch=False,
         )
+        self._validate_delivery_task_version(row)
+        return row
+
+    @staticmethod
+    def _validate_delivery_task_version(row: Mapping[str, Any]) -> None:
+        payload = row.get("payload")
+        binding = payload.get("issue_delivery") if isinstance(payload, Mapping) else None
+        if binding is None:
+            return
+        if not isinstance(binding, Mapping) or binding.get("contract") not in {"fca-issue-delivery-task.v1", "fca-issue-delivery-task.v2"}:
+            raise ControlPlaneProtocolError("unsupported native Issue-delivery task version")
+        sources = binding.get("delivery_sources")
+        if binding["contract"] == "fca-issue-delivery-task.v2":
+            if (not isinstance(sources, Mapping) or sources.get("contract_version") != "fca-issue-delivery.v3"
+                or type(binding.get("task_record_version")) is not int
+                or binding["task_record_version"] != row.get("version")):
+                raise ControlPlaneProtocolError("candidate native task binding changed")
+        elif isinstance(sources, Mapping) and sources.get("contract_version") != "fca-issue-delivery.v2":
+            raise ControlPlaneProtocolError("legacy native task source version changed")
 
     def list_tasks(
         self, *, repository: str, task_prefix: str | None = None
@@ -347,6 +366,8 @@ class BuilderOpsControlPlaneClient:
             raise ControlPlaneProtocolError(
                 "control plane returned malformed task collection"
             )
+        for task in tasks:
+            self._validate_delivery_task_version(task)
         return tasks
 
     def list_attempts(

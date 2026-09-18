@@ -21,6 +21,8 @@ from app.builderops.control_plane.models import canonical_repository
 
 CONTRACT_VERSION = "fca-issue-delivery.v1"
 SECOND_CONTRACT_VERSION = "fca-issue-delivery.v2"
+CANDIDATE_CONTRACT_VERSION = "fca-issue-delivery.v3"
+TWO_SOURCE_VERSIONS = frozenset({SECOND_CONTRACT_VERSION, CANDIDATE_CONTRACT_VERSION})
 SECOND_REPOSITORY = "rasmustho/bifrost"
 OPERATION_TYPE = "deliver_ready_issue"
 RECORD_TYPE = "IssueDeliveryApproval"
@@ -43,6 +45,25 @@ REQUIRED_WORKFLOW_ARTIFACTS = frozenset(
         ".codex/skills/verification-and-closure/SKILL.md",
     }
 )
+
+CANDIDATE_WORKFLOW_ARTIFACTS = REQUIRED_WORKFLOW_ARTIFACTS | frozenset({
+    "app/builderops/control_plane/issue_delivery.py",
+    "app/builderops/control_plane/service.py",
+    "app/builderops/control_plane/client.py",
+    "app/builderops/control_plane/store.py",
+    "app/builderops/issue_delivery_operation.py",
+    "app/builderops/issue_delivery_readback.py",
+    "app/builderops/devui_sources.py",
+})
+
+
+def workflow_artifacts(version: str) -> frozenset[str]:
+    if version == CANDIDATE_CONTRACT_VERSION:
+        return CANDIDATE_WORKFLOW_ARTIFACTS
+    if version in {CONTRACT_VERSION, SECOND_CONTRACT_VERSION}:
+        return REQUIRED_WORKFLOW_ARTIFACTS
+    raise IssueDeliveryContractError("unsupported Issue-delivery contract")
+
 
 # FCA-ID-A admits the complete repository delivery chain as a named set.  The
 # destination slices decide whether an individual effect is currently
@@ -133,6 +154,26 @@ _TOP_LEVEL_SOURCE_ALIASES = frozenset(
 
 class IssueDeliveryContractError(ValueError):
     """The supplied Issue-delivery manifest is not exact and closed."""
+
+
+def validate_content_result(value: Any) -> dict[str, Any]:
+    """Advisory content only; host identities and effects are never worker input."""
+    if not isinstance(value, Mapping) or set(value) != {"contract", "status", "summary", "validation"}:
+        raise IssueDeliveryContractError("content result fields are not closed")
+    if value["contract"] != "builderops.issue-delivery-content-result.v1" or value["status"] not in {"completed", "failed"}:
+        raise IssueDeliveryContractError("content result contract or status is invalid")
+    _text(value["summary"], "content summary", limit=4096)
+    checks = value["validation"]
+    if not isinstance(checks, list) or len(checks) > 32:
+        raise IssueDeliveryContractError("content validation is not bounded")
+    for check in checks:
+        if not isinstance(check, Mapping) or set(check) != {"name", "outcome", "summary"}:
+            raise IssueDeliveryContractError("content validation fields are not closed")
+        _text(check["name"], "validation name", limit=128)
+        _text(check["summary"], "validation summary", limit=2048)
+        if check["outcome"] not in {"passed", "failed", "not_run"}:
+            raise IssueDeliveryContractError("content validation outcome is invalid")
+    return dict(value)
 
 
 def canonical_hash(value: Any) -> str:
@@ -667,8 +708,10 @@ def _workflow_fields(value: Any, *, contract_version: str = CONTRACT_VERSION) ->
             }
         )
     artifacts.sort(key=lambda item: item["path"])
-    if paths != REQUIRED_WORKFLOW_ARTIFACTS:
+    if paths != workflow_artifacts(contract_version):
         raise IssueDeliveryContractError("workflow artifact manifest is incomplete or unrelated")
+    if contract_version == CANDIDATE_CONTRACT_VERSION and workflow.get("host_candidate_contract") != "fca-host-candidate.v1":
+        raise IssueDeliveryContractError("host candidate contract is required")
     if workflow_hash != canonical_hash(artifacts):
         raise IssueDeliveryContractError("workflow hash does not bind its artifact manifest")
     return {
@@ -890,11 +933,13 @@ def _parent_evidence(value: Any, *, issue_number: int, canonical_effects: bool =
 
 
 def delivery_source_pair(value: Mapping[str, Any]) -> dict[str, str]:
-    """Only v2 adds identities; never reinterpret or rehash a stored v1 binding."""
-    if value.get("contract_version") != SECOND_CONTRACT_VERSION:
+    """Preserve the declared v2/v3 pair; never upgrade a stored v1 binding."""
+    if value.get("contract_version") == CONTRACT_VERSION:
         return {}
+    if value.get("contract_version") not in TWO_SOURCE_VERSIONS:
+        raise IssueDeliveryContractError("unsupported Issue-delivery source version")
     return {
-        "contract_version": SECOND_CONTRACT_VERSION,
+        "contract_version": value["contract_version"],
         "repository": value["repository"],
         "source_revision": value["source"]["revision"],
         "issue_repository": value["issue"]["repository"],
@@ -937,9 +982,12 @@ def _second_consumer_bindings(value: dict[str, Any]) -> None:
         _text(policy["credential_id"], "target credential identifier")
         if type(policy["rotation_generation"]) is not int or policy["rotation_generation"] < 1:
             raise IssueDeliveryContractError("exact credential generation is required")
-        if set(_list_of_text(policy["allowed_effects"], "target effects")) != {
+        expected_effects = {
             f"github.issue-delivery.{effect}.v1" for effect in effects
-        }:
+        }
+        if value["contract_version"] == CANDIDATE_CONTRACT_VERSION and repository == SECOND_REPOSITORY:
+            expected_effects.add("git.issue-delivery.candidate-prepare.v1")
+        if set(_list_of_text(policy["allowed_effects"], "target effects")) != expected_effects:
             raise IssueDeliveryContractError("target effect grants are not exact")
         if repository == SECOND_REPOSITORY:
             paths = _list_of_text(policy["documentation_paths"], "documentation paths")
@@ -971,7 +1019,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
     raw = dict(value)
     try:
         version = raw.get("contract_version")
-        if version not in {CONTRACT_VERSION, SECOND_CONTRACT_VERSION}:
+        if version not in {CONTRACT_VERSION, *TWO_SOURCE_VERSIONS}:
             raise IssueDeliveryContractError("unsupported Issue-delivery contract")
         if raw.get("operation_type") != OPERATION_TYPE:
             raise IssueDeliveryContractError("deliver_ready_issue operation is required")
@@ -1082,7 +1130,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             raise IssueDeliveryContractError("permitted effects do not match the closed delivery set")
         if set(non_effects) != NON_EFFECTS:
             raise IssueDeliveryContractError("explicit non-effects do not match the closed delivery set")
-        parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"], canonical_effects=version == SECOND_CONTRACT_VERSION)
+        parent = _parent_evidence(raw.get("parent_evidence"), issue_number=issue["number"], canonical_effects=version in TWO_SOURCE_VERSIONS)
         if parent.get("kind") == "issue" and (
             parent.get("node_id") == issue["node_id"]
             or (
@@ -1128,7 +1176,7 @@ def normalize_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
             "parent_evidence": parent,
             "owner_profile": {**owner_profile, "principal": profile_principal},
         }
-        if version == SECOND_CONTRACT_VERSION:
+        if version in TWO_SOURCE_VERSIONS:
             _second_consumer_bindings(result)
         return result
     except IssueDeliveryContractError:
@@ -1201,6 +1249,45 @@ def destination_resource_key(
             },
         }
     )
+
+
+def validate_worker_completion(value: Any) -> dict[str, Any]:
+    """Closed, non-authorizing host completion witness shared by durable readers."""
+    fields = {"contract", "approval_id", "operation_key", "run_id", "session_id",
+              "attempt_receipt_sha256", "entry_receipt_sha256", "destination_sha256",
+              "isolation_receipt_sha256", "profile_sha256", "observation"}
+    observation_fields = {"boot_id", "unit", "invocation_id", "cgroup", "worker_uid",
+                          "worker_gid", "observed_at", "load_state", "active_state", "sub_state",
+                          "result", "restart", "job", "cgroup_populated", "worker_processes",
+                          "aperture_writer_uids"}
+    if not isinstance(value, Mapping) or set(value) != fields or value.get("contract") != "builderops.issue-delivery-worker-completion.v1":
+        raise IssueDeliveryContractError("worker completion witness is malformed")
+    for key in fields - {"contract", "observation"}:
+        item = value[key]
+        if not isinstance(item, str) or not item or len(item) > 256 or any(ord(c) < 32 for c in item):
+            raise IssueDeliveryContractError("worker completion binding is malformed")
+        if key.endswith("sha256") and re.fullmatch(r"[0-9a-f]{64}", item) is None:
+            raise IssueDeliveryContractError("worker completion hash is malformed")
+    observed = value["observation"]
+    if not isinstance(observed, Mapping) or set(observed) != observation_fields:
+        raise IssueDeliveryContractError("worker completion observation is not closed")
+    for key in ("boot_id", "unit", "invocation_id", "cgroup"):
+        if not isinstance(observed[key], str) or not observed[key] or len(observed[key]) > 512 or any(ord(c) < 32 for c in observed[key]):
+            raise IssueDeliveryContractError("worker containment identity is malformed")
+    try:
+        timestamp = datetime.fromisoformat(observed["observed_at"].replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise IssueDeliveryContractError("worker completion time is malformed") from exc
+    if (any(type(observed[key]) is not int or observed[key] <= 0 for key in ("worker_uid", "worker_gid"))
+        or observed["load_state"] != "loaded" or observed["active_state"] != "inactive"
+        or observed["sub_state"] != "dead" or observed["result"] != "success"
+        or observed["restart"] != "no" or observed["job"] != ""
+        or type(observed["cgroup_populated"]) is not int or observed["cgroup_populated"] != 0
+        or observed["worker_processes"] != [] or observed["aperture_writer_uids"] != [observed["worker_uid"]]):
+        raise IssueDeliveryContractError("worker completion is not quiescent and exclusive")
+    return {**value, "observation": dict(observed)}
 
 
 def strip_server_fields(value: Mapping[str, Any]) -> dict[str, Any]:

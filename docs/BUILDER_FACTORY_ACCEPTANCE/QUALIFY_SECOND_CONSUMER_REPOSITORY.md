@@ -106,16 +106,17 @@ Replacing this validator must preserve that fail-closed distinction and its rece
 Before any live Start, parent #5399 must supply qualified independent authority, concrete host
 transport/bootstrap **and host candidate preparation/stage/commit**, an authenticated M2 UI,
 separately prepared Bifrost policy/governance and exact selected-operation stop/recovery/rollback
-proof. `PublicationTarget` expects an existing head; `_validate_complete_diff` verifies worktree
-HEAD, while the content worker cannot write Git metadata. Test-side Git preparation does not
-implement this host producer. The launcher reports stop as unsupported; that limitation and an
+proof. Issue #5593 supplies the dormant repository candidate producer through the protected local
+fence, not an installed or qualified live composition. `PublicationTarget` expects an independently
+observed head; the content worker still cannot write Git metadata. The launcher reports stop as unsupported; that limitation and an
 existing bob deployment rollback cannot substitute for real selected-operation rollback proof.
 
-The single future producer/continuation owner is
+The single candidate/continuation owner is
 [FCA-ID-HOST-CANDIDATE](README.md#fca-id-host-candidate--protected-candidate-and-continuation-contract).
-It defines the local-effect fence, versioned candidate/readback chain and smallest next dormant
-implementation slice. This source contract does not implement the missing host path or complete
-this pilot; the live requirements above remain pending.
+It distinguishes the implemented dormant local-effect fence and versioned candidate/readback
+chain from later remote transport and continuation. Disposable production-composed proof permits
+raw external I/O fixtures, not authority verdicts or live qualification. This does not complete
+the pilot; the live requirements above remain pending.
 
 Consumer preparation must preserve Bifrost Issue25/PR26's local-Issue and foreign-auto-closer
 policy. Hub-tracked v2 needs its own bounded preparation, not retargeting or policy weakening.

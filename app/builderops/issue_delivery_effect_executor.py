@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,13 +29,14 @@ from app.builderops.control_plane.client import (
     ControlPlaneNotFoundError,
 )
 from app.builderops.control_plane.issue_delivery import (
-    REQUIRED_WORKFLOW_ARTIFACTS, SECOND_CONTRACT_VERSION, delivery_source_pair,
-    tracking_repository,
+    CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS, delivery_source_pair,
+    tracking_repository, workflow_artifacts,
 )
 from app.builderops.control_plane.models import canonical_repository
 from app.builderops.issue_delivery_worker_isolation import (
     ISOLATION_RECEIPT_CONTRACT,
     LinuxSystemdCodexIssueSessionLauncher,
+    reobserve_worker_completion,
 )
 from app.dispatcher.verification_merge import (
     BuilderOpsOutboxExecutor,
@@ -50,6 +53,7 @@ WORKER_ISOLATION_ARTIFACT = "app/builderops/issue_delivery_worker_isolation.py"
 _HEX_40 = r"^[0-9a-f]{40}$"
 _HEX_64 = r"^[0-9a-f]{64}$"
 _EFFECT_TYPES = {
+    "candidate_prepare": "git.issue-delivery.candidate-prepare.v1",
     "claim": "github.issue-delivery.claim.v1",
     "publication": "github.issue-delivery.publication.v1",
     "merge": "github.issue-delivery.merge.v1",
@@ -57,6 +61,7 @@ _EFFECT_TYPES = {
     "parent_evidence": "github.issue-delivery.parent-evidence.v1",
 }
 _PERMISSIONS = {
+    "candidate_prepare": "repository_worktree",
     "claim": "issue_claim",
     "publication": "publication",
     "merge": "review_merge",
@@ -517,9 +522,37 @@ EffectTarget = Annotated[
 ]
 
 
+class CandidatePath(_StrictModel):
+    path: str = Field(min_length=1, max_length=512)
+    old_mode: Literal["000000", "100644"]
+    new_mode: Literal["000000", "100644"]
+    old_blob: str = Field(pattern=_HEX_40)
+    new_blob: str = Field(pattern=_HEX_40)
+    bytes_sha256: str = Field(pattern=_HEX_64)
+    length: int = Field(ge=0, le=2 * 1024 * 1024)
+
+
+class CandidateTarget(_StrictModel):
+    kind: Literal["candidate_prepare"]
+    issue_number: int = Field(gt=0)
+    branch: str
+    base_ref: str
+    base_sha: str = Field(pattern=_HEX_40)
+    expected_head_sha: str = Field(pattern=_HEX_40)
+    snapshot_sha256: str = Field(pattern=_HEX_64)
+    paths: tuple[CandidatePath, ...] = Field(min_length=1, max_length=128)
+    index_sha256: str = Field(pattern=_HEX_64)
+    commit_message_sha256: str = Field(pattern=_HEX_64)
+    identity: Literal["BuilderOps Candidate <candidate@builderops.invalid>"]
+    timestamp: int = Field(gt=0)
+    tree_oid: str = Field(pattern=_HEX_40)
+    commit_oid: str = Field(pattern=_HEX_40)
+    completion_sha256: str = Field(pattern=_HEX_64)
+
+
 class IssueDeliveryEffectRequest(_StrictModel):
-    contract: Literal["builderops.issue-delivery-effect.v1"]
-    effect_kind: Literal["claim", "publication", "merge", "closure", "parent_evidence"]
+    contract: Literal["builderops.issue-delivery-effect.v1", "builderops.issue-delivery-effect.v2"]
+    effect_kind: Literal["claim", "publication", "merge", "closure", "parent_evidence", "candidate_prepare"]
     approval: dict[str, Any]
     approval_id: str = Field(min_length=1, max_length=256)
     approved_operation_key: str = Field(min_length=1, max_length=256)
@@ -538,7 +571,7 @@ class IssueDeliveryEffectRequest(_StrictModel):
     worker_isolation: WorkerIsolationBinding
     executor_artifact_sha256: str = Field(pattern=_HEX_64)
     worker_isolation_artifact_sha256: str = Field(pattern=_HEX_64)
-    target: EffectTarget
+    target: EffectTarget | CandidateTarget
 
     @field_validator("repository")
     @classmethod
@@ -547,6 +580,11 @@ class IssueDeliveryEffectRequest(_StrictModel):
 
     @model_validator(mode="after")
     def _closed_identity(self) -> "IssueDeliveryEffectRequest":
+        candidate_version = self.approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION
+        if (self.contract == "builderops.issue-delivery-effect.v2") != candidate_version:
+            raise ValueError("effect wire version does not match approval")
+        if self.effect_kind == "candidate_prepare" and not candidate_version:
+            raise ValueError("candidate preparation requires v3")
         if self.target.kind != self.effect_kind:
             raise ValueError("Issue-delivery target kind does not match effect")
         if self.destination.repository != self.repository:
@@ -578,6 +616,7 @@ class IssueDeliveryEffectRequest(_StrictModel):
 
         target = self.target.model_dump(mode="json")
         semantic_fields = {
+            "candidate_prepare": ("issue_number", "branch", "base_ref", "base_sha"),
             "claim": ("issue_number", "issue_node_id"),
             "publication": ("issue_number", "branch", "base_ref", "base_sha"),
             "merge": (
@@ -641,10 +680,30 @@ class EffectReadbackEvidence(_StrictModel):
         return value
 
 
+class LocalCandidateReadbackEvidence(_StrictModel):
+    source: Literal["local-git-candidate"] = "local-git-candidate"
+    observed_target_sha256: str = Field(pattern=_HEX_64)
+    effect_repository: str
+    effect_slot_sha256: str = Field(pattern=_HEX_64)
+    destination_identity_sha256: str = Field(pattern=_HEX_64)
+    expected_parent: str = Field(pattern=_HEX_40)
+    observed_parent: str = Field(pattern=_HEX_40)
+    expected_tree: str = Field(pattern=_HEX_40)
+    observed_tree: str = Field(pattern=_HEX_40)
+    expected_commit: str = Field(pattern=_HEX_40)
+    observed_commit: str = Field(pattern=_HEX_40)
+    branch: str
+    observed_head: str = Field(pattern=_HEX_40)
+    index_tree: str = Field(pattern=_HEX_40)
+    content_snapshot_sha256: str = Field(pattern=_HEX_64)
+    complete_diff_sha256: str = Field(pattern=_HEX_64)
+    partial: Literal[False] = False
+
+
 class EffectReadback(_StrictModel):
     request_sha256: str = Field(pattern=_HEX_64)
     outcome: Literal["applied", "not_applied", "unknown"]
-    evidence: EffectReadbackEvidence
+    evidence: EffectReadbackEvidence | LocalCandidateReadbackEvidence
 
 
 @dataclass(frozen=True)
@@ -676,7 +735,218 @@ class IssueDeliveryEffectReceipt:
         _safe_receipt_value(value)
         if self.delivery_sources is not None:
             value["delivery_sources"] = dict(self.delivery_sources)
+            if self.delivery_sources.get("contract_version") == CANDIDATE_CONTRACT_VERSION:
+                value["contract"] = "builderops.issue-delivery-effect-receipt.v2"
         return value
+
+
+@dataclass(frozen=True)
+class CandidateSnapshot:
+    target: CandidateTarget
+    objects: tuple[tuple[str, bytes, str], ...]
+
+
+class LocalCandidateApplicator:
+    """Finite, hook/filter-free Git application; the executor owns its fence."""
+
+    def __init__(self, frozen: FrozenIssueDeliveryDestination) -> None:
+        self.frozen = frozen
+        self.snapshot: CandidateSnapshot | None = None
+
+    def git(self, *args: str, data: bytes | None = None) -> bytes:
+        env = {"PATH": os.defpath, "LANG": "C", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_OPTIONAL_LOCKS": "0"}
+        result = subprocess.run(["git", "--no-replace-objects", "-C", str(self.frozen.binding.worktree),
+            "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", *args],
+            input=data, capture_output=True, env=env, check=False)
+        if result.returncode:
+            raise ValueError("candidate Git observation or effect failed")
+        return result.stdout
+
+    @staticmethod
+    def oid(kind: str, data: bytes) -> str:
+        return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode() + b"\0" + data).hexdigest()
+
+    def entries(self, revision: str) -> dict[str, tuple[str, str]]:
+        values = {}
+        for row in self.git("ls-tree", "-rz", "--full-tree", revision).split(b"\0"):
+            if row:
+                meta, name = row.split(b"\t", 1)
+                mode, kind, oid = meta.decode().split()
+                if kind != "blob":
+                    raise ValueError("candidate source contains unsupported Git entries")
+                values[name.decode("utf-8")] = (mode, oid)
+        return values
+
+    def index_matches(self, revision: str) -> bool:
+        values = {}
+        for row in self.git("ls-files", "--stage", "-z").split(b"\0"):
+            if row:
+                meta, name = row.split(b"\t", 1)
+                mode, oid, stage = meta.decode().split()
+                if stage != "0":
+                    return False
+                values[name.decode("utf-8")] = (mode, oid)
+        return values == self.entries(revision)
+
+    def capture(self, approval: Mapping[str, Any], completion_sha256: str, *, head: str | None = None,
+                index_sha256: str | None = None, index_revision: str | None = None) -> CandidateSnapshot:
+        binding = self.frozen.binding
+        for path, device, inode in ((binding.checkout, self.frozen.checkout_device, self.frozen.checkout_inode),
+                (binding.worktree, self.frozen.worktree_device, self.frozen.worktree_inode),
+                (self.frozen.git_directory, self.frozen.git_directory_device, self.frozen.git_directory_inode),
+                (self.frozen.common_git_directory, self.frozen.common_git_device, self.frozen.common_git_inode)):
+            metadata = path.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or path.resolve(strict=True) != path or (metadata.st_dev, metadata.st_ino) != (device, inode):
+                raise ValueError("candidate frozen filesystem identity changed")
+        if (Path(self.git("rev-parse", "--path-format=absolute", "--git-dir").decode().strip()) != self.frozen.git_directory
+            or Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()) != self.frozen.common_git_directory
+            or self.git("remote", "get-url", "origin").decode().strip() != self.frozen.origin_url):
+            raise ValueError("candidate frozen Git identity changed")
+        expected_head = head or binding.base_sha
+        if (self.git("rev-parse", "HEAD").decode().strip() != expected_head
+            or self.git("symbolic-ref", "HEAD").decode().strip() != f"refs/heads/{binding.branch}"
+            or not self.index_matches(index_revision or expected_head)):
+            raise ValueError("candidate head or index changed")
+        common = Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip())
+        config = self.git("config", "--local", "--no-includes", "--name-only", "--list").decode().splitlines()
+        if (any(key.startswith(("filter.", "include.", "includeif.", "extensions.", "core.worktree", "core.fsmonitor")) for key in config)
+            or (common / "objects/info/alternates").exists()
+            or self.git("for-each-ref", "refs/replace").strip()):
+            raise ValueError("candidate repository has unsupported configuration")
+        index = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "index").decode().strip())
+        original_index_hash = index_sha256 or _file_sha256(index)
+        base = self.entries(binding.base_sha)
+        current: dict[str, tuple[str, str]] = {}
+        contents: dict[str, bytes] = {}
+        total = 0
+        for directory, dirs, files in os.walk(binding.worktree, followlinks=False):
+            for name in list(dirs):
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise ValueError("candidate contains a symlink directory")
+            for name in files:
+                path = Path(directory) / name
+                relative = path.relative_to(binding.worktree).as_posix()
+                if relative == ".git":
+                    continue
+                metadata = path.lstat()
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or path.resolve(strict=True) != path:
+                    raise ValueError("candidate contains a non-regular file")
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(descriptor, "rb") as stream:
+                    data = stream.read(2 * 1024 * 1024 + 1)
+                    after = os.fstat(stream.fileno())
+                    if len(data) > 2 * 1024 * 1024 or any(getattr(after, key) != getattr(metadata, key) for key in ("st_ino", "st_dev", "st_mtime_ns", "st_ctime_ns", "st_size", "st_mode", "st_nlink")):
+                        raise ValueError("candidate file unavailable or too large")
+                mode = "100755" if metadata.st_mode & 0o111 else "100644"
+                current[relative] = (mode, self.oid("blob", data))
+                if current[relative] != base.get(relative):
+                    contents[relative] = data
+                    total += len(data)
+        changed = sorted(key for key in base.keys() | current.keys() if base.get(key) != current.get(key))
+        allowed = approval["target_policies"][binding.repository]["documentation_paths"]
+        if not changed or len(changed) > 128 or total > 8 * 1024 * 1024:
+            raise ValueError("candidate delta is empty or unbounded")
+        rows = []
+        objects = []
+        for relative_path in changed:
+            old_mode, old_blob = base.get(relative_path, ("000000", "0" * 40))
+            new_mode, new_blob = current.get(relative_path, ("000000", "0" * 40))
+            if relative_path not in allowed or old_mode not in {"000000", "100644"} or new_mode not in {"000000", "100644"}:
+                raise ValueError("candidate delta exceeds exact documentation envelope")
+            data = contents.get(relative_path, b"")
+            rows.append(CandidatePath(path=relative_path, old_mode=old_mode, new_mode=new_mode, old_blob=old_blob,
+                new_blob=new_blob, bytes_sha256=hashlib.sha256(data).hexdigest(), length=len(data)))
+            if new_mode != "000000":
+                objects.append(("blob", data, new_blob))
+        tree: dict[str, Any] = {}
+        for relative_path, entry in current.items():
+            parent = tree
+            parts = relative_path.split("/")
+            for part in parts[:-1]:
+                parent = parent.setdefault(part, {})
+            parent[parts[-1]] = entry
+        def tree_object(node: dict[str, Any]) -> str:
+            data = b""
+            for name in sorted(node, key=lambda key: (key + ("/" if isinstance(node[key], dict) else "")).encode()):
+                item = node[name]
+                mode, oid = ("40000", tree_object(item)) if isinstance(item, dict) else item
+                data += mode.encode() + b" " + name.encode() + b"\0" + bytes.fromhex(oid)
+            oid = self.oid("tree", data)
+            objects.append(("tree", data, oid))
+            return oid
+        tree_oid = tree_object(tree)
+        identity = "BuilderOps Candidate <candidate@builderops.invalid>"
+        timestamp = int(datetime.fromisoformat(str(approval["approved_at"]).replace("Z", "+00:00")).timestamp())
+        message = f"Prepare approved documentation for Issue #{approval['issue']['number']}\n".encode()
+        commit = (f"tree {tree_oid}\nparent {binding.base_sha}\nauthor {identity} {timestamp} +0000\n"
+                  f"committer {identity} {timestamp} +0000\n\n").encode() + message
+        commit_oid = self.oid("commit", commit)
+        objects.append(("commit", commit, commit_oid))
+        target = CandidateTarget(kind="candidate_prepare", issue_number=approval["issue"]["number"],
+            branch=binding.branch, base_ref=binding.base_ref, base_sha=binding.base_sha,
+            expected_head_sha=binding.base_sha, paths=tuple(rows),
+            snapshot_sha256=_canonical_hash([row.model_dump(mode="json") for row in rows]),
+            index_sha256=original_index_hash, commit_message_sha256=hashlib.sha256(message).hexdigest(),
+            identity=identity, timestamp=timestamp, tree_oid=tree_oid, commit_oid=commit_oid,
+            completion_sha256=completion_sha256)
+        return CandidateSnapshot(target, tuple(objects))
+
+    def validate(self, request: IssueDeliveryEffectRequest) -> None:
+        target = request.target
+        if not isinstance(target, CandidateTarget):
+            raise ValueError("candidate target required")
+        observed = self.capture(request.approval, target.completion_sha256)
+        if observed.target != target:
+            raise ValueError("candidate snapshot changed")
+        self.snapshot = observed
+
+    def write_object(self, kind: str, content: bytes) -> str:
+        return self.git("hash-object", "-w", "-t", kind, "--stdin", data=content).decode().strip()
+
+    def apply(self, request: IssueDeliveryEffectRequest) -> None:
+        # Called only after the executor acknowledges its durable dispatch fence.
+        self.validate(request)
+        snapshot = self.snapshot
+        if snapshot is None:
+            raise ValueError("candidate bytes unavailable")
+        for kind, data, oid in snapshot.objects:
+            self.validate(request)
+            if self.write_object(kind, data) != oid:
+                raise ValueError("candidate object identity mismatch")
+        self.validate(request)
+        self.git("update-ref", f"refs/heads/{snapshot.target.branch}", snapshot.target.commit_oid,
+                 snapshot.target.expected_head_sha)
+        before_index = self.capture(request.approval, snapshot.target.completion_sha256,
+            head=snapshot.target.commit_oid, index_revision=snapshot.target.base_sha)
+        if before_index.target != snapshot.target:
+            raise ValueError("candidate input changed before index reconciliation")
+        self.git("read-tree", snapshot.target.commit_oid)
+
+    def readback(self, request: IssueDeliveryEffectRequest) -> EffectReadback:
+        target = request.target
+        if not isinstance(target, CandidateTarget):
+            raise ValueError("candidate target required")
+        observed = self.capture(request.approval, target.completion_sha256, head=target.commit_oid,
+                                index_sha256=target.index_sha256)
+        commit = self.git("cat-file", "commit", target.commit_oid)
+        if observed.target != target or commit != observed.objects[-1][1]:
+            raise ValueError("candidate readback incomplete")
+        raw = self.git("diff-tree", "--no-commit-id", "--raw", "-z", "-r", "--no-abbrev",
+                       "-M", "-C", "--find-copies-harder", target.base_sha, target.commit_oid, "--")
+        diff = _parse_documentation_diff(raw, target.base_sha, target.commit_oid,
+                                        request.approval["target_policies"][request.repository]["documentation_paths"])
+        return EffectReadback(outcome="applied", request_sha256=request.content_sha256,
+            evidence=LocalCandidateReadbackEvidence(observed_target_sha256=_canonical_hash(target.model_dump(mode="json")),
+                effect_repository=request.effect_repository, effect_slot_sha256=request.effect_slot_sha256,
+                destination_identity_sha256=self.frozen.identity_sha256,
+                expected_parent=target.base_sha, observed_parent=commit.splitlines()[1].split()[1].decode(),
+                expected_tree=target.tree_oid, observed_tree=commit.splitlines()[0].split()[1].decode(),
+                expected_commit=target.commit_oid, observed_commit=self.oid("commit", commit),
+                branch=target.branch, observed_head=self.git("rev-parse", "HEAD").decode().strip(),
+                index_tree=observed.target.tree_oid, content_snapshot_sha256=observed.target.snapshot_sha256,
+                complete_diff_sha256=_canonical_hash(diff)))
 
 
 class IssueDeliveryAuthorityReader(Protocol):
@@ -771,7 +1041,11 @@ def complete_documentation_diff(root: Path, base_sha: str, head_sha: str, allowe
          "--no-abbrev", "-M", "-C", "--find-copies-harder", base_sha, head_sha, "--"],
         capture_output=True, check=True,
     )
-    parts = result.stdout.decode("utf-8", errors="strict").split("\0")
+    return _parse_documentation_diff(result.stdout, base_sha, head_sha, allowed_paths)
+
+
+def _parse_documentation_diff(raw: bytes, base_sha: str, head_sha: str, allowed_paths: Sequence[str]) -> dict[str, Any]:
+    parts = raw.decode("utf-8", errors="strict").split("\0")
     changes: list[dict[str, Any]] = []
     index = 0
     while index < len(parts) - 1:
@@ -851,7 +1125,7 @@ def _v2_authority_bindings(
 
 def validate_installed_v2_admission(approval: Mapping[str, Any], *, require_ready: bool = True) -> None:
     """The service uses the host-installed readers; caller input cannot install them."""
-    if approval.get("contract_version") != SECOND_CONTRACT_VERSION:
+    if approval.get("contract_version") not in TWO_SOURCE_VERSIONS:
         return
     runtime = _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
     if runtime is None:
@@ -878,6 +1152,7 @@ class IssueDeliveryHostExecutor:
         frozen_destination: FrozenIssueDeliveryDestination,
         transport: IssueDeliveryEffectTransport,
         prepared_worker: PreparedIssueDeliveryWorker | None = None,
+        completion_reader: Callable[[str], Mapping[str, Any]] | None = None,
         expected_isolation_profile_sha256: str | None = None,
         live_binding_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         trusted_executor_artifact: Path = Path(__file__),
@@ -892,10 +1167,15 @@ class IssueDeliveryHostExecutor:
         self.credentials = credentials
         self.destination = destination
         self.frozen_destination = frozen_destination
+        self.candidate_applicator = LocalCandidateApplicator(frozen_destination)
+        self._completion: dict[str, Any] | None = None
+        self._completion_bindings: dict[str, Any] | None = None
         # A protected executor always starts unbound.  Only the prepared
         # launcher it was given can later supply the one durable host receipt.
         self._worker_isolation: WorkerIsolationBinding | None = None
         self._prepared_worker = prepared_worker
+        self._completion_reader = completion_reader
+        self.recovered_candidate_terminal: Mapping[str, Any] | None = None
         self._expected_isolation_profile_sha256 = expected_isolation_profile_sha256
         self.transport = transport
         self._live_binding_reader = live_binding_reader
@@ -962,9 +1242,79 @@ class IssueDeliveryHostExecutor:
             observed["current_issue"].update(body_hash=body, acceptance_criteria_hash=ac)
         return dict(observed)
 
+    def prepare_candidate(self, approval: Mapping[str, Any], bindings: Mapping[str, Any]) -> CandidateTarget:
+        if approval.get("contract_version") != CANDIDATE_CONTRACT_VERSION or self._prepared_worker is None:
+            raise ValueError("candidate preparation requires the v3 host composition")
+        self._completion_bindings = dict(bindings)
+        self._completion = self._prepared_worker.launcher.completed_worker_observation(bindings)
+        snapshot = self.candidate_applicator.capture(approval, _canonical_hash(self._completion))
+        self.candidate_applicator.snapshot = snapshot
+        return snapshot.target
+
+    def _validate_candidate_completion(self, request: IssueDeliveryEffectRequest) -> None:
+        if self._completion_reader is None or self._completion_bindings is None or self._completion is None:
+            raise ValueError("candidate completion witness unavailable")
+        observed = reobserve_worker_completion(self._completion, self._completion_reader)
+        if observed != self._completion or not isinstance(request.target, CandidateTarget) or request.target.completion_sha256 != _canonical_hash(observed):
+            raise ValueError("candidate completion witness changed")
+
+    def restore_candidate_binding(self, terminal: Mapping[str, Any]) -> None:
+        """Restore only a directly authenticated terminal, then observe the same host."""
+        payload = terminal["payload"]
+        if not isinstance(self.ledger, BuilderOpsIssueDeliveryEffectLedger):
+            raise ValueError("candidate recovery requires the native authenticated ledger")
+        actual = self.ledger.client.issue_delivery_operation_record_read(
+            repository=payload["repository"], record_id=f"issue-delivery-terminal:{payload['operation_key']}")
+        if actual != terminal or payload["schema"] != "builderops.issue-delivery-terminal.v2":
+            raise ValueError("retained candidate terminal is unauthenticated")
+        from app.builderops.control_plane.issue_delivery import validate_worker_completion
+        candidate = payload["candidate_binding"]
+        completion = validate_worker_completion(candidate["completion"])
+        if (candidate["completion_sha256"] != _canonical_hash(completion)
+            or completion["destination_sha256"] != self.frozen_destination.identity_sha256
+            or completion["approval_id"] != payload["approval_id"] or completion["operation_key"] != payload["operation_key"]
+            or completion["profile_sha256"] != self._expected_isolation_profile_sha256
+            or self._completion_reader is None):
+            raise ValueError("retained candidate binding changed")
+        reobserve_worker_completion(completion, self._completion_reader)
+        self._completion = completion
+        self._completion_bindings = {k: v for k, v in completion.items() if k not in {"contract", "observation", "profile_sha256", "isolation_receipt_sha256"}}
+        self._worker_isolation = WorkerIsolationBinding.model_validate({**candidate["worker_isolation"], "repository_credential_probe": "denied"})
+        self.recovered_candidate_terminal = actual
+
+    def read_candidate(self, request: IssueDeliveryEffectRequest) -> IssueDeliveryEffectReceipt:
+        """Read-only replay. A missing intent or partial Git effect never permits dispatch."""
+        self._validate_static_request(request, current_artifacts=False)
+        self._validate_candidate_completion(request)
+        operation = self.ledger.operation_key(effect_slot_sha256=request.effect_slot_sha256,
+            effect_type=_EFFECT_TYPES["candidate_prepare"])
+        status = self.ledger.status(operation)
+        if status.get("status") == "missing":
+            return self._receipt("unknown", operation, request, {"outcome": "unknown", "readback": "candidate-intent-missing"})
+        self._validate_recovery_intent(status, request, _EFFECT_TYPES["candidate_prepare"], operation)
+        if status.get("status") == "succeeded":
+            # Historical reconciliation alone is not evidence of current ref/index/content.
+            self._fresh_readback_authority(request)
+            readback = self.candidate_applicator.readback(request)
+            return self._receipt("applied", operation, request, readback.evidence.model_dump(mode="json"))
+        return self._readback_and_reconcile(operation, request)
+
+    def candidate_binding(self, target: CandidateTarget) -> dict[str, Any]:
+        if self._completion is None or target.completion_sha256 != _canonical_hash(self._completion):
+            raise ValueError("candidate completion binding unavailable")
+        return {"completion": self._completion, "completion_sha256": target.completion_sha256,
+                "target": target.model_dump(mode="json"),
+                # The closed retained representation omits this invariant literal,
+                # not a credential or a grant; the authenticated isolation hash remains.
+                "worker_isolation": self.worker_isolation.model_dump(mode="json", exclude={"repository_credential_probe"})}
+
     def execute(
         self, request: IssueDeliveryEffectRequest
     ) -> IssueDeliveryEffectReceipt:
+        if request.approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION and self._prepared_worker is None:
+            raise ValueError("reconstructed candidate permits readback only")
+        if request.approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION and request.effect_kind not in {"claim", "candidate_prepare"}:
+            raise ValueError("v3 remote continuation is not implemented")
         self._validate_static_request(request, current_artifacts=False)
         frozen = self._request_destination(request)
         effect_type = _EFFECT_TYPES[request.effect_kind]
@@ -977,6 +1327,8 @@ class IssueDeliveryHostExecutor:
         if state != "missing":
             self._validate_recovery_intent(status, request, effect_type, operation_key)
             if state == "succeeded":
+                if request.effect_kind == "candidate_prepare":
+                    return self.read_candidate(request)
                 evidence = status.get("reconciliation_evidence")
                 if not isinstance(evidence, Mapping):
                     raise ValueError("settled Issue-delivery effect lacks readback")
@@ -1016,10 +1368,11 @@ class IssueDeliveryHostExecutor:
             final_manifest = self._fresh_execute_authority(request, frozen)
             if final_manifest != first_manifest:
                 raise ValueError("protected repository manifest changed before effect")
-            self._validate_target_authority(
-                request,
-                self.transport.validate_target(request),
-            )
+            if request.effect_kind == "candidate_prepare":
+                self._validate_candidate_completion(request)
+                self.candidate_applicator.validate(request)
+            else:
+                self._validate_target_authority(request, self.transport.validate_target(request))
         except Exception as exc:
             self._record_known_no_effect(claim, request, reason=type(exc).__name__)
             raise
@@ -1045,7 +1398,11 @@ class IssueDeliveryHostExecutor:
                 {"outcome": "unknown", "readback": "dispatch-fence-unavailable"},
             )
         try:
-            self.transport.apply(request, credential)
+            if request.effect_kind == "candidate_prepare":
+                self._validate_candidate_completion(request)
+                self.candidate_applicator.apply(request)
+            else:
+                self.transport.apply(request, credential)
         except Exception:
             pass
         return self._readback_and_reconcile(operation_key, request)
@@ -1112,7 +1469,11 @@ class IssueDeliveryHostExecutor:
             payload,
         )
         try:
-            readback = self.transport.readback(request)
+            if request.effect_kind == "candidate_prepare":
+                self._validate_candidate_completion(request)
+                readback = self.candidate_applicator.readback(request)
+            else:
+                readback = self.transport.readback(request)
         except Exception:
             return self._receipt(
                 "unknown",
@@ -1179,6 +1540,9 @@ class IssueDeliveryHostExecutor:
             raise ValueError("Issue-delivery execute authority changed")
         self._validate_static_request(request, current_artifacts=True)
         self.destination.assert_frozen(frozen, approved)
+        if request.effect_kind == "candidate_prepare":
+            self._validate_candidate_completion(request)
+            self.candidate_applicator.validate(request)
         if delivery_source_pair(approved):
             merge_sha, closed = self._completed_transitions(request)
             current = _v2_authority_bindings(approved, repository_authority=self.repository_authority,
@@ -1312,7 +1676,7 @@ class IssueDeliveryHostExecutor:
         except ValueError as exc:
             raise ValueError("Issue-delivery approval destination is invalid") from exc
         if (
-            approval.get("contract_version") not in {"fca-issue-delivery.v1", SECOND_CONTRACT_VERSION}
+            approval.get("contract_version") not in {"fca-issue-delivery.v1", *TWO_SOURCE_VERSIONS}
             or approval.get("operation_type") != "deliver_ready_issue"
             or approval.get("approval_id") != request.approval_id
             or approval.get("operation_key") != request.approved_operation_key
@@ -1340,7 +1704,7 @@ class IssueDeliveryHostExecutor:
             raise ValueError("Issue-delivery request does not match exact approval")
         target = request.target
         if isinstance(
-            target, (ClaimTarget, PublicationTarget, MergeTarget, ClosureTarget)
+            target, (ClaimTarget, PublicationTarget, MergeTarget, ClosureTarget, CandidateTarget)
         ):
             if target.issue_number != request.issue_number:
                 raise ValueError("Issue-delivery target addresses another Issue")
@@ -1348,7 +1712,7 @@ class IssueDeliveryHostExecutor:
             "node_id"
         ):
             raise ValueError("Issue-delivery claim node changed")
-        if isinstance(target, (PublicationTarget, MergeTarget)) and (
+        if isinstance(target, (PublicationTarget, MergeTarget, CandidateTarget)) and (
             target.branch != request.destination.branch
             or target.base_ref != request.destination.base_ref
             or target.base_sha != request.destination.base_sha
@@ -1418,13 +1782,13 @@ class IssueDeliveryHostExecutor:
         }
         trusted_paths = {
             artifact_path: self.trusted_workflow_root / PurePath(artifact_path)
-            for artifact_path in REQUIRED_WORKFLOW_ARTIFACTS
+            for artifact_path in workflow_artifacts(request.approval["contract_version"])
         }
         trusted_paths[EXECUTOR_ARTIFACT] = self.trusted_executor_artifact
         trusted_paths[WORKER_ISOLATION_ARTIFACT] = (
             self.trusted_worker_isolation_artifact
         )
-        for artifact_path in sorted(REQUIRED_WORKFLOW_ARTIFACTS):
+        for artifact_path in sorted(workflow_artifacts(request.approval["contract_version"])):
             matches = [
                 item
                 for item in artifacts
@@ -1478,7 +1842,7 @@ class IssueDeliveryHostExecutor:
         manifest: ProtectedDeliveryManifest,
     ) -> dict[str, Any]:
         payload = {
-            "contract": CONTRACT,
+            "contract": request.contract,
             "request_sha256": request.content_sha256,
             "effect_slot_sha256": request.effect_slot_sha256,
             "approval_id": request.approval_id,
@@ -1544,7 +1908,7 @@ class IssueDeliveryHostExecutor:
             status.get("operation_key") != operation_key
             or status.get("effect_type") != effect_type
             or not isinstance(payload, Mapping)
-            or payload.get("contract") != CONTRACT
+            or payload.get("contract") != request.contract
             or payload.get("request_sha256") != request.content_sha256
             or payload.get("effect_slot_sha256") != request.effect_slot_sha256
             or payload.get("approval_id") != request.approval_id
@@ -1800,6 +2164,14 @@ class GitIssueDeliveryDestination:
             raise ValueError("Issue-delivery destination Git identity changed") from exc
         if observed != frozen:
             raise ValueError("Issue-delivery destination Git identity changed")
+
+    def recover(self, approval: Mapping[str, Any], identity_sha256: str) -> FrozenIssueDeliveryDestination:
+        """Observe retained topology, not a clean-base preparation or Git repair."""
+        frozen = self._observe(DestinationBinding.from_approval(approval), require_base_head=False)
+        if frozen.identity_sha256 != identity_sha256:
+            raise ValueError("retained candidate destination identity changed")
+        self.assert_frozen(frozen, approval)
+        return frozen
 
     def _observe(
         self,
@@ -2143,6 +2515,11 @@ class ContentOnlyIssueDeliverySessionLauncher(LinuxSystemdCodexIssueSessionLaunc
     """The #5559 OS-principal launcher with a closed content-only prompt."""
 
     def prompt(self, context_pack: Mapping[str, Any]) -> str:
+        if context_pack.get("delivery_sources", {}).get("contract_version") == CANDIDATE_CONTRACT_VERSION:
+            return ("Edit only the approved documentation content. Git administration and all effects belong to the host. "
+                    "Return only JSON with contract=builderops.issue-delivery-content-result.v1, status=completed|failed, "
+                    "summary, validation=[{name,outcome=passed|failed|not_run,summary}]. No identities or effect proposals.\n"
+                    + json.dumps(context_pack, sort_keys=True))
         try:
             serialized = json.dumps(
                 context_pack,
@@ -2256,6 +2633,7 @@ class HostIssueDeliveryExecutorRuntime:
     live_binding_reader: Callable[[Mapping[str, Any]], Mapping[str, Any]]
     worker_id: str = "issue-delivery-host"
     trusted_workflow_root: Path | None = None
+    completion_reader: Callable[[str], Mapping[str, Any]] | None = None
 
 
 _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME: HostIssueDeliveryExecutorRuntime | None = None
@@ -2285,7 +2663,7 @@ def build_host_issue_delivery_executor(
     *,
     approval: Mapping[str, Any],
     client: BuilderOpsControlPlaneClient,
-    prepared: PreparedIssueDeliveryWorker,
+    prepared: PreparedIssueDeliveryWorker | None = None,
 ) -> IssueDeliveryHostExecutor:
     """Build the fixed host-owned executor used by ``dispatch-sessions``.
 
@@ -2297,19 +2675,40 @@ def build_host_issue_delivery_executor(
     runtime = _HOST_ISSUE_DELIVERY_EXECUTOR_RUNTIME
     if runtime is None:
         raise ValueError("Issue-delivery host executor runtime is unavailable")
-    if type(prepared) is not PreparedIssueDeliveryWorker:
+    terminal = None
+    if prepared is None:
+        if approval.get("contract_version") != CANDIDATE_CONTRACT_VERSION or runtime.completion_reader is None:
+            raise ValueError("candidate readback composition is unavailable")
+        terminal = client.issue_delivery_operation_record_read(
+            repository=str(approval["repository"]),
+            record_id=f"issue-delivery-terminal:{approval['operation_key']}")
+        if (not terminal or terminal["payload"].get("schema") != "builderops.issue-delivery-terminal.v2"
+            or terminal["payload"].get("approval_id") != approval["approval_id"]
+            or terminal["payload"].get("approval_manifest_hash") != approval["approval_manifest_hash"]
+            or not terminal["payload"].get("candidate_binding")):
+            raise ValueError("authenticated candidate terminal is unavailable")
+        destination = GitIssueDeliveryDestination()
+        frozen = destination.recover(approval, terminal["payload"]["candidate_binding"]["completion"]["destination_sha256"])
+    elif type(prepared) is not PreparedIssueDeliveryWorker:
         raise ValueError("Issue-delivery prepared worker is invalid")
-    if dict(prepared.approval) != dict(approval):
+    elif dict(prepared.approval) != dict(approval):
         raise ValueError("Issue-delivery prepared worker is bound to another approval")
-    if not isinstance(prepared.launcher, ContentOnlyIssueDeliverySessionLauncher):
-        raise ValueError("Issue-delivery prepared worker launcher is invalid")
-    if prepared.launcher.expected_profile_sha256 != runtime.isolation_profile_sha256:
-        raise ValueError("Issue-delivery prepared worker profile differs from host pin")
+    if prepared is not None:
+        if not isinstance(prepared.launcher, ContentOnlyIssueDeliverySessionLauncher):
+            raise ValueError("Issue-delivery prepared worker launcher is invalid")
+        if prepared.launcher.expected_profile_sha256 != runtime.isolation_profile_sha256:
+            raise ValueError("Issue-delivery prepared worker profile differs from host pin")
+        destination, frozen = prepared.destination, prepared.frozen_destination
+    if approval.get("contract_version") == CANDIDATE_CONTRACT_VERSION:
+        if runtime.completion_reader is None:
+            raise ValueError("Issue-delivery host completion observer is unavailable")
+        if prepared is not None:
+            prepared.launcher._completion_reader = runtime.completion_reader
     repository = canonical_repository(str(approval.get("repository", "")))
     destination_data = approval.get("destination")
     if not isinstance(destination_data, Mapping):
         raise ValueError("Issue-delivery approval destination is unavailable")
-    return IssueDeliveryHostExecutor(
+    executor = IssueDeliveryHostExecutor(
         authority=client,
         ledger=BuilderOpsIssueDeliveryEffectLedger(
             client,
@@ -2320,10 +2719,11 @@ def build_host_issue_delivery_executor(
         ),
         repository_authority=runtime.repository_authority,
         credentials=runtime.credentials,
-        destination=prepared.destination,
-        frozen_destination=prepared.frozen_destination,
+        destination=destination,
+        frozen_destination=frozen,
         transport=runtime.transport,
         prepared_worker=prepared,
+        completion_reader=runtime.completion_reader,
         expected_isolation_profile_sha256=runtime.isolation_profile_sha256,
         live_binding_reader=runtime.live_binding_reader,
         **({"trusted_workflow_root": runtime.trusted_workflow_root,
@@ -2331,6 +2731,9 @@ def build_host_issue_delivery_executor(
             "trusted_worker_isolation_artifact": runtime.trusted_workflow_root / WORKER_ISOLATION_ARTIFACT}
            if runtime.trusted_workflow_root is not None else {}),
     )
+    if terminal is not None:
+        executor.restore_candidate_binding(terminal)
+    return executor
 
 
 __all__ = [
