@@ -820,7 +820,10 @@ class LocalCandidateApplicator:
         current: dict[str, tuple[str, str]] = {}
         contents: dict[str, bytes] = {}
         total = 0
-        for directory, dirs, files in os.walk(binding.worktree, followlinks=False):
+        def refuse_incomplete_inventory(error: OSError) -> None:
+            raise ValueError("candidate directory inventory unavailable") from error
+        for directory, dirs, files in os.walk(binding.worktree, followlinks=False,
+                                               onerror=refuse_incomplete_inventory):
             for name in list(dirs):
                 path = Path(directory) / name
                 if path.is_symlink():

@@ -66,7 +66,7 @@ from tests.builderops.issue_delivery_production_harness import (
 
 
 @pytest.mark.pg
-@pytest.mark.parametrize("fault", ["worker_effect", "nested_effect", "worker_failed", "extra_path", "code", "policy_file", "executable", "symlink", "hardlink", "index", "ref", "empty", "policy", "hub_policy", "consumer_base", "hub_base", "source", "consumer_credential", "hub_credential", "owner_grant", "missing_witness", "invocation", "boot", "populated", "restart", "job", "unit_gone", "writer", "process", "stale_time", "late_bytes", "late_index"])
+@pytest.mark.parametrize("fault", ["worker_effect", "nested_effect", "worker_failed", "extra_path", "code", "policy_file", "unreadable_directory", "late_unreadable_directory", "executable", "symlink", "hardlink", "index", "ref", "empty", "policy", "hub_policy", "consumer_base", "hub_base", "source", "consumer_credential", "hub_credential", "owner_grant", "missing_witness", "invocation", "boot", "populated", "restart", "job", "unit_gone", "writer", "process", "stale_time", "late_bytes", "late_index"])
 def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_production_harness, monkeypatch, fault):
     from tests.builderops.test_issue_delivery_operation import _production_adapter
     from app.builderops.issue_delivery_operation import IssueDeliveryOperationError
@@ -75,6 +75,15 @@ def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_p
     base = approval["destination"]["base_sha"]
     writes = []
     applicator = harness.executor.candidate_applicator
+    index_before = applicator.git("ls-files", "--stage", "-z")
+    unreadable = harness.worktree / "hidden"
+    def hide_untracked_code():
+        unreadable.mkdir()
+        (unreadable / "module.py").write_text("outside envelope")
+        unreadable.chmod(0)
+        # Real OS denial, not a substituted capture/admission verdict.
+        with pytest.raises(PermissionError):
+            list(unreadable.iterdir())
     original_write = applicator.write_object
     def write_object(*args):
         writes.append(args[0])
@@ -111,6 +120,8 @@ def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_p
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("outside envelope")
+        elif fault == "unreadable_directory":
+            hide_untracked_code()
         elif fault == "executable":
             (root / "docs/guide.md").chmod(0o755)
         elif fault == "symlink":
@@ -149,16 +160,23 @@ def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_p
                 (harness.worktree / "docs/guide.md").write_text("changed after intent")
             elif fault == "late_index":
                 subprocess.run(["git", "-C", str(harness.worktree), "add", "docs/guide.md"], check=True)
+            elif fault == "late_unreadable_directory":
+                hide_untracked_code()
         return result
     monkeypatch.setattr(harness.ledger, "begin", late_change)
     try:
         result = _production_adapter(harness).launch(approval["context"]["dispatch_plan"]["context_packs"][0])
     except IssueDeliveryOperationError:
         result = {"candidate_state": "refused"}
+    finally:
+        if unreadable.exists():
+            unreadable.chmod(0o700)
     assert result.get("candidate_state") in {"refused", "unknown"}
     assert writes == []
     assert subprocess.check_output(["git", "-C", str(harness.worktree), "rev-parse", "HEAD"], text=True).strip() == base
     assert all(request.effect_kind == "claim" for request in harness.transport.applied_requests)
+    if fault in {"unreadable_directory", "late_unreadable_directory"}:
+        assert applicator.git("ls-files", "--stage", "-z") == index_before
 
 
 @pytest.mark.pg
