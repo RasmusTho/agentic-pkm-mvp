@@ -66,7 +66,7 @@ from tests.builderops.issue_delivery_production_harness import (
 
 
 @pytest.mark.pg
-@pytest.mark.parametrize("fault", ["worker_effect", "nested_effect", "worker_failed", "extra_path", "code", "policy_file", "unreadable_directory", "late_unreadable_directory", "executable", "symlink", "hardlink", "index", "ref", "empty", "policy", "hub_policy", "consumer_base", "hub_base", "source", "consumer_credential", "hub_credential", "owner_grant", "missing_witness", "invocation", "boot", "populated", "restart", "job", "unit_gone", "writer", "process", "stale_time", "late_bytes", "late_index"])
+@pytest.mark.parametrize("fault", ["worker_effect", "nested_effect", "worker_failed", "extra_path", "code", "policy_file", "unreadable_directory", "late_unreadable_directory", "executable", "symlink", "hardlink", "index", "ref", "empty", "policy", "hub_policy", "consumer_base", "hub_base", "source", "consumer_credential", "hub_credential", "owner_grant", "missing_witness", "invocation", "boot", "populated", "restart", "job", "unit_gone", "writer", "process", "stale_time", "future_time", "late_bytes", "late_index"])
 def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_production_harness, monkeypatch, fault):
     from tests.builderops.test_issue_delivery_operation import _production_adapter
     from app.builderops.issue_delivery_operation import IssueDeliveryOperationError
@@ -105,7 +105,8 @@ def test_candidate_prepare_rejects_unbound_content_or_authority(issue_delivery_p
         "boot": {"boot_id": "other"}, "populated": {"cgroup_populated": 1},
         "restart": {"restart": "always"}, "job": {"job": "start"},
         "unit_gone": {"load_state": "not-found"}, "writer": {"aperture_writer_uids": [1, 2]},
-        "process": {"worker_processes": [123]}, "stale_time": {"observed_at": "2000-01-01T00:00:00Z"}}
+        "process": {"worker_processes": [123]}, "stale_time": {"observed_at": "2000-01-01T00:00:00Z"},
+        "future_time": {"observed_at": "2999-01-01T00:00:00Z"}}
     def observe(unit):
         value = reader(unit)
         if harness.worker_transport.completed:

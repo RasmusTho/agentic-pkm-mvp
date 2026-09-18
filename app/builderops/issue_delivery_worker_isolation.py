@@ -1934,9 +1934,11 @@ class LinuxSystemdCodexIssueSessionLauncher(CodexIssueSessionLauncher):
             or observed.get("aperture_writer_uids") != [worker["uid"]]):
             raise IssueWorkerIsolationError("worker completion is not quiescent and exclusive")
         from app.builderops.control_plane.issue_delivery import canonical_hash, validate_worker_completion
-        return validate_worker_completion({"contract": "builderops.issue-delivery-worker-completion.v1", **dict(bindings),
+        witness = validate_worker_completion({"contract": "builderops.issue-delivery-worker-completion.v1", **dict(bindings),
                 "isolation_receipt_sha256": canonical_hash(receipt),
                 "profile_sha256": receipt["profile_sha256"], "observation": observed})
+        _require_fresh_completion(witness)
+        return witness
 
     def launch(
         self,
@@ -1985,17 +1987,22 @@ def reobserve_worker_completion(
     witness: Mapping[str, Any], reader: Callable[[str], Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Authenticate current raw containment facts without constructing a launcher."""
-    from datetime import datetime, timezone
     from app.builderops.control_plane.issue_delivery import validate_worker_completion
     retained = validate_worker_completion(witness)
     observed = validate_worker_completion({**retained, "observation": dict(reader(retained["observation"]["unit"]))})
-    observed_at = datetime.fromisoformat(observed["observation"]["observed_at"].replace("Z", "+00:00"))
-    if abs((datetime.now(timezone.utc) - observed_at).total_seconds()) > 60:
-        raise IssueWorkerIsolationError("host completion observation is stale")
+    _require_fresh_completion(observed)
     observed["observation"]["observed_at"] = retained["observation"]["observed_at"]
     if observed != retained:
         raise IssueWorkerIsolationError("retained worker containment or exclusivity changed")
     return retained
+
+
+def _require_fresh_completion(witness: Mapping[str, Any]) -> None:
+    """Freshness gates newly observed facts, not retained historical receipts."""
+    from datetime import datetime, timezone
+    observed_at = datetime.fromisoformat(witness["observation"]["observed_at"].replace("Z", "+00:00"))
+    if abs((datetime.now(timezone.utc) - observed_at).total_seconds()) > 60:
+        raise IssueWorkerIsolationError("host completion observation is stale")
 
 
 __all__ = [
