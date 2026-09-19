@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "76f637179350c844be097cba20c97b09cb80fc91",
+    "tree": "41a2bf636734af88293dddcbf5866d2c418873f3",
     "inventory": {
       "devui.css": "20fddd9d9462d181cb648411e7302781234e6000",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
-      "focus.js": "454ff35f0c1e7897bd56320e6105982d1288d338",
+      "focus.js": "2a11e4a04f204d1bca615a269757c06b380160e4",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
-      "overview.js": "bba93969cf7ffe137c5e6e3aa2430488e436cdd6"
+      "overview.js": "0a5d29b7c4648576f70ae23e827483f3c0aa00c4"
     }
   },
   "transform_allowlist": [
@@ -281,11 +281,11 @@
       ],
       "candidate_anchors": [
         "function ownerRows(parent, value) {",
-        "details.className = \"technical-disclosure\";",
-        "matrix(details, evidence);",
-        "rows(details, evidence, true);"
+        "function sourceWarning(value) {",
+        "value[key] == null",
+        "details.className = \"technical-disclosure\";"
       ],
-      "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render known owner-language labels and keep unknown scalar fields reachable, while placing raw subject/evidence identifiers and technical rows behind closed native details/summary controls. Preserve the existing fixed GET, navigation validation, no-egress behavior, and data hooks."
+      "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render finite owner-language labels and material source-state warnings, omit null optional owner rows without inventing Unavailable, and keep raw axes/null/unknown fields behind closed native details/summary controls. Preserve fixed GET, navigation validation, no-egress behavior, and data hooks."
     },
     {
       "issue": 5594,
@@ -300,10 +300,10 @@
       ],
       "candidate_anchors": [
         "function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {",
-        "details.className = \"technical-disclosure\";",
-        "rows(details, value);"
+        "function sourceWarning(value) {",
+        "value[key] == null"
       ],
-      "exact_rule": "Render all eight Focus sections with owner-language labels at first paint and retain every raw field behind closed native details/summary controls. Unknown/new fields remain in the expandable raw rows; preserve the exact subject-bound GET, response-state handling, textContent rendering, navigation, and no-egress behavior."
+      "exact_rule": "Render all eight Focus sections with finite owner-language labels and material source-state warnings at first paint; omit null optional owner rows without inventing Unavailable; retain every raw field, exact axis values, and unknown/new fields behind closed native details/summary controls. Preserve exact subject-bound GET, response-state handling, textContent rendering, navigation, and no-egress behavior."
     },
     {
       "issue": 5594,

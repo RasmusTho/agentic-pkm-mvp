@@ -375,15 +375,15 @@
           "source-cockpit-disclosure-css",
           "source-cockpit-disclosure-js"
         ],
-        "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render known owner-language labels and keep unknown/new fields reachable only under closed native details/summary controls. Reuse the exact Cockpit card details/summary keyboard, focus, hover, border and token grammar from the immutable CSS/JS sources, with no new tokens, authority, persistence, egress, or effect behavior.",
+        "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render finite owner-language labels and material source-state warnings, omit null optional owner rows without inventing Unavailable, and keep raw axes/null/unknown fields behind closed native details/summary controls. Reuse the exact Cockpit disclosure grammar with no new authority, persistence, egress, or effect behavior.",
         "source_anchors": [
           "`<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">`",
           ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
         ],
         "target_anchors": [
           "details.className = \"technical-disclosure\";",
-          "function ownerRows(parent, value) {",
-          ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+          "function sourceWarning(value) {",
+          "value[key] == null"
         ]
       },
       {
@@ -533,7 +533,7 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
-        "content_sha256": "sha256:e88b858d8779e689b340f15e092b3aef1c5d5aefa1deb4799375a47cf490cfa3"
+        "content_sha256": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b"
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
@@ -541,7 +541,7 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
-        "content_sha256": "sha256:1e19a46cbb357e2740aef152f1da6fcd9fa798c084d2deeeac22a8d7e8a45199"
+        "content_sha256": "sha256:44dcc72f6ad26eb6f5eb802dfa3c8cb1b981d8f864e5b017af8d54f8995750f9"
       },
       {
         "target_path": "app/builderops/devui_managed.css",
@@ -602,7 +602,7 @@
       ],
       "cross_origin_request_count": 0,
       "network_evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-      "network_evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81",
+      "network_evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82",
       "csp_relaxations": []
     },
     "state_matrix": [
@@ -619,7 +619,7 @@
         ],
         "expected_behavior": "Render source-owned Overview and exact selected Issue Focus, unsupported Conversation Port, no inferred linkage; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "hostile-and-source-refused",
@@ -634,7 +634,7 @@
         ],
         "expected_behavior": "Render source text literally, preserve independent unavailable/refused metadata and complete text across all accessibility modes.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "refusal",
@@ -649,7 +649,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "timeout",
@@ -664,7 +664,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "404",
@@ -679,7 +679,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "http_status",
@@ -694,7 +694,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "malformed",
@@ -709,7 +709,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "request_failure",
@@ -724,7 +724,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "page_error",
@@ -739,7 +739,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "console_error",
@@ -754,7 +754,7 @@
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "state_id": "candidate-missing",
@@ -765,7 +765,7 @@
         ],
         "expected_behavior": "Production admission refuses the missing candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       },
       {
         "state_id": "candidate-sha",
@@ -776,7 +776,7 @@
         ],
         "expected_behavior": "Production admission refuses the sha candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       },
       {
         "state_id": "candidate-inventory",
@@ -787,7 +787,7 @@
         ],
         "expected_behavior": "Production admission refuses the inventory candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       },
       {
         "state_id": "candidate-bytes",
@@ -798,7 +798,7 @@
         ],
         "expected_behavior": "Production admission refuses the bytes candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       },
       {
         "state_id": "candidate-extra",
@@ -809,7 +809,7 @@
         ],
         "expected_behavior": "Production admission refuses the extra candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       },
       {
         "state_id": "managed-document-provenance",
@@ -819,7 +819,7 @@
         ],
         "expected_behavior": "Source-owned document references retain their exact repository paths and content hashes. Package-only shell aliases remain in the complete checked inventory and are not presented as repository document references. Existing text-only rendering is unchanged.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       },
       {
         "state_id": "managed-repository-identity",
@@ -829,7 +829,7 @@
         ],
         "expected_behavior": "Existing canonical repository identity admits display-case variation while Focus retains the exact selected subject and original source URL. Foreign repository or malformed source identity remains unavailable. Real package_candidate and standalone Overview-to-Focus browser proof use mixed-case GitHub-style source identity; no visual or interaction change.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:9024e1cf53f463a1531a72e2ba66a73ab3c7de837d81fae2a024467e4e77b16e"
+        "evidence_sha256": "sha256:f4f50684ce09453daeee8462830738c0925eb19b44996d67b06df5ff1f1c6fbe"
       }
     ],
     "accessibility_matrix": [
@@ -845,7 +845,7 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "mode": "narrow",
@@ -859,7 +859,7 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "mode": "zoom_200",
@@ -873,7 +873,7 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "mode": "keyboard",
@@ -887,7 +887,7 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "mode": "screen_reader",
@@ -901,7 +901,7 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "mode": "print",
@@ -915,7 +915,7 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       },
       {
         "mode": "javascript_off",
@@ -929,17 +929,17 @@
           "decision-managed-limitations-wrap"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:9cbf95532fb3fa455d70c333ea73e5b33ece4b4b3865cb7ad255dec9a1998b81"
+        "evidence_sha256": "sha256:1b3ffce7be0889bffc2baee4069246c61e2c55810203fc049a1f0331eb007d82"
       }
     ]
   },
   "independent_review": {
-    "reviewer_identity": "codex-review:/root/reuse_review_5594_r3",
-    "independent_from_author": true,
-    "independence_basis": "Author-independent read-only reviewer of the complete R3 artifact and live Issue5594 contract. This is the same independent reviewer’s narrow metadata-delta recheck, not a claimed new full-context session. R3 behavior/source/CI-inventory evidence is reused only after exact Git equality proved that all runtime, test, asset and owner-doc bytes are unchanged. The sole corrected Focus anchor, every affected hash, all 25 proof consumers, actual newly executed raw 45+5 observations, immutable artifact A2 and the newly canonicalized payload were independently authenticated. No implementation, Git, GitHub, claim, publication, lifecycle or helper authority was exercised.",
-    "reviewed_payload_sha256": "sha256:eb03bad8e95d0f543301ffd00bf51628e675f9129f34d0ff2031604318914621",
-    "reviewed_at": "2026-09-19T15:15:08.730Z",
-    "verdict": "pass",
+    "reviewer_identity": "pending:root-supplied-fresh-final-payload-review",
+    "independent_from_author": null,
+    "independence_basis": "Final payload will be frozen after the c039 source/test/asset repair, fresh host-leased proof, and artifact commit; no final review pass is claimed yet.",
+    "reviewed_payload_sha256": null,
+    "reviewed_at": null,
+    "verdict": "pending",
     "findings": []
   },
   "receipt_sha256": "sha256:cd16ed6395f2a70a97bcf05e71b0635d4f9e1b4711699f5e066d517fd3449cbb"

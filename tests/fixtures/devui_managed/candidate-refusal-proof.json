@@ -2,26 +2,26 @@
   "asset_sha256": {
     "app/builderops/devui_managed.css": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:e88b858d8779e689b340f15e092b3aef1c5d5aefa1deb4799375a47cf490cfa3",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:1e19a46cbb357e2740aef152f1da6fcd9fa798c084d2deeeac22a8d7e8a45199"
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:44dcc72f6ad26eb6f5eb802dfa3c8cb1b981d8f864e5b017af8d54f8995750f9"
   },
   "fixture_code_sha256": {
-    ".github/workflows/browser-runtime.yml": "sha256:0df130a40fc01d07c0cf7ee6e26b25ecd42022be3374dfd36e216e7e0919134c",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:5a3b13f61e154ceb9f266f24527d37486ecfa9d87ffcf178d06f960076bbbb52",
+    ".github/workflows/browser-runtime.yml": "sha256:5e680236777ba47cbd7fc47d79bc2c508acbdee5d0f88de3d4c88900405072b7",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:b3217d3b877e438fbeb3343a8e75e491d7949021e11d160bbfd0ce1418e9f5de",
     "tests/builderops/test_devui_runtime.py": "sha256:47e2e74d7f8117f42ebc8d6199b09eff676d4aed946b4c0a6fcefeb6049bdde6"
   },
   "junit": {
     "errors": 0,
-    "evidence_ref": "5594-final-repair-c/runtime/junit.xml",
+    "evidence_ref": "5594-final-c039-metadata/runtime/junit.xml",
     "failures": 0,
-    "sha256": "sha256:4a75eebbe2f3a1576334b5df0530cfb986bd878dbd5eb72ab49e0e0b43d5fb73",
+    "sha256": "sha256:07b0f4ac01f6a731e6d5d6504ebb40d503b4b96d2872f6527c2018a331f6524b",
     "skips": 0,
     "tests": 5
   },
   "log": {
-    "evidence_ref": "5594-final-repair-c/runtime/pytest.log",
-    "sha256": "sha256:ec1dd8c3e646203467f44c143d365f5be5a4ff135e3ced97103457cc45640775"
+    "evidence_ref": "5594-final-c039-metadata/runtime/pytest.log",
+    "sha256": "sha256:3f1a4bf951bb491073e04d8eb48c97a2c47d98e38b0455990ad4cf37d6acdd98"
   },
   "mutations": [
     "missing",
@@ -46,14 +46,14 @@
   ],
   "production_code_sha256": {
     "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db",
-    "app/builderops/devui_assets.py": "sha256:eee10d8ed309638e07c0ca563e9bc5b43cdc5df21603ef81f7833472df44c990",
+    "app/builderops/devui_assets.py": "sha256:96d0f394cfacd95142aa9f07cbf9eaa29a4f4c7f443da8f8e8ad0a1216be0942",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
     "app/builderops/devui_overview_inputs.py": "sha256:73f68980e9c53ee4d823a7f27277c12c19f3e278414deb5a078e21abf5c7da84",
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
     "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
   },
-  "raw_proof_package": "5594-final-repair-c/runtime (host-leased runtime admission/refusal run)",
-  "recorded_at": "2026-09-19T15:07:58.038Z",
+  "raw_proof_package": "5594-final-c039-metadata/runtime (host-leased runtime admission/refusal run)",
+  "recorded_at": "2026-09-19T16:35:28.131985Z",
   "repository_identity_cases": {
     "accepted_subjects": [
       "github:example/fixture#501",
