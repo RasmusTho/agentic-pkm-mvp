@@ -1,8 +1,8 @@
 {
-  "payload_sha256": "sha256:572090ecb2edf68fd0a42fb78ea781665b49a5f1fc01eb4e8ace9f7874c9330a",
+  "payload_sha256": "sha256:478d66815de32995bf7acb1f0eb5ab83ee85da862923d3edf41a3477ccc68958",
   "provenance_payload": {
     "contract_version": "yggdrasil-constrained-reuse.v1",
-    "repository_commit": "6e9482ce84a737ede68373eda6fabfcdfeb2fbe7",
+    "repository_commit": "04eed0004484658522bfbe761807f1325df598d3",
     "authorship": {
       "author_identity": "codex-devui-5596-recovery-01a0b900",
       "created_at": "2026-09-19T10:03:17Z"
