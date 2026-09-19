@@ -843,8 +843,11 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         _server(source, monkeypatch),
         _browser() as (page, context, _browser_instance, external, requests, errors, console),
     ):
-        first = page.goto(ORIGIN + "/devui/overview")
+        with page.expect_response(ORIGIN + "/api/devui/overview") as initial:
+            first = page.goto(ORIGIN + "/devui/overview")
         _loaded(page, "overview")
+        first_payload = initial.value.json()
+        first_candidate = first_payload["now"][0]
         overview_reads = len(source.calls)
         overview_text = page.locator('[data-testid="overview-now"]').inner_text()
         assert "Explicit docs-linked capability" in overview_text
@@ -886,13 +889,27 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
             assert first.headers[key] == read.value.headers[key]
         assert payload["receipts"] == payload["execution_observations"] == []
         _capture(page, "managed-focus")
-        row["payload"]["issue_number"] = 502
-        row["payload"]["title"] = "Unlinked fixture work"
+        candidate_manifest = json.loads((source.root / "manifest.json").read_text())
+        (source.root / "docs" / "matrix.md").write_text(
+            (source.root / "docs" / "matrix.md").read_text().replace("#501", "#503")
+        )
+        (source.root / "docs" / "FIXTURE" / "TASK.md").write_text(
+            (source.root / "docs" / "FIXTURE" / "TASK.md")
+            .read_text()
+            .replace("github_issue: 501", "github_issue: 503")
+        )
+        package_candidate(
+            source.root,
+            repository=source.environment["DEVUI_REPOSITORY"],
+            source_sha=source.environment["DEVUI_SOURCE_SHA"],
+            capabilities=candidate_manifest["capabilities"],
+            matrix=candidate_manifest["matrix"],
+        )
         with page.expect_response(ORIGIN + "/api/devui/overview") as returned:
             page.get_by_role("link", name="Return to Overview").click()
         _loaded(page, "overview")
         returned_text = page.locator('[data-testid="overview-now"]').inner_text()
-        assert "Unlinked fixture work" in returned_text
+        assert "Fixture work" in returned_text
         assert "Explicit docs-linked capability" not in returned_text
         assert "Capability is unknown" in returned_text
         assert "fixture-registered-holder" in returned_text
@@ -900,6 +917,14 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         assert "inspect dependency 900" in returned_text
         assert "does not authorize execution" in returned_text
         returned_candidate = returned.value.json()["now"][0]
+        assert returned_candidate["subject_ref"] == first_candidate["subject_ref"]
+        for key in (
+            "x-pkm-runtime-git-sha",
+            "x-devui-image-digest",
+            "x-devui-config-fingerprint",
+            "x-devui-asset-inventory",
+        ):
+            assert returned.value.headers[key] == first.headers[key]
         returned_capability = next(
             entry
             for entry in returned_candidate["evidence"]
@@ -920,7 +945,7 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         page.reload()
         _loaded(page, "overview")
         withdrawn_text = page.locator('[data-testid="overview-now"]').inner_text()
-        assert "Unlinked fixture work" in withdrawn_text
+        assert "Fixture work" in withdrawn_text
         assert "Explicit docs-linked capability" not in withdrawn_text
         assert "unknown" in withdrawn_text.lower()
         assert "fixture-registered-holder" in withdrawn_text
