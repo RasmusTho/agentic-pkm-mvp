@@ -330,6 +330,63 @@ def test_connected_shell_renders_full_server_state_matrix_without_reclassificati
             playwright.stop()
 
 
+def test_overview_evidence_axes_reflow_in_narrow_rail_column() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            page.locator('[data-testid="overview-needs-you"]').evaluate(
+                "(rail) => rail.append(document.querySelector('[data-testid=overview-now] article'))"
+            )
+            matrix = page.locator('[data-testid="overview-needs-you"] .matrix')
+            assert page.viewport_size == {"width": 1280, "height": 720}
+            assert matrix.evaluate(
+                "(element) => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+            ) == 1
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            card_body = page.locator('[data-testid="overview-now"] article .body')
+            assert card_body.locator(".matrix [data-axis]").count() == 5
+            for axis in ("availability", "freshness", "completeness", "cardinality", "linkage"):
+                assert card_body.locator("b").filter(has_text=axis).count() == 1
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            matrix = page.locator('[data-testid="overview-now"] .matrix')
+            assert matrix.evaluate(
+                "(element) => getComputedStyle(element).gridTemplateColumns.split(' ').length"
+            ) == 1
+            for locator in matrix.locator(".axis b, .axis span").all():
+                assert locator.evaluate(
+                    "(element) => { const range = document.createRange(); range.selectNodeContents(element); return range.getClientRects().length; }"
+                ) == 1
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
 def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
     with _serve() as (base_url, client):
         playwright, browser, context, page, external = _browser(base_url)

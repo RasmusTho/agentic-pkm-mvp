@@ -75,7 +75,6 @@ function renderItem(parent, item) {
   rows(body, item.subject_ref);
   (item.evidence || []).forEach((evidence) => {
     matrix(body, evidence);
-    rows(body, evidence);
   });
   (item.limitations || []).forEach((limitation) => text(body, "p", limitation, "empty"));
   card.appendChild(body);
