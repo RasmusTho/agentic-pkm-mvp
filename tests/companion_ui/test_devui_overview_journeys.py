@@ -247,6 +247,84 @@ def _browser(base_url: str):
     return playwright, browser, context, context.new_page(), external
 
 
+def _assert_candidate_overview_control_inventory(page) -> None:
+    expected_summaries = ["Inspect subject source details", "Inspect evidence details"]
+    assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries
+    candidate_inventory = page.evaluate(
+        """() => {
+            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+            const body = card && card.querySelector(':scope > .body');
+            const subject = body && body.querySelector(':scope > details.technical-disclosure');
+            const evidence = body && body.querySelector(':scope > .evidence-entry');
+            const evidenceDetails = evidence && evidence.querySelector(':scope > details.technical-disclosure');
+            const link = card && card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+            const rowValue = (details, key) => {
+                const row = details && Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
+                    .find(item => item.querySelector(':scope > b')?.textContent === key);
+                return row ? row.querySelector(':scope > code')?.textContent : null;
+            };
+            const controlChildren = body
+                ? Array.from(body.children).filter(child => child.matches('details.technical-disclosure,.evidence-entry'))
+                : [];
+            const checks = {
+                nodes: Boolean(card && body && subject && evidence && evidenceDetails && link),
+                link_last: Boolean(card && link && card.lastElementChild === link && link.parentElement === card),
+                controls: controlChildren.length === 2 && controlChildren[0] === subject && controlChildren[1] === evidence,
+                evidence_parent: Boolean(evidence && evidence.parentElement === body),
+                evidence_order: Boolean(body && subject && evidence && Array.from(body.children).indexOf(subject) < Array.from(body.children).indexOf(evidence)),
+                evidence_owner: Boolean(evidence && evidence.children.length === 2 && evidence.children[0].classList.contains('owner-summary')),
+                evidence_details: Boolean(evidence && evidence.children[1] === evidenceDetails),
+                subject_shape: Boolean(subject && Array.from(subject.children).map(child => child.tagName.toLowerCase()).join(',') === 'summary,ul'),
+                evidence_shape: Boolean(evidenceDetails && Array.from(evidenceDetails.children).map(child => child.tagName.toLowerCase()).join(',') === 'summary,div,ul'),
+                subject_source: rowValue(subject, 'source_id') === 'github:RasmusTho/agentic-pkm-mvp#4836',
+                evidence_source: rowValue(evidenceDetails, 'source_ref')?.includes('cockpit:working:4836'),
+            };
+            const ok = Object.values(checks).every(Boolean);
+            return {ok, checks};
+        }"""
+    )
+    assert candidate_inventory["ok"], candidate_inventory["checks"]
+    assert page.evaluate(
+        """() => {
+            const summaries = Array.from(document.querySelectorAll('details.technical-disclosure > summary'));
+            return summaries.every(summary =>
+                summary.dataset.testid === 'devui-technical-disclosure' &&
+                summary.parentElement.firstElementChild === summary &&
+                !summary.isContentEditable && !summary.hasAttribute('role') &&
+                !summary.hasAttribute('tabindex') &&
+                !summary.querySelector('button,a,input,textarea,select,[tabindex],[contenteditable]'));
+        }"""
+    ), "Only the candidate fixture's admitted navigation and disclosures are keyboard interactive"
+    assert page.evaluate(
+        """() => {
+            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+            const body = card.querySelector(':scope > .body');
+            const expected = [
+                body.querySelector(':scope > details.technical-disclosure > summary'),
+                body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
+                card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
+            ];
+            const visible = element => element.getClientRects().length &&
+                getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
+            const actual = Array.from(document.querySelectorAll(
+                'a[href],button,input,textarea,select,[tabindex],[contenteditable],summary'
+            )).filter(element => element.tabIndex >= 0 && visible(element));
+            return expected.every(Boolean) && actual.length === expected.length &&
+                actual.every((element, index) => element === expected[index]);
+        }"""
+    ), "Only the candidate fixture's admitted navigation and disclosures are keyboard interactive"
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    card = page.locator('[data-testid="overview-now"] > article.card')
+    expected_focus = [
+        card.locator(':scope > .body > details.technical-disclosure > summary'),
+        card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
+        card.locator(':scope > a[data-testid="overview-focus-link"]'),
+    ]
+    for expected in expected_focus:
+        page.keyboard.press("Tab")
+        assert page.evaluate("expected => document.activeElement === expected", expected.element_handle())
+
+
 def test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha() -> None:
     with _serve() as (base_url, client):
         playwright, browser, context, page, external = _browser(base_url)
@@ -548,22 +626,7 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
             assert page.locator("h1").count() == 1
             assert page.get_by_role("main").get_attribute("aria-labelledby") == "overview-heading"
             assert page.get_by_role("link", name="Open Focus").count() == 1
-            expected_disclosures = [
-                "Inspect subject source details",
-                "Inspect evidence details",
-            ]
-            assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_disclosures
-            page.keyboard.press("Tab")
-            for _ in range(len(expected_disclosures) + 1):
-                focused = page.locator(":focus")
-                assert focused.evaluate(
-                    "element => element.matches('details.technical-disclosure > summary, a[data-testid=overview-focus-link]')"
-                )
-                if focused.get_attribute("data-testid") == "overview-focus-link":
-                    break
-                page.keyboard.press("Tab")
-            else:
-                pytest.fail("Admitted navigation was not reachable after disclosures")
+            _assert_candidate_overview_control_inventory(page)
 
             assert page.viewport_size == {"width": 1280, "height": 720}
             page.set_viewport_size({"width": 375, "height": 812})

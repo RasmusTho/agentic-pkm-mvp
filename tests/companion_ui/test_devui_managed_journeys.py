@@ -38,16 +38,63 @@ EXPECTED_DISCLOSURE_SUMMARIES = {
     ],
     "focus": ["Inspect source and technical details"] * 10,
 }
-EXPECTED_FOCUS_DISCLOSURE_COUNTS = {
-    "focus-owner-intent": 1,
-    "focus-governing-sources": 3,
-    "focus-evidence": 2,
-    "focus-receipts": 0,
-    "focus-risks": 0,
-    "focus-next-step": 1,
-    "focus-execution": 0,
-    "focus-conversation": 1,
-    "focus-limitations": 2,
+EXPECTED_FOCUS_ENTRY_IDENTITIES = {
+    "focus-owner-intent": [
+        {
+            "key": "summary",
+            "value": "Declared Context:\nFixture owner intent.\n\nDeclared Scope:\nFixture source scope.",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501",
+        }
+    ],
+    "focus-governing-sources": [
+        {
+            "key": "claim_id",
+            "value": "governing-subject",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501",
+        },
+        {
+            "key": "claim_id",
+            "value": "issue-declaration:source-anchors:r1-1e08b386e6ca3ff9",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501#source-anchors",
+        },
+        {
+            "key": "claim_id",
+            "value": "issue-declaration:source-docs:r1-6119125eb82ddba1",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501#source-docs",
+        },
+    ],
+    "focus-evidence": [
+        {
+            "key": "claim_id",
+            "value": "subject-read",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501",
+        },
+        {
+            "key": "claim_id",
+            "value": "issue-declaration:acceptance-criteria:r1-56e00693da9440a2",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501#acceptance-criteria",
+        },
+    ],
+    "focus-receipts": [],
+    "focus-risks": [],
+    "focus-next-step": [{"key": "legality", "value": "unavailable", "source_id": None, "locator": None}],
+    "focus-execution": [],
+    "focus-conversation": [{"key": "availability", "value": "unsupported", "source_id": None, "locator": None}],
+    "focus-limitations": [
+        {
+            "key": "kind",
+            "value": "criterion_results_unassessed",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/example/fixture/issues/501#acceptance-criteria",
+        },
+        {"key": "kind", "value": "owner_facts_unavailable", "source_id": None, "locator": None},
+    ],
 }
 
 
@@ -138,7 +185,7 @@ def _capture(page, name):
 
 
 def _keyboard_navigation(page, surface):
-    """Prove the finite bound disclosures plus route link and navigate safely."""
+    """Prove the finite fixture-bound disclosure inventory plus route link."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
     name = "Open Focus" if surface == "overview" else "Return to Overview"
     link = page.get_by_role("link", name=name)
@@ -149,42 +196,154 @@ def _keyboard_navigation(page, surface):
         "Only the admitted navigation and disclosures are keyboard interactive"
     )
     if surface == "overview":
-        card = page.locator('[data-testid="overview-now"] article').first
-        assert card.locator(".body > details.technical-disclosure > summary").all_text_contents() == [
-            expected_summaries[0]
-        ], "Only the admitted navigation and disclosures are keyboard interactive"
-        assert card.locator(".evidence-entry > details.technical-disclosure > summary").all_text_contents() == [
-            expected_summaries[1]
-        ], "Only the admitted navigation and disclosures are keyboard interactive"
+        assert page.evaluate(
+            """() => {
+                const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                const body = card && card.querySelector(':scope > .body');
+                const subject = body && body.querySelector(':scope > details.technical-disclosure');
+                const evidence = body && body.querySelector(':scope > .evidence-entry');
+                const evidenceDetails = evidence && evidence.querySelector(':scope > details.technical-disclosure');
+                const link = card && card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+                const controlChildren = body
+                    ? Array.from(body.children).filter(child =>
+                        child.matches('details.technical-disclosure,.evidence-entry'))
+                    : [];
+                const rowShape = details => details && Array.from(details.children).map(child =>
+                    child.matches('summary') ? 'summary' :
+                    child.matches('ul.rungs') ? 'rungs' : child.tagName.toLowerCase());
+                const rowValue = (details, key) => {
+                    const row = details && Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
+                        .find(item => item.querySelector(':scope > b')?.textContent === key);
+                    return row ? row.querySelector(':scope > code')?.textContent : null;
+                };
+                return Boolean(card && body && subject && evidence && evidenceDetails && link) &&
+                    card.children[2] === body && card.lastElementChild === link &&
+                    link.parentElement === card && link.matches('a[data-testid="overview-focus-link"]') &&
+                    controlChildren.length === 2 && controlChildren[0] === subject &&
+                    controlChildren[1] === evidence && evidence.parentElement === body &&
+                    Array.from(evidence.children).length === 2 && evidence.children[0].classList.contains('owner-summary') &&
+                    evidence.children[1] === evidenceDetails && rowShape(subject).join(',') === 'summary,rungs' &&
+                    rowShape(evidenceDetails).join(',') === 'summary,matrix,rungs' &&
+                    rowValue(subject, 'source_ref')?.includes('example/fixture#501') &&
+                    rowValue(evidenceDetails, 'source_ref')?.includes('cockpit:working:github:example/fixture#501');
+            }"""
+        ), "Only the admitted navigation and disclosures are keyboard interactive"
     else:
-        for testid, count in EXPECTED_FOCUS_DISCLOSURE_COUNTS.items():
-            assert page.locator(
-                f'[data-testid="{testid}"] details.technical-disclosure'
-            ).count() == count, "Only the admitted navigation and disclosures are keyboard interactive"
-    expected_controls = (
-        ["summary:0", "summary:1", "link:overview-focus-link"]
-        if surface == "overview"
-        else [
-            "link:overview-return",
-            *[
-                f"summary:{testid}:{index}"
-                for testid, count in EXPECTED_FOCUS_DISCLOSURE_COUNTS.items()
-                for index in range(count)
-            ],
+        expected_entries = [
+            {"section": testid, "entries": identities}
+            for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items()
         ]
-    )
+        actual_entries = page.evaluate(
+            """sectionSpecs => sectionSpecs.map(({section, entries}) => {
+                const root = document.querySelector(`[data-testid="${section}"]`);
+                const content = root && root.querySelector(':scope > div');
+                if (!root || !content || root.children.length !== 2 || root.children[0].tagName !== 'H2') {
+                    return {section, invalid: 'section-shape'};
+                }
+                const actual = Array.from(content.children).map(entry => {
+                    if (!entry.classList.contains('focus-entry') || entry.children.length !== 2 ||
+                        !entry.children[0].classList.contains('owner-summary') ||
+                        !entry.children[1].matches('details.technical-disclosure')) {
+                        return {invalid: 'entry-shape'};
+                    }
+                    const details = entry.children[1];
+                    if (details.children.length !== 2 || !details.children[0].matches('summary') ||
+                        !details.children[1].matches('ul.rungs')) {
+                        return {invalid: 'details-shape'};
+                    }
+                    const rows = {};
+                    Array.from(details.querySelectorAll(':scope > ul.rungs > li')).forEach(row => {
+                        const key = row.querySelector(':scope > b')?.textContent;
+                        const value = row.querySelector(':scope > code')?.textContent;
+                        if (key) rows[key] = value;
+                    });
+                    const key = ['claim_id', 'kind', 'summary', 'legality', 'availability']
+                        .find(candidate => Object.prototype.hasOwnProperty.call(rows, candidate));
+                    let source = null;
+                    if (rows.source_ref) {
+                        try { source = JSON.parse(rows.source_ref); } catch (_) { return {invalid: 'source-ref'}; }
+                    }
+                    return {
+                        key,
+                        value: key ? rows[key] : null,
+                        source_id: source?.source_id ?? null,
+                        locator: source?.locator ?? null,
+                    };
+                });
+                return {section, entries: actual};
+            })""",
+            expected_entries,
+        )
+        assert actual_entries == expected_entries, "Only the admitted navigation and disclosures are keyboard interactive"
     assert page.evaluate(
-        """surface => Array.from(document.querySelectorAll(
-            'details.technical-disclosure > summary,a[data-testid="overview-focus-link"],a[data-testid="overview-return"]'
-        )).map((element, index) => {
-            if (element.matches('a')) return `link:${element.dataset.testid}`;
-            if (surface === 'overview') return `summary:${index}`;
-            const owner = element.parentElement.closest('[data-testid]');
-            const siblings = Array.from(owner.querySelectorAll('details.technical-disclosure > summary'));
-            return `summary:${owner.dataset.testid}:${siblings.indexOf(element)}`;
-        })""",
-        surface,
-    ) == expected_controls, "Only the admitted navigation and disclosures are keyboard interactive"
+        """inventory => {
+            const identity = entry => {
+                const details = entry.querySelector(':scope > details.technical-disclosure');
+                if (!details || details.children.length !== 2 || !details.children[0].matches('summary') ||
+                    !details.children[1].matches('ul.rungs')) return null;
+                const rows = {};
+                Array.from(details.querySelectorAll(':scope > ul.rungs > li')).forEach(row => {
+                    const key = row.querySelector(':scope > b')?.textContent;
+                    const value = row.querySelector(':scope > code')?.textContent;
+                    if (key) rows[key] = value;
+                });
+                const key = ['claim_id', 'kind', 'summary', 'legality', 'availability']
+                    .find(candidate => Object.prototype.hasOwnProperty.call(rows, candidate));
+                let source = null;
+                if (rows.source_ref) {
+                    try { source = JSON.parse(rows.source_ref); } catch (_) { return null; }
+                }
+                return {
+                    key,
+                    value: key ? rows[key] : null,
+                    source_id: source?.source_id ?? null,
+                    locator: source?.locator ?? null,
+                };
+            };
+            const expectedEntry = (section, spec) => {
+                const root = document.querySelector(`[data-testid="${section}"]`);
+                const content = root && root.querySelector(':scope > div');
+                if (!content) return null;
+                return Array.from(content.children).find(entry =>
+                    JSON.stringify(identity(entry)) === JSON.stringify(spec)
+                );
+            };
+            const expected = inventory.surface === 'overview'
+                ? (() => {
+                    const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                    const body = card && card.querySelector(':scope > .body');
+                    return [
+                        body && body.querySelector(':scope > details.technical-disclosure > summary'),
+                        body && body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
+                        card && card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
+                    ];
+                })()
+                : [
+                    document.querySelector('[data-testid="overview-return"]'),
+                    ...inventory.sections.flatMap(({section, entries}) => entries.map(spec => {
+                        const entry = expectedEntry(section, spec);
+                        return entry && entry.querySelector(':scope > details.technical-disclosure > summary');
+                    })),
+                ];
+            if (expected.some(element => !element)) return false;
+            const visible = element => element.getClientRects().length &&
+                getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
+            const actual = Array.from(document.querySelectorAll(
+                'a[href],button,input,textarea,select,[tabindex],[contenteditable],summary'
+            )).filter(element => element.tabIndex >= 0 && visible(element));
+            return actual.length === expected.length && actual.every((element, index) => element === expected[index]) &&
+                expected.every(summary => !summary.matches('summary') ||
+                    (summary.dataset.testid === 'devui-technical-disclosure' &&
+                     summary.parentElement.firstElementChild === summary));
+        }""",
+        {
+            "surface": surface,
+            "sections": [
+                {"section": testid, "entries": identities}
+                for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items()
+            ],
+        },
+    ), "Only the admitted navigation and disclosures are keyboard interactive"
     assert page.evaluate(
         """() => Array.from(document.querySelectorAll('details.technical-disclosure > summary')).every(summary =>
             !summary.isContentEditable && !summary.hasAttribute('role') &&
@@ -200,24 +359,35 @@ def _keyboard_navigation(page, surface):
         link.element_handle(),
     ), "Only the admitted navigation and disclosures are keyboard interactive"
     page.bring_to_front()
-    for summary in page.locator("details.technical-disclosure > summary").all():
+    summaries = page.locator("details.technical-disclosure > summary").all()
+    for summary in summaries:
         summary.focus()
+        assert summary.evaluate("el => document.activeElement === el")
         page.keyboard.press("Enter")
         assert summary.evaluate("el => el.parentElement.open") is True
         page.keyboard.press("Space")
         assert summary.evaluate("el => el.parentElement.open") is False
-    for _ in range(len(expected_summaries) + 2):
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    expected_focus = [link]
+    if surface == "overview":
+        card = page.locator('[data-testid="overview-now"] > article.card')
+        expected_focus = [
+            card.locator(':scope > .body > details.technical-disclosure > summary'),
+            card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
+            card.locator(':scope > a[data-testid="overview-focus-link"]'),
+        ]
+    else:
+        expected_focus = [page.locator('[data-testid="overview-return"]')]
+        for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items():
+            section = page.locator(f'[data-testid="{testid}"]')
+            expected_focus.extend(
+                section.locator(':scope > div > .focus-entry > details.technical-disclosure > summary').all()
+            )
+    for expected in expected_focus:
         page.keyboard.press("Tab")
         assert page.evaluate(
-            """expected => [document.body, document.documentElement, expected]
-                .includes(document.activeElement) ||
-                document.activeElement.matches('details.technical-disclosure > summary')""",
-            link.element_handle(),
+            """expected => document.activeElement === expected""", expected.element_handle()
         ), "Unexpected keyboard focus outside admitted navigation and disclosures"
-        if link.evaluate("el => el === document.activeElement"):
-            break
-    else:
-        pytest.fail("Admitted navigation was not reachable by Tab")
     page.keyboard.press("Enter")
     page.wait_for_url(ORIGIN + destination)
     _loaded(page, "focus" if surface == "overview" else "overview")
@@ -235,6 +405,12 @@ def _keyboard_navigation(page, surface):
         "disclosure_misplaced",
         "body_after_focus",
         "summary_editable",
+        "evidence_after_body",
+        "navigation_nested_in_evidence",
+        "governing_entries_swapped",
+        "details_before_owner_summary",
+        "details_before_focus_entry",
+        "details_prepended_into_other_entry",
     ],
 )
 def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
@@ -248,6 +424,8 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
         _loaded(page, surface)
         # Fault injection into the actual production-served DOM, not a substitute page.
         page.evaluate("""kind => {
+            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+            const focusSection = document.querySelector('[data-testid="focus-governing-sources"] > div');
             if (kind === 'disclosure_misplaced') {
                 const details = Array.from(document.querySelectorAll('details.technical-disclosure'));
                 details.forEach(item => document.querySelector('main').append(item));
@@ -260,6 +438,69 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
                 } else {
                     const grid = document.querySelector('.focus-grid');
                     document.querySelector('[data-testid="overview-return"]').closest('.claim').before(grid);
+                }
+                return;
+            }
+            if (kind === 'evidence_after_body') {
+                if (card) {
+                    const evidence = card.querySelector(':scope > .body > .evidence-entry');
+                    card.insertBefore(evidence, card.querySelector(':scope > a[data-testid="overview-focus-link"]'));
+                } else {
+                    const first = focusSection.querySelector(':scope > .focus-entry');
+                    focusSection.append(first);
+                }
+                return;
+            }
+            if (kind === 'navigation_nested_in_evidence') {
+                if (card) {
+                    const evidence = card.querySelector(':scope > .body > .evidence-entry');
+                    evidence.append(card.querySelector(':scope > a[data-testid="overview-focus-link"]'));
+                } else {
+                    const entry = focusSection.querySelector(':scope > .focus-entry');
+                    entry.append(document.querySelector('[data-testid="overview-return"]'));
+                }
+                return;
+            }
+            if (kind === 'governing_entries_swapped') {
+                if (focusSection) {
+                    const entries = focusSection.querySelectorAll(':scope > .focus-entry');
+                    focusSection.insertBefore(entries[1], entries[0]);
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    const subject = body.querySelector(':scope > details.technical-disclosure');
+                    const evidence = body.querySelector(':scope > .evidence-entry');
+                    body.insertBefore(evidence, subject);
+                }
+                return;
+            }
+            if (kind === 'details_before_owner_summary') {
+                if (focusSection) {
+                    const entry = focusSection.querySelector(':scope > .focus-entry');
+                    entry.insertBefore(entry.querySelector(':scope > details.technical-disclosure'), entry.firstElementChild);
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    body.insertBefore(body.querySelector(':scope > details.technical-disclosure'), body.firstElementChild);
+                }
+                return;
+            }
+            if (kind === 'details_before_focus_entry') {
+                if (focusSection) {
+                    const entry = focusSection.querySelector(':scope > .focus-entry');
+                    focusSection.insertBefore(entry.querySelector(':scope > details.technical-disclosure'), entry);
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    body.insertBefore(body.querySelector(':scope > details.technical-disclosure'), body.firstElementChild);
+                }
+                return;
+            }
+            if (kind === 'details_prepended_into_other_entry') {
+                if (focusSection) {
+                    const entries = focusSection.querySelectorAll(':scope > .focus-entry');
+                    entries[1].prepend(entries[0].querySelector(':scope > details.technical-disclosure'));
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    const subject = body.querySelector(':scope > details.technical-disclosure');
+                    body.querySelector(':scope > .evidence-entry').prepend(subject);
                 }
                 return;
             }

@@ -363,7 +363,7 @@
         "target_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
         "target_content_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
-        "target_git_blob_oid": "f2f827b514b8df34a22d49ae632dc9971395c0e"
+        "target_git_blob_oid": "f2f827b514b8df34a22d49ae632dc9971395c0e4"
       },
       {
         "transformation_id": "issue-5594-owner-language-disclosure",
