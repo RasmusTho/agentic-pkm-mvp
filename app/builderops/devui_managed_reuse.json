@@ -60,6 +60,22 @@
         "stable_ref": ".rungs .r-val { overflow-wrap:break-word } (also authenticated at 339ec73ef93fb8af96a6dd7b1d739c147f5f69ea:139)",
         "source_role": "pattern",
         "content_sha256": "sha256:d34fadfdd619534f6e0f9480a979b5caae52b65b9b05d8bb6db99fa8ae1d1d93"
+      },
+      {
+        "source_id": "source-cockpit-disclosure-css",
+        "source_path": "app/web/static/cockpit.css",
+        "stable_ref": ".card>summary disclosure grammar at immutable Cockpit source commit 339ec73ef93fb8af96a6dd7b1d739c147f5f69ea:104-107",
+        "source_role": "pattern",
+        "content_sha256": "sha256:d34fadfdd619534f6e0f9480a979b5caae52b65b9b05d8bb6db99fa8ae1d1d93",
+        "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea"
+      },
+      {
+        "source_id": "source-cockpit-disclosure-js",
+        "source_path": "app/web/static/cockpit.js",
+        "stable_ref": "cardMarkup native details/summary disclosure at immutable Cockpit source commit 339ec73ef93fb8af96a6dd7b1d739c147f5f69ea:98-119",
+        "source_role": "pattern",
+        "content_sha256": "sha256:8bfdc94692eb6d8038f0883b7cb7f7e9346acde357e6af9b515b4120a9164b78",
+        "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea"
       }
     ],
     "tokens": {
@@ -350,16 +366,36 @@
         "source_ids": [
           "source-overview.js",
           "source-focus.js",
-          "source-devui.css"
+          "source-devui.css",
+          "source-cockpit-disclosure-css",
+          "source-cockpit-disclosure-js"
         ],
-        "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render known owner-language labels and keep unknown scalar fields reachable, while placing raw subject/evidence identifiers and technical rows behind closed native details/summary controls. Reuse the existing Cockpit summary focus/hover grammar, with no new tokens, authority, persistence, egress, or effect behavior.",
+        "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render known owner-language labels and keep unknown/new fields reachable only under closed native details/summary controls. Reuse the exact Cockpit card details/summary keyboard, focus, hover, border and token grammar from the immutable CSS/JS sources, with no new tokens, authority, persistence, egress, or effect behavior.",
         "source_anchors": [
-          "<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">",
+          "`<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">`",
           ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
         ],
         "target_anchors": [
           "details.className = \"technical-disclosure\";",
           "function ownerRows(parent, value) {",
+          ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+        ]
+      },
+      {
+        "transformation_id": "issue-5594-disclosure-source-mapping",
+        "kind": "interaction_binding",
+        "source_ids": [
+          "source-cockpit-disclosure-css",
+          "source-cockpit-disclosure-js"
+        ],
+        "exact_rule": "Use the immutable Cockpit cardMarkup details/summary element structure and its exact CSS summary focus/hover/border/token grammar for each finite technical disclosure. Adapt only the wrapper class and owner content binding; add no interaction class, token, visual language, persistence, egress, or authority behavior.",
+        "source_anchors": [
+          "`<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">`",
+          "`<summary><div class=\"meta\">",
+          ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+        ],
+        "target_anchors": [
+          "details.className = \"technical-disclosure\";",
           ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
         ]
       }
@@ -369,7 +405,9 @@
         "decision_id": "decision-devui.css",
         "target_ref": "app/builderops/devui_managed.css (all original selectors/declarations and media behavior)",
         "source_ids": [
-          "source-devui.css"
+          "source-devui.css",
+          "source-cockpit-disclosure-css",
+          "source-cockpit-disclosure-js"
         ],
         "token_ids": [
           "--accent",
@@ -420,7 +458,8 @@
         "transformation_ids": [
           "inherit-font-normalization",
           "issue-5596-axis-container-reflow",
-          "issue-5594-owner-language-disclosure"
+          "issue-5594-owner-language-disclosure",
+          "issue-5594-disclosure-source-mapping"
         ]
       },
       {
@@ -436,11 +475,14 @@
         "decision_id": "decision-focus.js",
         "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
         "source_ids": [
-          "source-focus.js"
+          "source-focus.js",
+          "source-cockpit-disclosure-css",
+          "source-cockpit-disclosure-js"
         ],
         "token_ids": [],
         "transformation_ids": [
-          "issue-5594-owner-language-disclosure"
+          "issue-5594-owner-language-disclosure",
+          "issue-5594-disclosure-source-mapping"
         ]
       },
       {
@@ -456,12 +498,15 @@
         "decision_id": "decision-overview.js",
         "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
         "source_ids": [
-          "source-overview.js"
+          "source-overview.js",
+          "source-cockpit-disclosure-css",
+          "source-cockpit-disclosure-js"
         ],
         "token_ids": [],
         "transformation_ids": [
           "issue-5596-evidence-single-render",
-          "issue-5594-owner-language-disclosure"
+          "issue-5594-owner-language-disclosure",
+          "issue-5594-disclosure-source-mapping"
         ]
       },
       {

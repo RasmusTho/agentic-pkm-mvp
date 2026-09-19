@@ -329,7 +329,7 @@
       "source_anchors": [
         "function cardMarkup(item) {",
         "`<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">`",
-        "`<summary>`"
+        "`<summary><div class=\"meta\">"
       ],
       "candidate_anchors": [
         "function technicalDetails(parent, summary, value, omitAxes = false) {",

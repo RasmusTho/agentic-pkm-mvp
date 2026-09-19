@@ -38,6 +38,17 @@ EXPECTED_DISCLOSURE_SUMMARIES = {
     ],
     "focus": ["Inspect source and technical details"] * 10,
 }
+EXPECTED_FOCUS_DISCLOSURE_COUNTS = {
+    "focus-owner-intent": 1,
+    "focus-governing-sources": 3,
+    "focus-evidence": 2,
+    "focus-receipts": 0,
+    "focus-risks": 0,
+    "focus-next-step": 1,
+    "focus-execution": 0,
+    "focus-conversation": 1,
+    "focus-limitations": 2,
+}
 
 
 @contextmanager
@@ -137,6 +148,25 @@ def _keyboard_navigation(page, surface):
     assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries, (
         "Only the admitted navigation and disclosures are keyboard interactive"
     )
+    if surface == "overview":
+        card = page.locator('[data-testid="overview-now"] article').first
+        assert card.locator(".body > details.technical-disclosure > summary").all_text_contents() == [
+            expected_summaries[0]
+        ], "Only the admitted navigation and disclosures are keyboard interactive"
+        assert card.locator(".evidence-entry > details.technical-disclosure > summary").all_text_contents() == [
+            expected_summaries[1]
+        ], "Only the admitted navigation and disclosures are keyboard interactive"
+    else:
+        for testid, count in EXPECTED_FOCUS_DISCLOSURE_COUNTS.items():
+            assert page.locator(
+                f'[data-testid="{testid}"] details.technical-disclosure'
+            ).count() == count, "Only the admitted navigation and disclosures are keyboard interactive"
+    assert page.evaluate(
+        """() => Array.from(document.querySelectorAll('details.technical-disclosure > summary')).every(summary =>
+            !summary.isContentEditable && !summary.hasAttribute('role') &&
+            !summary.hasAttribute('tabindex') &&
+            !summary.querySelector('button,a,input,textarea,select,[tabindex],[contenteditable]'))"""
+    ), "Only the admitted navigation and disclosures are keyboard interactive"
     assert page.evaluate(
         """expected => Array.from(document.querySelectorAll('*')).filter(el =>
             (el.tabIndex >= 0 || el.isContentEditable) &&
@@ -146,6 +176,12 @@ def _keyboard_navigation(page, surface):
         link.element_handle(),
     ), "Only the admitted navigation and disclosures are keyboard interactive"
     page.bring_to_front()
+    for summary in page.locator("details.technical-disclosure > summary").all():
+        summary.focus()
+        page.keyboard.press("Enter")
+        assert summary.evaluate("el => el.parentElement.open") is True
+        page.keyboard.press("Space")
+        assert summary.evaluate("el => el.parentElement.open") is False
     for _ in range(len(expected_summaries) + 2):
         page.keyboard.press("Tab")
         assert page.evaluate(
@@ -164,7 +200,10 @@ def _keyboard_navigation(page, surface):
 
 
 @pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
-@pytest.mark.parametrize("action", ["button", "link", "tabindex", "editable", "disclosure"])
+@pytest.mark.parametrize(
+    "action",
+    ["button", "link", "tabindex", "editable", "disclosure", "disclosure_misplaced", "summary_editable"],
+)
 def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     managed_sources, monkeypatch, surface, path, action  # noqa: F811 - imported pytest fixture
 ):
@@ -176,6 +215,15 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
         _loaded(page, surface)
         # Fault injection into the actual production-served DOM, not a substitute page.
         page.evaluate("""kind => {
+            if (kind === 'disclosure_misplaced') {
+                const details = Array.from(document.querySelectorAll('details.technical-disclosure'));
+                details.forEach(item => document.querySelector('main').append(item));
+                return;
+            }
+            if (kind === 'summary_editable') {
+                document.querySelector('details.technical-disclosure > summary').contentEditable = 'true';
+                return;
+            }
             const el = document.createElement(kind === 'disclosure' ? 'details' :
                 kind === 'button' ? 'button' : kind === 'link' ? 'a' : 'div');
             el.textContent = 'Unexpected action';
