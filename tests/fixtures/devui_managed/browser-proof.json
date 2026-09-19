@@ -183,7 +183,7 @@
   "scope": "#5599 final local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
   "proof_observed_at": "2026-09-19T21:19:57.921589Z",
   "current_proof": {
-    "source_commit": "263c3de19837757e2c0265d7ebe94c092734454b",
+    "source_commit": "ad4c548cda04ef667d0b94f47b9b4d95233f5a9a",
     "execution_id": "5599-final-managed-ad4c548c",
     "stdout": {
       "evidence_ref": ".codex-tmp/5599-final-proof/managed-current.stdout",

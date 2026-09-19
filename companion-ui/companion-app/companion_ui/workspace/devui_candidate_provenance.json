@@ -383,8 +383,8 @@
       ],
       "candidate_anchors": [
         "function renderItem(parent, item) {",
-        "matrix(body, evidence);",
-        "rows(body, evidence, true);"
+        "matrix(details, evidence);",
+        "rows(details, evidence, true);"
       ],
       "candidate_git_blob_oids": {
         "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "bf61c7f1bbe22b54f658f59886134ac892a3260b"
@@ -412,7 +412,21 @@
       "candidate_git_blob_oids": {
         "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css": "0a473a000bf9c15bb4ffbab93088c25e8f25d752"
       },
-      "exact_rule": "Extend the accepted source-value wrapping grammar to preserved technical labels and full limitation text; retain every text value and axis layout with no new token, visual, interaction, or authority behavior."
+      "exact_rule": "Extend the accepted source-value wrapping grammar to preserved technical labels and full limitation text; retain every text value and axis layout with no new token, visual, interaction, or authority behavior.",
+      "source_dependencies": [
+        {
+          "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
+          "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4",
+          "source_git_blob_oid": "2d6e19e1f427d186bed8fc4391739baeda724737",
+          "source_anchor": ".rungs code{color:var(--fg-1);overflow-wrap:anywhere}"
+        },
+        {
+          "source_path": "app/web/static/cockpit.css",
+          "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+          "source_git_blob_oid": "63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2",
+          "source_anchor": ".rungs .r-val{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);overflow-wrap:break-word}"
+        }
+      ]
     },
     {
       "issue": 5599,
@@ -432,7 +446,21 @@
         ".limitations li{overflow-wrap:break-word}"
       ],
       "target_git_blob_oid": "ab2f7a228d1284347d9d2b67ca3388a090244f6d",
-      "exact_rule": "Carry the existing source-value wrapping pattern into the managed copy for labels and complete limitation text, preserving the existing limitations overlay and all text, axis layout, tokens, interactions, and authority boundaries."
+      "exact_rule": "Carry the existing source-value wrapping pattern into the managed copy for labels and complete limitation text, preserving the existing limitations overlay and all text, axis layout, tokens, interactions, and authority boundaries.",
+      "source_dependencies": [
+        {
+          "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
+          "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4",
+          "source_git_blob_oid": "2d6e19e1f427d186bed8fc4391739baeda724737",
+          "source_anchor": ".rungs code{color:var(--fg-1);overflow-wrap:anywhere}"
+        },
+        {
+          "source_path": "app/web/static/cockpit.css",
+          "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+          "source_git_blob_oid": "63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2",
+          "source_anchor": ".rungs .r-val{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);overflow-wrap:break-word}"
+        }
+      ]
     }
   ],
   "historical_consumer_issues": [
