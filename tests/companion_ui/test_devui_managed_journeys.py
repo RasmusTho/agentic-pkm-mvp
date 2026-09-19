@@ -44,7 +44,7 @@ EXPECTED_FOCUS_ENTRY_IDENTITIES = {
             "key": "summary",
             "value": "Declared Context:\nFixture owner intent.\n\nDeclared Scope:\nFixture source scope.",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
         }
     ],
     "focus-governing-sources": [
@@ -52,19 +52,19 @@ EXPECTED_FOCUS_ENTRY_IDENTITIES = {
             "key": "claim_id",
             "value": "governing-subject",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
         },
         {
             "key": "claim_id",
             "value": "issue-declaration:source-anchors:r1-1e08b386e6ca3ff9",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501#source-anchors",
+            "locator": "https://github.com/Example/Fixture/issues/501#source-anchors",
         },
         {
             "key": "claim_id",
             "value": "issue-declaration:source-docs:r1-6119125eb82ddba1",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501#source-docs",
+            "locator": "https://github.com/Example/Fixture/issues/501#source-docs",
         },
     ],
     "focus-evidence": [
@@ -72,13 +72,13 @@ EXPECTED_FOCUS_ENTRY_IDENTITIES = {
             "key": "claim_id",
             "value": "subject-read",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
         },
         {
             "key": "claim_id",
             "value": "issue-declaration:acceptance-criteria:r1-56e00693da9440a2",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501#acceptance-criteria",
+            "locator": "https://github.com/Example/Fixture/issues/501#acceptance-criteria",
         },
     ],
     "focus-receipts": [],
@@ -91,7 +91,7 @@ EXPECTED_FOCUS_ENTRY_IDENTITIES = {
             "key": "kind",
             "value": "criterion_results_unassessed",
             "source_id": "example/fixture#501",
-            "locator": "https://github.com/example/fixture/issues/501#acceptance-criteria",
+            "locator": "https://github.com/Example/Fixture/issues/501#acceptance-criteria",
         },
         {"key": "kind", "value": "owner_facts_unavailable", "source_id": None, "locator": None},
     ],
@@ -184,7 +184,7 @@ def _capture(page, name):
         (path / (name + ".aria.txt")).write_text(page.locator("body").aria_snapshot())
 
 
-def _keyboard_navigation(page, surface):
+def _keyboard_navigation(page, surface, *, navigate=True):
     """Prove the finite fixture-bound disclosure inventory plus route link."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
     name = "Open Focus" if surface == "overview" else "Return to Overview"
@@ -210,6 +210,7 @@ def _keyboard_navigation(page, surface):
                     : [];
                 const rowShape = details => details && Array.from(details.children).map(child =>
                     child.matches('summary') ? 'summary' :
+                    child.classList.contains('matrix') ? 'matrix' :
                     child.matches('ul.rungs') ? 'rungs' : child.tagName.toLowerCase());
                 const rowValue = (details, key) => {
                     const row = details && Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
@@ -221,11 +222,13 @@ def _keyboard_navigation(page, surface):
                     link.parentElement === card && link.matches('a[data-testid="overview-focus-link"]') &&
                     controlChildren.length === 2 && controlChildren[0] === subject &&
                     controlChildren[1] === evidence && evidence.parentElement === body &&
+                    body.firstElementChild?.classList.contains('owner-summary') &&
+                    Array.from(body.children).indexOf(body.firstElementChild) < Array.from(body.children).indexOf(subject) &&
                     Array.from(evidence.children).length === 2 && evidence.children[0].classList.contains('owner-summary') &&
                     evidence.children[1] === evidenceDetails && rowShape(subject).join(',') === 'summary,rungs' &&
                     rowShape(evidenceDetails).join(',') === 'summary,matrix,rungs' &&
-                    rowValue(subject, 'source_ref')?.includes('example/fixture#501') &&
-                    rowValue(evidenceDetails, 'source_ref')?.includes('cockpit:working:github:example/fixture#501');
+                    rowValue(subject, 'source_id') === 'github:example/fixture#501' &&
+                    (() => { try { return JSON.parse(rowValue(evidenceDetails, 'source_ref')).source_id === 'cockpit:working:github:example/fixture#501'; } catch (_) { return false; } })();
             }"""
         ), "Only the admitted navigation and disclosures are keyboard interactive"
     else:
@@ -239,6 +242,12 @@ def _keyboard_navigation(page, surface):
                 const content = root && root.querySelector(':scope > div');
                 if (!root || !content || root.children.length !== 2 || root.children[0].tagName !== 'H2') {
                     return {section, invalid: 'section-shape'};
+                }
+                if (entries.length === 0) {
+                    return {
+                        section,
+                        entries: content.children.length === 1 && content.children[0].classList.contains('empty') ? [] : null,
+                    };
                 }
                 const actual = Array.from(content.children).map(entry => {
                     if (!entry.classList.contains('focus-entry') || entry.children.length !== 2 ||
@@ -330,7 +339,7 @@ def _keyboard_navigation(page, surface):
                 getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
             const actual = Array.from(document.querySelectorAll(
                 'a[href],button,input,textarea,select,[tabindex],[contenteditable],summary'
-            )).filter(element => element.tabIndex >= 0 && visible(element));
+            )).filter(element => (element.tabIndex >= 0 || element.isContentEditable) && visible(element));
             return actual.length === expected.length && actual.every((element, index) => element === expected[index]) &&
                 expected.every(summary => !summary.matches('summary') ||
                     (summary.dataset.testid === 'devui-technical-disclosure' &&
@@ -367,7 +376,8 @@ def _keyboard_navigation(page, surface):
         assert summary.evaluate("el => el.parentElement.open") is True
         page.keyboard.press("Space")
         assert summary.evaluate("el => el.parentElement.open") is False
-    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.mouse.click(2, 2)
+    assert page.evaluate("document.activeElement === document.body"), "Browser did not reset focus to body"
     expected_focus = [link]
     if surface == "overview":
         card = page.locator('[data-testid="overview-now"] > article.card')
@@ -388,9 +398,12 @@ def _keyboard_navigation(page, surface):
         assert page.evaluate(
             """expected => document.activeElement === expected""", expected.element_handle()
         ), "Unexpected keyboard focus outside admitted navigation and disclosures"
-    page.keyboard.press("Enter")
-    page.wait_for_url(ORIGIN + destination)
-    _loaded(page, "focus" if surface == "overview" else "overview")
+    if navigate:
+        link.focus()
+        assert page.evaluate("expected => document.activeElement === expected", link.element_handle())
+        page.keyboard.press("Enter")
+        page.wait_for_url(ORIGIN + destination)
+        _loaded(page, "focus" if surface == "overview" else "overview")
 
 
 @pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
@@ -422,6 +435,7 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     ):
         page.goto(ORIGIN + path)
         _loaded(page, surface)
+        _keyboard_navigation(page, surface, navigate=False)
         # Fault injection into the actual production-served DOM, not a substitute page.
         page.evaluate("""kind => {
             const card = document.querySelector('[data-testid="overview-now"] > article.card');
@@ -523,7 +537,7 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
             document.querySelector('main').append(el);
         }""", action)
         with pytest.raises(AssertionError, match="Only the admitted navigation"):
-            _keyboard_navigation(page, surface)
+            _keyboard_navigation(page, surface, navigate=False)
         assert page.url == ORIGIN + path
         assert all(method == "GET" for method, _ in requests)
         assert not external and not errors and not console

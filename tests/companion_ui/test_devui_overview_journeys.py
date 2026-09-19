@@ -263,6 +263,9 @@ def _assert_candidate_overview_control_inventory(page) -> None:
                     .find(item => item.querySelector(':scope > b')?.textContent === key);
                 return row ? row.querySelector(':scope > code')?.textContent : null;
             };
+            const sourceValue = (details, key) => {
+                try { return JSON.parse(rowValue(details, key)); } catch (_) { return null; }
+            };
             const controlChildren = body
                 ? Array.from(body.children).filter(child => child.matches('details.technical-disclosure,.evidence-entry'))
                 : [];
@@ -272,12 +275,15 @@ def _assert_candidate_overview_control_inventory(page) -> None:
                 controls: controlChildren.length === 2 && controlChildren[0] === subject && controlChildren[1] === evidence,
                 evidence_parent: Boolean(evidence && evidence.parentElement === body),
                 evidence_order: Boolean(body && subject && evidence && Array.from(body.children).indexOf(subject) < Array.from(body.children).indexOf(evidence)),
+                owner_order: Boolean(body && body.firstElementChild?.classList.contains('owner-summary') &&
+                    Array.from(body.children).indexOf(body.querySelector(':scope > .owner-summary')) <
+                    Array.from(body.children).indexOf(subject)),
                 evidence_owner: Boolean(evidence && evidence.children.length === 2 && evidence.children[0].classList.contains('owner-summary')),
                 evidence_details: Boolean(evidence && evidence.children[1] === evidenceDetails),
                 subject_shape: Boolean(subject && Array.from(subject.children).map(child => child.tagName.toLowerCase()).join(',') === 'summary,ul'),
                 evidence_shape: Boolean(evidenceDetails && Array.from(evidenceDetails.children).map(child => child.tagName.toLowerCase()).join(',') === 'summary,div,ul'),
                 subject_source: rowValue(subject, 'source_id') === 'github:RasmusTho/agentic-pkm-mvp#4836',
-                evidence_source: rowValue(evidenceDetails, 'source_ref')?.includes('cockpit:working:4836'),
+                evidence_source: sourceValue(evidenceDetails, 'source_ref')?.source_id === 'cockpit:working:4836',
             };
             const ok = Object.values(checks).every(Boolean);
             return {ok, checks};
@@ -308,12 +314,13 @@ def _assert_candidate_overview_control_inventory(page) -> None:
                 getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
             const actual = Array.from(document.querySelectorAll(
                 'a[href],button,input,textarea,select,[tabindex],[contenteditable],summary'
-            )).filter(element => element.tabIndex >= 0 && visible(element));
+            )).filter(element => (element.tabIndex >= 0 || element.isContentEditable) && visible(element));
             return expected.every(Boolean) && actual.length === expected.length &&
                 actual.every((element, index) => element === expected[index]);
         }"""
     ), "Only the candidate fixture's admitted navigation and disclosures are keyboard interactive"
-    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.mouse.click(2, 2)
+    assert page.evaluate("document.activeElement === document.body"), "Browser did not reset focus to body"
     card = page.locator('[data-testid="overview-now"] > article.card')
     expected_focus = [
         card.locator(':scope > .body > details.technical-disclosure > summary'),
