@@ -83,10 +83,10 @@ the rolling Known Defects registry Issue #4172; P3 is informational. `bug-to-iss
 `deliver-issue-set`, and `verification-and-closure` own the procedure.
 
 ## Proportional delivery
-
-- Tier 1/2 single-Issue or issue-free work uses required current-head CI plus self-verified `Verify:`
-  targets. Tier 3, multi-Issue, and auth/security/data/migration/concurrency/payments/external-API work
-  also uses the full independent review and verified-merge path, with mechanism/convergence review before an expensive proof cycle.
+- Native session-owned PRs use current-head CI, covered `Verify:` targets and plain merge. High-risk
+  work or an explicit request adds one independent review, not a different merge protocol. Issue
+  count alone does not escalate. Dispatched executors, in-flight fenced merges and release effects
+  retain their existing protocol; `verification-and-closure :: Routing` owns the distinction.
 - Build the most boring solution that satisfies the contract. New ledgers, registries, abstractions,
   provider layers, or enterprise patterns require explicit demand and must replace something or have
   a review date.
@@ -135,10 +135,10 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
   see `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`.
 - Verify every exact closing Issue. A distinct open parent is checked as the issue-set contract;
   unfinished feature criteria do not block delivery of verified children.
-- Verification binds to the current head, mutable authority digest/version and contract/body/check configuration, and late-change supersession; rerun affected evidence. Green CI
-  alone is not a merge receipt. The full path must neutralize mutable body closers, use a fixed
-  non-closing message, explicitly close the authenticated issue set, reject race-added refs, include
-  restoring the authenticated body, and preserve a durable receipt; see `verification-and-closure`.
+- Verification binds to current head and applicable contract/body/check configuration; reuse valid
+  results and rerun only affected evidence. Green CI alone is not a merge receipt. Native delivery
+  uses expected-head merge and exact closure readback; dispatched/in-flight execution keeps its
+  authenticated body fencing and phase receipts in `verification-and-closure/FULL_PATH.md`.
 - The post-merge owner-doc result is PR-specific: record it on every exact closed issue and a distinct
   open governing parent; a generic receipt or one for another PR is insufficient.
 - Push, PR, merge, close, label, Project, release, or deployment effects require explicit task scope

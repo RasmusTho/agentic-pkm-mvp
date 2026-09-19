@@ -74,7 +74,7 @@ Do not end the session unless the shared workflow stop-loss or explicit user sco
   `app.dispatcher.poll_backoff` helper, REST check-runs only, interval + cap + exponential backoff,
   `Retry-After` and x-ratelimit-reset header honoring, calibrated backoff,
   `scripts/await_pr_checks.sh`). Review is separate: light-path PRs skip it; full-path PRs use
-  `verification-and-closure :: Running the local review gate`; `--codex` remains opt-in. Never
+  `.codex/skills/verification-and-closure/FULL_PATH.md :: Running the local review gate 🤖`; `--codex` remains opt-in. Never
   tight-poll `gh pr checks`/`gh pr view --json`, and never re-read verdict surfaces as separate
   per-attempt calls — they starve the shared API budget. [ci-wait-contract]
 - If CI reports an unavailable pytest flag such as `-n`/`--dist`, check for `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and require an explicit `-p <plugin_name>` load before adding or changing dependencies. [plugin-load-guard]

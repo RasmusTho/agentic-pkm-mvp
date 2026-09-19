@@ -301,3 +301,18 @@ def test_pr_4275_shaped_diff_now_selects_architecture_and_ci_gate_coverage() -> 
     assert "tests/architecture" in selection.targets
     assert "tests/ops/test_review_before_ci_gate.py" in selection.targets
     assert "tests/docs" in selection.targets
+
+
+def test_text_contract_lane_does_not_require_unrelated_product_gates() -> None:
+    steps = _unit_tests_job_text()["steps"]
+    by_name = {step.get("name"): step for step in steps}
+    selector_index = next(i for i, step in enumerate(steps) if step.get("id") == "select-tests")
+    for name in (
+        "Run mandatory repo-wide mypy gate", "Intent-classification golden gate (KERNEL-13)",
+        "Install Linux ACL tools", "Install standalone sidecar test dependencies",
+    ):
+        step = by_name[name]
+        assert "steps.select-tests.outputs.runtime_checks == 'true'" in step["if"]
+        assert selector_index < steps.index(step)
+    # Real contract execution remains required for documentation and skill edits.
+    assert "runtime_checks" not in by_name["Run scoped not-pg unit tests"]["if"]

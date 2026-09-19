@@ -135,7 +135,7 @@ def test_pr_integration_skill_allows_all_approved_pr_lanes() -> None:
 
 
 def test_verification_skill_distinguishes_issue_backed_and_direct_repair_modes() -> None:
-    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+    text = _read(".codex/skills/verification-and-closure/FULL_PATH.md")
 
     for fragment in (
         "For issue-backed PRs, close the exact closing issues and update the governing issue",
@@ -147,7 +147,7 @@ def test_verification_skill_distinguishes_issue_backed_and_direct_repair_modes()
 
 
 def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None:
-    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+    text = _read(".codex/skills/verification-and-closure/FULL_PATH.md")
 
     for fragment in (
         "explicitly close every and only the authenticated `closing_issues`",
@@ -161,7 +161,7 @@ def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None
 
 
 def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
-    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+    text = _read(".codex/skills/verification-and-closure/FULL_PATH.md")
     normalized_text = " ".join(text.split())
 
     for fragment in (
@@ -178,7 +178,7 @@ def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
 
 def test_verified_merge_uses_authenticated_closing_projection_convergence() -> None:
     closure_skill = _read(
-        ".codex/skills/verification-and-closure/SKILL.md"
+        ".codex/skills/verification-and-closure/FULL_PATH.md"
     )
     process_map = _read("docs/development/BUILDER_SYSTEM_PROCESS_MAP.md")
     phase_cli = _read("scripts/build_verified_issue_set_merge_phase.py")
@@ -363,7 +363,7 @@ def test_open_governing_parent_uses_issue_set_gate_not_unfinished_feature_acs() 
     agents = " ".join(_read("AGENTS.md").split())
     hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
     closure_skill = " ".join(
-        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+        _read(".codex/skills/verification-and-closure/FULL_PATH.md").split()
     )
 
     for text in (agents, hot_path, closure_skill):
@@ -378,7 +378,7 @@ def test_canonical_merge_policy_neutralizes_mutable_body_closers() -> None:
     agents = " ".join(_read("AGENTS.md").split())
     hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
     closure_skill = " ".join(
-        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+        _read(".codex/skills/verification-and-closure/FULL_PATH.md").split()
     )
 
     for fragment in (
@@ -453,7 +453,7 @@ def test_owner_doc_policy_requires_pr_specific_child_and_open_parent_receipts() 
     agents = " ".join(_read("AGENTS.md").split())
     hot_path = " ".join(_read("docs/development/PR_HOT_PATH.md").split())
     closure_skill = " ".join(
-        _read(".codex/skills/verification-and-closure/SKILL.md").split()
+        _read(".codex/skills/verification-and-closure/FULL_PATH.md").split()
     )
     owner_doc_skill = " ".join(
         _read(".codex/skills/post-merge-owner-doc/SKILL.md").split()
@@ -753,3 +753,26 @@ def test_parent_issue_closure_keeps_delivery_scope_above_future_adoption() -> No
         "If the delivered scope is complete and the remaining work is only observation or follow-up learning, close the parent",
     ):
         assert fragment in text, fragment
+
+
+def test_native_delivery_separates_review_from_executor_merge_protocol() -> None:
+    router = _read(".codex/skills/verification-and-closure/SKILL.md")
+    assert len(router.splitlines()) < 130
+    assert "Review depth is independent of merge mechanics" in router
+    assert "approved bounded multi-Issue PRs" in router
+    assert "--match-head-commit" in router
+    assert "Never\n  switch an in-flight attempt to native delivery" in router
+    assert "current-head CI cannot be replaced by local evidence" in router
+    assert "closure attribution" in router
+    assert "post-merge-owner-doc :: Reuse an existing assessment" in router
+
+
+def test_validation_policy_reuses_evidence_without_relaxing_required_checks() -> None:
+    policy = _read("docs/development/GOVERNANCE_PROPORTIONALITY.md")
+    assert "## Evidence reuse and stop rule" in policy
+    assert "Required GitHub checks remain current-head" in policy
+    assert "Live deployment/health evidence" in policy
+    assert "new agent" in policy
+    implementation = _read(".codex/skills/issue-to-code/SKILL.md")
+    assert "currently fails against the unchanged code path" not in implementation
+    assert "One meaningful test may cover several ACs" in implementation

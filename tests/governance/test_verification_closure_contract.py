@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILL = ROOT / ".codex/skills/verification-and-closure/SKILL.md"
+SKILL = ROOT / ".codex/skills/verification-and-closure/FULL_PATH.md"
 
 
 def test_pre_neutralization_authenticates_readback_repository_identity() -> None:

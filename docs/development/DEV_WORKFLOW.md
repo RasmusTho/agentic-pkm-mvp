@@ -343,6 +343,13 @@ Use this lane only when:
   - `.github/workflows/ci-smoke.yaml`
   - `.github/workflows/issue-pr-governance.yml`
   - `Makefile`
+  - `scripts/select_pr_tests.py`
+  - `tests/scripts/test_select_pr_tests.py`
+  - `tests/architecture/test_handoff_fencing_governance.py`
+  - `tests/governance/test_autonomous_escalation_contract.py`
+  - `tests/governance/test_late_change_supersession.py`
+  - `tests/governance/test_verification_closure_contract.py`
+  - `tests/governance/test_skill_model_selection_contract.py`
   - `scripts/docs_guard.py`
   - `scripts/docs_guard_logic.py`
   - `scripts/install_skills.sh`
@@ -493,7 +500,7 @@ Enforcement surfaces:
 
 - Creation: `docs-to-issue`, `feature-breakdown`, and `bug-to-issue` must produce ACs with `Verify:` lines.
 - Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract shape.
-- Consumption: `issue-to-code` gates on `Verify:` presence and implements test-first for behavioral ACs, writeback-first for non-behavioral ACs.
+- Consumption: `issue-to-code` gates on `Verify:` presence and reuses meaningful behavioral coverage and performs non-behavioral writeback.
 
 ## Multi-Agent Workspace Guardrails
 
@@ -556,7 +563,7 @@ Enforcement surfaces:
 - Resuming interrupted work: when a session breaks mid-task (quota, network, hung command, tool failure) and the tree is dirty or the branch has unmerged work, reconstruct state from git first, then continue — see `.codex/skills/resume-work/SKILL.md`.
 - Closure: `verification-and-closure` resolves every AC's `Verify:` target and blocks merge if any behavioral test is missing, skipped, or xfailed.
 
-The builder-agent effect: test-first discipline emerges automatically for behavioral work — the failing test is the AC's declared proof, so the agent writes or confirms it before code, then implements the smallest change to turn it green.
+Reuse existing passing coverage for behavior-preserving work. Add a reproducing regression test for bugs when practical and focused tests for uncovered new behavior. Several ACs may share a meaningful test; a fresh failing test is not a prerequisite for every AC.
 
 ## Source-anchor rule for backlog creation
 

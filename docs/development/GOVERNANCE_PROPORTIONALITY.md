@@ -27,7 +27,7 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 - `## BuilderOps Routing` may be omitted entirely when nothing was routed: **absence means "none"**. A present-but-unfilled section (template placeholders) still fails CI — claiming the section means filling it.
 - output format: a short human summary (2–4 sentences) plus a receipt line; no multi-section report
 - validation: lightweight docs/governance checks appropriate to the touched surfaces; no full code/test smoke by default
-- delivery depth: light path — declare `Final-Review-Rounds: 0` and merge plainly on green required checks; no independent review round, no verified-merge ceremony (single-issue or issue-free; a multi-issue PR escalates to the full path like any other)
+- delivery depth: light path — declare `Final-Review-Rounds: 0` and merge plainly on green required checks; no independent review round, no verified-merge ceremony; approved bounded multi-Issue work uses the same native merge
 
 ### Tier 2 — standard
 
@@ -41,19 +41,58 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 - every Acceptance Criterion's `Verify:` target resolved before merge
 - standard receipts (delivery receipt, post-merge owner-doc check)
 - repo-standard validation gates (`ruff check app tests` and the relevant test suites when `app/` or `tests/` changed)
-- delivery depth (single-issue default): light path — declare `Final-Review-Rounds: 0`, self-verify
-  every `Verify:` target on the head SHA, wait for required checks green, then merge plainly with
-  the normal closing keywords; GitHub-native closure closes the single governing issue and is
-  verified after merge. No independent review round and no verified-merge neutralization/
-  phase-ledger sequence. Delivery depth escalates to the full path when the PR is multi-issue,
-  touches a TCD high-risk escalation surface (`AGENTS.md :: Total Cost of Development`), or a
-  review round is explicitly requested
+- delivery depth: native merge with current-head checks and self-verified coverage. An explicit
+  independent review uses `Final-Review-Rounds: 1` without requiring body neutralization or a phase
+  ledger. Approved multi-Issue work validates every closing child and keeps an unclosed parent open.
 
 ### Tier 3 — high risk
 
 **Classification:** migrations, release channels, prod mutations, `stable` pointer moves, Core Runtime <-> Agentic Lab boundary moves.
 
-**Required machinery:** the full current machinery — fail-closed checks, promotion plans, operator acknowledgment, verification receipts. **Unchanged by this contract.** Delivery depth is the full path: one independent local review gate with `Final-Review-Rounds: 1` plus the verified-merge sequence in `verification-and-closure`. A P0/P1 repair requires a new clean independent review on the repaired current head SHA, but no delivery requires two consecutive clean final reviews. The release-channel promotion chain (`promote-to-test`, `promote-test-to-prod`, `prepare-promotion`, `execute-promotion`, `verify-promotion`, `rollback-promotion`) keeps every existing gate.
+**Required machinery:** one independent current-head review (`Final-Review-Rounds: 1`) and checks
+covering the actual risk. P0/P1 repairs require a fresh clean review. Native PR merge is separate
+from release authority: promotion plans, channel isolation, operator acknowledgment and live
+verification still apply when deploying. Dispatched executors, already-started authenticated merge
+attempts, and contracts explicitly requiring independent closure retain the fenced full path.
+
+## Evidence reuse and stop rule
+
+Collect evidence once per relevant candidate/input set and consume it across implementation,
+publication and closure. A stage transition, a new agent, or a request for a summary is not an
+invalidation event. Resolve `Suggested Validation` from existing applicable results before running
+commands. Preserve the command, outcome, tested candidate, environment and artifact link in the
+existing PR Validation section or CI artifact; do not introduce another schema or ledger.
+
+Rerun only evidence affected by changed code, tests, dependencies, configuration, fixtures,
+contract/ACs, selection or execution environment. Required GitHub checks remain current-head; the
+base-drift rule below is the only cross-head local reuse exception. Missing or ambiguous dependency
+information requires the affected check, not a fabricated pass. Live deployment/health evidence
+remains bound to its environment and observation time.
+
+Each additional check must name the unresolved failure mode and the delivery decision its result
+can change. Stop validating when AC coverage, relevant CI, required review and authority are
+satisfied. Do not add a full suite, second clean review, per-AC fresh test, or post-merge doc re-audit
+solely for reassurance. Existing tests may cover multiple ACs. Bug fixes should reproduce the
+regression where practical; behavior-preserving refactors may retain passing coverage.
+
+Keep successful output to the result and artifact link. Read failed-node details first, complete
+logs only for diagnosis. Reuse the PR's validation summary in the delivery receipt; do not copy
+structured artifacts or repeated AC tables into comments and chat. Executor protocol receipts stay
+in their required durable location until that consumer contract is separately changed.
+
+## Implementation and evaluation
+
+The 2026-09-19 simplification replaces routine full-path merge with native session-owned delivery,
+separates review depth from merge mechanics, reuses validation and owner-doc assessments, and drops
+unrelated product gates from text-only CI. The existing selector remains the single source for
+check selection; contract coverage stays conservative for unclassified docs. No new queue, evidence
+registry, or runtime executor authority is added.
+
+Use the next 20 accepted deliveries as a bounded evaluation, from existing CI and session records:
+compare tokens per accepted change, validation reruns, control calls, and post-merge defects with a
+like-for-like prior sample. Report unavailable token data as unknown. A 50% routine-token reduction
+is a hypothesis, not a shipped result or an acceptance blocker. Any new permanent check must replace
+an existing check or name a review date; retain protections that demonstrate unique failure detection.
 
 ## Delivery budgets and stop-loss
 
@@ -130,12 +169,12 @@ Product-side scale posture is owned by `docs/DESIGN_PRINCIPLES.md`.
 - `Verify:` targets on issue-backed acceptance criteria.
 - Branch-truth gates at the publication boundary.
 - Required CI checks green on the current head SHA before any merge, at every tier.
-- Required final reviews run on the current head SHA; only eligible pre-publication expensive
+- Required independent reviews run on the current head SHA; only eligible pre-publication expensive
   validation may use the base-drift evidence-reuse rule above.
 
 ## CI enforcement
 
-`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) implements the Tier 1 relaxation deterministically: when the PR body carries a docs-authoring or governance lane checkbox, a missing `## BuilderOps Routing` section is treated as "none"; for all other PRs the section remains required with concrete values. The same job accepts `Final-Review-Rounds: 0` (light path), `1` (current full path), or `2` (backward-compatible authenticated declaration for already-started deliveries); the value's delivery-depth meaning is defined by this contract, not by CI. New deliveries never select `2` from risk or convergence classification.
+`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) implements the Tier 1 relaxation deterministically: when the PR body carries a docs-authoring or governance lane checkbox, a missing `## BuilderOps Routing` section is treated as "none"; for all other PRs the section remains required with concrete values. The same job accepts `Final-Review-Rounds: 0` (light path), `1` (one independent review), or `2` (backward-compatible authenticated declaration for already-started deliveries); the value's delivery-depth meaning is defined by this contract, not by CI. New deliveries never select `2` from risk or convergence classification.
 
 ## Output formats
 

@@ -1512,3 +1512,32 @@ def test_docs_plus_tests_governance_does_not_narrow_mixed_pr() -> None:
     assert selection.full_suite is False
     assert "builder_system" in selection.subsystems
     assert "tests/governance/test_project_pickup_deprecation.py" in selection.targets
+
+
+@pytest.mark.parametrize("paths", [
+    ["README.md"], ["docs/TESTING.md"], [".codex/skills/issue-to-code/SKILL.md", "AGENTS.md"],
+])
+def test_text_only_changes_keep_contract_tests_without_product_gates(paths: list[str]) -> None:
+    assert selector.requires_runtime_checks(paths) is False
+    assert select_tests(paths).targets
+
+
+@pytest.mark.parametrize("paths", [
+    [], ["docs/TESTING.md", "app/cli.py"], ["docs/eval/classification_golden.yaml"],
+    [".codex/helper.py"], ["tests/test_example.py"], ["vault/note.md"],
+    ["requirements.txt"], [".github/workflows/ci-smoke.yaml"],
+])
+def test_runtime_gate_selection_is_conservative(paths: list[str]) -> None:
+    assert selector.requires_runtime_checks(paths) is True
+
+
+def test_github_output_exposes_text_only_runtime_gate_decision(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    result = subprocess.run([
+        sys.executable, "scripts/select_pr_tests.py", "--changed-file", "AGENTS.md",
+        "--github-output", str(output),
+    ], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["runtime_checks"] == "false"
+    assert fields["pytest_args"]
