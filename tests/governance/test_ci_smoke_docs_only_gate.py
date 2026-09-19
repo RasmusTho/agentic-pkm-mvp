@@ -309,7 +309,7 @@ def test_text_contract_lane_does_not_require_unrelated_product_gates() -> None:
     selector_index = next(i for i, step in enumerate(steps) if step.get("id") == "select-tests")
     for name in (
         "Run mandatory repo-wide mypy gate", "Intent-classification golden gate (KERNEL-13)",
-        "Install Linux ACL tools", "Install standalone sidecar test dependencies",
+        "Install Linux ACL tools",
     ):
         step = by_name[name]
         assert "steps.select-tests.outputs.runtime_checks == 'true'" in step["if"]

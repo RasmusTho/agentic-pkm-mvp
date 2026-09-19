@@ -18,7 +18,8 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 The selector's `requires_runtime_checks` classifies diffs limited to root contributor Markdown,
 `docs/**/*.md`, and `.codex/**/*.md` as text-only. They still execute the selected docs/governance
 contract tests and documentation guards. The PR unit job skips repo-wide mypy, the product intent
-classification golden gate, Linux ACL provisioning and sidecar provisioning for those diffs.
+classification golden gate and Linux ACL provisioning for those diffs. Sidecar dependencies remain
+installed for conservative contract/collection compatibility.
 Unknown paths, executable files, fixtures, mixed changes and runtime configuration remain
 conservative and enable those gates. This classification does not turn a required check into a
 bare skipped success or remove exact AC coverage. Broad contract target sets remain until a narrower

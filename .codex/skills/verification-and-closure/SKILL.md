@@ -60,6 +60,11 @@ request require one independent current-head review and `Final-Review-Rounds: 1`
 mechanics. Keep P0/P1 repairs and fresh independent review mandatory. P2 needs a durable defect
 reference in rolling Known Defects registry Issue #4172 and disposition; P3 is informational. No second consecutive clean review is required.
 
+A current-candidate independent review completed before CI may serve the final native review gate
+when the candidate, contract and relevant check configuration are unchanged. Inspect the final CI
+results; a failure invalidates affected conclusions. Do not repeat a clean review merely because
+CI finished. Executor-specific review sequencing remains owned by its full-path contract.
+
 After two independent change-request rounds apply
 `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
 

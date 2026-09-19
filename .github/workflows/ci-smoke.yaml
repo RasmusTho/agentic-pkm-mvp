@@ -789,7 +789,7 @@ jobs:
           pip install -r dev-requirements.txt
 
       - name: Install standalone sidecar test dependencies
-        if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.runtime_checks == 'true'
+        if: steps.changes.outputs.code == 'true'
         run: |
           pip install --requirement mimer-mcp-sidecar/requirements.txt
           pip install --no-deps --editable mimer-mcp-sidecar

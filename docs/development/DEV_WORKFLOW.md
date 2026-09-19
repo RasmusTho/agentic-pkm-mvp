@@ -343,6 +343,7 @@ Use this lane only when:
   - `.github/workflows/ci-smoke.yaml`
   - `.github/workflows/issue-pr-governance.yml`
   - `Makefile`
+  - `tests/architecture/test_requirements_consistency.py`
   - `scripts/select_pr_tests.py`
   - `tests/scripts/test_select_pr_tests.py`
   - `tests/architecture/test_handoff_fencing_governance.py`
