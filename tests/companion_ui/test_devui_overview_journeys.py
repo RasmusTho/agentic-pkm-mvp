@@ -140,15 +140,36 @@ def _focus() -> dict[str, Any]:
         },
         "governing_sources": [claim],
         "evidence": [{**claim, "claim_id": "subject-read"}],
-        "receipts": [],
-        "risks": [],
+        "receipts": [
+            {
+                "receipt_ref": "receipt-4836",
+                "source_ref": _source("receipt:4836"),
+                "correlation": "focus-4836",
+            }
+        ],
+        "risks": [
+            {
+                "risk_id": "risk-4836",
+                "summary": "No acceptance receipt is available.",
+                "source_ref": _source("risk:4836"),
+            }
+        ],
         "next_legal_step": {
             "workflow_ref": None,
             "actor_class": "system",
             "legality": "unavailable",
             "reason": "No transition is inferred.",
         },
-        "execution_observations": [],
+        "execution_observations": [
+            {
+                "observation_ref": "observation-4836",
+                "observed_at": "2026-08-28T10:00:00+00:00",
+                "provider": "builderops_cockpit",
+                "summary": "The read model was observed without mutation.",
+                "source_ref": _source("observation:4836"),
+                "correlation": "focus-4836",
+            }
+        ],
         "conversation_port": {
             "availability": "unsupported",
             "reason": "Conversation is not delivered here.",
@@ -370,6 +391,7 @@ def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
                 "limitation",
             ):
                 assert evidence_rows.locator("b").filter(has_text=field).count() == 1
+            card_body.locator("details.technical-disclosure").nth(1).locator("summary").click()
             evidence_text = evidence_rows.inner_text()
             assert "working-4836" in evidence_text
             assert "Working projection contains this item." in evidence_text
@@ -401,6 +423,96 @@ def test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport() -> No
             playwright.stop()
 
 
+def test_overview_now_card_renders_owner_language_not_raw_field_names() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            card = page.locator('[data-testid="overview-now"] article').first
+            visible = card.inner_text()
+            assert "Claim" in visible
+            assert "Availability" in visible
+            assert "Freshness" in visible
+            for raw_name in ("subject_ref", "source_ref", "evidence_id", "captured_at"):
+                assert raw_name not in visible
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_card_hides_raw_technical_fields_until_expanded() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            card = page.locator('[data-testid="overview-now"] article').first
+            details = card.locator("details.technical-disclosure")
+            assert details.count() == 2
+            assert details.evaluate_all("items => items.every(item => !item.open)")
+            assert card.locator("code").filter(has_text=SUBJECT).count() >= 1
+            assert all(
+                not item.is_visible() for item in card.locator("code").filter(has_text=SUBJECT).all()
+            )
+            assert all(
+                not item.is_visible()
+                for item in card.locator("code").filter(has_text="cockpit:working:4836").all()
+            )
+            details.nth(0).locator("summary").click()
+            details.nth(1).locator("summary").click()
+            assert any(
+                item.is_visible() for item in card.locator("code").filter(has_text=SUBJECT).all()
+            )
+            assert any(
+                item.is_visible()
+                for item in card.locator("code").filter(has_text="cockpit:working:4836").all()
+            )
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_focus_sections_render_owner_language_not_raw_field_names() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in (
+                "focus-owner-intent",
+                "focus-governing-sources",
+                "focus-evidence",
+                "focus-receipts",
+                "focus-risks",
+                "focus-next-step",
+                "focus-execution",
+                "focus-conversation",
+            ):
+                section = page.locator(f'[data-testid="{testid}"]')
+                assert section.locator(".owner-summary").count() >= 1
+                assert section.locator("details.technical-disclosure").count() >= 1
+                assert section.locator("details.technical-disclosure").evaluate_all(
+                    "items => items.every(item => !item.open)"
+                )
+                visible = section.inner_text()
+                assert (
+                    "Source" in visible
+                    or "Summary" in visible
+                    or "Availability" in visible
+                    or "Actor" in visible
+                    or "Legality" in visible
+                )
+                for raw_name in ("source_ref", "authority_ref", "captured_at", "receipt_ref"):
+                    assert raw_name not in visible
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
 def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
     with _serve() as (base_url, client):
         playwright, browser, context, page, external = _browser(base_url)
@@ -422,7 +534,16 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
             assert page.get_by_role("main").get_attribute("aria-labelledby") == "overview-heading"
             assert page.get_by_role("link", name="Open Focus").count() == 1
             page.keyboard.press("Tab")
-            assert page.locator(":focus").get_attribute("data-testid") == "overview-focus-link"
+            for _ in range(page.locator("details.technical-disclosure > summary").count() + 1):
+                focused = page.locator(":focus")
+                assert focused.evaluate(
+                    "element => element.matches('details.technical-disclosure > summary, a[data-testid=overview-focus-link]')"
+                )
+                if focused.get_attribute("data-testid") == "overview-focus-link":
+                    break
+                page.keyboard.press("Tab")
+            else:
+                pytest.fail("Admitted navigation was not reachable after disclosures")
 
             assert page.viewport_size == {"width": 1280, "height": 720}
             page.set_viewport_size({"width": 375, "height": 812})

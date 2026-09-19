@@ -12,8 +12,9 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-09-14 for #5520 source wiring, #5522 managed read-journey writeback, and #5527
-bounded Issue source-text projection.
+Last reviewed: 2026-09-19 for #5594 owner-language/progressive-disclosure delivery, #5596 evidence-axis
+presentation, #5520 source wiring, #5522 managed read-journey writeback, and #5527 bounded Issue
+source-text projection.
 Prior broader current-state and milestone review: 2026-09-12 at `main`
 `c7a4da3a80a1108b269bd8e88c4535a17499290a`, #5399 delivery ledger and #5181's cited operational receipts.
 Earlier Stage A verification baseline: `origin/main` `34c5c933e8bd72da117a0f6e0e1b9a05d1123bd3`, live GitHub state
@@ -807,6 +808,12 @@ Delivered now:
   journey with its exact managed reuse receipt. CKM remains unadmitted; the
   [runtime owner](BUILDEROPS_CONTROL_PLANE/README.md#managed-read-journey-admission) defines source
   configuration, withdrawal and separate live-source qualification; and
+- the #5594 Overview/Focus owner-language presentation: known source and evidence fields use the
+  owner vocabulary at Glance, while raw identifiers, timestamps, and unknown fields remain
+  reachable under closed native details/summary disclosures. The disclosure controls reuse the
+  accepted Cockpit keyboard/focus pattern; managed browser proof admits only the bound disclosures
+  and existing route links, and rejects injected controls. This is a client rendering change only;
+  it adds no source, schema, API, persistence, or owner-acceptance authority; and
 - the BuilderOps API/PostgreSQL control-plane implementation and independent package boot.
 
 The production Companion transport prerequisite for the existing Overview and Focus reads is
@@ -921,6 +928,9 @@ Bifrost result contributes only its exact evidence to the full-platform target; 
       action is legal.
 - [ ] Glance, understand, verify, and inspect reveal progressively deeper information about the
       same item without dropping evidence or forcing a product switch.
+- [ ] Technical source identifiers, timestamps, and unknown fields remain reachable under an
+      explicit per-item disclosure while the default view keeps owner-language labels and the
+      existing evidence axes visible.
 - [ ] Every claim names source, freshness, and whether it is confirmed, candidate, stale, unread,
       or unavailable.
 - [ ] When owner intent, a governing decision, or an acceptance criterion changes, the selected

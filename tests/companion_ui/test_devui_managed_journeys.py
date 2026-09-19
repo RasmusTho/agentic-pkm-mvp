@@ -120,7 +120,7 @@ def _capture(page, name):
 
 
 def _keyboard_navigation(page, surface):
-    """Prove the finite tab set and navigate without assuming browser-chrome focus."""
+    """Prove the finite bound disclosures plus route link and navigate safely."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
     name = "Open Focus" if surface == "overview" else "Return to Overview"
     link = page.get_by_role("link", name=name)
@@ -131,17 +131,19 @@ def _keyboard_navigation(page, surface):
             (el.tabIndex >= 0 || el.isContentEditable) &&
             !el.matches(':disabled') && !el.closest('[inert]') &&
             el.getClientRects().length && getComputedStyle(el).visibility === 'visible'
-        ).every(el => el === expected)""",
+        ).every(el => el === expected || el.matches('details.technical-disclosure > summary'))""",
         link.element_handle(),
-    ), "Only the admitted navigation is keyboard interactive"
+    ), "Only the admitted navigation and disclosures are keyboard interactive"
     page.bring_to_front()
-    for _ in range(4):
+    disclosure_count = page.locator("details.technical-disclosure > summary").count()
+    for _ in range(max(4, disclosure_count + 2)):
         page.keyboard.press("Tab")
         assert page.evaluate(
             """expected => [document.body, document.documentElement, expected]
-                .includes(document.activeElement)""",
+                .includes(document.activeElement) ||
+                document.activeElement.matches('details.technical-disclosure > summary')""",
             link.element_handle(),
-        ), "Unexpected keyboard focus outside admitted navigation"
+        ), "Unexpected keyboard focus outside admitted navigation and disclosures"
         if link.evaluate("el => el === document.activeElement"):
             break
     else:

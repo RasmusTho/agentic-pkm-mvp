@@ -1,11 +1,106 @@
 "use strict";
 
+const FIELD_LABELS = {
+  actor_class: "Actor",
+  availability: "Availability",
+  authority: "Authority",
+  authority_ref: "Authority source",
+  cardinality: "Cardinality",
+  captured_at: "Captured",
+  claim: "Claim",
+  claim_id: "Claim reference",
+  completeness: "Completeness",
+  composed_at: "Composed",
+  correlation: "Correlation",
+  coverage: "Coverage",
+  evidence_id: "Evidence reference",
+  evidence_state: "Evidence state",
+  freshness: "Freshness",
+  kind: "Kind",
+  legality: "Legality",
+  limitation: "Limitation",
+  linkage: "Linkage",
+  locator: "Source location",
+  observation_ref: "Observation reference",
+  owner_state: "Owner state",
+  provider: "Provider",
+  read_watermark: "Read watermark",
+  reason: "Reason",
+  receipt_ref: "Receipt reference",
+  risk_id: "Risk reference",
+  source_id: "Source reference",
+  source_ref: "Source reference",
+  source_type: "Source type",
+  state: "State",
+  summary: "Summary",
+  title: "Title",
+  version: "Source version",
+  workflow_ref: "Workflow reference",
+};
+const TECHNICAL_FIELDS = new Set([
+  "authority_ref",
+  "captured_at",
+  "claim_id",
+  "composed_at",
+  "correlation",
+  "evidence_id",
+  "evidence_state",
+  "locator",
+  "observation_ref",
+  "read_watermark",
+  "receipt_ref",
+  "risk_id",
+  "source_id",
+  "source_ref",
+  "source_type",
+  "version",
+  "workflow_ref",
+]);
+
 function text(parent, tag, value, className) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   node.textContent = value == null ? "" : String(value);
   parent.appendChild(node);
   return node;
+}
+
+function labelFor(key) {
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  return key
+    .split("_")
+    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .join(" ");
+}
+
+function scalarValue(value) {
+  if (value == null) return "Unavailable";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function ownerRows(parent, value) {
+  const list = document.createElement("div");
+  list.className = "owner-summary";
+  Object.keys(value || {}).forEach((key) => {
+    if (TECHNICAL_FIELDS.has(key)) return;
+    const row = document.createElement("p");
+    row.className = "owner-fact";
+    text(row, "b", labelFor(key));
+    text(row, "span", scalarValue(value[key]));
+    list.appendChild(row);
+  });
+  if (!list.childElementCount && Object.keys(value || {}).length) {
+    const row = document.createElement("p");
+    row.className = "owner-fact";
+    text(row, "b", "Source details");
+    text(row, "span", "Available for inspection");
+    list.appendChild(row);
+  }
+  if (list.childElementCount) parent.appendChild(list);
+  return list;
 }
 
 function rows(parent, value) {
@@ -24,10 +119,23 @@ function render(testid, value) {
   const target = document.querySelector(`[data-testid="${testid}"] > div`);
   if (Array.isArray(value)) {
     if (!value.length) text(target, "p", "No server-declared entries.", "empty");
-    value.forEach((entry) => rows(target, entry));
+    value.forEach((entry) => renderEntry(target, entry));
     return;
   }
-  rows(target, value || {});
+  renderEntry(target, value || {});
+}
+
+function renderEntry(parent, value) {
+  const entry = document.createElement("div");
+  entry.className = "focus-entry";
+  ownerRows(entry, value);
+  const details = document.createElement("details");
+  details.className = "technical-disclosure";
+  const summary = text(details, "summary", "Inspect source and technical details");
+  summary.dataset.testid = "devui-technical-disclosure";
+  rows(details, value);
+  entry.appendChild(details);
+  parent.appendChild(entry);
 }
 
 const query = new URLSearchParams(window.location.search);

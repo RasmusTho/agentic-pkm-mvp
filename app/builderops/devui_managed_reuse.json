@@ -343,6 +343,25 @@
           "matrix(body, evidence);",
           "rows(body, evidence, true);"
         ]
+      },
+      {
+        "transformation_id": "issue-5594-owner-language-disclosure",
+        "kind": "interaction_binding",
+        "source_ids": [
+          "source-overview.js",
+          "source-focus.js",
+          "source-devui.css"
+        ],
+        "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render known owner-language labels and keep unknown scalar fields reachable, while placing raw subject/evidence identifiers and technical rows behind closed native details/summary controls. Reuse the existing Cockpit summary focus/hover grammar, with no new tokens, authority, persistence, egress, or effect behavior.",
+        "source_anchors": [
+          "<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">",
+          ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+        ],
+        "target_anchors": [
+          "details.className = \"technical-disclosure\";",
+          "function ownerRows(parent, value) {",
+          ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+        ]
       }
     ],
     "decision_inventory": [
@@ -398,9 +417,10 @@
           "--vault-dim",
           "--weight-medium"
         ],
-        "transformation_ids": [
-          "inherit-font-normalization",
-          "issue-5596-axis-container-reflow"
+      "transformation_ids": [
+        "inherit-font-normalization",
+        "issue-5596-axis-container-reflow",
+        "issue-5594-owner-language-disclosure"
         ]
       },
       {
@@ -419,7 +439,9 @@
           "source-focus.js"
         ],
         "token_ids": [],
-        "transformation_ids": []
+        "transformation_ids": [
+          "issue-5594-owner-language-disclosure"
+        ]
       },
       {
         "decision_id": "decision-overview.html",
@@ -438,7 +460,8 @@
         ],
         "token_ids": [],
         "transformation_ids": [
-          "issue-5596-evidence-single-render"
+          "issue-5596-evidence-single-render",
+          "issue-5594-owner-language-disclosure"
         ]
       },
       {
@@ -460,7 +483,7 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
-        "content_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1"
+        "content_sha256": "sha256:7bfb254fbc9a6c9d4375de7ea9c1e92e0eeeb1e3aeaaad058ad0222ad3b64684"
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
@@ -468,11 +491,11 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
-        "content_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2"
+        "content_sha256": "sha256:4f8d53a99d0795f70fe644cd9945ff5f64d8d9cf14b258de645eb69282113c78"
       },
       {
         "target_path": "app/builderops/devui_managed.css",
-        "content_sha256": "sha256:9bd853fe5007b960d58525a5029f3a2687fdeab5aae161363ec944f19be4a36a"
+        "content_sha256": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76"
       }
     ],
     "zero_novel_visual_language": {

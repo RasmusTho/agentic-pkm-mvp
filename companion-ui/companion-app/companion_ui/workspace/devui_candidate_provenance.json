@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "1c91860a0ebd42c0f8e615169bc6ada1329bfc55",
+    "tree": "9d115a7b678d98e350e6fccfc1e950416348f071",
     "inventory": {
-      "devui.css": "8c9af75f6100ec84550fa1cf5b5965de9498405b",
+      "devui.css": "20fddd9d9462d181cb648411e7302781234e6000",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
-      "focus.js": "21946448a21f416653f8e08a393e17c6afff624f",
+      "focus.js": "a9b3512f212a1f685fadbdcbf2417b857fb252b8",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
-      "overview.js": "f2f827b514b8df34a22d49ae632dc9971395c0e4"
+      "overview.js": "0869149ec86042fecbcd3ef703b1086594cdd843"
     }
   },
   "transform_allowlist": [
@@ -157,7 +157,7 @@
           "node.textContent =",
           "function verifiedFocusHref(item) {",
           "fetch(\"/api/devui/overview\", {method: \"GET\", cache: \"no-store\"})",
-          "rows(body, evidence, true);"
+          "rows(details, evidence, true);"
         ],
         "focus.js": [
           "function text(parent, tag, value, className) {",
@@ -261,6 +261,61 @@
         "rows(body, evidence, true);"
       ],
       "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes."
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-overview-owner-language-disclosure",
+      "kind": "interaction_binding",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+      "source_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
+      "source_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
+      "source_anchors": [
+        "function renderItem(parent, item) {",
+        "matrix(body, evidence);",
+        "rows(body, evidence, true);"
+      ],
+      "candidate_anchors": [
+        "function ownerRows(parent, value) {",
+        "details.className = \"technical-disclosure\";",
+        "matrix(evidenceBox, evidence);",
+        "rows(details, evidence, true);"
+      ],
+      "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render known owner-language labels and keep unknown scalar fields reachable, while placing raw subject/evidence identifiers and technical rows behind closed native details/summary controls. Preserve the existing fixed GET, navigation validation, no-egress behavior, and data hooks."
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-focus-owner-language-disclosure",
+      "kind": "interaction_binding",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
+      "source_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
+      "source_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
+      "source_anchors": [
+        "function render(testid, value) {",
+        "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"
+      ],
+      "candidate_anchors": [
+        "function ownerRows(parent, value) {",
+        "details.className = \"technical-disclosure\";",
+        "rows(details, value);"
+      ],
+      "exact_rule": "Render all eight Focus sections with owner-language labels at first paint and retain every raw field behind closed native details/summary controls. Unknown/new fields remain in the expandable raw rows; preserve the exact subject-bound GET, response-state handling, textContent rendering, navigation, and no-egress behavior."
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-disclosure-source-style",
+      "kind": "layout_reflow",
+      "source_path": "app/web/static/cockpit.css",
+      "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+      "source_sha256": "sha256:63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2",
+      "source_anchors": [
+        ".card>summary{list-style:none;cursor:pointer;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}",
+        ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+      ],
+      "candidate_anchors": [
+        ".technical-disclosure>summary{list-style:none;cursor:pointer;padding:var(--space-2) var(--space-3);",
+        ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+      ],
+      "exact_rule": "Reuse the existing Cockpit details/summary keyboard, focus, hover, border, and token grammar for the bounded disclosure wrapper; add no new token, visual language, persistence, or effect."
     }
   ]
 }

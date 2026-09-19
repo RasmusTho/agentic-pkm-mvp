@@ -55,9 +55,9 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      # #5596: ordinary PRs must execute every current Overview regression, including
-      # the evidence-axis ACs. Keep this JUnit gate separate from the historical
-      # exact-ref receipt inventory below.
+      # #5594/#5596: ordinary PRs must execute every current Overview regression,
+      # including owner-language/disclosure and evidence-axis ACs. Keep this JUnit
+      # gate separate from the historical exact-ref receipt inventory below.
       - name: Run PR Overview browser regressions
         if: github.event_name == 'pull_request'
         env:
@@ -75,7 +75,10 @@ jobs:
             tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_reflow_in_narrow_rail_column \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_render_exactly_once_per_entry \
-            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_now_card_renders_owner_language_not_raw_field_names \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_card_hides_raw_technical_fields_until_expanded \
+            tests/companion_ui/test_devui_overview_journeys.py::test_focus_sections_render_owner_language_not_raw_field_names
           python - "$DEVUI_OVERVIEW_PR_JUNIT" <<'PY'
           from pathlib import Path
           import sys
@@ -100,6 +103,12 @@ jobs:
               "test_overview_evidence_axes_render_exactly_once_per_entry",
               f"{TEST_MODULE}::"
               "test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport",
+              f"{TEST_MODULE}::"
+              "test_overview_now_card_renders_owner_language_not_raw_field_names",
+              f"{TEST_MODULE}::"
+              "test_overview_card_hides_raw_technical_fields_until_expanded",
+              f"{TEST_MODULE}::"
+              "test_focus_sections_render_owner_language_not_raw_field_names",
           )
 
           root = ET.parse(Path(sys.argv[1])).getroot()
