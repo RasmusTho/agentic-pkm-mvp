@@ -1,5 +1,5 @@
 {
-  "payload_sha256": "sha256:478d66815de32995bf7acb1f0eb5ab83ee85da862923d3edf41a3477ccc68958",
+  "payload_sha256": "sha256:b7dbae5a762e424ab0ddc8306b81dfcb4942d26b277850031487d382f73213d4",
   "provenance_payload": {
     "contract_version": "yggdrasil-constrained-reuse.v1",
     "repository_commit": "04eed0004484658522bfbe761807f1325df598d3",
@@ -17,37 +17,42 @@
       {
         "source_id": "source-devui.css",
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
-        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "stable_ref": "pre-#5596 shipped candidate baseline at dd86e54221d04f9c730301ca734491b725c45be4 :: entire accepted file before bounded #5596 transformations",
         "source_role": "component",
-        "content_sha256": "sha256:3746cb7f951b674af7d07c67715a3274b2c814ee4d9af87052b9b323e2fb996d"
+        "content_sha256": "sha256:9094a547edafcc6bff80f82ddae3b57975cb98890a7b5d2d3a79fac35f6bc8f3",
+        "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4"
       },
       {
         "source_id": "source-focus.html",
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html",
-        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "stable_ref": "pre-#5596 shipped candidate baseline at dd86e54221d04f9c730301ca734491b725c45be4 :: entire accepted file before bounded #5596 transformations",
         "source_role": "component",
-        "content_sha256": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361"
+        "content_sha256": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
+        "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4"
       },
       {
         "source_id": "source-focus.js",
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
-        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "stable_ref": "pre-#5596 shipped candidate baseline at dd86e54221d04f9c730301ca734491b725c45be4 :: entire accepted file before bounded #5596 transformations",
         "source_role": "pattern",
-        "content_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1"
+        "content_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
+        "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4"
       },
       {
         "source_id": "source-overview.html",
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
-        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "stable_ref": "pre-#5596 shipped candidate baseline at dd86e54221d04f9c730301ca734491b725c45be4 :: entire accepted file before bounded #5596 transformations",
         "source_role": "component",
-        "content_sha256": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb"
+        "content_sha256": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
+        "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4"
       },
       {
         "source_id": "source-overview.js",
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
-        "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
+        "stable_ref": "pre-#5596 shipped candidate baseline at dd86e54221d04f9c730301ca734491b725c45be4 :: entire accepted file before bounded #5596 transformations",
         "source_role": "pattern",
-        "content_sha256": "sha256:a6c860f4c27acda9ca86128f0a77cbf9243e26c3e360a3f3d8af77a0011e6889"
+        "content_sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b",
+        "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4"
       },
       {
         "source_id": "source-cockpit-wrap",
@@ -300,6 +305,44 @@
           "source-devui.css"
         ],
         "exact_rule": "The managed CSS is byte-for-byte the shipped devui.css followed only by .limitations li{overflow-wrap:break-word} and a newline. Transfer the accepted .rungs .r-val source-value wrapping declaration to complete limitation text. No other layout, token, visual, interaction or authority change."
+      },
+      {
+        "transformation_id": "issue-5596-axis-container-reflow",
+        "kind": "layout_reflow",
+        "source_ids": [
+          "source-devui.css"
+        ],
+        "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve the existing matrix tokens and grid, replace only mid-word wrapping with normal word boundaries, establish inline-size containment on the existing overview/focus containers, and move the existing matrix single-column fallback from the viewport media rule to max-width:40rem container scope. No new token, component, interaction, or authority behavior.",
+        "source_anchors": [
+          ".matrix{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-2)}",
+          ".axis b,.axis span{display:block;overflow-wrap:anywhere}",
+          ".overview-rail{min-width:0}",
+          "@media (max-width:900px){.overview-grid,.focus-grid,.matrix{grid-template-columns:1fr}"
+        ],
+        "target_anchors": [
+          ".matrix{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-2)}",
+          ".axis b,.axis span{display:block;overflow-wrap:normal;word-break:normal}",
+          ".overview-rail,.surface,.body{container-type:inline-size}",
+          "@container (max-width:40rem){.matrix{grid-template-columns:1fr}}"
+        ]
+      },
+      {
+        "transformation_id": "issue-5596-evidence-single-render",
+        "kind": "content_binding",
+        "source_ids": [
+          "source-overview.js"
+        ],
+        "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes.",
+        "source_anchors": [
+          "function renderItem(parent, item) {",
+          "matrix(body, evidence);",
+          "rows(body, evidence);"
+        ],
+        "target_anchors": [
+          "function renderItem(parent, item) {",
+          "matrix(body, evidence);",
+          "rows(body, evidence, true);"
+        ]
       }
     ],
     "decision_inventory": [
@@ -356,7 +399,8 @@
           "--weight-medium"
         ],
         "transformation_ids": [
-          "inherit-font-normalization"
+          "inherit-font-normalization",
+          "issue-5596-axis-container-reflow"
         ]
       },
       {
@@ -393,7 +437,9 @@
           "source-overview.js"
         ],
         "token_ids": [],
-        "transformation_ids": []
+        "transformation_ids": [
+          "issue-5596-evidence-single-render"
+        ]
       },
       {
         "decision_id": "decision-managed-limitations-wrap",
@@ -422,7 +468,7 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
-        "content_sha256": "sha256:a6c860f4c27acda9ca86128f0a77cbf9243e26c3e360a3f3d8af77a0011e6889"
+        "content_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2"
       },
       {
         "target_path": "app/builderops/devui_managed.css",

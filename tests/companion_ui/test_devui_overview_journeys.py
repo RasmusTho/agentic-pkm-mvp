@@ -360,6 +360,20 @@ def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
             assert card_body.locator(".matrix [data-axis]").count() == 5
             for axis in ("availability", "freshness", "completeness", "cardinality", "linkage"):
                 assert card_body.locator("b").filter(has_text=axis).count() == 1
+            evidence_rows = card_body.locator(".rungs").nth(1)
+            for field in (
+                "evidence_id",
+                "claim",
+                "source_ref",
+                "captured_at",
+                "read_watermark",
+                "limitation",
+            ):
+                assert evidence_rows.locator("b").filter(has_text=field).count() == 1
+            evidence_text = evidence_rows.inner_text()
+            assert "working-4836" in evidence_text
+            assert "Working projection contains this item." in evidence_text
+            assert "cockpit:working:4836" in evidence_text
         finally:
             context.close()
             browser.close()

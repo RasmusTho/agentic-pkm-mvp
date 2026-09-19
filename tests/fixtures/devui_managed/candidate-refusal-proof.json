@@ -55,7 +55,7 @@
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:a6c860f4c27acda9ca86128f0a77cbf9243e26c3e360a3f3d8af77a0011e6889",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
     "app/builderops/devui_managed.css": "sha256:9bd853fe5007b960d58525a5029f3a2687fdeab5aae161363ec944f19be4a36a"
   },
   "repository_identity_cases": {

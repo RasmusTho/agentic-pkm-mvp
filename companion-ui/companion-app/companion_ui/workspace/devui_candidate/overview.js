@@ -40,11 +40,11 @@ function matrix(parent, value) {
   parent.appendChild(grid);
 }
 
-function rows(parent, value) {
+function rows(parent, value, omitAxes = false) {
   const list = document.createElement("ul");
   list.className = "rungs";
   Object.keys(value || {}).forEach((key) => {
-    if (key === "navigation_refs") return;
+    if (key === "navigation_refs" || (omitAxes && AXES.includes(key))) return;
     const row = document.createElement("li");
     text(row, "b", key);
     text(row, "code", typeof value[key] === "string" ? value[key] : JSON.stringify(value[key]));
@@ -75,6 +75,7 @@ function renderItem(parent, item) {
   rows(body, item.subject_ref);
   (item.evidence || []).forEach((evidence) => {
     matrix(body, evidence);
+    rows(body, evidence, true);
   });
   (item.limitations || []).forEach((limitation) => text(body, "p", limitation, "empty"));
   card.appendChild(body);
