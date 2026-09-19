@@ -75,16 +75,16 @@
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:787b498e84efd1fa6de062c3dae45aa451a0fead0149ee00b1929073a30bb003",
     "tests/companion_ui/test_devui_managed_journeys.py": "sha256:c08328d6b52936a635127ef030a689462da7cca31e019d21c70c82e014900c02",
     "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a",
-    "tests/builderops/test_devui_runtime.py": "sha256:76ea22acf3b2db928895ee9683aa9ecb4028f32536b63c8246c369fe920447ba",
-    "tests/builderops/test_devui_overview_inputs.py": "sha256:4c4872b5c6a7ce257c9d9bc3441c1658ac3cd8308bbf8acb065c39c9ce8a0586"
+    "tests/builderops/test_devui_runtime.py": "sha256:dc653086428aa979a2923b243e4908dbf05049e556d7b9420c31767d1abd0f71",
+    "tests/builderops/test_devui_overview_inputs.py": "sha256:5037437b0439f5d7c9dd8f9d90f36291186e5d4fbce2d37adec00fac61b0b294"
   },
   "junit": {
     "errors": 0,
     "failures": 0,
     "skips": 0,
     "tests": 54,
-    "evidence_ref": ".codex-tmp/5599-final-proof/managed-current-junit.xml",
-    "sha256": "sha256:78ba2a06809a24c317420bb04c770ac075e47f326b0361f78ca88b8dbc3a49a6"
+    "evidence_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc-junit.xml",
+    "sha256": "sha256:55de99a3c8c4d0431a26955fa67b5044e3ceeee15262b7b9066dca48da808a10"
   },
   "modes": [
     "desktop",
@@ -167,12 +167,12 @@
     "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db",
     "app/builderops/devui_assets.py": "sha256:a937ab36e9ef9f9f27efaf1af74ea0d602b97ba28f936ddec28c5cce7526a58e",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
-    "app/builderops/devui_overview_inputs.py": "sha256:1db8ff25fdecc6d54776a5167a4da0389545acb5ce13f5ff7ba0a2861a06916e",
+    "app/builderops/devui_overview_inputs.py": "sha256:0b32deefebd5c91f98a43e6ffbd4e3de2aa8aa6130011bbd083cfb1ce177db84",
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
     "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353",
     "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d"
   },
-  "raw_capture_package": "Current #5599 final host-leased managed 54 proof is bound at .codex-tmp/5599-final-proof/managed-current.stdout and managed-current-junit.xml; the embedded accessibility/visual captures remain explicitly historical inventory.",
+  "raw_capture_package": "Current #5599 repaired-head host-leased managed 54 and ordinary Overview 21 proofs are bound at .codex-tmp/5599-source04-final-proof; embedded accessibility/visual captures remain explicitly historical inventory.",
   "repository_identity_observation": {
     "canonical_repository": "example/fixture",
     "fixture_repository": "Example/Fixture",
@@ -181,29 +181,29 @@
     "source_locator": "https://github.com/Example/Fixture/issues/501"
   },
   "scope": "#5599 final local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
-  "proof_observed_at": "2026-09-19T21:19:57.921589Z",
+  "proof_observed_at": "2026-09-19T23:04:30.579326+00:00",
   "current_proof": {
-    "source_commit": "ad4c548cda04ef667d0b94f47b9b4d95233f5a9a",
-    "execution_id": "5599-final-managed-ad4c548c",
+    "source_commit": "f7adc2b34a3a207663699c932cbddfa5362a22a0",
+    "execution_id": "5599-repaired-managed-f7adc",
     "stdout": {
-      "evidence_ref": ".codex-tmp/5599-final-proof/managed-current.stdout",
-      "sha256": "sha256:3e819612346f4bf20db2507c36cdf9c9e3424b9969db18289d7942cfc8035b8c"
+      "evidence_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc.stdout",
+      "sha256": "sha256:c0c33aa7338cddb2250b87d53a72e172431e5d9d4dbed93c5d963cf1407ccf58"
     },
     "junit": {
-      "evidence_ref": ".codex-tmp/5599-final-proof/managed-current-junit.xml",
-      "sha256": "sha256:78ba2a06809a24c317420bb04c770ac075e47f326b0361f78ca88b8dbc3a49a6",
+      "evidence_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc-junit.xml",
+      "sha256": "sha256:55de99a3c8c4d0431a26955fa67b5044e3ceeee15262b7b9066dca48da808a10",
       "tests": 54,
       "skips": 0
     },
     "ordinary_overview": {
-      "execution_id": "5599-final-overview-ad4c548c",
+      "execution_id": "5599-repaired-overview-f7adc",
       "stdout": {
-        "evidence_ref": ".codex-tmp/5599-final-proof/overview-current.stdout",
-        "sha256": "sha256:5b6a796a51eb6c0aa5a2dfe6603ced9e18173f730d9ff5958dd7dfe897b6be66"
+        "evidence_ref": ".codex-tmp/5599-source04-final-proof/overview-f7adc.stdout",
+        "sha256": "sha256:21f9c933fc730750f13bbe17a3ac5c819f54b5c89ada07f5bb7b2c3ab8560ed2"
       },
       "junit": {
-        "evidence_ref": ".codex-tmp/5599-final-proof/overview-current-junit.xml",
-        "sha256": "sha256:830d246eb6d0d1c11a9a07504ea3d8558486cc9a6ffeaead68782ca4886ef527",
+        "evidence_ref": ".codex-tmp/5599-source04-final-proof/overview-f7adc-junit.xml",
+        "sha256": "sha256:497722bc47f2abd0b7d689034bfff83a1535ce485253876bd621701bb6767fdd",
         "tests": 21,
         "skips": 0
       }
