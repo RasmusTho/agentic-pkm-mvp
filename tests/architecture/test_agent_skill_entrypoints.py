@@ -152,7 +152,7 @@ def test_bug_delivery_transition_policy_is_linked_across_workflows() -> None:
         assert canonical in " ".join(_read(path).split())
 
     verification = _read(".codex/skills/verification-and-closure/SKILL.md")
-    assert "rolling Known Defects\n  registry Issue #4172" in verification
+    assert "Known Defects registry Issue #4172" in " ".join(verification.split())
 
     coordinator = _read(".codex/agents/issue-set-coordinator.toml")
     assert 'model = "gpt-5.6-luna"' in coordinator

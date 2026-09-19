@@ -82,8 +82,7 @@ Plain text, one parent, no bold or prose around the number — the line is machi
 declared reference — a `Parent:`-prefixed line carrying a `#<digits>` token — is not exactly this
 shape or appears more than once. Descriptive parent prose without an issue-number token is not a
 declaration. The parent→child direction is owned by the epic delivery ledger
-(`verification-and-closure :: Parent Issue Closure :: Structured child ledger (epic delivery
-ledger v1)`), not by this line.
+(`.codex/skills/verification-and-closure/FULL_PATH.md :: Structured child ledger (epic delivery ledger v1)`), not by this line.
 
 ## Verify: marker rule
 

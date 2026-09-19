@@ -70,7 +70,7 @@ Use when review feedback is blocking, repetitive, or clearly requires more than 
 - out-of-scope -> short response only
 - incorrect or not applicable -> short response only
 - apply the protected severity floors and dispatcher receipt compatibility rule from
-  `.codex/skills/verification-and-closure/SKILL.md :: Severity routing`; there is no valid
+  `.codex/skills/verification-and-closure/FULL_PATH.md :: Severity routing`; there is no valid
   `blocking P2`
 - if the loop keeps expanding, stop and classify the PR as blocked rather than dragging the hot path into a governance cycle
 

@@ -1363,13 +1363,28 @@ def _existing_test_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
     )
 
 
-def _write_github_output(path: str, selection: Selection) -> None:
+def requires_runtime_checks(changed_files: list[str]) -> bool:
+    """Text-only instructions/docs still run contract tests, not product gates.
+
+    Unknown, executable, fixture and configuration paths stay conservative. A
+    Markdown suffix alone does not make a runtime artifact documentation.
+    """
+    paths = tuple(_normalize(path) for path in changed_files if _normalize(path))
+    return not paths or not all(
+        path in {"README.md", "CHANGELOG.md", "AGENTS.md", "CLAUDE.md"}
+        or (path.endswith(".md") and path.startswith(("docs/", ".codex/")))
+        for path in paths
+    )
+
+
+def _write_github_output(path: str, selection: Selection, *, runtime_checks: bool = True) -> None:
     output = Path(path)
     with output.open("a", encoding="utf-8") as handle:
         handle.write(f"full_suite={'true' if selection.full_suite else 'false'}\n")
         handle.write(f"subsystems={','.join(selection.subsystems) or 'all'}\n")
         handle.write(f"pytest_args={selection.pytest_args}\n")
         handle.write(f"reason={selection.reason}\n")
+        handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
 
 
 def main() -> int:
@@ -1402,7 +1417,9 @@ def main() -> int:
         return 2
 
     if args.github_output:
-        _write_github_output(args.github_output, selection)
+        _write_github_output(
+            args.github_output, selection, runtime_checks=requires_runtime_checks(changed)
+        )
     return 0
 
 

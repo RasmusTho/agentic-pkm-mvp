@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE_CONTRACT = ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 PROCESS_MAP = ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 AGENTS = ROOT / "AGENTS.md"
-VERIFICATION_SKILL = ROOT / ".codex/skills/verification-and-closure/SKILL.md"
+VERIFICATION_SKILL = ROOT / ".codex/skills/verification-and-closure/FULL_PATH.md"
 SUBAGENT_ROLES = ROOT / "docs/development/BUILDER_SUBAGENT_ROLES.md"
 DISPATCHER_CONTRACT = ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
 VERIFICATION_ADAPTER = ROOT / ".codex/agents/verification-closer.toml"
@@ -47,7 +47,7 @@ def test_repeated_review_findings_route_to_triage_before_owner() -> None:
 def test_no_legacy_route_sends_technical_stops_directly_to_owner() -> None:
     contract = GATE_CONTRACT.read_text(encoding="utf-8")
     process_map = PROCESS_MAP.read_text(encoding="utf-8")
-    closure_skill = (ROOT / ".codex/skills/verification-and-closure/SKILL.md").read_text(
+    closure_skill = (ROOT / ".codex/skills/verification-and-closure/FULL_PATH.md").read_text(
         encoding="utf-8"
     )
 

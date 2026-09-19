@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 AGENTS = ROOT / "AGENTS.md"
 INTEGRATION = ROOT / ".codex/skills/pr-integration/SKILL.md"
-CLOSURE = ROOT / ".codex/skills/verification-and-closure/SKILL.md"
+CLOSURE = ROOT / ".codex/skills/verification-and-closure/FULL_PATH.md"
 
 
 def test_late_change_supersedes_affected_evidence() -> None:
@@ -14,7 +14,9 @@ def test_late_change_supersedes_affected_evidence() -> None:
     integration = INTEGRATION.read_text(encoding="utf-8")
     agents = AGENTS.read_text(encoding="utf-8")
 
-    for text in (agents, integration, closure):
+    assert "rerun only affected evidence" in " ".join(agents.split())
+
+    for text in (integration, closure):
         normalized = text.lower()
         assert "late-change supersession" in normalized
         assert "affected evidence" in normalized

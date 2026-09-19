@@ -723,7 +723,7 @@ def test_p3_is_informational_and_excluded_before_github_mutation(
         REPO_ROOT / ".codex" / "skills" / "bug-to-issue" / "SKILL.md"
     ).read_text(encoding="utf-8")
     verification_skill = (
-        REPO_ROOT / ".codex" / "skills" / "verification-and-closure" / "SKILL.md"
+        REPO_ROOT / ".codex" / "skills" / "verification-and-closure" / "FULL_PATH.md"
     ).read_text(encoding="utf-8")
     skill_index = (REPO_ROOT / ".codex" / "skills" / "README.md").read_text(
         encoding="utf-8"

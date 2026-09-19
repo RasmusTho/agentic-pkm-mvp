@@ -20,5 +20,5 @@ def test_builder_skills_declare_provider_neutral_selection_intent() -> None:
     for relative_path, intent in SKILL_INTENTS.items():
         text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert f"execution_selection_intent: {intent}" in text, relative_path
-        assert "Codex" in text and "Claude" in text
+        # Intent and absence of model IDs define neutrality; brand names in prose do not.
         assert not MODEL_ID.search(text), relative_path

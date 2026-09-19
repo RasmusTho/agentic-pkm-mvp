@@ -29,10 +29,9 @@ Default rule:
 - touching a skill does not itself escalate delivery depth; escalate only when the skill change
   alters high-risk runtime/release behavior or another trigger below applies
 - if any escalation trigger is true, use the escalation path instead of adding heavyweight checks here
-- an already-authenticated issue-free Tier 1 docs-authoring or governance PR with
-  `Final-Review-Rounds: 1` preserves that review decision through
-  `verification-and-closure :: Issue-free reviewed lane compatibility path`; it does not gain
-  Issue authority or a new review-round option
+- native session-owned delivery uses `verification-and-closure :: Routing`; independent review
+  and approved Issue batching do not by themselves require a phase-ledger merge
+- already-authenticated or executor-owned attempts retain their existing exception protocol
 
 ## Mandatory Hot-Path Gates
 
@@ -43,7 +42,7 @@ Default rule:
 - if they do not agree, stop and recover branch truth first
 
 2. Relevant checks for lane and risk
-- run the smallest checks that still cover the changed surface
+- resolve existing applicable results first; run only missing or invalidated checks covering the changed surface
 - do not expand into a full governance sweep for a low-risk PR
 - required checks must be known, current, and attached to the current head SHA
 - relevant repo-standard checks that cover the changed surface must be current, even when GitHub branch protection does not require them
@@ -211,7 +210,7 @@ poll GitHub. GitHub check conclusions and the PR head SHA remain the authority.
 - incorrect or not applicable -> short response
 
 The protected severity floors and dispatcher receipt compatibility rule are normative in
-`.codex/skills/verification-and-closure/SKILL.md :: Severity routing`. There is no valid
+`.codex/skills/verification-and-closure/FULL_PATH.md :: Severity routing`. There is no valid
 `blocking P2`.
 
 Compatibility for the current `pr-integration` consumer: its legacy `cheap fix` bucket is not a
@@ -322,10 +321,10 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 ## Safety Invariants
 
 - current SHA truth before merge
-- before neutralization, derive and preserve the canonical case-sensitive repository identity from
+- executor/in-flight path only: before neutralization, derive and preserve the canonical case-sensitive repository identity from
   live GitHub REST evidence and independently authenticate the just-posted exact receipt against the
   original live body/head/issue sets/run/unchanged accounting. Failed readback permits no body effect
-- issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
+- executor/in-flight issue-backed merge neutralizes authenticated body closers immediately before the exact-head merge,
   publishes the neutralized body in the LF-less canonical transport form, revalidates the live
   body/head/closing links with at most one stored terminal LF, rejects a second LF, CR/CRLF, or any
   other whitespace drift, and requires `pr-contract` to authenticate

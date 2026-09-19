@@ -16,7 +16,7 @@ def test_handoff_requires_authenticated_owner_and_current_evidence() -> None:
     """Replacement, publication, and closure require one authenticated current owner."""
     issue_to_code = _read(".codex/skills/issue-to-code/SKILL.md")
     resume_work = _read(".codex/skills/resume-work/SKILL.md")
-    verification = _read(".codex/skills/verification-and-closure/SKILL.md")
+    verification = _read(".codex/skills/verification-and-closure/FULL_PATH.md")
     owner_doc = _read("docs/development/BUILDER_SUBAGENT_ROLES.md")
 
     for surface in (issue_to_code, resume_work, verification, owner_doc):
