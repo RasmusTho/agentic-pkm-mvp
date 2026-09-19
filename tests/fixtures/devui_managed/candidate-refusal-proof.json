@@ -8,20 +8,20 @@
   },
   "fixture_code_sha256": {
     ".github/workflows/browser-runtime.yml": "sha256:0df130a40fc01d07c0cf7ee6e26b25ecd42022be3374dfd36e216e7e0919134c",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:fd35346ee8d7f7653d588c0c6f57a2fa71b9c4a0840fa3d9a89eb43860706dfe",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:5a3b13f61e154ceb9f266f24527d37486ecfa9d87ffcf178d06f960076bbbb52",
     "tests/builderops/test_devui_runtime.py": "sha256:47e2e74d7f8117f42ebc8d6199b09eff676d4aed946b4c0a6fcefeb6049bdde6"
   },
   "junit": {
     "errors": 0,
-    "evidence_ref": "5594-final-repair-b/runtime/junit.xml",
+    "evidence_ref": "5594-final-repair-c/runtime/junit.xml",
     "failures": 0,
-    "sha256": "sha256:fca2ae1ab6e2ae56f5f8b95b64276f5ed5c5299d8475a221c5d291e962ca0f60",
+    "sha256": "sha256:4a75eebbe2f3a1576334b5df0530cfb986bd878dbd5eb72ab49e0e0b43d5fb73",
     "skips": 0,
     "tests": 5
   },
   "log": {
-    "evidence_ref": "5594-final-repair-b/runtime/pytest.log",
-    "sha256": "sha256:0864b11c5a2fbc8b01c3d693ad3e12e65c35c587912a1522e97548e0b0d9d115"
+    "evidence_ref": "5594-final-repair-c/runtime/pytest.log",
+    "sha256": "sha256:ec1dd8c3e646203467f44c143d365f5be5a4ff135e3ced97103457cc45640775"
   },
   "mutations": [
     "missing",
@@ -52,8 +52,8 @@
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
     "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
   },
-  "raw_proof_package": "5594-final-repair-b/runtime (host-leased runtime admission/refusal run)",
-  "recorded_at": "2026-09-19T14:44:59.817951Z",
+  "raw_proof_package": "5594-final-repair-c/runtime (host-leased runtime admission/refusal run)",
+  "recorded_at": "2026-09-19T15:07:58.038Z",
   "repository_identity_cases": {
     "accepted_subjects": [
       "github:example/fixture#501",

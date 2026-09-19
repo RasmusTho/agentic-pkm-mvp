@@ -43,19 +43,19 @@
     "managed/focus-zoom_200.png": "sha256:0913738e21e3482935ea4af6b6a21c21ee3df57289d7b514b77a3111063b4454",
     "managed/managed-focus.aria.txt": "sha256:08e5d5496303b95b4e92e87845ea8ad2b6f4eba127b3619ef88eb4ade47cb38a",
     "managed/managed-focus.png": "sha256:f8ced4d5f637b92644344c9760523b54ae1518e4447e896e6e4a7fed08ac9e67",
-    "managed/overview-desktop.aria.txt": "sha256:b464453d35b9d61f8e72f79f2ea093194894f8162ed9439ebf641abe4b77b857",
-    "managed/overview-desktop.png": "sha256:f3884e2a9b1552d08b87c84731283f3880c5065efa89a5790f1316f5a65ee504",
+    "managed/overview-desktop.aria.txt": "sha256:2b7ee8400303de3654124aa4b39dedc13b8e5a06d231536285b9bc77112c3d35",
+    "managed/overview-desktop.png": "sha256:710d5ae9561c04ca811d91ef49269a3c3c74b74d8dffda94372302f3ee5e0a9b",
     "managed/overview-javascript-off.aria.txt": "sha256:adebca306d8c0ae10e8356382de7288cee7fbfaaa7471a3b51bad6d3f7177f3f",
     "managed/overview-javascript-off.png": "sha256:8b079a6ab8ebd2ed7c16d5f3a3fc8e24bc8572fe38bff9806728e69f461ca170",
-    "managed/overview-narrow.aria.txt": "sha256:b464453d35b9d61f8e72f79f2ea093194894f8162ed9439ebf641abe4b77b857",
-    "managed/overview-narrow.png": "sha256:c2fff5b6ed502c6c3194243b7929147b2a6df4946ef2e6c042eea5ff91e50b5a",
-    "managed/overview-print.aria.txt": "sha256:b464453d35b9d61f8e72f79f2ea093194894f8162ed9439ebf641abe4b77b857",
-    "managed/overview-print.png": "sha256:04bae97dfa59b8ba385270818b4aa2d7fa9276d1195cdad430300d3668dd0112",
-    "managed/overview-zoom_200.aria.txt": "sha256:b464453d35b9d61f8e72f79f2ea093194894f8162ed9439ebf641abe4b77b857",
-    "managed/overview-zoom_200.png": "sha256:04bae97dfa59b8ba385270818b4aa2d7fa9276d1195cdad430300d3668dd0112",
+    "managed/overview-narrow.aria.txt": "sha256:2b7ee8400303de3654124aa4b39dedc13b8e5a06d231536285b9bc77112c3d35",
+    "managed/overview-narrow.png": "sha256:5b583b8365f4c5353391723f4f3ea1d575ceaf3d5bbdd2d6a3816bc9cbf39d8e",
+    "managed/overview-print.aria.txt": "sha256:2b7ee8400303de3654124aa4b39dedc13b8e5a06d231536285b9bc77112c3d35",
+    "managed/overview-print.png": "sha256:7b9246548c43883fd2d3be091306fa0f558aa7f8a88680d5c0590f6ecba6f101",
+    "managed/overview-zoom_200.aria.txt": "sha256:2b7ee8400303de3654124aa4b39dedc13b8e5a06d231536285b9bc77112c3d35",
+    "managed/overview-zoom_200.png": "sha256:7b9246548c43883fd2d3be091306fa0f558aa7f8a88680d5c0590f6ecba6f101",
     "overview/receipts/devui-overview-browser-accessibility.v1.json": "sha256:936f21ff79f7d34b5b7dc191372b35a190109611f7a589ecf6f80878ab671bc5",
     "overview/screenshots/overview.png": "sha256:0936bcf240ddb1dce9b7d712b60d013ef4180925529c3f7ca14268e71487f5b5",
-    "overview/traces/connected-overview-focus.zip": "sha256:e1ae30ff7d5dc2b480fa3bc4140df1ff9b1d410e9bc847660584f34c42998ddb"
+    "overview/traces/connected-overview-focus.zip": "sha256:706bea25f56e5a39d39a29b59b2f02e1f4230117d37dde2ca493b7f93068bae4"
   },
   "contract": "devui-managed-browser-observation.v1",
   "cross_origin_request_count": 0,
@@ -72,15 +72,15 @@
   ],
   "fixture_code_sha256": {
     ".github/workflows/browser-runtime.yml": "sha256:0df130a40fc01d07c0cf7ee6e26b25ecd42022be3374dfd36e216e7e0919134c",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:fd35346ee8d7f7653d588c0c6f57a2fa71b9c4a0840fa3d9a89eb43860706dfe",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:5a3b13f61e154ceb9f266f24527d37486ecfa9d87ffcf178d06f960076bbbb52",
     "tests/companion_ui/test_devui_managed_journeys.py": "sha256:3d41186095c03ace937bc974bf2ca7ca393651daaf74b8813608129b35d91361",
     "tests/companion_ui/test_devui_overview_journeys.py": "sha256:95a0b9af60dcca8e86a6bcfd2fa15c4d4cdd06370032a1a9706cbbe540b4855d"
   },
   "junit": {
     "errors": 0,
-    "evidence_ref": "5594-final-repair-b/combined/junit.xml",
+    "evidence_ref": "5594-final-repair-c/combined/junit.xml",
     "failures": 0,
-    "sha256": "sha256:1cce3e93412589628c2b66ba64cbea545faf077cb6f2d83c8734af7ef7a0afdf",
+    "sha256": "sha256:699847daa3876205b2911952d88e25339506d815fa435c5341351c097944e90c",
     "skips": 0,
     "tests": 45
   },
@@ -95,7 +95,7 @@
   ],
   "mutating_browser_requests": 0,
   "mutating_source_requests": 0,
-  "observed_at": "2026-09-19T14:44:59.817951Z",
+  "observed_at": "2026-09-19T15:07:58.038Z",
   "origin": "http://127.0.0.1:8113",
   "passed_nodeids": [
     "tests/companion_ui/test_devui_managed_journeys::test_managed_keyboard_proof_rejects_unexpected_interactive_action[button-overview-/devui/overview]",
@@ -160,7 +160,7 @@
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
     "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
   },
-  "raw_capture_package": "5594-final-repair-b/combined (single host-leased managed+Overview browser run)",
+  "raw_capture_package": "5594-final-repair-c/combined (single host-leased managed+Overview browser run)",
   "repository_identity_observation": {
     "canonical_repository": "example/fixture",
     "fixture_repository": "Example/Fixture",
