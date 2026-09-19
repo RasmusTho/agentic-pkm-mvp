@@ -647,6 +647,41 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
             assert page.get_by_role("link", name="Open Focus").count() == 1
             _assert_candidate_overview_control_inventory(page)
 
+            for mutation in ("body_before_title", "audio_controls"):
+                page.evaluate(
+                    """kind => {
+                        const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                        const body = card && card.querySelector(':scope > .body');
+                        if (kind === 'body_before_title' && card && body) {
+                            card.insertBefore(body, card.firstElementChild);
+                        } else if (kind === 'audio_controls' && card) {
+                            const audio = document.createElement('audio');
+                            audio.controls = true;
+                            audio.dataset.devuiMutation = kind;
+                            card.append(audio);
+                        }
+                    }""",
+                    mutation,
+                )
+                try:
+                    with pytest.raises(AssertionError):
+                        _assert_candidate_overview_control_inventory(page)
+                finally:
+                    page.evaluate(
+                        """kind => {
+                            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                            if (kind === 'body_before_title' && card) {
+                                const body = card.querySelector(':scope > .body');
+                                const link = card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+                                if (body && link) card.insertBefore(body, link);
+                            } else if (kind === 'audio_controls') {
+                                document.querySelector('[data-devui-mutation="audio_controls"]')?.remove();
+                            }
+                        }""",
+                        mutation,
+                    )
+                _assert_candidate_overview_control_inventory(page)
+
             assert page.viewport_size == {"width": 1280, "height": 720}
             page.set_viewport_size({"width": 375, "height": 812})
             assert page.evaluate(

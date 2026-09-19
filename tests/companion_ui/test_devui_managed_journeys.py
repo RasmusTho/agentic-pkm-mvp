@@ -441,6 +441,7 @@ def _keyboard_navigation(page, surface, *, navigate=True):
         "details_before_owner_summary",
         "details_before_focus_entry",
         "details_prepended_into_other_entry",
+        "return_outside_claim",
     ],
 )
 def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
@@ -532,6 +533,17 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
                     const body = card.querySelector(':scope > .body');
                     const subject = body.querySelector(':scope > details.technical-disclosure');
                     body.querySelector(':scope > .evidence-entry').prepend(subject);
+                }
+                return;
+            }
+            if (kind === 'return_outside_claim') {
+                if (focusSection) {
+                    const returnLink = document.querySelector('[data-testid="overview-return"]');
+                    const claim = returnLink && returnLink.closest('.claim');
+                    if (returnLink && claim) claim.parentElement.insertBefore(returnLink, claim);
+                } else if (card) {
+                    const link = card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+                    if (link) card.parentElement.insertBefore(link, card);
                 }
                 return;
             }
