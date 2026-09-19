@@ -39,6 +39,12 @@ Concept anchors: layering, portability, archive exposure, trust semantics, event
 `app/builderops/devui_runtime.py`, `app/builderops/devui_sources.py`, and
 `app/ops/devui_vm102_runtime_receipts.py`; repository evidence only):
 
+2026-09-19 bounded evidence-axis presentation writeback (#5596 / PR #5598; repository evidence
+only): the Overview axis layout follows its rendered container, each axis is shown once per
+evidence entry, and the source claim metadata remains reachable. Managed asset hashes, candidate
+inventory, constrained-reuse lineage, and fresh managed browser/refusal evidence are bound to the
+delivery candidate; no deployment or owner acceptance is inferred.
+
 - The pure `devui-overview-view.v1` server-side composer derives the nonvisual Overview from
   `devui.composition.v1`, explicit producer evidence, and typed root references. It preserves
   unsupported owner and ready classification as withdrawal rather than an empty list; it performs
