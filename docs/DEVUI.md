@@ -12,7 +12,7 @@ Review cadence: Event-driven
 Source of truth: This document owns the owner experience. Accepted ADRs and linked capability
 specifications own the mechanisms; live GitHub, CI, dispatcher, and receipt evidence owns delivery
 truth.
-Last reviewed: 2026-09-19 for #5594 owner-language/progressive-disclosure delivery, #5596 evidence-axis
+Last reviewed: 2026-09-19 for #5595 trust-frame compact disclosure, #5594 owner-language/progressive-disclosure delivery, #5596 evidence-axis
 presentation, #5520 source wiring, #5522 managed read-journey writeback, and #5527 bounded Issue
 source-text projection.
 Prior broader current-state and milestone review: 2026-09-12 at `main`
@@ -814,6 +814,12 @@ Delivered now:
   accepted Cockpit keyboard/focus pattern; managed browser proof admits only the bound disclosures
   and existing route links, and rejects injected controls. This is a client rendering change only;
   it adds no source, schema, API, persistence, or owner-acceptance authority; and
+- the #5595 Overview trust-frame presentation: the first paint is a compact source count with
+  explicit source-declared refusals visible at Glance, while the complete provider state rows remain
+  available under the existing native details/summary disclosure. Candidate and managed browser
+  proofs bind the exact provider identities, order, cardinality, and trust-frame placement; this is
+  repository evidence only and adds no source, schema, API, persistence, deployment, or owner-
+  acceptance authority; and
 - the BuilderOps API/PostgreSQL control-plane implementation and independent package boot.
 
 The production Companion transport prerequisite for the existing Overview and Focus reads is

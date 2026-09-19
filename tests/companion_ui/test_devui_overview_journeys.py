@@ -36,6 +36,33 @@ SUBJECT = "github:RasmusTho/agentic-pkm-mvp#4836"
 FOCUS_PATH = "/devui/focus?subject=github%3ARasmusTho%2Fagentic-pkm-mvp%234836"
 RUNTIME_SHA = "a" * 40
 _EVIDENCE = ExactRefEvidenceRecorder()
+EXPECTED_OVERVIEW_PROVIDER_IDENTITY = [
+    {
+        "role": "work",
+        "rows": [
+            ["role", "work"],
+            ["provider", "builderops_cockpit"],
+            ["status", "available"],
+            ["authority", "read_time_join"],
+            ["captured_at", "2026-08-28T10:00:00+00:00"],
+            ["snapshot", '{"watermark":"work:42"}'],
+            ["completeness", '{"state":"complete"}'],
+        ],
+    },
+    {
+        "role": "capabilities",
+        "rows": [
+            ["role", "capabilities"],
+            ["provider", "capability_registry"],
+            ["status", "refused"],
+            ["authority", "read_time_join"],
+            ["captured_at", "null"],
+            ["snapshot", "null"],
+            ["completeness", "null"],
+            ["refusal", "Provider declined the capabilities read."],
+        ],
+    },
+]
 
 
 def _page_errors(page) -> list[str]:
@@ -50,6 +77,33 @@ def _source(source_id: str) -> dict[str, str]:
         "source_id": source_id,
         "locator": f"https://example.invalid/{source_id}",
         "version": "2026-08-28T10:00:00+00:00",
+    }
+
+
+def _overview_composition() -> dict[str, Any]:
+    return {
+        "contract_version": "devui.composition.v1",
+        "authority": "projection_only",
+        "captured_at": "2026-08-28T10:00:00+00:00",
+        "providers": {
+            "work": {
+                "provider": "builderops_cockpit",
+                "status": "available",
+                "authority": "read_time_join",
+                "captured_at": "2026-08-28T10:00:00+00:00",
+                "snapshot": {"watermark": "work:42"},
+                "completeness": {"state": "complete"},
+            },
+            "capabilities": {
+                "provider": "capability_registry",
+                "status": "refused",
+                "authority": "read_time_join",
+                "captured_at": None,
+                "snapshot": None,
+                "completeness": None,
+                "refusal": "Provider declined the capabilities read.",
+            },
+        },
     }
 
 
@@ -96,20 +150,7 @@ def _overview() -> dict[str, Any]:
         "contract_version": "devui-overview-view.v1",
         "authority": "projection_only",
         "composed_at": "2026-08-28T10:00:00+00:00",
-        "trust_frame": {
-            "provider_states": [
-                {
-                    "role": "work",
-                    "provider": "builderops_cockpit",
-                    "status": "available",
-                    "authority": "read_time_join",
-                    "captured_at": "2026-08-28T10:00:00+00:00",
-                    "snapshot": {"watermark": "work:42"},
-                    "completeness": {"state": "complete"},
-                }
-            ],
-            "limitations": ["One provider is stale."],
-        },
+        "trust_frame": compose_overview_view(composition=_overview_composition())["trust_frame"],
         "now": [candidate],
         "needs_you": [],
         "ready_to_try": [],
@@ -195,24 +236,11 @@ def _focus() -> dict[str, Any]:
 def _validate_overview_fixture(payload: dict[str, Any]) -> None:
     candidate = json.loads(json.dumps(payload["now"][0]))
     candidate["evidence"][0].pop("opaque_diagnostic", None)
-    compose_overview_view(
-        composition={
-            "contract_version": "devui.composition.v1",
-            "authority": "projection_only",
-            "captured_at": payload["composed_at"],
-            "providers": {
-                "fixture": {
-                    "provider": "fixture",
-                    "status": "available",
-                    "authority": "fixture",
-                    "captured_at": payload["composed_at"],
-                    "snapshot": "fixture:42",
-                    "completeness": "complete",
-                }
-            },
-        },
+    composed = compose_overview_view(
+        composition=_overview_composition(),
         candidates={"now": [candidate], "needs_you": [], "ready_to_try": []},
     )
+    assert composed["trust_frame"] == payload["trust_frame"]
 
 
 def _validate_focus_fixture(payload: dict[str, Any]) -> None:
@@ -375,11 +403,22 @@ def _browser(base_url: str):
     return playwright, browser, context, context.new_page(), external
 
 
-def _assert_candidate_overview_control_inventory(page) -> None:
-    expected_summaries = ["Inspect subject source details", "Inspect evidence details"]
+def _assert_candidate_overview_control_inventory(
+    page, *, expected_provider_identity: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    if expected_provider_identity is None:
+        expected_provider_identity = EXPECTED_OVERVIEW_PROVIDER_IDENTITY
+    expected_summaries = [
+        "Inspect trust frame",
+        "Inspect subject source details",
+        "Inspect evidence details",
+    ]
     assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries
     candidate_inventory = page.evaluate(
-        """() => {
+        """expectedProviderIdentity => {
+            const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
+            const frame = document.querySelector('[data-testid="overview-trust-frame"]');
+            const trustDetails = trust && trust.querySelector(':scope > details.technical-disclosure');
             const card = document.querySelector('[data-testid="overview-now"] > article.card');
             const body = card && card.querySelector(':scope > .body');
             const subject = body && body.querySelector(':scope > details.technical-disclosure');
@@ -394,11 +433,32 @@ def _assert_candidate_overview_control_inventory(page) -> None:
             const sourceValue = (details, key) => {
                 try { return JSON.parse(rowValue(details, key)); } catch (_) { return null; }
             };
+            const providerSections = trustDetails
+                ? Array.from(trustDetails.querySelectorAll(':scope > section.provider-state'))
+                : [];
+            const providerIdentity = providerSections.map(section => ({
+                role: section.dataset.providerRole,
+                rows: Array.from(section.querySelectorAll(':scope > ul.rungs > li')).map(row => [
+                    row.querySelector(':scope > b')?.textContent,
+                    row.querySelector(':scope > code')?.textContent,
+                ]),
+            }));
             const controlChildren = body
                 ? Array.from(body.children).filter(child => child.matches('details.technical-disclosure,.evidence-entry'))
                 : [];
             const checks = {
-                nodes: Boolean(card && body && subject && evidence && evidenceDetails && link),
+                nodes: Boolean(frame && trust && trustDetails && card && body && subject && evidence && evidenceDetails && link),
+                trust_parent: Boolean(frame && frame.children.length === 2 && frame.children[0].matches('h2') &&
+                    frame.children[1] === trust && trust.parentElement === frame),
+                trust_shape: Boolean(trust && trust.children.length === 2 &&
+                    trust.children[0].classList.contains('owner-summary') && trust.children[1] === trustDetails &&
+                    trustDetails.children.length === providerSections.length + 1 && providerSections.length > 0 &&
+                    trustDetails.children[0].matches('summary') &&
+                    Array.from(trustDetails.children).slice(1).every(child => child.matches('section.provider-state')) &&
+                    Array.from(document.querySelectorAll('[data-testid="overview-trust-matrix"] .matrix'))
+                        .every(matrix => matrix.parentElement === trustDetails)),
+                trust_provider_identity: expectedProviderIdentity === null ||
+                    JSON.stringify(providerIdentity) === JSON.stringify(expectedProviderIdentity),
                 card_order: Boolean(card && body &&
                     card.children[0]?.classList.contains('card-title') &&
                     card.children[1]?.classList.contains('why') &&
@@ -418,8 +478,9 @@ def _assert_candidate_overview_control_inventory(page) -> None:
                 evidence_source: sourceValue(evidenceDetails, 'source_ref')?.source_id === 'cockpit:working:4836',
             };
             const ok = Object.values(checks).every(Boolean);
-            return {ok, checks};
-        }"""
+            return {ok, checks, providerIdentity};
+        }""",
+        expected_provider_identity,
     )
     assert candidate_inventory["ok"], candidate_inventory["checks"]
     assert page.evaluate(
@@ -438,6 +499,7 @@ def _assert_candidate_overview_control_inventory(page) -> None:
             const card = document.querySelector('[data-testid="overview-now"] > article.card');
             const body = card.querySelector(':scope > .body');
             const expected = [
+                document.querySelector('[data-testid="overview-trust-matrix"] details.technical-disclosure > summary'),
                 body.querySelector(':scope > details.technical-disclosure > summary'),
                 body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
                 card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
@@ -463,6 +525,7 @@ def _assert_candidate_overview_control_inventory(page) -> None:
     assert page.evaluate("document.activeElement === document.body"), "Browser did not reset focus to body"
     card = page.locator('[data-testid="overview-now"] > article.card')
     expected_focus = [
+        page.locator('[data-testid="overview-trust-matrix"] details.technical-disclosure > summary'),
         card.locator(':scope > .body > details.technical-disclosure > summary'),
         card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
         card.locator(':scope > a[data-testid="overview-focus-link"]'),
@@ -470,6 +533,7 @@ def _assert_candidate_overview_control_inventory(page) -> None:
     for expected in expected_focus:
         page.keyboard.press("Tab")
         assert page.evaluate("expected => document.activeElement === expected", expected.element_handle())
+    return candidate_inventory["providerIdentity"]
 
 
 def test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha() -> None:
@@ -574,6 +638,109 @@ def test_connected_shell_renders_full_server_state_matrix_without_reclassificati
                 "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
                 page_errors=page_errors,
             )
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_trust_frame_default_view_is_compact() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            trust = page.locator('[data-testid="overview-trust-frame"]')
+            details = trust.locator('details.technical-disclosure')
+            assert details.count() == 1
+            assert not details.evaluate("element => element.open")
+            summary = details.locator(":scope > summary")
+            assert summary.count() == 1
+            assert "inspect trust frame" in summary.inner_text().lower()
+            assert "capabilities" in trust.inner_text()
+            assert "Provider declined the capabilities read." not in trust.inner_text()
+            assert not trust.locator('[data-provider-role="work"]').is_visible()
+            assert "builderops_cockpit" not in trust.inner_text()
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_now_band_visible_above_fold_on_mobile_viewport() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.set_viewport_size({"width": 375, "height": 812})
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            trust = page.locator('[data-testid="overview-trust-frame"]')
+            now = page.locator('[data-testid="overview-now"]')
+            trust_box = trust.bounding_box()
+            now_box = now.bounding_box()
+            card_box = now.locator(":scope > article.card").first.bounding_box()
+            assert trust_box["y"] + trust_box["height"] <= now_box["y"]
+            assert now_box["y"] < 812
+            assert card_box["y"] < 812
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_trust_frame_expansion_preserves_all_provider_fields() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            details = page.locator('[data-testid="overview-trust-frame"] details.technical-disclosure')
+            details.locator(":scope > summary").click()
+            assert details.evaluate("element => element.open")
+            expected = {
+                "work": {
+                    "provider": "builderops_cockpit",
+                    "status": "available",
+                    "authority": "read_time_join",
+                    "captured_at": "2026-08-28T10:00:00+00:00",
+                    "snapshot": '{"watermark":"work:42"}',
+                    "completeness": '{"state":"complete"}',
+                },
+                "capabilities": {
+                    "provider": "capability_registry",
+                    "status": "refused",
+                    "authority": "read_time_join",
+                    "refusal": "Provider declined the capabilities read.",
+                },
+            }
+            for role, fields in expected.items():
+                state = details.locator(f'[data-provider-role="{role}"]')
+                assert state.count() == 1
+                rows = state.locator(":scope > ul.rungs > li")
+                actual_rows = rows.evaluate_all(
+                    "items => Object.fromEntries(items.map(item => [item.querySelector(':scope > b')?.textContent, item.querySelector(':scope > code')?.textContent]))"
+                )
+                for key, value in fields.items():
+                    assert actual_rows[key] == value
+            assert details.locator('[data-provider-role="work"] ul.rungs > li').count() == 7
+            assert details.locator('[data-provider-role="capabilities"] ul.rungs > li').count() == 8
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_trust_frame_surfaces_degraded_provider_at_glance_depth() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            trust = page.locator('[data-testid="overview-trust-frame"]')
+            assert "Source refused the read" in trust.inner_text()
+            assert "capabilities" in trust.inner_text()
+            assert "Provider declined the capabilities read." not in trust.inner_text()
+            assert not trust.locator('details.technical-disclosure').evaluate("element => element.open")
         finally:
             context.close()
             browser.close()
@@ -999,7 +1166,7 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
             assert page.locator("h1").count() == 1
             assert page.get_by_role("main").get_attribute("aria-labelledby") == "overview-heading"
             assert page.get_by_role("link", name="Open Focus").count() == 1
-            _assert_candidate_overview_control_inventory(page)
+            expected_provider_identity = _assert_candidate_overview_control_inventory(page)
 
             for mutation in ("body_before_title", "audio_controls"):
                 page.evaluate(
@@ -1019,7 +1186,9 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
                 )
                 try:
                     with pytest.raises(AssertionError):
-                        _assert_candidate_overview_control_inventory(page)
+                        _assert_candidate_overview_control_inventory(
+                            page, expected_provider_identity=expected_provider_identity
+                        )
                 finally:
                     page.evaluate(
                         """kind => {
@@ -1034,7 +1203,61 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
                         }""",
                         mutation,
                     )
-                _assert_candidate_overview_control_inventory(page)
+                _assert_candidate_overview_control_inventory(
+                    page, expected_provider_identity=expected_provider_identity
+                )
+
+            for mutation in (
+                "trust_provider_substituted",
+                "trust_provider_reversed",
+                "trust_provider_dropped",
+                "trust_matrix_moved",
+            ):
+                page.evaluate(
+                    """kind => {
+                        const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
+                        const details = trust && trust.querySelector(':scope > details.technical-disclosure');
+                        if (!trust || !details) return;
+                        const providers = Array.from(details.querySelectorAll(':scope > section.provider-state'));
+                        if (kind === 'trust_provider_substituted' && providers[0]) {
+                            const original = providers[0];
+                            const replacement = providers[0].cloneNode(true);
+                            replacement.dataset.providerRole = 'substituted-provider';
+                            const row = Array.from(replacement.querySelectorAll(':scope > ul.rungs > li'))
+                                .find(item => item.querySelector(':scope > b')?.textContent === 'provider');
+                            if (row) row.querySelector(':scope > code').textContent = 'substituted_provider';
+                            details.replaceChild(replacement, providers[0]);
+                            window.__devui5595Restore = () => details.replaceChild(original, replacement);
+                        } else if (kind === 'trust_provider_reversed' && providers.length > 1) {
+                            details.insertBefore(providers[1], providers[0]);
+                            window.__devui5595Restore = () => details.insertBefore(providers[0], providers[1]);
+                        } else if (kind === 'trust_provider_dropped' && providers.length > 1) {
+                            const original = providers[providers.length - 1];
+                            original.remove();
+                            window.__devui5595Restore = () => details.append(original);
+                        } else if (kind === 'trust_matrix_moved') {
+                            const frame = document.querySelector('[data-testid="overview-trust-frame"]');
+                            const originalParent = trust.parentElement;
+                            const originalNext = trust.nextSibling;
+                            frame.before(trust);
+                            window.__devui5595Restore = () => originalParent.insertBefore(trust, originalNext);
+                        }
+                    }""",
+                    mutation,
+                )
+                with pytest.raises(AssertionError):
+                    _assert_candidate_overview_control_inventory(
+                        page, expected_provider_identity=expected_provider_identity
+                    )
+                page.evaluate(
+                    """() => {
+                        window.__devui5595Restore?.();
+                        delete window.__devui5595Restore;
+                    }"""
+                )
+                _assert_candidate_overview_control_inventory(
+                    page, expected_provider_identity=expected_provider_identity
+                )
 
             assert page.viewport_size == {"width": 1280, "height": 720}
             page.set_viewport_size({"width": 375, "height": 812})

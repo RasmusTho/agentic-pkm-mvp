@@ -20,7 +20,7 @@ ASSET_SHA256 = {
     "focus.html": "ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
     "focus.js": "47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
     "overview.html": "71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
-    "overview.js": "44dcc72f6ad26eb6f5eb802dfa3c8cb1b981d8f864e5b017af8d54f8995750f9",
+    "overview.js": "873c9de9bbc8eb85410f0f6450b477cfc52346ff42a921588d8d33494581b4b2",
 }
 INVENTORY_SHA256 = (
     "sha256:"
