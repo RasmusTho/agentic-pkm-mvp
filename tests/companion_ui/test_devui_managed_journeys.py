@@ -337,9 +337,26 @@ def _keyboard_navigation(page, surface, *, navigate=True):
             if (expected.some(element => !element)) return false;
             const visible = element => element.getClientRects().length &&
                 getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
-            const actual = Array.from(document.querySelectorAll(
-                'a[href],button,input,textarea,select,[tabindex],[contenteditable],summary'
-            )).filter(element => (element.tabIndex >= 0 || element.isContentEditable) && visible(element));
+            const interactiveRoles = new Set([
+                'button', 'checkbox', 'combobox', 'gridcell', 'link', 'listbox', 'menuitem',
+                'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'scrollbar', 'searchbox',
+                'slider', 'spinbutton', 'switch', 'tab', 'textbox', 'treeitem'
+            ]);
+            const interactive = element => visible(element) && (
+                element.tabIndex >= 0 || element.isContentEditable ||
+                element.matches('a[href],area[href],button,input,select,textarea,summary,audio[controls],video[controls]') ||
+                interactiveRoles.has(element.getAttribute('role'))
+            );
+            const actual = Array.from(document.querySelectorAll('*')).filter(interactive);
+            if (inventory.surface === 'focus') {
+                const shell = document.querySelector('[data-testid="devui-focus"]');
+                const claim = shell && shell.querySelector(':scope > .claim');
+                const grid = shell && shell.querySelector(':scope > .focus-grid');
+                const returnLink = document.querySelector('[data-testid="overview-return"]');
+                if (!shell || !claim || !grid || !returnLink || returnLink.parentElement !== claim ||
+                    claim.lastElementChild !== returnLink ||
+                    Array.from(shell.children).indexOf(claim) >= Array.from(shell.children).indexOf(grid)) return false;
+            }
             return actual.length === expected.length && actual.every((element, index) => element === expected[index]) &&
                 expected.every(summary => !summary.matches('summary') ||
                     (summary.dataset.testid === 'devui-technical-disclosure' &&

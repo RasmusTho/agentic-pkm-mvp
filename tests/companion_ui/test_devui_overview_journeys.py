@@ -271,6 +271,10 @@ def _assert_candidate_overview_control_inventory(page) -> None:
                 : [];
             const checks = {
                 nodes: Boolean(card && body && subject && evidence && evidenceDetails && link),
+                card_order: Boolean(card && body &&
+                    card.children[0]?.classList.contains('card-title') &&
+                    card.children[1]?.classList.contains('why') &&
+                    card.children[2] === body),
                 link_last: Boolean(card && link && card.lastElementChild === link && link.parentElement === card),
                 controls: controlChildren.length === 2 && controlChildren[0] === subject && controlChildren[1] === evidence,
                 evidence_parent: Boolean(evidence && evidence.parentElement === body),
@@ -312,9 +316,17 @@ def _assert_candidate_overview_control_inventory(page) -> None:
             ];
             const visible = element => element.getClientRects().length &&
                 getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
-            const actual = Array.from(document.querySelectorAll(
-                'a[href],button,input,textarea,select,[tabindex],[contenteditable],summary'
-            )).filter(element => (element.tabIndex >= 0 || element.isContentEditable) && visible(element));
+            const interactiveRoles = new Set([
+                'button', 'checkbox', 'combobox', 'gridcell', 'link', 'listbox', 'menuitem',
+                'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'scrollbar', 'searchbox',
+                'slider', 'spinbutton', 'switch', 'tab', 'textbox', 'treeitem'
+            ]);
+            const interactive = element => visible(element) && (
+                element.tabIndex >= 0 || element.isContentEditable ||
+                element.matches('a[href],area[href],button,input,select,textarea,summary,audio[controls],video[controls]') ||
+                interactiveRoles.has(element.getAttribute('role'))
+            );
+            const actual = Array.from(document.querySelectorAll('*')).filter(interactive);
             return expected.every(Boolean) && actual.length === expected.length &&
                 actual.every((element, index) => element === expected[index]);
         }"""
