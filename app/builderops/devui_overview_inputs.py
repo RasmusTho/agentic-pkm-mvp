@@ -407,43 +407,74 @@ def _work_context_evidence(
         parts.append(f"Registered holder (source-declared): {holder}.")
     if status:
         parts.append(f"Observed work status (source-declared): {status}.")
+    position_limitation: str | None = None
     if position:
-        parts.append(f"Observed chain position: {position}.")
         position_evidence = _object(item.get("position_evidence"))
+        position_dependencies = ["dispatcher-store"]
+        if position_evidence is not None and position_evidence.get("open_authority_work"):
+            position_dependencies.append("github-live")
+        position_scope: list[str] = []
+        dependency_states: list[tuple[str, str, bool]] = []
+        for dependency_name in position_dependencies:
+            dependency = sources.get(dependency_name)
+            raw_dependency_state = (
+                dependency.get("state") if dependency is not None else None
+            )
+            dependency_state = (
+                raw_dependency_state
+                if isinstance(raw_dependency_state, str)
+                else "unavailable"
+            )
+            dependency_read, dependency_watermark = _source_watermark(
+                dependency, fallback="unknown"
+            )
+            dependency_states.append(
+                (dependency_name, dependency_state, dependency_watermark is not None)
+            )
+            position_scope.append(
+                f"{dependency_name}[{dependency_state}] "
+                + _source_locator(
+                    source=dependency,
+                    source_name=dependency_name,
+                    repo=repo,
+                    task_id=task_id,
+                    fallback=f"/api/cockpit/registry#{dependency_name}",
+                )
+                + f" @ {dependency_read}"
+            )
+        position_detail: list[str] = []
         if position_evidence is not None:
-            parts.append(
+            position_detail.append(
                 "Position evidence (source-declared): "
                 + json.dumps(position_evidence, sort_keys=True, separators=(",", ":"))
                 + "."
             )
-            position_dependencies = ["dispatcher-store"]
-            if position_evidence.get("open_authority_work"):
-                position_dependencies.append("github-live")
-            position_scope: list[str] = []
-            for dependency_name in position_dependencies:
-                dependency = sources.get(dependency_name)
-                dependency_state = (
-                    dependency.get("state") if dependency is not None else "unavailable"
-                )
-                dependency_read, _dependency_watermark = _source_watermark(
-                    dependency, fallback=captured_at
-                )
-                position_scope.append(
-                    f"{dependency_name}[{dependency_state}] "
-                    + _source_locator(
-                        source=dependency,
-                        source_name=dependency_name,
-                        repo=repo,
-                        task_id=task_id,
-                        fallback=f"/api/cockpit/registry#{dependency_name}",
-                    )
-                    + f" @ {dependency_read}"
-                )
-            parts.append("Position source scope: " + "; ".join(position_scope) + ".")
+        position_detail.append("Position source scope: " + "; ".join(position_scope) + ".")
+        dependencies_fresh = source_state == "fresh" and all(
+            dependency_state == "fresh" and has_watermark
+            for _dependency_name, dependency_state, has_watermark in dependency_states
+        )
+        if dependencies_fresh:
+            parts.append(f"Observed chain position: {position}.")
+            parts.extend(position_detail)
+        else:
+            unresolved_dependencies = ", ".join(
+                f"{dependency_name} ({dependency_state})"
+                for dependency_name, dependency_state, has_watermark in dependency_states
+                if dependency_state != "fresh" or not has_watermark
+            )
+            position_limitation = (
+                "Observed chain position is unknown because its source dependencies are not fresh: "
+                + (unresolved_dependencies or "dispatcher-store")
+                + ". "
+                + " ".join(position_detail)
+            )
     if observed_at:
         parts.append(f"Observed update time: {observed_at}.")
     unresolved = _nonblank(item.get("position_unresolved_reason"))
     limitations: list[str] = []
+    if position_limitation:
+        limitations.append(position_limitation)
     if unresolved:
         limitations.append(f"Observed chain position is unknown: {unresolved}")
     if not parts:
@@ -464,7 +495,7 @@ def _work_context_evidence(
                 linkage=linkage,
                 captured_at=source_captured,
                 read_watermark=source_watermark,
-                limitation=None if claim else limitations[0],
+                limitation=position_limitation or (None if claim else limitations[0]),
             )
         ],
         limitations,

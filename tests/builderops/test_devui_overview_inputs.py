@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
 
+import pytest
+
+from app.builderops.cockpit_github_plane import (
+    GithubIssue,
+    GithubLiveSnapshot,
+    GithubPull,
+    GithubReadError,
+)
+from app.builderops.cockpit_registry import build_registry
+from app.builderops.devui_composition import _cockpit_contribution
 from app.builderops.devui_overview_inputs import derive_overview_inputs
+from app.dispatcher.models import TaskRecord
+from app.dispatcher.store import SqliteStore
 
 
 GENERATED_AT = "2026-08-22T12:00:00+00:00"
 UPDATED_AT = "2026-08-22T11:59:00+00:00"
+PRODUCER_REPO = "RasmusTho/agentic-pkm-mvp"
 
 
 def _item(*, number: int = 4834, title: str = "Cockpit source title") -> dict:
@@ -159,6 +174,80 @@ def _context_work_provider(*, item: dict, docs_state: str = "fresh") -> dict:
         ]
     )
     return provider
+
+
+def _producer_snapshot(*, read_at: str, pull: bool) -> GithubLiveSnapshot:
+    return GithubLiveSnapshot(
+        read_at=read_at,
+        issues={
+            5599: GithubIssue(
+                number=5599,
+                title="Contextual work",
+                state="open",
+                html_url=f"https://github.com/{PRODUCER_REPO}/issues/5599",
+            )
+        },
+        pulls=(
+            {
+                5603: GithubPull(
+                    number=5603,
+                    title="Governing-Issue: #5599",
+                    state="open",
+                    html_url=f"https://github.com/{PRODUCER_REPO}/pull/5603",
+                    head_sha="a" * 40,
+                    head_ref="codex/issue-5599-devui",
+                    governing_issue=5599,
+                )
+            }
+            if pull
+            else {}
+        ),
+    )
+
+
+def _producer_payload(
+    tmp_path: Path,
+    *,
+    updated_at: str | None,
+    snapshot: GithubLiveSnapshot | None = None,
+    github_failure: bool = False,
+) -> dict:
+    db_path = tmp_path / "dispatcher.sqlite3"
+    store = SqliteStore(db_path)
+    store.initialize()
+    stamp = updated_at or "not-a-timestamp"
+    store.upsert_task(
+        TaskRecord(
+            task_id="task-5599",
+            issue_number=5599,
+            title="Contextual work",
+            status="claimed",
+            priority="high",
+            source_anchor_refs=[],
+            created_at="2020-01-01T00:00:00+00:00",
+            updated_at=stamp,
+            repo=PRODUCER_REPO,
+            claimed_by="registered-holder",
+        )
+    )
+
+    def reader(repo: str) -> GithubLiveSnapshot:
+        assert repo == PRODUCER_REPO
+        if github_failure:
+            raise GithubReadError("fixture read failed")
+        assert snapshot is not None
+        return snapshot
+
+    return build_registry(
+        db_path=db_path,
+        deploy_receipt_dir=tmp_path / "deploys",
+        github_repo=PRODUCER_REPO,
+        github_reader=reader,
+    )
+
+
+def _producer_overview_inputs(payload: dict) -> dict:
+    return derive_overview_inputs(work_provider=_cockpit_contribution(lambda: payload))
 
 
 def test_adapter_is_pure_and_admits_only_trusted_unique_working_band() -> None:
@@ -339,6 +428,184 @@ def test_owner_context_preserves_independent_source_withdrawals() -> None:
     assert any("does not authorize execution" in limitation for limitation in candidate["limitations"])
     assert next_step["source_ref"]["version"] != GENERATED_AT
     assert any("unknown" in limitation.lower() for limitation in candidate["limitations"])
+
+
+def test_owner_context_preserves_independent_source_withdrawals_from_producers(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    fresh_open_old = _producer_payload(
+        tmp_path / "fresh-open-old",
+        updated_at="2020-01-01T00:00:00+00:00",
+        snapshot=_producer_snapshot(read_at=now, pull=True),
+    )
+    fresh_open_missing = _producer_payload(
+        tmp_path / "fresh-open-missing",
+        updated_at=None,
+        snapshot=_producer_snapshot(read_at=now, pull=True),
+    )
+    candidate = _producer_overview_inputs(fresh_open_old)["now"][0]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    assert any("registered-holder" in claim and "claimed" in claim for claim in claims)
+    assert any("Observed chain position: in_progress" in claim for claim in claims)
+    assert (
+        fresh_open_old["bands"][0]["items"][0]["position_evidence"]["open_authority_work"]
+        == 5603
+    )
+    missing_item = fresh_open_missing["bands"][0]["items"][0]
+    assert missing_item["position_evidence"]["last_movement_at"] is None
+    assert missing_item["position_evidence"]["open_authority_work"] == 5603
+
+    stale_open = _producer_payload(
+        tmp_path / "stale-open",
+        updated_at="2020-01-01T00:00:00+00:00",
+        snapshot=_producer_snapshot(read_at="2020-01-01T00:00:00+00:00", pull=True),
+    )
+    stale_candidate = _producer_overview_inputs(stale_open)["now"][0]
+    stale_claims = [entry["claim"] for entry in stale_candidate["evidence"] if entry["claim"]]
+    assert any("registered-holder" in claim and "claimed" in claim for claim in stale_claims)
+    assert not any("Observed chain position: in_progress" in claim for claim in stale_claims)
+    assert any(
+        "github-live[stale]" in limitation
+        and '"open_authority_work":5603' in limitation
+        and "@ 2020-01-01T00:00:00+00:00" in limitation
+        for limitation in stale_candidate["limitations"]
+    )
+
+    recent_no_pr = _producer_payload(
+        tmp_path / "recent-no-pr",
+        updated_at=now,
+        snapshot=_producer_snapshot(read_at=now, pull=False),
+    )
+    recent_candidate = _producer_overview_inputs(recent_no_pr)["now"][0]
+    recent_claims = [entry["claim"] for entry in recent_candidate["evidence"] if entry["claim"]]
+    assert any("Observed chain position: in_progress" in claim for claim in recent_claims)
+    assert not any(
+        "Observed chain position is unknown" in limitation
+        for limitation in recent_candidate["limitations"]
+    )
+
+    unavailable_recent = _producer_payload(
+        tmp_path / "unavailable-recent",
+        updated_at=now,
+        github_failure=True,
+    )
+    unavailable_candidate = _producer_overview_inputs(unavailable_recent)["now"][0]
+    unavailable_claims = [
+        entry["claim"] for entry in unavailable_candidate["evidence"] if entry["claim"]
+    ]
+    assert any("Observed chain position: in_progress" in claim for claim in unavailable_claims)
+    assert any(
+        source["name"] == "github-live" and source["state"] == "unavailable"
+        for source in unavailable_recent["sources"]
+    )
+
+    forgotten = _producer_payload(
+        tmp_path / "forgotten",
+        updated_at="2020-01-01T00:00:00+00:00",
+        github_failure=True,
+    )
+    assert _producer_overview_inputs(forgotten)["now"] == []
+    assert next(band for band in forgotten["bands"] if band["key"] == "forgotten")["items"]
+
+    missing_movement = _producer_payload(
+        tmp_path / "missing-movement",
+        updated_at=None,
+        github_failure=True,
+    )
+    assert _producer_overview_inputs(missing_movement)["now"] == []
+    assert missing_movement["unclassified"]
+
+
+@pytest.mark.parametrize("github_state", ["stale", "unavailable", "empty"])
+def test_owner_context_withdraws_github_backed_position_when_github_is_not_fresh(
+    github_state: str,
+) -> None:
+    item = _context_item(
+        position_evidence={
+            "dispatcher_status": "claimed",
+            "last_movement_at": UPDATED_AT,
+            "open_authority_work": 5603,
+        }
+    )
+    provider = _context_work_provider(item=item)
+    github = next(
+        source for source in provider["payload"]["sources"] if source["name"] == "github-live"
+    )
+    github["state"] = github_state
+    if github_state == "unavailable":
+        github["last_successful_read"] = None
+
+    candidate = derive_overview_inputs(work_provider=provider)["now"][0]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    work = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "dispatcher-store"
+    )
+    assert any("registered-holder" in claim and "claimed" in claim for claim in claims)
+    assert not any("Observed chain position: in_progress" in claim for claim in claims)
+    position_limitation = next(
+        limitation
+        for limitation in candidate["limitations"]
+        if "Observed chain position is unknown" in limitation
+    )
+    assert f"github-live[{github_state}]" in position_limitation
+    assert '"open_authority_work":5603' in position_limitation
+    assert "github-rest:RasmusTho/agentic-pkm-mvp@" in position_limitation
+    assert (
+        GENERATED_AT if github_state in {"stale", "empty"} else "@ unknown"
+    ) in position_limitation
+    assert work["source_ref"]["version"] == UPDATED_AT
+    assert work["limitation"] == position_limitation
+
+
+def test_owner_context_withdraws_github_backed_position_when_github_is_missing() -> None:
+    item = _context_item(
+        position_evidence={
+            "dispatcher_status": "claimed",
+            "last_movement_at": UPDATED_AT,
+            "open_authority_work": 5603,
+        }
+    )
+    provider = _context_work_provider(item=item)
+    provider["payload"]["sources"] = [
+        source
+        for source in provider["payload"]["sources"]
+        if source["name"] != "github-live"
+    ]
+
+    candidate = derive_overview_inputs(work_provider=provider)["now"][0]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    assert any("registered-holder" in claim and "claimed" in claim for claim in claims)
+    assert not any("Observed chain position: in_progress" in claim for claim in claims)
+    position_limitation = next(
+        limitation
+        for limitation in candidate["limitations"]
+        if "Observed chain position is unknown" in limitation
+    )
+    assert "github-live[unavailable] /api/cockpit/registry#github-live" in position_limitation
+    assert '"open_authority_work":5603' in position_limitation
+
+
+def test_owner_context_keeps_dispatcher_only_position_when_github_is_unavailable() -> None:
+    item = _context_item(
+        position_evidence={
+            "dispatcher_status": "claimed",
+            "open_authority_work": None,
+        }
+    )
+    provider = _context_work_provider(item=item)
+    provider["payload"]["sources"] = [
+        source
+        for source in provider["payload"]["sources"]
+        if source["name"] != "github-live"
+    ]
+
+    candidate = derive_overview_inputs(work_provider=provider)["now"][0]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    assert any("Observed chain position: in_progress" in claim for claim in claims)
+    assert not any("Observed chain position is unknown" in limitation for limitation in candidate["limitations"])
 
 
 def test_owner_context_does_not_infer_execution_permission_or_maturity() -> None:

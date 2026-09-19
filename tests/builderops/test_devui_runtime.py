@@ -532,7 +532,7 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
     )
 
 
-def test_managed_overview_exposes_owner_work_context(managed_sources) -> None:
+def test_managed_overview_exposes_owner_work_context(managed_sources, monkeypatch) -> None:
     source = managed_sources
     row = source.tasks[0]
     stamp = row["updated_at"]
@@ -602,6 +602,62 @@ def test_managed_overview_exposes_owner_work_context(managed_sources) -> None:
         "does not authorize execution" in limitation
         for limitation in withdrawn_candidate["limitations"]
     )
+
+    # The live PR is a positive position edge, so an old retained GitHub
+    # snapshot withdraws only that edge while the dispatcher holder/status
+    # remain source-declared. A fresh read restores the same candidate and
+    # position through the same managed API -> composition -> Overview path.
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+
+    from app.builderops import devui_sources
+
+    original_github_reader = devui_sources.cockpit_github_plane.default_github_reader
+
+    def stale_github_reader(repository):
+        snapshot = original_github_reader(repository)
+        return replace(
+            snapshot,
+            read_at=(datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
+        )
+
+    monkeypatch.setattr(
+        devui_sources.cockpit_github_plane,
+        "default_github_reader",
+        stale_github_reader,
+    )
+    with source.client() as client:
+        stale_payload = client.get("/api/devui/overview").json()
+    stale_candidate = stale_payload["now"][0]
+    stale_github = _managed_source(stale_payload, "github-live")
+    stale_claims = [entry["claim"] for entry in stale_candidate["evidence"] if entry["claim"]]
+    assert stale_github["state"] == "stale"
+    assert stale_candidate["subject_ref"] == candidate["subject_ref"]
+    assert len(stale_candidate["evidence"]) == len(candidate["evidence"])
+    assert any("fixture-registered-holder" in claim and "claimed" in claim for claim in stale_claims)
+    assert not any("Observed chain position: in_progress" in claim for claim in stale_claims)
+    assert any(
+        "Observed chain position is unknown" in limitation
+        and "github-live[stale]" in limitation
+        and '"open_authority_work":502' in limitation
+        and stale_github["last_successful_read"] in limitation
+        for limitation in stale_candidate["limitations"]
+    )
+
+    monkeypatch.setattr(
+        devui_sources.cockpit_github_plane,
+        "default_github_reader",
+        original_github_reader,
+    )
+    with source.client() as client:
+        fresh_payload = client.get("/api/devui/overview").json()
+    fresh_candidate = fresh_payload["now"][0]
+    fresh_claims = [entry["claim"] for entry in fresh_candidate["evidence"] if entry["claim"]]
+    assert _managed_source(fresh_payload, "github-live")["state"] == "fresh"
+    assert fresh_candidate["subject_ref"] == candidate["subject_ref"]
+    assert len(fresh_candidate["evidence"]) == len(candidate["evidence"])
+    assert any("fixture-registered-holder" in claim and "claimed" in claim for claim in fresh_claims)
+    assert any("Observed chain position: in_progress" in claim for claim in fresh_claims)
 
 
 def test_managed_overview_keeps_unprojectable_tasks_explicit(managed_sources) -> None:
