@@ -16,11 +16,11 @@ ROUTES = {
 }
 # Exact reviewed managed candidate bytes; historical Companion assets remain separate.
 ASSET_SHA256 = {
-    "devui.css": "833dbf1d2cc70ecbcda13e3bf5d1c4091a3657d1fb636bd3978b3f7cbf43d635",
+    "devui.css": "9bd853fe5007b960d58525a5029f3a2687fdeab5aae161363ec944f19be4a36a",
     "focus.html": "ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
     "focus.js": "5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
     "overview.html": "71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
-    "overview.js": "2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b",
+    "overview.js": "a6c860f4c27acda9ca86128f0a77cbf9243e26c3e360a3f3d8af77a0011e6889",
 }
 INVENTORY_SHA256 = (
     "sha256:"

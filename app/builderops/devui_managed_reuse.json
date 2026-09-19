@@ -1,11 +1,11 @@
 {
-  "payload_sha256": "sha256:09b34d0d7f099307e7f30bbd9be87ccd6d99a38cf41b0cd4c4e14f0ffb6ca82b",
+  "payload_sha256": "sha256:bcdf16afec4e2c9fd9251b360f4aa2cce94b41b717b59518c6321edb876079b4",
   "provenance_payload": {
     "contract_version": "yggdrasil-constrained-reuse.v1",
-    "repository_commit": "725737c204e3494695fdc464f781967f1d156449",
+    "repository_commit": "e1d5fcfce5ca78e66d262f7dbeba7d5c40256592",
     "authorship": {
-      "author_identity": "codex-issue-5522",
-      "created_at": "2026-09-13T12:39:25.938760+00:00"
+      "author_identity": "codex-devui-5596-recovery-01a0b900",
+      "created_at": "2026-09-19T10:03:17Z"
     },
     "authority_claims": {
       "live_design_system_selection": "not_claimed",
@@ -19,7 +19,7 @@
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
         "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
         "source_role": "component",
-        "content_sha256": "sha256:9094a547edafcc6bff80f82ddae3b57975cb98890a7b5d2d3a79fac35f6bc8f3"
+        "content_sha256": "sha256:3746cb7f951b674af7d07c67715a3274b2c814ee4d9af87052b9b323e2fb996d"
       },
       {
         "source_id": "source-focus.html",
@@ -47,7 +47,7 @@
         "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
         "stable_ref": "entire shipped file: all selectors, rendering, navigation, state and accessibility behavior",
         "source_role": "pattern",
-        "content_sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b"
+        "content_sha256": "sha256:a6c860f4c27acda9ca86128f0a77cbf9243e26c3e360a3f3d8af77a0011e6889"
       },
       {
         "source_id": "source-cockpit-wrap",
@@ -422,11 +422,11 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
-        "content_sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b"
+        "content_sha256": "sha256:a6c860f4c27acda9ca86128f0a77cbf9243e26c3e360a3f3d8af77a0011e6889"
       },
       {
         "target_path": "app/builderops/devui_managed.css",
-        "content_sha256": "sha256:833dbf1d2cc70ecbcda13e3bf5d1c4091a3657d1fb636bd3978b3f7cbf43d635"
+        "content_sha256": "sha256:9bd853fe5007b960d58525a5029f3a2687fdeab5aae161363ec944f19be4a36a"
       }
     ],
     "zero_novel_visual_language": {
@@ -813,15 +813,5 @@
         "evidence_sha256": "sha256:eb574d75f7cd657560dc73bf1dd18de0e6b78cb477932cce19009127549d9bb6"
       }
     ]
-  },
-  "independent_review": {
-    "reviewer_identity": "codex-runtime:01a09aef-8404-7911-bdb1-efda4bb2e07a",
-    "independent_from_author": true,
-    "independence_basis": "Fresh read-only review context. Observed CODEX_THREAD_ID and CODEX_SESSION_ID match this identity, distinct from codex-issue-5522 and both supplied prior reviewers. No authorship or delegation. Retained unchanged evidence by identity comparison; independently inspected changed bindings, assertions, results and captures.",
-    "reviewed_at": "2026-09-13T13:28:50Z",
-    "reviewed_payload_sha256": "sha256:09b34d0d7f099307e7f30bbd9be87ccd6d99a38cf41b0cd4c4e14f0ffb6ca82b",
-    "verdict": "pass",
-    "findings": []
-  },
-  "receipt_sha256": "sha256:8bd73f5509562d883ba056e883ece98e3759648e2f2915e65dcab558f6b33862"
+  }
 }
