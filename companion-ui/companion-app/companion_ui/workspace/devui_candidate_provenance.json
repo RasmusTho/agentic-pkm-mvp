@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "41a2bf636734af88293dddcbf5866d2c418873f3",
+    "tree": "3db9787566cbf7945e16612ce89d7502065619fa",
     "inventory": {
       "devui.css": "20fddd9d9462d181cb648411e7302781234e6000",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
       "focus.js": "2a11e4a04f204d1bca615a269757c06b380160e4",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
-      "overview.js": "0a5d29b7c4648576f70ae23e827483f3c0aa00c4"
+      "overview.js": "bf61c7f1bbe22b54f658f59886134ac892a3260b"
     }
   },
   "transform_allowlist": [
@@ -342,6 +342,26 @@
         "summary.dataset.testid = \"devui-technical-disclosure\";"
       ],
       "exact_rule": "Reuse the immutable Cockpit cardMarkup details/summary disclosure structure and bound keyboard interaction; adapt only the owner-language content renderer and finite technical disclosure wrapper, preserving GET-only/no-egress behavior."
+    },
+    {
+      "issue": 5595,
+      "transformation_id": "issue-5595-trust-frame-compact-disclosure",
+      "kind": "interaction_binding",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+      "source_commit": "dd928a5746f9c841a214d2da45ec2bf603e017a0",
+      "source_sha256": "sha256:44dcc72f6ad26eb6f5eb802dfa3c8cb1b981d8f864e5b017af8d54f8995750f9",
+      "source_git_blob_oid": "0a5d29b7c4648576f70ae23e827483f3c0aa00c4",
+      "source_anchors": [
+        "function providerStates(parent, value) {",
+        "function matrix(parent, value) {",
+        "const trust = document.querySelector('[data-testid=\"overview-trust-matrix\"]');"
+      ],
+      "candidate_anchors": [
+        "function trustSummary(parent, value) {",
+        "function renderTrustFrame(parent, value) {",
+        "const label = text(details, \"summary\", \"Inspect trust frame\");"
+      ],
+      "exact_rule": "Preserve the existing trust_frame payload and provider-state vocabulary; bind the existing native details/summary disclosure to a compact source count and keep each source-declared refused provider visible at Glance. Defer complete provider fields only inside the disclosure, without reclassifying detached metadata, inferring freshness/degradation, changing source/API/schema behavior, or adding a visual or authority pattern."
     }
   ]
 }

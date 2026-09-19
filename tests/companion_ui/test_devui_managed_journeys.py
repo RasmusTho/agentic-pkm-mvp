@@ -33,6 +33,7 @@ ORIGIN = "http://127.0.0.1:8113"
 FOCUS = "/devui/focus?subject=github%3Aexample%2Ffixture%23501"
 EXPECTED_DISCLOSURE_SUMMARIES = {
     "overview": [
+        "Inspect trust frame",
         "Inspect subject source details",
         "Inspect evidence details",
     ],
@@ -226,7 +227,13 @@ def _capture(page, name):
         (path / (name + ".aria.txt")).write_text(page.locator("body").aria_snapshot())
 
 
-def _keyboard_navigation(page, surface, *, navigate=True):
+def _keyboard_navigation(
+    page,
+    surface,
+    *,
+    navigate=True,
+    expected_provider_identity: list[dict[str, object]] | None = None,
+):
     """Prove the finite fixture-bound disclosure inventory plus route link."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
     name = "Open Focus" if surface == "overview" else "Return to Overview"
@@ -237,9 +244,49 @@ def _keyboard_navigation(page, surface, *, navigate=True):
     assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries, (
         "Only the admitted navigation and disclosures are keyboard interactive"
     )
+    provider_identity = None
     if surface == "overview":
+        provider_inventory = page.evaluate(
+            """expectedProviderIdentity => {
+                const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
+                const frame = document.querySelector('[data-testid="overview-trust-frame"]');
+                const details = trust && trust.querySelector(':scope > details.technical-disclosure');
+                const providers = details
+                    ? Array.from(details.querySelectorAll(':scope > section.provider-state'))
+                    : [];
+                const identity = providers.map(section => ({
+                    role: section.dataset.providerRole,
+                    rows: Array.from(section.querySelectorAll(':scope > ul.rungs > li')).map(row => [
+                        row.querySelector(':scope > b')?.textContent,
+                        row.querySelector(':scope > code')?.textContent,
+                    ]),
+                }));
+                const checks = {
+                    trust_parent: Boolean(frame && trust && details && frame.children.length === 2 &&
+                        frame.children[0].matches('h2') && frame.children[1] === trust && trust.parentElement === frame &&
+                        trust.children.length === 2 &&
+                        trust.children[0].classList.contains('owner-summary') && trust.children[1] === details &&
+                        details.children.length === providers.length + 1 && providers.length > 0 &&
+                        details.children[0].matches('summary') &&
+                        Array.from(details.children).slice(1).every(child => child.matches('section.provider-state'))),
+                    provider_identity: expectedProviderIdentity === null ||
+                        JSON.stringify(identity) === JSON.stringify(expectedProviderIdentity),
+                    matrix_parent: Array.from(document.querySelectorAll('[data-testid="overview-trust-matrix"] .matrix'))
+                        .every(matrix => matrix.parentElement === details),
+                };
+                return {ok: Object.values(checks).every(Boolean), checks, identity};
+            }""",
+            expected_provider_identity,
+        )
+        assert provider_inventory["ok"], (
+            "Only the admitted navigation and disclosures are keyboard interactive: "
+            + repr(provider_inventory["checks"])
+        )
+        provider_identity = provider_inventory["identity"]
         assert page.evaluate(
             """() => {
+                const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
+                const trustSummary = trust && trust.querySelector(':scope > details.technical-disclosure');
                 const card = document.querySelector('[data-testid="overview-now"] > article.card');
                 const body = card && card.querySelector(':scope > .body');
                 const subject = body && body.querySelector(':scope > details.technical-disclosure');
@@ -259,7 +306,12 @@ def _keyboard_navigation(page, surface, *, navigate=True):
                         .find(item => item.querySelector(':scope > b')?.textContent === key);
                     return row ? row.querySelector(':scope > code')?.textContent : null;
                 };
-                return Boolean(card && body && subject && evidence && evidenceDetails && link) &&
+                return Boolean(trust && trustSummary && trustSummary.children.length >= 2 &&
+                    trustSummary.children[0].matches('summary') &&
+                    Array.from(trustSummary.children).slice(1).every(child => child.matches('section.provider-state')) &&
+                    trust.children.length === 2 && trust.children[0].classList.contains('owner-summary') &&
+                    trust.children[1] === trustSummary &&
+                    card && body && subject && evidence && evidenceDetails && link) &&
                     card.children[2] === body && card.lastElementChild === link &&
                     link.parentElement === card && link.matches('a[data-testid="overview-focus-link"]') &&
                     controlChildren.length === 2 && controlChildren[0] === subject &&
@@ -361,9 +413,11 @@ def _keyboard_navigation(page, surface, *, navigate=True):
             };
             const expected = inventory.surface === 'overview'
                 ? (() => {
+                    const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
                     const card = document.querySelector('[data-testid="overview-now"] > article.card');
                     const body = card && card.querySelector(':scope > .body');
                     return [
+                        trust && trust.querySelector(':scope > details.technical-disclosure > summary'),
                         body && body.querySelector(':scope > details.technical-disclosure > summary'),
                         body && body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
                         card && card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
@@ -441,6 +495,7 @@ def _keyboard_navigation(page, surface, *, navigate=True):
     if surface == "overview":
         card = page.locator('[data-testid="overview-now"] > article.card')
         expected_focus = [
+            page.locator('[data-testid="overview-trust-matrix"] details.technical-disclosure > summary'),
             card.locator(':scope > .body > details.technical-disclosure > summary'),
             card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
             card.locator(':scope > a[data-testid="overview-focus-link"]'),
@@ -463,6 +518,7 @@ def _keyboard_navigation(page, surface, *, navigate=True):
         page.keyboard.press("Enter")
         page.wait_for_url(ORIGIN + destination)
         _loaded(page, "focus" if surface == "overview" else "overview")
+    return provider_identity
 
 
 @pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
@@ -477,6 +533,16 @@ def _keyboard_navigation(page, surface, *, navigate=True):
         "disclosure_misplaced",
         "body_after_focus",
         "summary_editable",
+        "trust_additional",
+        "trust_substituted",
+        "trust_moved",
+        "trust_duplicated",
+        "trust_editable",
+        "trust_lookalike",
+        "trust_provider_substituted",
+        "trust_provider_reversed",
+        "trust_provider_dropped",
+        "trust_matrix_moved",
         "evidence_after_body",
         "navigation_nested_in_evidence",
         "governing_entries_swapped",
@@ -495,7 +561,7 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     ):
         page.goto(ORIGIN + path)
         _loaded(page, surface)
-        _keyboard_navigation(page, surface, navigate=False)
+        expected_provider_identity = _keyboard_navigation(page, surface, navigate=False)
         # Fault injection into the actual production-served DOM, not a substitute page.
         page.evaluate("""kind => {
             const card = document.querySelector('[data-testid="overview-now"] > article.card');
@@ -590,7 +656,71 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
                 return;
             }
             if (kind === 'summary_editable') {
-                document.querySelector('details.technical-disclosure > summary').contentEditable = 'true';
+                const target = card
+                    ? card.querySelector(':scope > .body > details.technical-disclosure > summary')
+                    : document.querySelector('[data-testid="focus-governing-sources"] details.technical-disclosure > summary');
+                if (target) target.contentEditable = 'true';
+                return;
+            }
+            if (kind.startsWith('trust_')) {
+                const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
+                const details = trust && trust.querySelector(':scope > details.technical-disclosure');
+                if (!trust || !details) {
+                    const existing = document.querySelector('details.technical-disclosure');
+                    if (kind === 'trust_editable' && existing) {
+                        existing.querySelector(':scope > summary').contentEditable = 'true';
+                    } else if (kind === 'trust_moved' && existing) {
+                        document.querySelector('main').append(existing);
+                    } else {
+                        const unexpected = document.createElement('details');
+                        unexpected.className = 'technical-disclosure';
+                        const summary = document.createElement('summary');
+                        summary.textContent = 'Unexpected trust control';
+                        unexpected.append(summary, document.createElement('p'));
+                        document.querySelector('main').append(unexpected);
+                    }
+                    return;
+                }
+                if (kind === 'trust_additional') {
+                    trust.append(details.cloneNode(true));
+                } else if (kind === 'trust_substituted') {
+                    const replacement = document.createElement('details');
+                    replacement.className = 'technical-disclosure';
+                    const summary = document.createElement('summary');
+                    summary.textContent = 'Inspect trust frame';
+                    replacement.append(summary, document.createElement('p'));
+                    trust.replaceChild(replacement, details);
+                } else if (kind === 'trust_moved') {
+                    document.querySelector('main').append(details);
+                } else if (kind === 'trust_duplicated') {
+                    trust.append(details.cloneNode(true));
+                } else if (kind === 'trust_editable') {
+                    details.querySelector(':scope > summary').contentEditable = 'true';
+                } else if (kind === 'trust_lookalike') {
+                    const lookalike = document.createElement('div');
+                    lookalike.className = 'technical-disclosure';
+                    lookalike.textContent = 'Inspect trust frame';
+                    trust.append(lookalike);
+                } else if (kind === 'trust_provider_substituted') {
+                    const providers = details.querySelectorAll(':scope > section.provider-state');
+                    if (providers[0]) {
+                        const replacement = providers[0].cloneNode(true);
+                        replacement.dataset.providerRole = 'substituted-provider';
+                        const row = Array.from(replacement.querySelectorAll(':scope > ul.rungs > li'))
+                            .find(item => item.querySelector(':scope > b')?.textContent === 'provider');
+                        if (row) row.querySelector(':scope > code').textContent = 'substituted_provider';
+                        details.replaceChild(replacement, providers[0]);
+                    }
+                } else if (kind === 'trust_provider_reversed') {
+                    const providers = details.querySelectorAll(':scope > section.provider-state');
+                    if (providers.length > 1) details.insertBefore(providers[1], providers[0]);
+                } else if (kind === 'trust_provider_dropped') {
+                    const providers = details.querySelectorAll(':scope > section.provider-state');
+                    if (providers.length > 1) providers[providers.length - 1].remove();
+                } else if (kind === 'trust_matrix_moved') {
+                    const frame = document.querySelector('[data-testid="overview-trust-frame"]');
+                    frame.before(trust);
+                }
                 return;
             }
             const el = document.createElement(kind === 'disclosure' ? 'details' :
@@ -608,7 +738,12 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
             document.querySelector('main').append(el);
         }""", action)
         with pytest.raises(AssertionError, match="Only the admitted navigation"):
-            _keyboard_navigation(page, surface, navigate=False)
+            _keyboard_navigation(
+                page,
+                surface,
+                navigate=False,
+                expected_provider_identity=expected_provider_identity,
+            )
         assert page.url == ORIGIN + path
         assert all(method == "GET" for method, _ in requests)
         assert not external and not errors and not console

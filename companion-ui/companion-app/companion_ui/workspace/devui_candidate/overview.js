@@ -175,6 +175,39 @@ function providerStates(parent, value) {
   });
 }
 
+function trustSummary(parent, value) {
+  const states = Array.isArray(value && value.provider_states) ? value.provider_states : [];
+  const summary = document.createElement("div");
+  summary.className = "owner-summary";
+  const count = document.createElement("p");
+  count.className = "owner-fact";
+  text(count, "b", "Provider sources");
+  text(count, "span", String(states.length));
+  summary.appendChild(count);
+  const refused = states
+    .filter((state) => state && state.status === "refused")
+    .map((state) => state.role || state.provider || "unknown provider");
+  if (refused.length) {
+    text(
+      summary,
+      "p",
+      `Source refused the read: ${refused.join(", ")}.`,
+      "owner-warning",
+    );
+  }
+  parent.appendChild(summary);
+}
+
+function renderTrustFrame(parent, value) {
+  trustSummary(parent, value);
+  const details = document.createElement("details");
+  details.className = "technical-disclosure";
+  const label = text(details, "summary", "Inspect trust frame");
+  label.dataset.testid = "devui-technical-disclosure";
+  providerStates(details, value);
+  parent.appendChild(details);
+}
+
 function matrix(parent, value) {
   providerStates(parent, value);
   const axes = AXES.filter((axis) => Object.prototype.hasOwnProperty.call(value || {}, axis));
@@ -276,7 +309,7 @@ fetch("/api/devui/overview", {method: "GET", cache: "no-store"}).then(async (res
   const shell = document.querySelector('[data-testid="overview-shell"]');
   shell.dataset.serverState = "loaded";
   const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
-  matrix(trust, payload.trust_frame || {});
+  renderTrustFrame(trust, payload.trust_frame || {});
   renderZone("overview-now", payload.now || []);
   renderZone("overview-needs-you", payload.needs_you || []);
   renderZone("overview-ready-to-try", payload.ready_to_try || []);

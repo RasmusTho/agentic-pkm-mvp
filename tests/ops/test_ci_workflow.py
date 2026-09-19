@@ -34,6 +34,14 @@ OVERVIEW_REQUIRED_NODEIDS = (
 )
 OVERVIEW_PR_REQUIRED_NODEIDS = OVERVIEW_REQUIRED_NODEIDS + (
     f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_trust_frame_default_view_is_compact",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_now_band_visible_above_fold_on_mobile_viewport",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_trust_frame_expansion_preserves_all_provider_fields",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_trust_frame_surfaces_degraded_provider_at_glance_depth",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
     "test_overview_evidence_axes_reflow_in_narrow_rail_column",
     f"{OVERVIEW_JOURNEY_MODULE}::"
     "test_overview_evidence_axes_render_exactly_once_per_entry",
@@ -580,6 +588,34 @@ def test_browser_runtime_pr_requires_non_skipped_overview_regressions(
         )
         assert (result.returncode == 0) is should_pass
         assert expected_error in result.stderr
+
+
+def test_browser_runtime_managed_inventory_covers_trust_frame_hostile_cases() -> None:
+    step = _workflow_step(
+        _browser_text(),
+        "Run standalone managed Overview and Focus journeys",
+        "Retain standalone managed browser evidence",
+    )
+    for action in (
+        "trust_additional",
+        "trust_substituted",
+        "trust_moved",
+        "trust_duplicated",
+        "trust_editable",
+        "trust_lookalike",
+        "trust_provider_substituted",
+        "trust_provider_reversed",
+        "trust_provider_dropped",
+        "trust_matrix_moved",
+    ):
+        for surface in (
+            "overview-/devui/overview",
+            "focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501",
+        ):
+            assert (
+                "test_managed_keyboard_proof_rejects_unexpected_interactive_action["
+                f"{action}-{surface}]"
+            ) in step
 
 
 def test_browser_runtime_dispatch_uploads_exact_sha_overview_evidence(

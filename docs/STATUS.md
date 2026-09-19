@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-14 (bounded DevUI owner-fact producer writeback; repository evidence only)
+Last reviewed: 2026-09-19 (bounded DevUI #5595 trust-frame presentation writeback; repository evidence only)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -51,6 +51,13 @@ raw source/evidence identifiers, timestamps, and unknown fields remain reachable
 native details/summary controls. The managed keyboard/accessibility proof admits only the bound
 disclosures and existing route links while rejecting injected controls. This client rendering change
 does not expand source, schema, API, persistence, deployment, host, or owner-acceptance claims.
+
+2026-09-19 bounded trust-frame compact disclosure writeback (#5595; repository evidence only):
+Overview first paint shows a compact provider count and keeps source-declared refused reads visible
+at Glance; complete provider fields remain under the native trust-frame disclosure. Candidate and
+managed journey guards bind the admitted provider identities, order, cardinality, and trust-frame
+parent placement. This client rendering change does not expand source, schema, API, persistence,
+deployment, host, or owner-acceptance claims.
 
 - The pure `devui-overview-view.v1` server-side composer derives the nonvisual Overview from
   `devui.composition.v1`, explicit producer evidence, and typed root references. It preserves

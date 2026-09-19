@@ -73,6 +73,10 @@ jobs:
             tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract \
             tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification \
             tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_trust_frame_default_view_is_compact \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_now_band_visible_above_fold_on_mobile_viewport \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_trust_frame_expansion_preserves_all_provider_fields \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_trust_frame_surfaces_degraded_provider_at_glance_depth \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_reflow_in_narrow_rail_column \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_render_exactly_once_per_entry \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport \
@@ -100,6 +104,14 @@ jobs:
               "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
               f"{TEST_MODULE}::"
               "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+              f"{TEST_MODULE}::"
+              "test_overview_trust_frame_default_view_is_compact",
+              f"{TEST_MODULE}::"
+              "test_overview_now_band_visible_above_fold_on_mobile_viewport",
+              f"{TEST_MODULE}::"
+              "test_overview_trust_frame_expansion_preserves_all_provider_fields",
+              f"{TEST_MODULE}::"
+              "test_overview_trust_frame_surfaces_degraded_provider_at_glance_depth",
               f"{TEST_MODULE}::"
               "test_overview_evidence_axes_reflow_in_narrow_rail_column",
               f"{TEST_MODULE}::"
@@ -265,7 +277,7 @@ jobs:
               )
           PY
 
-      # #5522: actual independent production listener; external source fixtures
+      # #5522/#5595: actual independent production listener; external source fixtures
       # remain separate from the historical authenticated five-node inventory.
       - name: Run standalone managed Overview and Focus journeys
         env:
@@ -315,6 +327,26 @@ jobs:
               "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_prepended_into_other_entry-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
               "test_managed_keyboard_proof_rejects_unexpected_interactive_action[return_outside_claim-overview-/devui/overview]",
               "test_managed_keyboard_proof_rejects_unexpected_interactive_action[return_outside_claim-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_additional-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_additional-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_substituted-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_substituted-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_moved-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_moved-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_duplicated-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_duplicated-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_editable-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_editable-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_lookalike-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_lookalike-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_provider_substituted-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_provider_substituted-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_provider_reversed-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_provider_reversed-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_provider_dropped-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_provider_dropped-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_matrix_moved-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[trust_matrix_moved-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
           }
           assert len(cases) == len(expected)
           assert {case.get("name") for case in cases} == expected
