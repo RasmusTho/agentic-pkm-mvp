@@ -284,7 +284,9 @@ def _keyboard_navigation(
                 }));
                 const evidenceIdentity = entry => {
                     const details = entry.querySelector(':scope > details.technical-disclosure');
-                    if (!details || details.children.length !== 3 ||
+                    if (!details || entry.children.length !== 2 ||
+                        !entry.children[0].classList.contains('owner-summary') ||
+                        entry.children[1] !== details || details.children.length !== 3 ||
                         !details.children[0].matches('summary') ||
                         !details.children[1].classList.contains('matrix') ||
                         !details.children[2].matches('ul.rungs')) return null;

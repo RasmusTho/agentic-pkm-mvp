@@ -471,13 +471,15 @@ delivery run, or a Builder System Control payload into a shared object.
 
 The admitted Cockpit working projection may add source-linked work context through the existing
 evidence and limitations fields. An explicit capability edge is shown only when the capability
-lane and a fresh, repository-bound docs source agree; a missing, stale, unavailable, or unlinked
-docs source remains an unknown capability. A registered holder and observed work status are
+lane and a fresh, repository-bound docs source agree; the complete admitted docs reference set is
+retained without assigning the edge to an arbitrary filename. A missing, stale, unavailable, or
+unlinked docs source remains an unknown capability. A registered holder and observed work status are
 descriptive source facts, separate from live session, lease, authentication, or permission
 authority. A proposed next step keeps the mirror's own watermark and remains a proposal; its
 freshness stays unknown unless that mirror supplies its own freshness evidence, and missing blocker
 evidence is unknown. Flaws, unresolved position reasons, source withdrawals, and their independent
-references, producer scope, and read times remain visible. This projection does not infer maturity,
+references, producer scope, evaluation scope, and read times remain visible. An absent proposal with
+an old mirror watermark remains freshness-unknown as well. This projection does not infer maturity,
 legality, execution permission, owner decisions, trial readiness, or blocker-free status.
 
 The three zones have strict eligibility:

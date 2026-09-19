@@ -79,7 +79,9 @@ def _items(value: Any) -> Sequence[Any] | None:
 
 def _trusted_working_items(
     work_provider: Any,
-) -> tuple[str, Sequence[Any], dict[str, Mapping[str, Any]]] | None:
+) -> tuple[
+    str, Sequence[Any], dict[str, Mapping[str, Any]], Mapping[str, Any]
+] | None:
     """Return the one admitted working list and its captured-at watermark."""
 
     provider = _object(work_provider)
@@ -139,10 +141,13 @@ def _trusted_working_items(
     if bands is None:
         return None
     working_bands: list[Mapping[str, Any]] = []
+    flaws_header: Mapping[str, Any] = {}
     for raw_band in bands:
         band = _object(raw_band)
         if band is not None and band.get("key") == "working":
             working_bands.append(band)
+        if band is not None and band.get("key") == "flawed":
+            flaws_header = _object(band.get("header")) or {}
     if len(working_bands) != 1:
         return None
     working = working_bands[0]
@@ -156,7 +161,7 @@ def _trusted_working_items(
         or count != len(items)
     ):
         return None
-    return captured_at, items, source_map
+    return captured_at, items, source_map, flaws_header
 
 
 def _source_axes(source: Mapping[str, Any] | None) -> tuple[str, str, str, str]:
@@ -196,39 +201,38 @@ def _transport_refs(source: Mapping[str, Any] | None) -> tuple[str, ...]:
 
 
 def _task_source_ref(
-    *, source: Mapping[str, Any] | None, repo: str, fallback: str
+    *, source: Mapping[str, Any] | None, repo: str, task_id: str | None, fallback: str
 ) -> str:
     """Keep the addressed task reference when the producer supplied one."""
 
-    expected = f"repository={repo}"
+    expected = f"/v1/tasks/{task_id}?repository={repo}" if task_id else None
+    if expected is None:
+        return fallback
     for reference in _transport_refs(source):
-        if "/v1/tasks/" in reference and expected in reference:
+        if expected in reference:
             return reference
     return fallback
 
 
 def _source_locator(
-    *, source: Mapping[str, Any] | None, source_name: str, repo: str, fallback: str
+    *,
+    source: Mapping[str, Any] | None,
+    source_name: str,
+    repo: str,
+    task_id: str | None,
+    fallback: str,
 ) -> str:
     if source_name == "dispatcher-store":
-        return _task_source_ref(source=source, repo=repo, fallback=fallback)
+        return _task_source_ref(source=source, repo=repo, task_id=task_id, fallback=fallback)
     references = _transport_refs(source)
     return references[0] if references else fallback
 
 
 def _capability_source_ref(refs: Sequence[Any] | None) -> str | None:
-    """Select the admitted task relation document, not an arbitrary docs file."""
+    """Preserve the complete admitted docs reference set."""
 
     candidates = [ref for ref in refs or () if isinstance(ref, str) and ref.strip()]
-    return next(
-        (
-            ref
-            for ref in candidates
-            if re.search(r"/(?:TASK|task)(?:\.md|/|#)", ref)
-            or re.search(r"/PARENT_FEATURE_ISSUE(?:\.md|/|#)", ref)
-        ),
-        None,
-    )
+    return "|".join(candidates) if candidates else None
 
 
 def _source_ref(
@@ -380,9 +384,11 @@ def _work_context_evidence(
     source_state = source.get("state") if source is not None else "unavailable"
     availability, freshness, completeness, linkage = _source_axes(source)
     repo = _nonblank(item.get("repo")) or "unknown"
+    task_id = _nonblank(item.get("id")) or _nonblank(item.get("task_id"))
     task_ref = _task_source_ref(
         source=source,
         repo=repo,
+        task_id=task_id,
         fallback="/api/cockpit/registry#working",
     )
     version = _timestamp(item.get("updated_at")) or source_watermark or captured_at
@@ -428,6 +434,7 @@ def _work_context_evidence(
                         source=dependency,
                         source_name=dependency_name,
                         repo=repo,
+                        task_id=task_id,
                         fallback=f"/api/cockpit/registry#{dependency_name}",
                     )
                     + f" @ {dependency_read}"
@@ -481,6 +488,7 @@ def _next_action_evidence(
         locator=_task_source_ref(
             source=source,
             repo=repo,
+            task_id=_nonblank(item.get("id")) or _nonblank(item.get("task_id")),
             fallback="/api/cockpit/registry#mirror",
         ),
         version=version,
@@ -514,7 +522,7 @@ def _next_action_evidence(
         claim=None,
         source_ref=source_ref,
         availability="available" if watermark else "unavailable",
-        freshness="fresh" if watermark else "unknown",
+        freshness="unknown",
         completeness="partial" if watermark else "unread",
         cardinality="not_countable",
         linkage="linked" if watermark else "unlinked",
@@ -541,6 +549,7 @@ def _flaw_evidence(
         for predicate in FLAW_PREDICATES
     }
     repo = _nonblank(item.get("repo")) or "unknown"
+    task_id = _nonblank(item.get("id")) or _nonblank(item.get("task_id"))
     result: list[dict[str, Any]] = []
     for index, raw_flaw in enumerate(flaws):
         flaw = _object(raw_flaw)
@@ -559,6 +568,7 @@ def _flaw_evidence(
             reference = _task_source_ref(
                 source=dependency,
                 repo=repo,
+                task_id=task_id,
                 fallback=f"/api/cockpit/registry#{source_name}",
             )
             if source_name != "dispatcher-store":
@@ -566,6 +576,7 @@ def _flaw_evidence(
                     source=dependency,
                     source_name=source_name,
                     repo=repo,
+                    task_id=task_id,
                     fallback=f"/api/cockpit/registry#{source_name}",
                 )
             source_lines.append(f"{source_name}[{state}] {reference} @ {read_at}")
@@ -627,6 +638,7 @@ def _append_work_context(
     candidate: dict[str, Any],
     item: Mapping[str, Any],
     sources: Mapping[str, Mapping[str, Any]],
+    flaws_header: Mapping[str, Any],
     captured_at: str,
 ) -> None:
     subject_id = candidate["subject_ref"]["source_id"]
@@ -668,10 +680,19 @@ def _append_work_context(
     candidate["limitations"].append(
         "Flaw coverage is source-scoped; absence of a rendered flaw is not a blocker-free claim."
     )
+    if flaws_header:
+        candidate["limitations"].append(
+            "Flaw evaluation scope (source-declared): "
+            + json.dumps(flaws_header, sort_keys=True, separators=(",", ":"))
+        )
 
 
 def _candidate(
-    *, item: Any, captured_at: str, sources: Mapping[str, Mapping[str, Any]]
+    *,
+    item: Any,
+    captured_at: str,
+    sources: Mapping[str, Mapping[str, Any]],
+    flaws_header: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     source = _object(item)
     if source is None:
@@ -731,6 +752,7 @@ def _candidate(
             candidate=candidate,
             item=source,
             sources=sources,
+            flaws_header=flaws_header,
             captured_at=captured_at,
         )
     return candidate
@@ -825,9 +847,14 @@ def derive_overview_inputs(
     trusted = _trusted_working_items(work_provider)
     candidates: list[dict[str, Any]] = []
     if trusted is not None:
-        captured_at, items, sources = trusted
+        captured_at, items, sources, flaws_header = trusted
         for item in items:
-            candidate = _candidate(item=item, captured_at=captured_at, sources=sources)
+            candidate = _candidate(
+                item=item,
+                captured_at=captured_at,
+                sources=sources,
+                flaws_header=flaws_header,
+            )
             if candidate is None:
                 candidates = []
                 break

@@ -76,6 +76,7 @@ def _context_item(*, number: int = 5599, **overrides: object) -> dict:
     item = _item(number=number, title="Contextual work")
     item.update(
         {
+            "id": f"task-{number}",
             "claimed_by": "registered-holder",
             "status": "claimed",
             "capability_lane": {
@@ -301,6 +302,13 @@ def test_owner_context_preserves_source_linked_work_facts() -> None:
         entry["source_ref"]["source_type"] == "docs-frontmatter"
         for entry in candidate["evidence"]
     )
+    capability = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "docs-frontmatter"
+    )
+    assert "capabilities.yaml" in capability["source_ref"]["locator"]
+    assert "TASK.md" in capability["source_ref"]["locator"]
 
 
 def test_owner_context_preserves_independent_source_withdrawals() -> None:
@@ -381,3 +389,48 @@ def test_owner_context_preserves_predicate_sources_and_raw_evidence() -> None:
     assert "github-live[fresh] github-rest:RasmusTho/agentic-pkm-mvp@" in flaw["claim"]
     assert flaw["source_ref"]["locator"].startswith("github-rest:RasmusTho/agentic-pkm-mvp@")
     assert flaw["read_watermark"] == GENERATED_AT
+
+
+def test_owner_context_preserves_flaw_evaluation_scope() -> None:
+    provider = _context_work_provider(item=_context_item())
+    provider["payload"]["bands"].append(
+        {
+            "key": "flawed",
+            "countable": True,
+            "count": 1,
+            "items": [],
+            "header": {
+                "evaluated": ["blocked_without_next_link"],
+                "not_evaluated": [
+                    {
+                        "predicate": "pr_ci_red_on_head_sha",
+                        "requires": ["github-live"],
+                        "reason": "required source(s) not fresh: github-live (unavailable)",
+                    }
+                ],
+                "unread": [{"predicate": "owner_outcome", "reason": "not admitted"}],
+            },
+        }
+    )
+    candidate = derive_overview_inputs(work_provider=provider)["now"][0]
+
+    assert any("Flaw evaluation scope (source-declared)" in limitation for limitation in candidate["limitations"])
+    assert any("pr_ci_red_on_head_sha" in limitation for limitation in candidate["limitations"])
+    assert any("owner_outcome" in limitation for limitation in candidate["limitations"])
+
+
+def test_owner_context_does_not_join_another_task_reference() -> None:
+    item = _context_item(number=503)
+    provider = _context_work_provider(item=item)
+    provider["payload"]["sources"][0]["transport"]["source_refs"] = [
+        "/v1/tasks/task-1?repository=RasmusTho/agentic-pkm-mvp#version=1"
+    ]
+
+    candidate = derive_overview_inputs(work_provider=provider)["now"][0]
+    work = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "dispatcher-store"
+    )
+    assert "task-1" not in repr(work)
+    assert work["source_ref"]["locator"] == "/api/cockpit/registry#working"
