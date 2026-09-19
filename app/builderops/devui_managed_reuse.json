@@ -934,13 +934,13 @@
     ]
   },
   "independent_review": {
-    "status": "pending",
-    "reviewer_identity": "pending:root-supplied-fresh-final-payload-review",
-    "independent_from_author": null,
-    "independence_basis": "Final payload is frozen after corrected artifact commit a2f1caa416a57374c116ac1ebb755bc912b8873c and fresh host-leased browser/runtime proof; no review pass is claimed.",
-    "reviewed_payload_sha256": null,
-    "reviewed_at": null,
-    "verdict": "pending",
+    "reviewer_identity": "codex-review:/root/reuse_review_5594_r3",
+    "independent_from_author": true,
+    "independence_basis": "Author-independent read-only reviewer of the complete R3 artifact and live Issue5594 contract. This is the same independent reviewer’s narrow metadata-delta recheck, not a claimed new full-context session. R3 behavior/source/CI-inventory evidence is reused only after exact Git equality proved that all runtime, test, asset and owner-doc bytes are unchanged. The sole corrected Focus anchor, every affected hash, all 25 proof consumers, actual newly executed raw 45+5 observations, immutable artifact A2 and the newly canonicalized payload were independently authenticated. No implementation, Git, GitHub, claim, publication, lifecycle or helper authority was exercised.",
+    "reviewed_payload_sha256": "sha256:eb03bad8e95d0f543301ffd00bf51628e675f9129f34d0ff2031604318914621",
+    "reviewed_at": "2026-09-19T15:15:08.730Z",
+    "verdict": "pass",
     "findings": []
-  }
+  },
+  "receipt_sha256": "sha256:91cf80928b1c85948f68c5a223605b33228d3e8bfa1c0a4b521e07b05c73a3ef"
 }
