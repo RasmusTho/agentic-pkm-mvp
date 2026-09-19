@@ -469,6 +469,16 @@ through classification and withdrawal; it is not identity, authority, ranking, o
 source-owned placement/why-now statement. It does not copy a Focus payload, a SoI payload, a
 delivery run, or a Builder System Control payload into a shared object.
 
+The admitted Cockpit working projection may add source-linked work context through the existing
+evidence and limitations fields. An explicit capability edge is shown only when the capability
+lane and a fresh, repository-bound docs source agree; a missing, stale, unavailable, or unlinked
+docs source remains an unknown capability. A registered holder and observed work status are
+descriptive source facts, separate from live session, lease, authentication, or permission
+authority. A proposed next step keeps the mirror's own watermark and remains a proposal; missing
+blocker evidence is unknown. Flaws, unresolved position reasons, source withdrawals, and their
+independent references and read times remain visible. This projection does not infer maturity,
+legality, execution permission, owner decisions, trial readiness, or blocker-free status.
+
 The three zones have strict eligibility:
 
 - **Needs you** requires an explicit named owner-authority category and its governing source
@@ -768,6 +778,13 @@ Delivered now:
   without source I/O, a local registry, UI, or promotion action, delivered by #4985;
 - `FocusView.v1` / `focus-view.v1`, a pure subject-centred projection with explicit correlation,
   delivered by #4694 / PR #4703;
+- the bounded #5599 Overview continuation enriches trusted Cockpit working candidates through
+  the existing evidence and limitations fields with explicit docs-linked capability when its
+  repository-bound docs source is fresh, registered holder and observed work facts, source
+  withdrawals, preserved flaws, and a mirror-watermarked proposed next step. These remain
+  descriptive projection facts: they do not create maturity, legality, execution permission,
+  owner decisions, trial readiness, or a blocker-free claim. This is repository proof only;
+  managed-host, live-source, owner-pilot, and parent #4741/#5399 acceptance remain open;
 - the addressed Issue Focus read now projects bounded source-declared Context/Scope, Acceptance
   Criteria and Verify text, Source Anchors, and Source Docs through those existing fields, with the
   Issue update version and body hash retained in each source reference, delivered by #5527. These

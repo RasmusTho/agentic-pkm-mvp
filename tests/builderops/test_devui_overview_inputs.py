@@ -72,6 +72,75 @@ def _work_provider(*, items: list[dict] | None = None) -> dict:
     }
 
 
+def _context_item(*, number: int = 5599, **overrides: object) -> dict:
+    item = _item(number=number, title="Contextual work")
+    item.update(
+        {
+            "claimed_by": "registered-holder",
+            "status": "claimed",
+            "capability_lane": {
+                "key": "capability:fixture",
+                "name": "Fixture capability",
+                "rung": "proven",
+            },
+            "sources": ["dispatcher-store", "docs-frontmatter", "github-live"],
+            "next_action": "read the source blocker",
+            "next_action_evidence": "issue comment blocker_action.v1",
+            "mirror_watermark": "2026-08-22T11:58:00+00:00",
+            "chain_position": "in_progress",
+            "position_evidence": {
+                "dispatcher_status": "claimed",
+                "last_movement_at": UPDATED_AT,
+            },
+            "position_unresolved_reason": None,
+            "flaws": [
+                {
+                    "predicate": "blocked_without_next_link",
+                    "text": "blocked: waiting for the source",
+                    "evidence": {"dispatcher_status": "claimed"},
+                }
+            ],
+        }
+    )
+    item.update(overrides)
+    return item
+
+
+def _context_work_provider(*, item: dict, docs_state: str = "fresh") -> dict:
+    provider = _work_provider(items=[item])
+    provider["payload"]["sources"].extend(
+        [
+            {
+                "name": "docs-frontmatter",
+                "state": docs_state,
+                "last_successful_read": GENERATED_AT,
+                "detail": "candidate documents read",
+                "stale_after_days": 7,
+                "configured": True,
+                "transport": {
+                    "repository": "RasmusTho/agentic-pkm-mvp",
+                    "candidate_sha": "a" * 40,
+                    "outcome": "available" if docs_state == "fresh" else "stale",
+                    "source_refs": [
+                        "https://github.com/RasmusTho/agentic-pkm-mvp/blob/"
+                        + "a" * 40
+                        + "/docs/capabilities.yaml"
+                    ],
+                },
+            },
+            {
+                "name": "github-live",
+                "state": "fresh",
+                "last_successful_read": GENERATED_AT,
+                "detail": "bounded GitHub read",
+                "stale_after_days": 0,
+                "configured": True,
+            },
+        ]
+    )
+    return provider
+
+
 def test_adapter_is_pure_and_admits_only_trusted_unique_working_band() -> None:
     provider = _work_provider()
     original = deepcopy(provider)
@@ -179,3 +248,73 @@ def test_nonworking_bands_are_ignored_and_withdrawals_stay_closed() -> None:
 
     assert len(candidates["now"]) == 1
     assert candidates.keys() == {"now"}
+
+
+def test_owner_context_preserves_source_linked_work_facts() -> None:
+    item = _context_item()
+
+    candidate = derive_overview_inputs(
+        work_provider=_context_work_provider(item=item)
+    )["now"][0]
+
+    assert [row["display_label"] for row in [candidate]] == ["Contextual work"]
+    assert candidate["reason"] == item["why_now"]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    assert any("Fixture capability" in claim for claim in claims)
+    assert any("registered-holder" in claim and "claimed" in claim for claim in claims)
+    assert any("in_progress" in claim for claim in claims)
+    assert any("read the source blocker" in claim for claim in claims)
+    assert any("blocked: waiting for the source" in claim for claim in claims)
+    assert candidate["evidence"][0]["source_ref"]["version"] == UPDATED_AT
+    assert any(
+        entry["source_ref"]["source_type"] == "docs-frontmatter"
+        for entry in candidate["evidence"]
+    )
+
+
+def test_owner_context_preserves_independent_source_withdrawals() -> None:
+    item = _context_item(mirror_watermark="2026-08-01T11:58:00+00:00")
+
+    candidate = derive_overview_inputs(
+        work_provider=_context_work_provider(item=item, docs_state="stale")
+    )["now"][0]
+
+    docs = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "docs-frontmatter"
+    )
+    next_step = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "builderops_mirror"
+    )
+    assert docs["claim"] is None
+    assert docs["freshness"] == "stale"
+    assert docs["limitation"]
+    assert next_step["source_ref"]["version"] == "2026-08-01T11:58:00+00:00"
+    assert next_step["captured_at"] == "2026-08-01T11:58:00+00:00"
+    assert next_step["read_watermark"] == "2026-08-01T11:58:00+00:00"
+    assert next_step["source_ref"]["version"] != GENERATED_AT
+    assert any("unknown" in limitation.lower() for limitation in candidate["limitations"])
+
+
+def test_owner_context_does_not_infer_execution_permission_or_maturity() -> None:
+    candidate = derive_overview_inputs(
+        work_provider=_context_work_provider(item=_context_item())
+    )["now"][0]
+
+    assert set(candidate) == {
+        "subject_ref",
+        "display_label",
+        "reason",
+        "evidence",
+        "navigation_refs",
+        "limitations",
+    }
+    serialized = repr(candidate).lower()
+    assert "owner_authority" not in serialized
+    assert "delivery_facts" not in serialized
+    assert "permission" not in serialized
+    assert "maturity" not in serialized
+    assert "ready_to_try" not in serialized

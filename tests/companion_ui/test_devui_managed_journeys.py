@@ -36,6 +36,9 @@ EXPECTED_DISCLOSURE_SUMMARIES = {
         "Inspect trust frame",
         "Inspect subject source details",
         "Inspect evidence details",
+        "Inspect evidence details",
+        "Inspect evidence details",
+        "Inspect evidence details",
     ],
     "focus": ["Inspect source and technical details"] * 10,
 }
@@ -314,7 +317,8 @@ def _keyboard_navigation(
                     card && body && subject && evidence && evidenceDetails && link) &&
                     card.children[2] === body && card.lastElementChild === link &&
                     link.parentElement === card && link.matches('a[data-testid="overview-focus-link"]') &&
-                    controlChildren.length === 2 && controlChildren[0] === subject &&
+                    controlChildren.length === 5 && controlChildren[0] === subject &&
+                    controlChildren.slice(1).every(child => child.classList.contains('evidence-entry')) &&
                     controlChildren[1] === evidence && evidence.parentElement === body &&
                     body.firstElementChild?.classList.contains('owner-summary') &&
                     Array.from(body.children).indexOf(body.firstElementChild) < Array.from(body.children).indexOf(subject) &&
@@ -416,10 +420,13 @@ def _keyboard_navigation(
                     const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
                     const card = document.querySelector('[data-testid="overview-now"] > article.card');
                     const body = card && card.querySelector(':scope > .body');
+                    const evidenceSummaries = body
+                        ? Array.from(body.querySelectorAll(':scope > .evidence-entry > details.technical-disclosure > summary'))
+                        : [];
                     return [
                         trust && trust.querySelector(':scope > details.technical-disclosure > summary'),
                         body && body.querySelector(':scope > details.technical-disclosure > summary'),
-                        body && body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
+                        ...evidenceSummaries,
                         card && card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
                     ];
                 })()
@@ -497,7 +504,7 @@ def _keyboard_navigation(
         expected_focus = [
             page.locator('[data-testid="overview-trust-matrix"] details.technical-disclosure > summary'),
             card.locator(':scope > .body > details.technical-disclosure > summary'),
-            card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
+            *card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary').all(),
             card.locator(':scope > a[data-testid="overview-focus-link"]'),
         ]
     else:
@@ -762,6 +769,9 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         first = page.goto(ORIGIN + "/devui/overview")
         _loaded(page, "overview")
         overview_reads = len(source.calls)
+        overview_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Explicit docs-linked capability" in overview_text
+        assert "unknown" in overview_text.lower()
         link = page.get_by_role("link", name="Open Focus")
         assert link.get_attribute("href") == FOCUS
         with page.expect_response(lambda r: "/api/devui/focus?" in r.url) as read:
@@ -792,6 +802,7 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         _capture(page, "managed-focus")
         page.get_by_role("link", name="Return to Overview").click()
         _loaded(page, "overview")
+        assert "Explicit docs-linked capability" in page.locator('[data-testid="overview-now"]').inner_text()
         assert len(source.calls) > overview_reads
         assert sum(url == ORIGIN + "/api/devui/overview" for _, url in requests) == 2
         assert all(method == "GET" for method, _ in requests)
@@ -813,6 +824,8 @@ def test_managed_journey_hostile_accessibility_and_no_effect_matrix(managed_sour
             assert "default-src 'none'" in response.headers["content-security-policy"]
             assert page.locator("img").count() == 0
             assert "<img" in page.locator("body").inner_text()
+            if surface == "overview":
+                assert "Explicit docs-linked capability" in page.locator('[data-testid="overview-now"]').inner_text()
             assert page.get_by_role("main").get_attribute("aria-labelledby") == surface + "-heading"
             assert page.get_by_role("heading", level=1).count() == 1
             if surface == "focus":

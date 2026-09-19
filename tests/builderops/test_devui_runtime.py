@@ -532,6 +532,44 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
     )
 
 
+def test_managed_overview_exposes_owner_work_context(managed_sources) -> None:
+    source = managed_sources
+    row = source.tasks[0]
+    stamp = row["updated_at"]
+    row["state"] = "claimed"
+    row["payload"]["status"] = "claimed"
+    row["payload"]["sync_state"] = {
+        "labels": [],
+        "last_pull_at": "2026-09-13T09:00:00+00:00",
+    }
+    row["lease"] = {
+        "repository": "example/fixture",
+        "resource_id": "task-1",
+        "holder": "fixture-registered-holder",
+        "fencing_token": 1,
+        "expires_at": "2099-09-13T10:00:00+00:00",
+        "lease_kind": "task",
+        "updated_at": stamp,
+    }
+
+    with source.client() as client:
+        response = client.get("/api/devui/overview")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["display_label"] for item in payload["now"]] == ["Fixture work"]
+    candidate = payload["now"][0]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    assert any("fixture" in claim.lower() and "capability" in claim.lower() for claim in claims)
+    assert any("fixture-registered-holder" in claim for claim in claims)
+    assert any("claimed" in claim for claim in claims)
+    assert any("in_progress" in claim for claim in claims)
+    assert any(entry["source_ref"]["source_type"] == "docs-frontmatter" for entry in candidate["evidence"])
+    assert any("unknown" in limitation.lower() for limitation in candidate["limitations"])
+    assert candidate["navigation_refs"][0]["kind"] == "focus"
+    assert source.calls.count(("list_tasks", "example/fixture")) == 1
+
+
 def test_managed_overview_keeps_unprojectable_tasks_explicit(managed_sources) -> None:
     managed_sources.tasks[:] = _native_unprojected_tasks(managed_sources)
     with managed_sources.client() as client:

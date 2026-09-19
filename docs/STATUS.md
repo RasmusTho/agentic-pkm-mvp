@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-19 (bounded DevUI #5595 trust-frame presentation writeback; repository evidence only)
+Last reviewed: 2026-09-19 (bounded DevUI #5599 working-context projection writeback; repository evidence only)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -94,6 +94,14 @@ deployment, host, or owner-acceptance claims.
   existing composition envelope and caller-declared source records. It preserves authority,
   provenance, lifecycle, source-state limitations, and source-bound read-only navigation; it adds
   no source I/O, registry, UI, task state, Builder Vault authority, or promotion action (#4985).
+- The #5599 bounded Overview continuation enriches admitted Cockpit working candidates through the
+  existing evidence and limitations fields. Fresh repository-bound docs evidence may describe an
+  explicit capability edge; registered holder, observed status, flaws, unresolved position reasons,
+  independent source withdrawals, and mirror-watermarked proposed next steps remain descriptive
+  source facts. Unknown or stale inputs stay unknown, and no maturity, legality, execution
+  permission, owner decision, trial readiness, or blocker-free state is inferred. This is
+  repository proof only; managed-host, live-source, owner-pilot, and parent #4741/#5399 acceptance
+  remain open.
 
 Roadmap reset note: `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` is the accepted strategic reset
 input for sequencing, not a runtime-promotion document. This status file remains the current-state
