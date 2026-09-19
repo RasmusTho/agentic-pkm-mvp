@@ -1,13 +1,28 @@
 {
-  "scope": "Local production create_app/load_configuration and real admitted source boundaries; no deployment or attestation",
-  "recorded_at": "2026-09-19T10:24:58.180373Z",
-  "passed_nodeids": [
-    "tests/builderops/test_devui_runtime.py::test_managed_source_packaging_and_isolation_contract",
-    "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
-    "tests/builderops/test_devui_runtime.py::test_managed_focus_preserves_canonical_repository_case[github:example/fixture#501]",
-    "tests/builderops/test_devui_runtime.py::test_managed_focus_preserves_canonical_repository_case[github:Example/Fixture#501]",
-    "tests/builderops/test_devui_runtime.py::test_managed_focus_uses_admitted_repository_source_and_honest_states"
-  ],
+  "asset_sha256": {
+    "app/builderops/devui_managed.css": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:44dcc72f6ad26eb6f5eb802dfa3c8cb1b981d8f864e5b017af8d54f8995750f9"
+  },
+  "fixture_code_sha256": {
+    ".github/workflows/browser-runtime.yml": "sha256:5e680236777ba47cbd7fc47d79bc2c508acbdee5d0f88de3d4c88900405072b7",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:b3217d3b877e438fbeb3343a8e75e491d7949021e11d160bbfd0ce1418e9f5de",
+    "tests/builderops/test_devui_runtime.py": "sha256:47e2e74d7f8117f42ebc8d6199b09eff676d4aed946b4c0a6fcefeb6049bdde6"
+  },
+  "junit": {
+    "errors": 0,
+    "evidence_ref": "5594-final-c039-metadata/runtime/junit.xml",
+    "failures": 0,
+    "sha256": "sha256:07b0f4ac01f6a731e6d5d6504ebb40d503b4b96d2872f6527c2018a331f6524b",
+    "skips": 0,
+    "tests": 5
+  },
+  "log": {
+    "evidence_ref": "5594-final-c039-metadata/runtime/pytest.log",
+    "sha256": "sha256:3f1a4bf951bb491073e04d8eb48c97a2c47d98e38b0455990ad4cf37d6acdd98"
+  },
   "mutations": [
     "missing",
     "sha",
@@ -15,11 +30,12 @@
     "bytes",
     "extra"
   ],
-  "routes": [
-    "/devui/overview",
-    "/devui/assets/devui.css",
-    "/api/devui/overview",
-    "/api/devui/focus"
+  "passed_nodeids": [
+    "tests/builderops/test_devui_runtime::test_managed_source_packaging_and_isolation_contract",
+    "tests/builderops/test_devui_runtime::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+    "tests/builderops/test_devui_runtime::test_managed_focus_preserves_canonical_repository_case[github:example/fixture#501]",
+    "tests/builderops/test_devui_runtime::test_managed_focus_preserves_canonical_repository_case[github:Example/Fixture#501]",
+    "tests/builderops/test_devui_runtime::test_managed_focus_uses_admitted_repository_source_and_honest_states"
   ],
   "postconditions": [
     "503 explicit candidate unavailability for each route and mutation",
@@ -28,36 +44,16 @@
     "document source references contain only exact repository document paths/hashes; complete assets/* inventory retained but package aliases are absent from source references",
     "Both canonical-case spellings admit the same configured repository while preserving the exact requested subject and source locator; foreign repository, malformed/foreign URL, wrong Issue number/kind and invalid version remain unavailable."
   ],
-  "junit": {
-    "evidence_ref": "5596-runtime-proof-r2/junit.xml",
-    "sha256": "sha256:78b5e297ba4545b39bd506da5f91928cd078c2707eadf6eac709d277891591d9",
-    "tests": 5,
-    "failures": 0,
-    "errors": 0,
-    "skips": 0
-  },
-  "log": {
-    "evidence_ref": "5596-runtime-proof-r2/pytest.log",
-    "sha256": "sha256:08827c5fd5d0ed50c247f65b090aacb2d7649931522041fc137ce3d5f8317397"
-  },
-  "fixture_code_sha256": {
-    "tests/builderops/test_devui_runtime.py": "sha256:47e2e74d7f8117f42ebc8d6199b09eff676d4aed946b4c0a6fcefeb6049bdde6"
-  },
   "production_code_sha256": {
-    "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
-    "app/builderops/devui_assets.py": "sha256:086c97790e93390366f5484a7e1d37c4c3e214c0cfc22d713fae3ff06ba00fce",
-    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353",
+    "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db",
+    "app/builderops/devui_assets.py": "sha256:96d0f394cfacd95142aa9f07cbf9eaa29a4f4c7f443da8f8e8ad0a1216be0942",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
     "app/builderops/devui_overview_inputs.py": "sha256:73f68980e9c53ee4d823a7f27277c12c19f3e278414deb5a078e21abf5c7da84",
-    "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db"
+    "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
+    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
   },
-  "asset_sha256": {
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
-    "app/builderops/devui_managed.css": "sha256:9bd853fe5007b960d58525a5029f3a2687fdeab5aae161363ec944f19be4a36a"
-  },
+  "raw_proof_package": "5594-final-c039-metadata/runtime (host-leased runtime admission/refusal run)",
+  "recorded_at": "2026-09-19T16:35:28.131985Z",
   "repository_identity_cases": {
     "accepted_subjects": [
       "github:example/fixture#501",
@@ -78,5 +74,12 @@
       "locator_wrong_path",
       "locator_foreign_host"
     ]
-  }
+  },
+  "routes": [
+    "/devui/overview",
+    "/devui/assets/devui.css",
+    "/api/devui/overview",
+    "/api/devui/focus"
+  ],
+  "scope": "Local production create_app/load_configuration and real admitted source boundaries; no deployment or attestation"
 }

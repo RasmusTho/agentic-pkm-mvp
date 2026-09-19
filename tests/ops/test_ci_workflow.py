@@ -39,6 +39,24 @@ OVERVIEW_PR_REQUIRED_NODEIDS = OVERVIEW_REQUIRED_NODEIDS + (
     "test_overview_evidence_axes_render_exactly_once_per_entry",
     f"{OVERVIEW_JOURNEY_MODULE}::"
     "test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_now_card_renders_owner_language_not_raw_field_names",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_card_hides_raw_technical_fields_until_expanded",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_focus_sections_render_owner_language_not_raw_field_names",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[stale]",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[unknown]",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[partial]",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_neutral_not_applicable_and_countable_states_stay_silent[not_countable]",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_neutral_not_applicable_and_countable_states_stay_silent[measured_empty]",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_explicit_limitation_remains_visible_in_overview_and_focus",
 )
 
 

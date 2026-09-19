@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "1c91860a0ebd42c0f8e615169bc6ada1329bfc55",
+    "tree": "41a2bf636734af88293dddcbf5866d2c418873f3",
     "inventory": {
-      "devui.css": "8c9af75f6100ec84550fa1cf5b5965de9498405b",
+      "devui.css": "20fddd9d9462d181cb648411e7302781234e6000",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
-      "focus.js": "21946448a21f416653f8e08a393e17c6afff624f",
+      "focus.js": "2a11e4a04f204d1bca615a269757c06b380160e4",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
-      "overview.js": "f2f827b514b8df34a22d49ae632dc9971395c0e4"
+      "overview.js": "0a5d29b7c4648576f70ae23e827483f3c0aa00c4"
     }
   },
   "transform_allowlist": [
@@ -157,7 +157,7 @@
           "node.textContent =",
           "function verifiedFocusHref(item) {",
           "fetch(\"/api/devui/overview\", {method: \"GET\", cache: \"no-store\"})",
-          "rows(body, evidence, true);"
+          "rows(details, evidence, true);"
         ],
         "focus.js": [
           "function text(parent, tag, value, className) {",
@@ -260,7 +260,88 @@
         "matrix(body, evidence);",
         "rows(body, evidence, true);"
       ],
-      "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes."
+      "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes. Target anchors are authenticated against the immutable intermediate artifact at target_commit; current #5594 target bytes are bound separately by its own transformation.",
+      "target_role": "historical_intermediate",
+      "target_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
+      "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+      "target_content_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
+      "target_git_blob_oid": "f2f827b514b8df34a22d49ae632dc9971395c0e4"
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-overview-owner-language-disclosure",
+      "kind": "interaction_binding",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+      "source_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
+      "source_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
+      "source_anchors": [
+        "function renderItem(parent, item) {",
+        "matrix(body, evidence);",
+        "rows(body, evidence, true);"
+      ],
+      "candidate_anchors": [
+        "function ownerRows(parent, value) {",
+        "function sourceWarning(value) {",
+        "value[key] == null",
+        "details.className = \"technical-disclosure\";"
+      ],
+      "exact_rule": "Retain every server field and the #5596 evidence matrix/non-axis binding; render finite owner-language labels and material source-state warnings, omit null optional owner rows without inventing Unavailable, and keep raw axes/null/unknown fields behind closed native details/summary controls. Preserve fixed GET, navigation validation, no-egress behavior, and data hooks."
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-focus-owner-language-disclosure",
+      "kind": "interaction_binding",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
+      "source_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
+      "source_sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
+      "source_anchors": [
+        "function render(testid, value) {",
+        "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"
+      ],
+      "candidate_anchors": [
+        "function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {",
+        "function sourceWarning(value) {",
+        "value[key] == null"
+      ],
+      "exact_rule": "Render all eight Focus sections with finite owner-language labels and material source-state warnings at first paint; omit null optional owner rows without inventing Unavailable; retain every raw field, exact axis values, and unknown/new fields behind closed native details/summary controls. Preserve exact subject-bound GET, response-state handling, textContent rendering, navigation, and no-egress behavior."
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-disclosure-source-style",
+      "kind": "layout_reflow",
+      "source_path": "app/web/static/cockpit.css",
+      "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+      "source_sha256": "sha256:d34fadfdd619534f6e0f9480a979b5caae52b65b9b05d8bb6db99fa8ae1d1d93",
+      "source_anchors": [
+        ".card>summary{list-style:none;cursor:pointer;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}",
+        ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+      ],
+      "candidate_anchors": [
+        ".technical-disclosure>summary{list-style:none;cursor:pointer;padding:var(--space-2) var(--space-3);",
+        ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
+      ],
+      "exact_rule": "Reuse the exact immutable Cockpit details/summary focus, hover, border, cursor and token grammar for finite technical disclosures; adapt only the bounded wrapper selector and content binding, with no new visual or interaction decision.",
+      "source_git_blob_oid": "63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2"
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-disclosure-source-behavior",
+      "kind": "interaction_binding",
+      "source_path": "app/web/static/cockpit.js",
+      "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+      "source_sha256": "sha256:8bfdc94692eb6d8038f0883b7cb7f7e9346acde357e6af9b515b4120a9164b78",
+      "source_git_blob_oid": "6a51c15179e2b67779e9ea0e2f0615da2e81f9b8",
+      "source_anchors": [
+        "function cardMarkup(item) {",
+        "`<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">`",
+        "`<summary><div class=\"meta\">"
+      ],
+      "candidate_anchors": [
+        "function technicalDetails(parent, summary, value, omitAxes = false) {",
+        "details.className = \"technical-disclosure\";",
+        "summary.dataset.testid = \"devui-technical-disclosure\";"
+      ],
+      "exact_rule": "Reuse the immutable Cockpit cardMarkup details/summary disclosure structure and bound keyboard interaction; adapt only the owner-language content renderer and finite technical disclosure wrapper, preserving GET-only/no-egress behavior."
     }
   ]
 }

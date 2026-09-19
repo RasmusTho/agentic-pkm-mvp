@@ -45,6 +45,13 @@ evidence entry, and the source claim metadata remains reachable. Managed asset h
 inventory, constrained-reuse lineage, and fresh managed browser/refusal evidence are bound to the
 delivery candidate; no deployment or owner acceptance is inferred.
 
+2026-09-19 bounded owner-language/progressive-disclosure writeback (#5594; repository evidence
+only): Overview and all eight Focus sections render known fields in owner vocabulary at first paint;
+raw source/evidence identifiers, timestamps, and unknown fields remain reachable under explicit
+native details/summary controls. The managed keyboard/accessibility proof admits only the bound
+disclosures and existing route links while rejecting injected controls. This client rendering change
+does not expand source, schema, API, persistence, deployment, host, or owner-acceptance claims.
+
 - The pure `devui-overview-view.v1` server-side composer derives the nonvisual Overview from
   `devui.composition.v1`, explicit producer evidence, and typed root references. It preserves
   unsupported owner and ready classification as withdrawal rather than an empty list; it performs

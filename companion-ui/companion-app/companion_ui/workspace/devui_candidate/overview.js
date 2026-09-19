@@ -1,6 +1,68 @@
 "use strict";
 
 const AXES = ["availability", "freshness", "completeness", "cardinality", "linkage"];
+const FIELD_LABELS = {
+  actor_class: "Actor",
+  availability: "Availability",
+  authority: "Authority",
+  authority_ref: "Authority source",
+  cardinality: "Cardinality",
+  captured_at: "Captured",
+  claim: "Claim",
+  claim_id: "Claim reference",
+  completeness: "Completeness",
+  composed_at: "Composed",
+  coverage: "Coverage",
+  display_label: "Title",
+  evidence_id: "Evidence reference",
+  evidence_state: "Evidence state",
+  freshness: "Freshness",
+  kind: "Kind",
+  legality: "Legality",
+  limitation: "Limitation",
+  linkage: "Linkage",
+  locator: "Source location",
+  navigation_refs: "Navigation",
+  owner_state: "Owner state",
+  provider: "Provider",
+  read_watermark: "Read watermark",
+  reason: "Reason",
+  receipt_ref: "Receipt reference",
+  risk_id: "Risk reference",
+  role: "Provider role",
+  snapshot: "Snapshot",
+  source_id: "Source reference",
+  source_ref: "Source reference",
+  source_type: "Source type",
+  state: "State",
+  status: "Status",
+  subject_ref: "Subject reference",
+  summary: "Summary",
+  title: "Title",
+  version: "Source version",
+  workflow_ref: "Workflow reference",
+};
+const TECHNICAL_FIELDS = new Set([
+  "authority_ref",
+  "captured_at",
+  "claim_id",
+  "composed_at",
+  "correlation",
+  "evidence_id",
+  "evidence_state",
+  "locator",
+  "navigation_refs",
+  "read_watermark",
+  "receipt_ref",
+  "risk_id",
+  "source_id",
+  "source_ref",
+  "source_type",
+  "subject_ref",
+  "version",
+  "workflow_ref",
+  ...AXES,
+]);
 
 function text(parent, tag, value, className) {
   const node = document.createElement(tag);
@@ -8,6 +70,97 @@ function text(parent, tag, value, className) {
   node.textContent = value == null ? "" : String(value);
   parent.appendChild(node);
   return node;
+}
+
+function labelFor(key) {
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  return key
+    .split("_")
+    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .join(" ");
+}
+
+function scalarValue(value) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function sourceWarning(value) {
+  const warningPhrases = {
+    availability: {
+      unavailable: "the source is unavailable",
+      refused: "the source refused the read",
+      unsupported: "the source does not support this read",
+    },
+    freshness: {
+      stale: "the source is stale",
+      unknown: "source timing is unknown",
+    },
+    completeness: {
+      partial: "required content is incomplete",
+      unread: "required content was not read",
+      missing: "required content is missing",
+    },
+    cardinality: {
+      not_measured: "source item count was not measured",
+    },
+    linkage: {
+      unlinked: "source relation is unlinked",
+      not_assessed: "source relation was not assessed",
+    },
+  };
+  const signals = Object.entries(warningPhrases)
+    .filter(([key, phrases]) =>
+      Object.prototype.hasOwnProperty.call(value || {}, key) &&
+      value[key] !== null &&
+      Object.prototype.hasOwnProperty.call(phrases, value[key])
+    )
+    .map(([key, phrases]) => phrases[value[key]]);
+  if (!signals.length) return null;
+  return `Source evidence requires attention: ${signals
+    .join("; ")}.`;
+}
+
+function ownerRows(parent, value) {
+  const list = document.createElement("div");
+  list.className = "owner-summary";
+  Object.keys(value || {}).forEach((key) => {
+    if (
+      TECHNICAL_FIELDS.has(key) ||
+      key === "limitations" ||
+      value[key] == null ||
+      !Object.prototype.hasOwnProperty.call(FIELD_LABELS, key) ||
+      (value[key] !== null && typeof value[key] === "object")
+    ) return;
+    const row = document.createElement("p");
+    row.className = "owner-fact";
+    text(row, "b", labelFor(key));
+    text(row, "span", scalarValue(value[key]));
+    list.appendChild(row);
+  });
+  const warning = sourceWarning(value);
+  if (warning) text(list, "p", warning, "owner-warning");
+  if (!list.childElementCount && Object.keys(value || {}).length) {
+    const row = document.createElement("p");
+    row.className = "owner-fact";
+    text(row, "b", "Source details");
+    text(row, "span", "Available for inspection");
+    list.appendChild(row);
+  }
+  if (list.childElementCount) parent.appendChild(list);
+  return list;
+}
+
+function technicalDetails(parent, summary, value, omitAxes = false) {
+  const details = document.createElement("details");
+  details.className = "technical-disclosure";
+  const label = text(details, "summary", summary);
+  label.dataset.testid = "devui-technical-disclosure";
+  rows(details, value, omitAxes);
+  parent.appendChild(details);
+  return details;
 }
 
 function providerStates(parent, value) {
@@ -33,7 +186,7 @@ function matrix(parent, value) {
     cell.className = "axis";
     cell.dataset.axis = axis;
     cell.dataset.value = String(value[axis]);
-    text(cell, "b", axis);
+    text(cell, "b", labelFor(axis));
     text(cell, "span", value[axis]);
     grid.appendChild(cell);
   });
@@ -72,10 +225,23 @@ function renderItem(parent, item) {
   text(card, "p", item.reason, "why");
   const body = document.createElement("div");
   body.className = "body";
-  rows(body, item.subject_ref);
+  ownerRows(body, {
+    display_label: item.display_label,
+    reason: item.reason,
+  });
+  technicalDetails(body, "Inspect subject source details", item.subject_ref || {});
   (item.evidence || []).forEach((evidence) => {
-    matrix(body, evidence);
-    rows(body, evidence, true);
+    const evidenceBox = document.createElement("div");
+    evidenceBox.className = "evidence-entry";
+    ownerRows(evidenceBox, evidence);
+    const details = document.createElement("details");
+    details.className = "technical-disclosure";
+    const summary = text(details, "summary", "Inspect evidence details");
+    summary.dataset.testid = "devui-technical-disclosure";
+    matrix(details, evidence);
+    rows(details, evidence, true);
+    evidenceBox.appendChild(details);
+    body.appendChild(evidenceBox);
   });
   (item.limitations || []).forEach((limitation) => text(body, "p", limitation, "empty"));
   card.appendChild(body);

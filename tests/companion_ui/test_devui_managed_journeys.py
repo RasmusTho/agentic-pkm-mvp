@@ -31,6 +31,71 @@ from app.builderops.devui_sources import package_candidate
 pytestmark = pytest.mark.browser_runtime
 ORIGIN = "http://127.0.0.1:8113"
 FOCUS = "/devui/focus?subject=github%3Aexample%2Ffixture%23501"
+EXPECTED_DISCLOSURE_SUMMARIES = {
+    "overview": [
+        "Inspect subject source details",
+        "Inspect evidence details",
+    ],
+    "focus": ["Inspect source and technical details"] * 10,
+}
+EXPECTED_FOCUS_ENTRY_IDENTITIES = {
+    "focus-owner-intent": [
+        {
+            "key": "summary",
+            "value": "Declared Context:\nFixture owner intent.\n\nDeclared Scope:\nFixture source scope.",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
+        }
+    ],
+    "focus-governing-sources": [
+        {
+            "key": "claim_id",
+            "value": "governing-subject",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
+        },
+        {
+            "key": "claim_id",
+            "value": "issue-declaration:source-anchors:r1-1e08b386e6ca3ff9",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501#source-anchors",
+        },
+        {
+            "key": "claim_id",
+            "value": "issue-declaration:source-docs:r1-6119125eb82ddba1",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501#source-docs",
+        },
+    ],
+    "focus-evidence": [
+        {
+            "key": "claim_id",
+            "value": "subject-read",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
+        },
+        {
+            "key": "claim_id",
+            "value": "issue-declaration:acceptance-criteria:r1-56e00693da9440a2",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501#acceptance-criteria",
+        },
+    ],
+    "focus-receipts": [],
+    "focus-risks": [],
+    "focus-next-step": [{"key": "legality", "value": "unavailable", "source_id": None, "locator": None}],
+    "focus-execution": [],
+    "focus-conversation": [{"key": "availability", "value": "unsupported", "source_id": None, "locator": None}],
+    "focus-limitations": [
+        {
+            "key": "kind",
+            "value": "criterion_results_unassessed",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501#acceptance-criteria",
+        },
+        {"key": "kind", "value": "owner_facts_unavailable", "source_id": None, "locator": None},
+    ],
+}
 
 
 @contextmanager
@@ -110,6 +175,48 @@ def _no_persistence(page, context):
     assert page.evaluate("navigator.serviceWorker.getRegistrations().then(x => x.length)") == 0
 
 
+def _assert_focus_technical_axis_disclosure(page):
+    axis_names = {"availability", "freshness", "coverage", "completeness", "cardinality", "linkage"}
+    for testid in ("focus-governing-sources", "focus-evidence"):
+        section = page.locator(f'[data-testid="{testid}"]')
+        entries = section.locator(':scope > div > .focus-entry').all()
+        assert entries
+        for entry in entries:
+            details = entry.locator(':scope > details.technical-disclosure')
+            assert details.count() == 1
+            assert not details.evaluate("element => element.open")
+            axis_rows = details.locator("ul.rungs > li").evaluate_all(
+                """items => items
+                    .map(item => [item.querySelector(':scope > b')?.textContent,
+                                  item.querySelector(':scope > code')?.textContent])
+                    .filter(([key]) => ['availability', 'freshness', 'coverage', 'completeness', 'cardinality', 'linkage'].includes(key))"""
+            )
+            assert axis_rows
+            owner_text = entry.locator(':scope > .owner-summary').inner_text().lower()
+            assert all(axis not in owner_text for axis in axis_names)
+            details.locator("summary").click()
+            assert details.evaluate("element => element.open")
+            expanded_rows = details.locator("ul.rungs > li").all()
+            assert all(row.is_visible() for row in expanded_rows)
+            expanded_axis_rows = details.locator("ul.rungs > li").evaluate_all(
+                """items => items
+                    .map(item => [item.querySelector(':scope > b')?.textContent,
+                                  item.querySelector(':scope > code')?.textContent])
+                    .filter(([key]) => ['availability', 'freshness', 'coverage', 'completeness', 'cardinality', 'linkage'].includes(key))"""
+            )
+            assert expanded_axis_rows == axis_rows
+            details.locator("summary").click()
+
+    conversation = page.locator('[data-testid="focus-conversation"]')
+    assert "unsupported" in conversation.inner_text().lower()
+    assert "not delivered" in conversation.inner_text().lower()
+    next_step = page.locator('[data-testid="focus-next-step"]')
+    assert "unavailable" in next_step.inner_text().lower()
+    assert "infer" in next_step.inner_text().lower()
+    limitation_text = page.locator('[data-testid="focus-limitations"]').inner_text().lower()
+    assert any(token in limitation_text for token in ("acceptance", "unassessed", "owner outcome"))
+
+
 def _capture(page, name):
     folder = os.environ.get("DEVUI_MANAGED_EVIDENCE_DIR")
     if folder:
@@ -119,40 +226,266 @@ def _capture(page, name):
         (path / (name + ".aria.txt")).write_text(page.locator("body").aria_snapshot())
 
 
-def _keyboard_navigation(page, surface):
-    """Prove the finite tab set and navigate without assuming browser-chrome focus."""
+def _keyboard_navigation(page, surface, *, navigate=True):
+    """Prove the finite fixture-bound disclosure inventory plus route link."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
     name = "Open Focus" if surface == "overview" else "Return to Overview"
     link = page.get_by_role("link", name=name)
     assert link.count() == 1
     assert link.get_attribute("href") == destination
+    expected_summaries = EXPECTED_DISCLOSURE_SUMMARIES[surface]
+    assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries, (
+        "Only the admitted navigation and disclosures are keyboard interactive"
+    )
+    if surface == "overview":
+        assert page.evaluate(
+            """() => {
+                const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                const body = card && card.querySelector(':scope > .body');
+                const subject = body && body.querySelector(':scope > details.technical-disclosure');
+                const evidence = body && body.querySelector(':scope > .evidence-entry');
+                const evidenceDetails = evidence && evidence.querySelector(':scope > details.technical-disclosure');
+                const link = card && card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+                const controlChildren = body
+                    ? Array.from(body.children).filter(child =>
+                        child.matches('details.technical-disclosure,.evidence-entry'))
+                    : [];
+                const rowShape = details => details && Array.from(details.children).map(child =>
+                    child.matches('summary') ? 'summary' :
+                    child.classList.contains('matrix') ? 'matrix' :
+                    child.matches('ul.rungs') ? 'rungs' : child.tagName.toLowerCase());
+                const rowValue = (details, key) => {
+                    const row = details && Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
+                        .find(item => item.querySelector(':scope > b')?.textContent === key);
+                    return row ? row.querySelector(':scope > code')?.textContent : null;
+                };
+                return Boolean(card && body && subject && evidence && evidenceDetails && link) &&
+                    card.children[2] === body && card.lastElementChild === link &&
+                    link.parentElement === card && link.matches('a[data-testid="overview-focus-link"]') &&
+                    controlChildren.length === 2 && controlChildren[0] === subject &&
+                    controlChildren[1] === evidence && evidence.parentElement === body &&
+                    body.firstElementChild?.classList.contains('owner-summary') &&
+                    Array.from(body.children).indexOf(body.firstElementChild) < Array.from(body.children).indexOf(subject) &&
+                    Array.from(evidence.children).length === 2 && evidence.children[0].classList.contains('owner-summary') &&
+                    evidence.children[1] === evidenceDetails && rowShape(subject).join(',') === 'summary,rungs' &&
+                    rowShape(evidenceDetails).join(',') === 'summary,matrix,rungs' &&
+                    rowValue(subject, 'source_id') === 'github:example/fixture#501' &&
+                    (() => { try { return JSON.parse(rowValue(evidenceDetails, 'source_ref')).source_id === 'cockpit:working:github:example/fixture#501'; } catch (_) { return false; } })();
+            }"""
+        ), "Only the admitted navigation and disclosures are keyboard interactive"
+    else:
+        expected_entries = [
+            {"section": testid, "entries": identities}
+            for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items()
+        ]
+        actual_entries = page.evaluate(
+            """sectionSpecs => sectionSpecs.map(({section, entries}) => {
+                const root = document.querySelector(`[data-testid="${section}"]`);
+                const content = root && root.querySelector(':scope > div');
+                if (!root || !content || root.children.length !== 2 || root.children[0].tagName !== 'H2') {
+                    return {section, invalid: 'section-shape'};
+                }
+                if (entries.length === 0) {
+                    return {
+                        section,
+                        entries: content.children.length === 1 && content.children[0].classList.contains('empty') ? [] : null,
+                    };
+                }
+                const actual = Array.from(content.children).map(entry => {
+                    if (!entry.classList.contains('focus-entry') || entry.children.length !== 2 ||
+                        !entry.children[0].classList.contains('owner-summary') ||
+                        !entry.children[1].matches('details.technical-disclosure')) {
+                        return {invalid: 'entry-shape'};
+                    }
+                    const details = entry.children[1];
+                    if (details.children.length !== 2 || !details.children[0].matches('summary') ||
+                        !details.children[1].matches('ul.rungs')) {
+                        return {invalid: 'details-shape'};
+                    }
+                    const rows = {};
+                    Array.from(details.querySelectorAll(':scope > ul.rungs > li')).forEach(row => {
+                        const key = row.querySelector(':scope > b')?.textContent;
+                        const value = row.querySelector(':scope > code')?.textContent;
+                        if (key) rows[key] = value;
+                    });
+                    const key = ['claim_id', 'kind', 'summary', 'legality', 'availability']
+                        .find(candidate => Object.prototype.hasOwnProperty.call(rows, candidate));
+                    let source = null;
+                    if (rows.source_ref) {
+                        try { source = JSON.parse(rows.source_ref); } catch (_) { return {invalid: 'source-ref'}; }
+                    }
+                    return {
+                        key,
+                        value: key ? rows[key] : null,
+                        source_id: source?.source_id ?? null,
+                        locator: source?.locator ?? null,
+                    };
+                });
+                return {section, entries: actual};
+            })""",
+            expected_entries,
+        )
+        assert actual_entries == expected_entries, "Only the admitted navigation and disclosures are keyboard interactive"
+    assert page.evaluate(
+        """inventory => {
+            const identity = entry => {
+                const details = entry.querySelector(':scope > details.technical-disclosure');
+                if (!details || details.children.length !== 2 || !details.children[0].matches('summary') ||
+                    !details.children[1].matches('ul.rungs')) return null;
+                const rows = {};
+                Array.from(details.querySelectorAll(':scope > ul.rungs > li')).forEach(row => {
+                    const key = row.querySelector(':scope > b')?.textContent;
+                    const value = row.querySelector(':scope > code')?.textContent;
+                    if (key) rows[key] = value;
+                });
+                const key = ['claim_id', 'kind', 'summary', 'legality', 'availability']
+                    .find(candidate => Object.prototype.hasOwnProperty.call(rows, candidate));
+                let source = null;
+                if (rows.source_ref) {
+                    try { source = JSON.parse(rows.source_ref); } catch (_) { return null; }
+                }
+                return {
+                    key,
+                    value: key ? rows[key] : null,
+                    source_id: source?.source_id ?? null,
+                    locator: source?.locator ?? null,
+                };
+            };
+            const expectedEntry = (section, spec) => {
+                const root = document.querySelector(`[data-testid="${section}"]`);
+                const content = root && root.querySelector(':scope > div');
+                if (!content) return null;
+                return Array.from(content.children).find(entry =>
+                    JSON.stringify(identity(entry)) === JSON.stringify(spec)
+                );
+            };
+            const expected = inventory.surface === 'overview'
+                ? (() => {
+                    const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                    const body = card && card.querySelector(':scope > .body');
+                    return [
+                        body && body.querySelector(':scope > details.technical-disclosure > summary'),
+                        body && body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
+                        card && card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
+                    ];
+                })()
+                : [
+                    document.querySelector('[data-testid="overview-return"]'),
+                    ...inventory.sections.flatMap(({section, entries}) => entries.map(spec => {
+                        const entry = expectedEntry(section, spec);
+                        return entry && entry.querySelector(':scope > details.technical-disclosure > summary');
+                    })),
+                ];
+            if (expected.some(element => !element)) return false;
+            const visible = element => element.getClientRects().length &&
+                getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
+            const interactiveRoles = new Set([
+                'button', 'checkbox', 'combobox', 'gridcell', 'link', 'listbox', 'menuitem',
+                'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'scrollbar', 'searchbox',
+                'slider', 'spinbutton', 'switch', 'tab', 'textbox', 'treeitem'
+            ]);
+            const interactive = element => visible(element) && (
+                element.tabIndex >= 0 || element.isContentEditable ||
+                element.matches('a[href],area[href],button,input,select,textarea,summary,audio[controls],video[controls]') ||
+                interactiveRoles.has(element.getAttribute('role'))
+            );
+            const actual = Array.from(document.querySelectorAll('*')).filter(interactive);
+            if (inventory.surface === 'focus') {
+                const shell = document.querySelector('[data-testid="devui-focus"]');
+                const claim = shell && shell.querySelector(':scope > .claim');
+                const grid = shell && shell.querySelector(':scope > .focus-grid');
+                const returnLink = document.querySelector('[data-testid="overview-return"]');
+                if (!shell || !claim || !grid || !returnLink || returnLink.parentElement !== claim ||
+                    claim.lastElementChild !== returnLink ||
+                    Array.from(shell.children).indexOf(claim) >= Array.from(shell.children).indexOf(grid)) return false;
+            }
+            return actual.length === expected.length && actual.every((element, index) => element === expected[index]) &&
+                expected.every(summary => !summary.matches('summary') ||
+                    (summary.dataset.testid === 'devui-technical-disclosure' &&
+                     summary.parentElement.firstElementChild === summary));
+        }""",
+        {
+            "surface": surface,
+            "sections": [
+                {"section": testid, "entries": identities}
+                for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items()
+            ],
+        },
+    ), "Only the admitted navigation and disclosures are keyboard interactive"
+    assert page.evaluate(
+        """() => Array.from(document.querySelectorAll('details.technical-disclosure > summary')).every(summary =>
+            !summary.isContentEditable && !summary.hasAttribute('role') &&
+            !summary.hasAttribute('tabindex') &&
+            !summary.querySelector('button,a,input,textarea,select,[tabindex],[contenteditable]'))"""
+    ), "Only the admitted navigation and disclosures are keyboard interactive"
     assert page.evaluate(
         """expected => Array.from(document.querySelectorAll('*')).filter(el =>
             (el.tabIndex >= 0 || el.isContentEditable) &&
             !el.matches(':disabled') && !el.closest('[inert]') &&
             el.getClientRects().length && getComputedStyle(el).visibility === 'visible'
-        ).every(el => el === expected)""",
+        ).every(el => el === expected || el.matches('details.technical-disclosure > summary'))""",
         link.element_handle(),
-    ), "Only the admitted navigation is keyboard interactive"
+    ), "Only the admitted navigation and disclosures are keyboard interactive"
     page.bring_to_front()
-    for _ in range(4):
+    summaries = page.locator("details.technical-disclosure > summary").all()
+    for summary in summaries:
+        summary.focus()
+        assert summary.evaluate("el => document.activeElement === el")
+        page.keyboard.press("Enter")
+        assert summary.evaluate("el => el.parentElement.open") is True
+        page.keyboard.press("Space")
+        assert summary.evaluate("el => el.parentElement.open") is False
+    page.mouse.click(2, 2)
+    assert page.evaluate("document.activeElement === document.body"), "Browser did not reset focus to body"
+    expected_focus = [link]
+    if surface == "overview":
+        card = page.locator('[data-testid="overview-now"] > article.card')
+        expected_focus = [
+            card.locator(':scope > .body > details.technical-disclosure > summary'),
+            card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
+            card.locator(':scope > a[data-testid="overview-focus-link"]'),
+        ]
+    else:
+        expected_focus = [page.locator('[data-testid="overview-return"]')]
+        for testid, identities in EXPECTED_FOCUS_ENTRY_IDENTITIES.items():
+            section = page.locator(f'[data-testid="{testid}"]')
+            expected_focus.extend(
+                section.locator(':scope > div > .focus-entry > details.technical-disclosure > summary').all()
+            )
+    for expected in expected_focus:
         page.keyboard.press("Tab")
         assert page.evaluate(
-            """expected => [document.body, document.documentElement, expected]
-                .includes(document.activeElement)""",
-            link.element_handle(),
-        ), "Unexpected keyboard focus outside admitted navigation"
-        if link.evaluate("el => el === document.activeElement"):
-            break
-    else:
-        pytest.fail("Admitted navigation was not reachable by Tab")
-    page.keyboard.press("Enter")
-    page.wait_for_url(ORIGIN + destination)
-    _loaded(page, "focus" if surface == "overview" else "overview")
+            """expected => document.activeElement === expected""", expected.element_handle()
+        ), "Unexpected keyboard focus outside admitted navigation and disclosures"
+    if navigate:
+        link.focus()
+        assert page.evaluate("expected => document.activeElement === expected", link.element_handle())
+        page.keyboard.press("Enter")
+        page.wait_for_url(ORIGIN + destination)
+        _loaded(page, "focus" if surface == "overview" else "overview")
 
 
 @pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
-@pytest.mark.parametrize("action", ["button", "link", "tabindex", "editable"])
+@pytest.mark.parametrize(
+    "action",
+    [
+        "button",
+        "link",
+        "tabindex",
+        "editable",
+        "disclosure",
+        "disclosure_misplaced",
+        "body_after_focus",
+        "summary_editable",
+        "evidence_after_body",
+        "navigation_nested_in_evidence",
+        "governing_entries_swapped",
+        "details_before_owner_summary",
+        "details_before_focus_entry",
+        "details_prepended_into_other_entry",
+        "return_outside_claim",
+    ],
+)
 def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     managed_sources, monkeypatch, surface, path, action  # noqa: F811 - imported pytest fixture
 ):
@@ -162,18 +495,120 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     ):
         page.goto(ORIGIN + path)
         _loaded(page, surface)
+        _keyboard_navigation(page, surface, navigate=False)
         # Fault injection into the actual production-served DOM, not a substitute page.
         page.evaluate("""kind => {
-            const el = document.createElement(kind === 'button' ? 'button' :
-                kind === 'link' ? 'a' : 'div');
+            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+            const focusSection = document.querySelector('[data-testid="focus-governing-sources"] > div');
+            if (kind === 'disclosure_misplaced') {
+                const details = Array.from(document.querySelectorAll('details.technical-disclosure'));
+                details.forEach(item => document.querySelector('main').append(item));
+                return;
+            }
+            if (kind === 'body_after_focus') {
+                const card = document.querySelector('[data-testid="overview-now"] article');
+                if (card) {
+                    card.append(card.querySelector('.body'));
+                } else {
+                    const grid = document.querySelector('.focus-grid');
+                    document.querySelector('[data-testid="overview-return"]').closest('.claim').before(grid);
+                }
+                return;
+            }
+            if (kind === 'evidence_after_body') {
+                if (card) {
+                    const evidence = card.querySelector(':scope > .body > .evidence-entry');
+                    card.insertBefore(evidence, card.querySelector(':scope > a[data-testid="overview-focus-link"]'));
+                } else {
+                    const first = focusSection.querySelector(':scope > .focus-entry');
+                    focusSection.append(first);
+                }
+                return;
+            }
+            if (kind === 'navigation_nested_in_evidence') {
+                if (card) {
+                    const evidence = card.querySelector(':scope > .body > .evidence-entry');
+                    evidence.append(card.querySelector(':scope > a[data-testid="overview-focus-link"]'));
+                } else {
+                    const entry = focusSection.querySelector(':scope > .focus-entry');
+                    entry.append(document.querySelector('[data-testid="overview-return"]'));
+                }
+                return;
+            }
+            if (kind === 'governing_entries_swapped') {
+                if (focusSection) {
+                    const entries = focusSection.querySelectorAll(':scope > .focus-entry');
+                    focusSection.insertBefore(entries[1], entries[0]);
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    const subject = body.querySelector(':scope > details.technical-disclosure');
+                    const evidence = body.querySelector(':scope > .evidence-entry');
+                    body.insertBefore(evidence, subject);
+                }
+                return;
+            }
+            if (kind === 'details_before_owner_summary') {
+                if (focusSection) {
+                    const entry = focusSection.querySelector(':scope > .focus-entry');
+                    entry.insertBefore(entry.querySelector(':scope > details.technical-disclosure'), entry.firstElementChild);
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    body.insertBefore(body.querySelector(':scope > details.technical-disclosure'), body.firstElementChild);
+                }
+                return;
+            }
+            if (kind === 'details_before_focus_entry') {
+                if (focusSection) {
+                    const entry = focusSection.querySelector(':scope > .focus-entry');
+                    focusSection.insertBefore(entry.querySelector(':scope > details.technical-disclosure'), entry);
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    body.insertBefore(body.querySelector(':scope > details.technical-disclosure'), body.firstElementChild);
+                }
+                return;
+            }
+            if (kind === 'details_prepended_into_other_entry') {
+                if (focusSection) {
+                    const entries = focusSection.querySelectorAll(':scope > .focus-entry');
+                    entries[1].prepend(entries[0].querySelector(':scope > details.technical-disclosure'));
+                } else if (card) {
+                    const body = card.querySelector(':scope > .body');
+                    const subject = body.querySelector(':scope > details.technical-disclosure');
+                    body.querySelector(':scope > .evidence-entry').prepend(subject);
+                }
+                return;
+            }
+            if (kind === 'return_outside_claim') {
+                if (focusSection) {
+                    const returnLink = document.querySelector('[data-testid="overview-return"]');
+                    const claim = returnLink && returnLink.closest('.claim');
+                    if (returnLink && claim) claim.parentElement.insertBefore(returnLink, claim);
+                } else if (card) {
+                    const link = card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+                    if (link) card.parentElement.insertBefore(link, card);
+                }
+                return;
+            }
+            if (kind === 'summary_editable') {
+                document.querySelector('details.technical-disclosure > summary').contentEditable = 'true';
+                return;
+            }
+            const el = document.createElement(kind === 'disclosure' ? 'details' :
+                kind === 'button' ? 'button' : kind === 'link' ? 'a' : 'div');
             el.textContent = 'Unexpected action';
+            if (kind === 'disclosure') {
+                el.className = 'technical-disclosure';
+                const summary = document.createElement('summary');
+                summary.textContent = 'Unreviewed injected disclosure';
+                el.replaceChildren(summary, document.createElement('p'));
+            }
             if (kind === 'link') el.href = '/unexpected-action';
             if (kind === 'tabindex') { el.tabIndex = 0; el.setAttribute('role', 'button'); }
             if (kind === 'editable') el.contentEditable = 'true';
             document.querySelector('main').append(el);
         }""", action)
         with pytest.raises(AssertionError, match="Only the admitted navigation"):
-            _keyboard_navigation(page, surface)
+            _keyboard_navigation(page, surface, navigate=False)
         assert page.url == ORIGIN + path
         assert all(method == "GET" for method, _ in requests)
         assert not external and not errors and not console
@@ -245,6 +680,8 @@ def test_managed_journey_hostile_accessibility_and_no_effect_matrix(managed_sour
             assert "<img" in page.locator("body").inner_text()
             assert page.get_by_role("main").get_attribute("aria-labelledby") == surface + "-heading"
             assert page.get_by_role("heading", level=1).count() == 1
+            if surface == "focus":
+                _assert_focus_technical_axis_disclosure(page)
             _keyboard_navigation(page, surface)
             page.goto(ORIGIN + path)
             _loaded(page, surface)

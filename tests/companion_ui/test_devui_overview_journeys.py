@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +24,8 @@ except ImportError:
     pytest.skip("playwright package not installed", allow_module_level=True)
 
 from companion_ui.workspace.serve_dev_page import make_handler
+from app.builderops.devui_focus import _source_claim
+from app.builderops.devui_overview import compose_overview_view
 from tests.companion_ui._devui_overview_exact_ref_evidence import (
     ExactRefEvidenceRecorder,
 )
@@ -67,6 +70,10 @@ def _overview() -> dict[str, Any]:
                 "linkage": "linked",
                 "captured_at": "2026-08-28T10:00:00+00:00",
                 "read_watermark": "2026-08-28T10:00:00+00:00",
+                "opaque_diagnostic": {
+                    "commit_sha": "ab" * 20,
+                    "source_id": "private-source-marker",
+                },
                 "limitation": None,
             }
         ],
@@ -121,6 +128,7 @@ def _focus() -> dict[str, Any]:
         "cardinality": "nonempty",
         "linkage": "linked",
         "captured_at": "2026-08-28T10:00:00+00:00",
+        "read_watermark": "2026-08-28T10:00:00+00:00",
         "limitation": None,
     }
     return {
@@ -140,15 +148,36 @@ def _focus() -> dict[str, Any]:
         },
         "governing_sources": [claim],
         "evidence": [{**claim, "claim_id": "subject-read"}],
-        "receipts": [],
-        "risks": [],
+        "receipts": [
+            {
+                "receipt_ref": "receipt-4836",
+                "source_ref": _source("receipt:4836"),
+                "correlation": "focus-4836",
+            }
+        ],
+        "risks": [
+            {
+                "risk_id": "risk-4836",
+                "summary": "No acceptance receipt is available.",
+                "source_ref": _source("risk:4836"),
+            }
+        ],
         "next_legal_step": {
             "workflow_ref": None,
             "actor_class": "system",
             "legality": "unavailable",
             "reason": "No transition is inferred.",
         },
-        "execution_observations": [],
+        "execution_observations": [
+            {
+                "observation_ref": "observation-4836",
+                "observed_at": "2026-08-28T10:00:00+00:00",
+                "provider": "builderops_cockpit",
+                "summary": "The read model was observed without mutation.",
+                "source_ref": _source("observation:4836"),
+                "correlation": "focus-4836",
+            }
+        ],
         "conversation_port": {
             "availability": "unsupported",
             "reason": "Conversation is not delivered here.",
@@ -163,9 +192,53 @@ def _focus() -> dict[str, Any]:
     }
 
 
+def _validate_overview_fixture(payload: dict[str, Any]) -> None:
+    candidate = json.loads(json.dumps(payload["now"][0]))
+    candidate["evidence"][0].pop("opaque_diagnostic", None)
+    compose_overview_view(
+        composition={
+            "contract_version": "devui.composition.v1",
+            "authority": "projection_only",
+            "captured_at": payload["composed_at"],
+            "providers": {
+                "fixture": {
+                    "provider": "fixture",
+                    "status": "available",
+                    "authority": "fixture",
+                    "captured_at": payload["composed_at"],
+                    "snapshot": "fixture:42",
+                    "completeness": "complete",
+                }
+            },
+        },
+        candidates={"now": [candidate], "needs_you": [], "ready_to_try": []},
+    )
+
+
+def _validate_focus_fixture(payload: dict[str, Any]) -> None:
+    # Validate only the source claims under mutation.  The journey fixture's
+    # unrelated receipt/observation shortcuts intentionally remain opaque to
+    # this focused source-state check.
+    for section in ("governing_sources", "evidence"):
+        for index, claim in enumerate(payload[section]):
+            _source_claim(claim, label=f"{section}[{index}]")
+
+
 class _Client:
-    def __init__(self, *, focus_status: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        focus_status: int = 200,
+        evidence_state: str | None = None,
+        explicit_limitation: str | None = None,
+        neutral_cardinality: str | None = None,
+        claim_without_support: bool = False,
+    ) -> None:
         self.focus_status = focus_status
+        self.evidence_state = evidence_state
+        self.explicit_limitation = explicit_limitation
+        self.neutral_cardinality = neutral_cardinality
+        self.claim_without_support = claim_without_support
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def get_with_status(
@@ -173,15 +246,95 @@ class _Client:
     ) -> tuple[int, dict[str, Any]]:
         self.calls.append((url, params))
         if url == "/api/devui/overview":
-            return 200, _overview()
+            payload = _overview()
+            evidence = payload["now"][0]["evidence"][0]
+            if self.evidence_state == "stale":
+                evidence.update(freshness="stale", limitation=None)
+            elif self.evidence_state == "unknown":
+                evidence.update(freshness="unknown", limitation=None)
+            elif self.evidence_state == "partial":
+                evidence.update(completeness="partial", limitation=None)
+            if self.explicit_limitation is not None:
+                evidence["limitation"] = self.explicit_limitation
+            if self.claim_without_support:
+                evidence["claim"] = None
+            if self.neutral_cardinality == "not_countable":
+                evidence.update(
+                    claim=None,
+                    completeness="not_applicable",
+                    cardinality="not_countable",
+                    linkage="not_applicable",
+                    limitation="This source does not declare requirement coverage.",
+                )
+            elif self.neutral_cardinality == "measured_empty":
+                evidence.update(
+                    claim="No matching items were measured.",
+                    completeness="complete",
+                    cardinality="measured_empty",
+                    linkage="linked",
+                    limitation=None,
+                )
+            _validate_overview_fixture(payload)
+            return 200, payload
         if self.focus_status != 200:
             return self.focus_status, {"detail": "unavailable"}
-        return 200, _focus()
+        payload = _focus()
+        if self.evidence_state in {"stale", "unknown", "partial"}:
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim["limitation"] = None
+                    if self.evidence_state in {"stale", "unknown"}:
+                        claim["freshness"] = self.evidence_state
+                    else:
+                        claim["coverage"] = "partial"
+        if self.explicit_limitation is not None:
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim["limitation"] = self.explicit_limitation
+        if self.claim_without_support:
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim["claim"] = None
+        if self.neutral_cardinality == "not_countable":
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim.update(
+                        claim=None,
+                        coverage="not_applicable",
+                        cardinality="not_countable",
+                        linkage="not_applicable",
+                        limitation="This source does not declare requirement coverage.",
+                    )
+        elif self.neutral_cardinality == "measured_empty":
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim.update(
+                        claim="No matching items were measured.",
+                        coverage="complete",
+                        cardinality="measured_empty",
+                        linkage="linked",
+                        limitation=None,
+                    )
+        _validate_focus_fixture(payload)
+        return 200, payload
 
 
 @contextmanager
-def _serve(*, focus_status: int = 200) -> Iterator[tuple[str, _Client]]:
-    client = _Client(focus_status=focus_status)
+def _serve(
+    *,
+    focus_status: int = 200,
+    evidence_state: str | None = None,
+    explicit_limitation: str | None = None,
+    neutral_cardinality: str | None = None,
+    claim_without_support: bool = False,
+) -> Iterator[tuple[str, _Client]]:
+    client = _Client(
+        focus_status=focus_status,
+        evidence_state=evidence_state,
+        explicit_limitation=explicit_limitation,
+        neutral_cardinality=neutral_cardinality,
+        claim_without_support=claim_without_support,
+    )
     handler = make_handler(
         client=client,  # type: ignore[arg-type]
         api_base_url="http://127.0.0.1:18000",
@@ -220,6 +373,103 @@ def _browser(base_url: str):
 
     context.route("**/*", record)
     return playwright, browser, context, context.new_page(), external
+
+
+def _assert_candidate_overview_control_inventory(page) -> None:
+    expected_summaries = ["Inspect subject source details", "Inspect evidence details"]
+    assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries
+    candidate_inventory = page.evaluate(
+        """() => {
+            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+            const body = card && card.querySelector(':scope > .body');
+            const subject = body && body.querySelector(':scope > details.technical-disclosure');
+            const evidence = body && body.querySelector(':scope > .evidence-entry');
+            const evidenceDetails = evidence && evidence.querySelector(':scope > details.technical-disclosure');
+            const link = card && card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+            const rowValue = (details, key) => {
+                const row = details && Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
+                    .find(item => item.querySelector(':scope > b')?.textContent === key);
+                return row ? row.querySelector(':scope > code')?.textContent : null;
+            };
+            const sourceValue = (details, key) => {
+                try { return JSON.parse(rowValue(details, key)); } catch (_) { return null; }
+            };
+            const controlChildren = body
+                ? Array.from(body.children).filter(child => child.matches('details.technical-disclosure,.evidence-entry'))
+                : [];
+            const checks = {
+                nodes: Boolean(card && body && subject && evidence && evidenceDetails && link),
+                card_order: Boolean(card && body &&
+                    card.children[0]?.classList.contains('card-title') &&
+                    card.children[1]?.classList.contains('why') &&
+                    card.children[2] === body),
+                link_last: Boolean(card && link && card.lastElementChild === link && link.parentElement === card),
+                controls: controlChildren.length === 2 && controlChildren[0] === subject && controlChildren[1] === evidence,
+                evidence_parent: Boolean(evidence && evidence.parentElement === body),
+                evidence_order: Boolean(body && subject && evidence && Array.from(body.children).indexOf(subject) < Array.from(body.children).indexOf(evidence)),
+                owner_order: Boolean(body && body.firstElementChild?.classList.contains('owner-summary') &&
+                    Array.from(body.children).indexOf(body.querySelector(':scope > .owner-summary')) <
+                    Array.from(body.children).indexOf(subject)),
+                evidence_owner: Boolean(evidence && evidence.children.length === 2 && evidence.children[0].classList.contains('owner-summary')),
+                evidence_details: Boolean(evidence && evidence.children[1] === evidenceDetails),
+                subject_shape: Boolean(subject && Array.from(subject.children).map(child => child.tagName.toLowerCase()).join(',') === 'summary,ul'),
+                evidence_shape: Boolean(evidenceDetails && Array.from(evidenceDetails.children).map(child => child.tagName.toLowerCase()).join(',') === 'summary,div,ul'),
+                subject_source: rowValue(subject, 'source_id') === 'github:RasmusTho/agentic-pkm-mvp#4836',
+                evidence_source: sourceValue(evidenceDetails, 'source_ref')?.source_id === 'cockpit:working:4836',
+            };
+            const ok = Object.values(checks).every(Boolean);
+            return {ok, checks};
+        }"""
+    )
+    assert candidate_inventory["ok"], candidate_inventory["checks"]
+    assert page.evaluate(
+        """() => {
+            const summaries = Array.from(document.querySelectorAll('details.technical-disclosure > summary'));
+            return summaries.every(summary =>
+                summary.dataset.testid === 'devui-technical-disclosure' &&
+                summary.parentElement.firstElementChild === summary &&
+                !summary.isContentEditable && !summary.hasAttribute('role') &&
+                !summary.hasAttribute('tabindex') &&
+                !summary.querySelector('button,a,input,textarea,select,[tabindex],[contenteditable]'));
+        }"""
+    ), "Only the candidate fixture's admitted navigation and disclosures are keyboard interactive"
+    assert page.evaluate(
+        """() => {
+            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+            const body = card.querySelector(':scope > .body');
+            const expected = [
+                body.querySelector(':scope > details.technical-disclosure > summary'),
+                body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
+                card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
+            ];
+            const visible = element => element.getClientRects().length &&
+                getComputedStyle(element).visibility !== 'hidden' && !element.closest('[inert]');
+            const interactiveRoles = new Set([
+                'button', 'checkbox', 'combobox', 'gridcell', 'link', 'listbox', 'menuitem',
+                'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'scrollbar', 'searchbox',
+                'slider', 'spinbutton', 'switch', 'tab', 'textbox', 'treeitem'
+            ]);
+            const interactive = element => visible(element) && (
+                element.tabIndex >= 0 || element.isContentEditable ||
+                element.matches('a[href],area[href],button,input,select,textarea,summary,audio[controls],video[controls]') ||
+                interactiveRoles.has(element.getAttribute('role'))
+            );
+            const actual = Array.from(document.querySelectorAll('*')).filter(interactive);
+            return expected.every(Boolean) && actual.length === expected.length &&
+                actual.every((element, index) => element === expected[index]);
+        }"""
+    ), "Only the candidate fixture's admitted navigation and disclosures are keyboard interactive"
+    page.mouse.click(2, 2)
+    assert page.evaluate("document.activeElement === document.body"), "Browser did not reset focus to body"
+    card = page.locator('[data-testid="overview-now"] > article.card')
+    expected_focus = [
+        card.locator(':scope > .body > details.technical-disclosure > summary'),
+        card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
+        card.locator(':scope > a[data-testid="overview-focus-link"]'),
+    ]
+    for expected in expected_focus:
+        page.keyboard.press("Tab")
+        assert page.evaluate("expected => document.activeElement === expected", expected.element_handle())
 
 
 def test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha() -> None:
@@ -358,6 +608,9 @@ def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
             page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
             card_body = page.locator('[data-testid="overview-now"] article .body')
             assert card_body.locator(".matrix [data-axis]").count() == 5
+            assert all(
+                not axis.is_visible() for axis in card_body.locator(".matrix [data-axis]").all()
+            )
             for axis in ("availability", "freshness", "completeness", "cardinality", "linkage"):
                 assert card_body.locator("b").filter(has_text=axis).count() == 1
             evidence_rows = card_body.locator(".rungs").nth(1)
@@ -370,6 +623,10 @@ def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
                 "limitation",
             ):
                 assert evidence_rows.locator("b").filter(has_text=field).count() == 1
+            card_body.locator("details.technical-disclosure").nth(1).locator("summary").click()
+            assert all(
+                axis.is_visible() for axis in card_body.locator(".matrix [data-axis]").all()
+            )
             evidence_text = evidence_rows.inner_text()
             assert "working-4836" in evidence_text
             assert "Working projection contains this item." in evidence_text
@@ -401,6 +658,327 @@ def test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport() -> No
             playwright.stop()
 
 
+def test_overview_now_card_renders_owner_language_not_raw_field_names() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            card = page.locator('[data-testid="overview-now"] article').first
+            visible = card.inner_text()
+            assert "Claim" in visible
+            owner_summary = card.locator(".evidence-entry > .owner-summary")
+            assert "Source evidence requires attention" not in owner_summary.inner_text()
+            assert "Unavailable" not in owner_summary.inner_text()
+            for raw_name in ("subject_ref", "source_ref", "evidence_id", "captured_at"):
+                assert raw_name not in visible
+            card.locator("details.technical-disclosure").nth(1).locator("summary").click()
+            expanded = card.inner_text()
+            assert "Availability" in expanded
+            assert "Freshness" in expanded
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+@pytest.mark.parametrize("evidence_state", ["stale", "unknown", "partial"])
+def test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent(
+    evidence_state: str,
+) -> None:
+    with _serve(evidence_state=evidence_state) as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            overview_owner_summary = page.locator(
+                '[data-testid="overview-now"] article .evidence-entry > .owner-summary'
+            )
+            overview_text = overview_owner_summary.inner_text()
+            assert "Source evidence requires attention" in overview_text
+            assert {
+                "stale": "the source is stale",
+                "unknown": "source timing is unknown",
+                "partial": "required content is incomplete",
+            }[evidence_state] in overview_text
+            assert "Limitation" not in overview_text
+            assert "Unavailable" not in overview_text
+            assert all(
+                axis not in overview_text.lower()
+                for axis in ("availability", "freshness", "completeness", "cardinality", "linkage")
+            )
+            overview_details = page.locator(
+                '[data-testid="overview-now"] article details.technical-disclosure'
+            ).nth(1)
+            overview_details.locator("summary").click()
+            overview_rows = overview_details.locator("ul.rungs > li").evaluate_all(
+                """items => Object.fromEntries(items.map(item => [
+                    item.querySelector(':scope > b')?.textContent,
+                    item.querySelector(':scope > code')?.textContent,
+                ]))"""
+            )
+            overview_axes = overview_details.locator(".matrix > .axis").evaluate_all(
+                """items => Object.fromEntries(items.map(item => [
+                    item.dataset.axis, item.dataset.value,
+                ]))"""
+            )
+            assert overview_rows["limitation"] == "null"
+            if evidence_state in {"stale", "unknown"}:
+                assert overview_axes["freshness"] == evidence_state
+            else:
+                assert overview_axes["completeness"] == evidence_state
+
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in ("focus-governing-sources", "focus-evidence"):
+                owner_summary = page.locator(
+                    f'[data-testid="{testid}"] .focus-entry > .owner-summary'
+                ).first
+                focus_text = owner_summary.inner_text()
+                assert "Source evidence requires attention" in focus_text
+                assert {
+                    "stale": "the source is stale",
+                    "unknown": "source timing is unknown",
+                    "partial": "required content is incomplete",
+                }[evidence_state] in focus_text
+                assert "Limitation" not in focus_text
+                assert "Unavailable" not in focus_text
+                assert all(
+                    axis not in focus_text.lower()
+                    for axis in ("availability", "freshness", "coverage", "cardinality", "linkage")
+                )
+                focus_details = page.locator(
+                    f'[data-testid="{testid}"] .focus-entry details.technical-disclosure'
+                ).first
+                focus_details.locator("summary").click()
+                focus_rows = focus_details.locator("ul.rungs > li").evaluate_all(
+                    """items => Object.fromEntries(items.map(item => [
+                        item.querySelector(':scope > b')?.textContent,
+                        item.querySelector(':scope > code')?.textContent,
+                    ]))"""
+                )
+                assert focus_rows["limitation"] == "null"
+                if evidence_state in {"stale", "unknown"}:
+                    assert focus_rows["freshness"] == evidence_state
+                else:
+                    assert focus_rows["coverage"] == evidence_state
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+@pytest.mark.parametrize("neutral_cardinality", ["not_countable", "measured_empty"])
+def test_neutral_not_applicable_and_countable_states_stay_silent(
+    neutral_cardinality: str,
+) -> None:
+    with _serve(neutral_cardinality=neutral_cardinality) as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            overview_owner_summary = page.locator(
+                '[data-testid="overview-now"] article .evidence-entry > .owner-summary'
+            )
+            assert "Source evidence requires attention" not in overview_owner_summary.inner_text()
+            overview_details = page.locator(
+                '[data-testid="overview-now"] article details.technical-disclosure'
+            ).nth(1)
+            overview_details.locator("summary").click()
+            overview_axes = overview_details.locator(".matrix > .axis").evaluate_all(
+                """items => Object.fromEntries(items.map(item => [
+                    item.dataset.axis, item.dataset.value,
+                ]))"""
+            )
+            if neutral_cardinality == "not_countable":
+                assert overview_axes["completeness"] == "not_applicable"
+                assert overview_axes["cardinality"] == "not_countable"
+                assert overview_axes["linkage"] == "not_applicable"
+            else:
+                assert overview_axes["completeness"] == "complete"
+                assert overview_axes["cardinality"] == "measured_empty"
+                assert overview_axes["linkage"] == "linked"
+
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in ("focus-governing-sources", "focus-evidence"):
+                section = page.locator(f'[data-testid="{testid}"]')
+                assert "Source evidence requires attention" not in section.locator(
+                    ".focus-entry > .owner-summary"
+                ).first.inner_text()
+                details = section.locator(".focus-entry details.technical-disclosure").first
+                details.locator("summary").click()
+                rows = details.locator("ul.rungs > li").evaluate_all(
+                    """items => Object.fromEntries(items.map(item => [
+                        item.querySelector(':scope > b')?.textContent,
+                        item.querySelector(':scope > code')?.textContent,
+                    ]))"""
+                )
+                if neutral_cardinality == "not_countable":
+                    assert rows["coverage"] == "not_applicable"
+                    assert rows["cardinality"] == "not_countable"
+                    assert rows["linkage"] == "not_applicable"
+                else:
+                    assert rows["coverage"] == "complete"
+                    assert rows["cardinality"] == "measured_empty"
+                    assert rows["linkage"] == "linked"
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_explicit_limitation_remains_visible_in_overview_and_focus() -> None:
+    limitation = "Source read is bounded to the admitted fixture scope."
+    with _serve(
+        explicit_limitation=limitation, claim_without_support=True
+    ) as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            overview_owner_summary = page.locator(
+                '[data-testid="overview-now"] article .evidence-entry > .owner-summary'
+            )
+            assert "Limitation" in overview_owner_summary.inner_text()
+            assert limitation in overview_owner_summary.inner_text()
+
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in ("focus-governing-sources", "focus-evidence"):
+                owner_summary = page.locator(
+                    f'[data-testid="{testid}"] .focus-entry > .owner-summary'
+                ).first
+                assert "Limitation" in owner_summary.inner_text()
+                assert limitation in owner_summary.inner_text()
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_overview_card_hides_raw_technical_fields_until_expanded() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            card = page.locator('[data-testid="overview-now"] article').first
+            details = card.locator("details.technical-disclosure")
+            assert details.count() == 2
+            assert details.evaluate_all("items => items.every(item => !item.open)")
+            assert card.locator("code").filter(has_text=SUBJECT).count() >= 1
+            assert all(
+                not item.is_visible() for item in card.locator("code").filter(has_text=SUBJECT).all()
+            )
+            assert all(
+                not item.is_visible()
+                for item in card.locator("code").filter(has_text="cockpit:working:4836").all()
+            )
+            assert "private-source-marker" not in card.inner_text()
+            details.nth(0).locator("summary").click()
+            details.nth(1).locator("summary").click()
+            assert any(
+                item.is_visible() for item in card.locator("code").filter(has_text=SUBJECT).all()
+            )
+            assert any(
+                item.is_visible()
+                for item in card.locator("code").filter(has_text="cockpit:working:4836").all()
+            )
+            assert "private-source-marker" in card.inner_text()
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def _assert_focus_technical_axis_disclosure(page) -> None:
+    expected_axes = [
+        ["availability", "available"],
+        ["freshness", "fresh"],
+        ["coverage", "complete"],
+        ["cardinality", "nonempty"],
+        ["linkage", "linked"],
+    ]
+    for testid in ("focus-governing-sources", "focus-evidence"):
+        section = page.locator(f'[data-testid="{testid}"]')
+        details = section.locator("details.technical-disclosure").first
+        assert not details.evaluate("element => element.open")
+        axis_rows = details.locator("ul.rungs > li").evaluate_all(
+            """items => items
+                .map(item => [item.querySelector(':scope > b')?.textContent,
+                              item.querySelector(':scope > code')?.textContent])
+                .filter(([key]) => ['availability', 'freshness', 'coverage', 'cardinality', 'linkage'].includes(key))"""
+        )
+        assert axis_rows == expected_axes
+        assert all(not row.is_visible() for row in details.locator("ul.rungs > li").all())
+        visible_default = section.inner_text()
+        assert all(axis not in visible_default for axis, _value in expected_axes)
+        details.locator("summary").click()
+        assert details.evaluate("element => element.open")
+        expanded_rows = details.locator("ul.rungs > li").all()
+        for axis, value in expected_axes:
+            matching_rows = [row for row in expanded_rows if row.locator("b").inner_text() == axis]
+            assert len(matching_rows) == 1
+            assert matching_rows[0].is_visible()
+            assert value in matching_rows[0].inner_text()
+        assert all(row.is_visible() for row in expanded_rows)
+        details.locator("summary").click()
+
+    conversation = page.locator('[data-testid="focus-conversation"]')
+    assert "unsupported" in conversation.inner_text().lower()
+    assert "not delivered" in conversation.inner_text().lower()
+    next_step = page.locator('[data-testid="focus-next-step"]')
+    assert "unavailable" in next_step.inner_text().lower()
+    assert "infer" in next_step.inner_text().lower()
+    limitations = page.locator('[data-testid="focus-limitations"]')
+    limitation_text = limitations.inner_text().lower()
+    assert any(token in limitation_text for token in ("acceptance", "unassessed", "owner outcome"))
+
+
+def test_focus_sections_render_owner_language_not_raw_field_names() -> None:
+    with _serve() as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            _assert_focus_technical_axis_disclosure(page)
+            for testid in (
+                "focus-owner-intent",
+                "focus-governing-sources",
+                "focus-evidence",
+                "focus-receipts",
+                "focus-risks",
+                "focus-next-step",
+                "focus-execution",
+                "focus-conversation",
+            ):
+                section = page.locator(f'[data-testid="{testid}"]')
+                assert section.locator(".owner-summary").count() >= 1
+                assert section.locator("details.technical-disclosure").count() >= 1
+                assert section.locator("details.technical-disclosure").evaluate_all(
+                    "items => items.every(item => !item.open)"
+                )
+                visible = section.inner_text()
+                assert (
+                    "Source" in visible
+                    or "Summary" in visible
+                    or "Availability" in visible
+                    or "Actor" in visible
+                    or "Legality" in visible
+                    or "Claim" in visible
+                    or "Reason" in visible
+                    or "Limitation" in visible
+                )
+                for raw_name in ("source_ref", "authority_ref", "captured_at", "receipt_ref"):
+                    assert raw_name not in visible
+                assert "2026-08-28T10:00:00+00:00" not in visible
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
 def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
     with _serve() as (base_url, client):
         playwright, browser, context, page, external = _browser(base_url)
@@ -421,8 +999,42 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
             assert page.locator("h1").count() == 1
             assert page.get_by_role("main").get_attribute("aria-labelledby") == "overview-heading"
             assert page.get_by_role("link", name="Open Focus").count() == 1
-            page.keyboard.press("Tab")
-            assert page.locator(":focus").get_attribute("data-testid") == "overview-focus-link"
+            _assert_candidate_overview_control_inventory(page)
+
+            for mutation in ("body_before_title", "audio_controls"):
+                page.evaluate(
+                    """kind => {
+                        const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                        const body = card && card.querySelector(':scope > .body');
+                        if (kind === 'body_before_title' && card && body) {
+                            card.insertBefore(body, card.firstElementChild);
+                        } else if (kind === 'audio_controls' && card) {
+                            const audio = document.createElement('audio');
+                            audio.controls = true;
+                            audio.dataset.devuiMutation = kind;
+                            card.append(audio);
+                        }
+                    }""",
+                    mutation,
+                )
+                try:
+                    with pytest.raises(AssertionError):
+                        _assert_candidate_overview_control_inventory(page)
+                finally:
+                    page.evaluate(
+                        """kind => {
+                            const card = document.querySelector('[data-testid="overview-now"] > article.card');
+                            if (kind === 'body_before_title' && card) {
+                                const body = card.querySelector(':scope > .body');
+                                const link = card.querySelector(':scope > a[data-testid="overview-focus-link"]');
+                                if (body && link) card.insertBefore(body, link);
+                            } else if (kind === 'audio_controls') {
+                                document.querySelector('[data-devui-mutation="audio_controls"]')?.remove();
+                            }
+                        }""",
+                        mutation,
+                    )
+                _assert_candidate_overview_control_inventory(page)
 
             assert page.viewport_size == {"width": 1280, "height": 720}
             page.set_viewport_size({"width": 375, "height": 812})

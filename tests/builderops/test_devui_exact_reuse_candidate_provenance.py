@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 
@@ -36,6 +38,51 @@ def test_candidate_inventory_git_object_and_transform_binding_fails_closed() -> 
         "transform_binding_status": "closed_allowlist",
         "no_egress_status": "verified",
     }
+
+
+def test_historical_reuse_target_blob_oid_is_full_and_content_bound() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    target_commit = "8056841cf7d060ba7c1cfcb4e46da14eb3206e62"
+    target_path = "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js"
+    oid = subprocess.run(
+        ["git", "rev-parse", f"{target_commit}:{target_path}"],
+        cwd=repo_root,
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    assert len(oid) == 40 and all(character in "0123456789abcdef" for character in oid)
+    assert subprocess.run(["git", "cat-file", "-e", oid], cwd=repo_root, check=False).returncode == 0
+    blob = subprocess.run(
+        ["git", "cat-file", "blob", oid], cwd=repo_root, capture_output=True, check=True
+    ).stdout
+    assert hashlib.sha256(blob).hexdigest() == "a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2"
+    assert b"matrix(body, evidence);" in blob
+    assert b"rows(body, evidence, true);" in blob
+    for manifest_path in (
+        repo_root / "app/builderops/devui_managed_reuse.json",
+        repo_root / "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json",
+    ):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        historical = []
+
+        def collect(value):
+            if isinstance(value, dict):
+                if value.get("target_role") == "historical_intermediate":
+                    historical.append(value)
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(manifest)
+        assert len(historical) == 1
+        target = historical[0]
+        assert target["target_commit"] == target_commit
+        assert target["target_path"] == target_path
+        assert target["target_git_blob_oid"] == oid
+        assert target["target_content_sha256"] == f"sha256:{hashlib.sha256(blob).hexdigest()}"
 
 
 def test_candidate_manifest_refuses_dirty_or_substituted_revision_evidence(

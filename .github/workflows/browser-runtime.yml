@@ -55,9 +55,9 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      # #5596: ordinary PRs must execute every current Overview regression, including
-      # the evidence-axis ACs. Keep this JUnit gate separate from the historical
-      # exact-ref receipt inventory below.
+      # #5594/#5596: ordinary PRs must execute every current Overview regression,
+      # including owner-language/disclosure and evidence-axis ACs. Keep this JUnit
+      # gate separate from the historical exact-ref receipt inventory below.
       - name: Run PR Overview browser regressions
         if: github.event_name == 'pull_request'
         env:
@@ -75,7 +75,13 @@ jobs:
             tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_reflow_in_narrow_rail_column \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_render_exactly_once_per_entry \
-            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_now_card_renders_owner_language_not_raw_field_names \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_card_hides_raw_technical_fields_until_expanded \
+            tests/companion_ui/test_devui_overview_journeys.py::test_focus_sections_render_owner_language_not_raw_field_names \
+            tests/companion_ui/test_devui_overview_journeys.py::test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent \
+            tests/companion_ui/test_devui_overview_journeys.py::test_neutral_not_applicable_and_countable_states_stay_silent \
+            tests/companion_ui/test_devui_overview_journeys.py::test_explicit_limitation_remains_visible_in_overview_and_focus
           python - "$DEVUI_OVERVIEW_PR_JUNIT" <<'PY'
           from pathlib import Path
           import sys
@@ -100,6 +106,24 @@ jobs:
               "test_overview_evidence_axes_render_exactly_once_per_entry",
               f"{TEST_MODULE}::"
               "test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport",
+              f"{TEST_MODULE}::"
+              "test_overview_now_card_renders_owner_language_not_raw_field_names",
+              f"{TEST_MODULE}::"
+              "test_overview_card_hides_raw_technical_fields_until_expanded",
+              f"{TEST_MODULE}::"
+              "test_focus_sections_render_owner_language_not_raw_field_names",
+              f"{TEST_MODULE}::"
+              "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[stale]",
+              f"{TEST_MODULE}::"
+              "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[unknown]",
+              f"{TEST_MODULE}::"
+              "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[partial]",
+              f"{TEST_MODULE}::"
+              "test_neutral_not_applicable_and_countable_states_stay_silent[not_countable]",
+              f"{TEST_MODULE}::"
+              "test_neutral_not_applicable_and_countable_states_stay_silent[measured_empty]",
+              f"{TEST_MODULE}::"
+              "test_explicit_limitation_remains_visible_in_overview_and_focus",
           )
 
           root = ET.parse(Path(sys.argv[1])).getroot()
@@ -269,6 +293,28 @@ jobs:
               "test_managed_keyboard_proof_rejects_unexpected_interactive_action[tabindex-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
               "test_managed_keyboard_proof_rejects_unexpected_interactive_action[editable-overview-/devui/overview]",
               "test_managed_keyboard_proof_rejects_unexpected_interactive_action[editable-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[disclosure-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[disclosure-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[disclosure_misplaced-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[disclosure_misplaced-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[body_after_focus-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[body_after_focus-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[summary_editable-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[summary_editable-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[evidence_after_body-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[evidence_after_body-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[navigation_nested_in_evidence-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[navigation_nested_in_evidence-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[governing_entries_swapped-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[governing_entries_swapped-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_before_owner_summary-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_before_owner_summary-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_before_focus_entry-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_before_focus_entry-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_prepended_into_other_entry-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[details_prepended_into_other_entry-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[return_outside_claim-overview-/devui/overview]",
+              "test_managed_keyboard_proof_rejects_unexpected_interactive_action[return_outside_claim-focus-/devui/focus?subject=github%3Aexample%2Ffixture%23501]",
           }
           assert len(cases) == len(expected)
           assert {case.get("name") for case in cases} == expected
