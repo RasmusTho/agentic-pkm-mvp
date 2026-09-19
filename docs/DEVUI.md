@@ -484,7 +484,9 @@ The three zones have strict eligibility:
 
 The composer performs no source reads, I/O, network access, cache lookup, persistence, task/graph
 or session operation, mutation, or browser-state classification. It preserves producer-exact
-withdrawals and each evidence axis through composition. Inferred correlations are refused. Focus,
+withdrawals and each evidence axis through composition. The visual evidence surface adapts its axis
+layout to the rendered container and shows each axis once while keeping the source claim and its
+metadata reachable. Inferred correlations are refused. Focus,
 Product/Runtime SoI Evidence, delivery execution, and Builder System Control are separate roots:
 links are typed navigation references, never joins or inherited state. A failed or unsupported root
 withdraws only the dependent reference and leaves the remaining read view usable.

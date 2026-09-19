@@ -55,6 +55,102 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
+      # #5596: ordinary PRs must execute every current Overview regression, including
+      # the evidence-axis ACs. Keep this JUnit gate separate from the historical
+      # exact-ref receipt inventory below.
+      - name: Run PR Overview browser regressions
+        if: github.event_name == 'pull_request'
+        env:
+          DEVUI_OVERVIEW_PR_JUNIT: ${{ runner.temp }}/devui-overview-pr/junit.xml
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$DEVUI_OVERVIEW_PR_JUNIT")"
+          test -f tests/companion_ui/test_devui_overview_journeys.py
+          pytest -q \
+            --junitxml="$DEVUI_OVERVIEW_PR_JUNIT" \
+            tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha \
+            tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing \
+            tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract \
+            tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification \
+            tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_reflow_in_narrow_rail_column \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_render_exactly_once_per_entry \
+            tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport
+          python - "$DEVUI_OVERVIEW_PR_JUNIT" <<'PY'
+          from pathlib import Path
+          import sys
+          import xml.etree.ElementTree as ET
+
+          TEST_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
+          TEST_CLASSNAME = "tests.companion_ui.test_devui_overview_journeys"
+          REQUIRED_NODEIDS = (
+              f"{TEST_MODULE}::"
+              "test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha",
+              f"{TEST_MODULE}::"
+              "test_focus_api_failure_renders_honest_visual_error_without_url_probing",
+              f"{TEST_MODULE}::"
+              "test_connected_shell_freezes_server_identity_selector_and_aria_contract",
+              f"{TEST_MODULE}::"
+              "test_connected_shell_renders_full_server_state_matrix_without_reclassification",
+              f"{TEST_MODULE}::"
+              "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+              f"{TEST_MODULE}::"
+              "test_overview_evidence_axes_reflow_in_narrow_rail_column",
+              f"{TEST_MODULE}::"
+              "test_overview_evidence_axes_render_exactly_once_per_entry",
+              f"{TEST_MODULE}::"
+              "test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport",
+          )
+
+          root = ET.parse(Path(sys.argv[1])).getroot()
+          cases = list(root.findall(".//testcase"))
+          if not cases:
+              raise SystemExit("required PR Overview journey collection is empty")
+          observed = [
+              (
+                  f"{TEST_MODULE}::{case.attrib.get('name', '')}"
+                  if case.attrib.get("classname") == TEST_CLASSNAME
+                  else (
+                      f"{case.attrib.get('classname', '<missing-classname>')}::"
+                      f"{case.attrib.get('name', '<missing-name>')}"
+                  )
+              )
+              for case in cases
+          ]
+          duplicates = sorted(nodeid for nodeid in set(observed) if observed.count(nodeid) > 1)
+          missing = sorted(set(REQUIRED_NODEIDS) - set(observed))
+          unexpected = sorted(set(observed) - set(REQUIRED_NODEIDS))
+          if duplicates:
+              raise SystemExit(
+                  "required PR Overview journey nodeids are duplicated: "
+                  + ", ".join(duplicates)
+              )
+          if missing or unexpected:
+              raise SystemExit(
+                  "required PR Overview journey nodeids mismatch: "
+                  f"missing={missing} unexpected={unexpected}"
+              )
+          skipped = sorted(
+              nodeid
+              for nodeid, case in zip(observed, cases, strict=True)
+              if case.find("skipped") is not None
+          )
+          if skipped:
+              raise SystemExit(
+                  "required PR Overview journeys were skipped: " + ", ".join(skipped)
+              )
+          failed = [
+              nodeid
+              for nodeid, case in zip(observed, cases, strict=True)
+              if case.find("failure") is not None or case.find("error") is not None
+          ]
+          if failed:
+              raise SystemExit(
+                  "required PR Overview journeys had failures or errors: "
+                  + ", ".join(failed)
+              )
+          PY
+
       # #4833: workflow_dispatch resolves the operator-selected published ref
       # to github.sha. The checkout above pins that immutable commit, while this
       # dispatch-only gate rejects absent, empty, or skipped #4836 journeys.
@@ -77,7 +173,11 @@ jobs:
           test -f tests/companion_ui/test_devui_overview_journeys.py
           pytest -q \
             --junitxml="$DEVUI_OVERVIEW_JUNIT" \
-            tests/companion_ui/test_devui_overview_journeys.py
+            tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha \
+            tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing \
+            tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract \
+            tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_renders_full_server_state_matrix_without_reclassification \
+            tests/companion_ui/test_devui_overview_journeys.py::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free
           python - "$DEVUI_OVERVIEW_JUNIT" <<'PY'
           from collections import Counter
           from pathlib import Path
@@ -658,4 +758,12 @@ jobs:
             ${{ runner.temp }}/devui-overview/receipts/**
             ${{ runner.temp }}/devui-overview/traces/**
             ${{ runner.temp }}/devui-overview/screenshots/**
+          if-no-files-found: error
+
+      - name: Upload PR Overview browser regression evidence
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: devui-overview-pr-${{ github.sha }}
+          path: ${{ runner.temp }}/devui-overview-pr/junit.xml
           if-no-files-found: error

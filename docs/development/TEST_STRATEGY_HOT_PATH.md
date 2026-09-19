@@ -103,10 +103,13 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   every production-producer target when a producer changes (`deploy`, `prod-up`, `prod-start-full`,
   and `prod-ui`). Merge evidence requires exact-head CI; stale checks from a prior branch head do
   not satisfy this transport contract.
-- Combined devUI shell recovery #4836 has an explicit pre-merge exception to that post-merge
-  browser default: after publishing the candidate ref, an operator must dispatch
-  `.github/workflows/browser-runtime.yml` against that exact ref (for example,
-  `gh workflow run browser-runtime.yml --ref <published-candidate-ref>`). Native
+- Combined devUI shell recovery #4836 keeps two browser protections in
+  `.github/workflows/browser-runtime.yml`: ordinary pull-request runs execute all eight current
+  Overview journeys, including the evidence-axis regressions, and reject empty, missing, duplicate,
+  skipped, failed, or errored required evidence; the ordinary PR JUnit is retained as the regression
+  proof. The separate exact-ref dispatch path remains the historical five-node proof: after
+  publishing the candidate ref, an operator must dispatch the workflow against that exact ref (for
+  example, `gh workflow run browser-runtime.yml --ref <published-candidate-ref>`). Native
   `workflow_dispatch` resolution binds the pinned checkout and the evidence artifact to exact
   `${{ github.sha }}`. The dispatch fails when
   `tests/companion_ui/test_devui_overview_journeys.py` is absent, collects zero tests, fails, or
@@ -123,10 +126,9 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
   questions must be a string list. The hashed manifest embeds that validated receipt and records the
   receipt, JUnit, trace, and screenshot files consistently. Runner-temporary paths are declared only
   at step scope, where the `runner` context is available for both push and dispatch evaluation. The
-  workflow retains its push-to-`main` path and deliberately has no `pull_request` trigger. The
-  ordinary PR unit CI does not provide this browser proof. Neither a local screenshot nor a
-  post-merge run substitutes for the exact published #4836 candidate run. The exact required JUnit
-  nodeid inventory for that candidate is:
+  ordinary PR unit CI does not provide this exact-ref browser receipt, and neither a local screenshot
+  nor a post-merge run substitutes for the exact published #4836 candidate run. The exact required
+  JUnit nodeid inventory for that candidate is:
   - `tests/companion_ui/test_devui_overview_journeys.py::test_real_gateway_overview_focus_return_journey_preserves_subject_context_and_sha`
   - `tests/companion_ui/test_devui_overview_journeys.py::test_focus_api_failure_renders_honest_visual_error_without_url_probing`
   - `tests/companion_ui/test_devui_overview_journeys.py::test_connected_shell_freezes_server_identity_selector_and_aria_contract`

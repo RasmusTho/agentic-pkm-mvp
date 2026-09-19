@@ -32,6 +32,14 @@ OVERVIEW_REQUIRED_NODEIDS = (
     f"{OVERVIEW_JOURNEY_MODULE}::"
     "test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
 )
+OVERVIEW_PR_REQUIRED_NODEIDS = OVERVIEW_REQUIRED_NODEIDS + (
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_evidence_axes_reflow_in_narrow_rail_column",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_evidence_axes_render_exactly_once_per_entry",
+    f"{OVERVIEW_JOURNEY_MODULE}::"
+    "test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport",
+)
 
 
 def _smoke_text() -> str:
@@ -345,6 +353,13 @@ def test_browser_runtime_supports_exact_ref_dispatch_with_pull_request_qualifica
         "DEVUI_OVERVIEW_MANIFEST": "${{ runner.temp }}/devui-overview/manifest.json",
         "DEVUI_OVERVIEW_JOURNEY_OUTCOME": "${{ steps.overview-journeys.outcome }}",
     }
+    pr_journey_env = _browser_step("Run PR Overview browser regressions")["env"]
+    assert pr_journey_env == {
+        "DEVUI_OVERVIEW_PR_JUNIT": "${{ runner.temp }}/devui-overview-pr/junit.xml"
+    }
+    pr_upload = _browser_step("Upload PR Overview browser regression evidence")
+    assert pr_upload["if"] == "${{ always() && github.event_name == 'pull_request' }}"
+    assert pr_upload["with"]["path"] == "${{ runner.temp }}/devui-overview-pr/junit.xml"
     assert "${{ runner.temp }}" in _browser_step(
         "Upload exact-SHA Overview browser evidence"
     )["with"]["path"]
@@ -374,10 +389,18 @@ def test_browser_runtime_dispatch_requires_non_skipped_overview_journeys(
     assert "required Overview journeys were skipped" in step
     assert "required Overview journey nodeids mismatch" in step
     assert "required Overview journey nodeids are duplicated" in step
+    dispatch_command = _workflow_run("Run exact-ref Overview browser journeys").split(
+        'python - "$DEVUI_OVERVIEW_JUNIT"', maxsplit=1
+    )[0]
+    pytest_command = dispatch_command.split("pytest -q", maxsplit=1)[1]
+    assert "tests/companion_ui/test_devui_overview_journeys.py\n" not in pytest_command
     for nodeid in OVERVIEW_REQUIRED_NODEIDS:
         module, name = nodeid.split("::", maxsplit=1)
         assert module in step
         assert name in step
+        assert nodeid in dispatch_command
+    for nodeid in set(OVERVIEW_PR_REQUIRED_NODEIDS) - set(OVERVIEW_REQUIRED_NODEIDS):
+        assert nodeid not in dispatch_command
     assert "\n        continue-on-error:" not in step
 
     junit_guard = _python_heredoc(
@@ -431,6 +454,103 @@ def test_browser_runtime_dispatch_requires_non_skipped_overview_journeys(
             "<testsuites><testsuite "
             f'tests="{len(nodeids)}" skipped="{len(skipped_nodeids)}" '
             f'failures="0" errors="0">{cases}</testsuite></testsuites>\n',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, "-", str(junit_path)],
+            input=junit_guard,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert (result.returncode == 0) is should_pass
+        assert expected_error in result.stderr
+
+
+def test_browser_runtime_pr_requires_non_skipped_overview_regressions(
+    tmp_path: Path,
+) -> None:
+    step = _workflow_step(
+        _browser_text(),
+        "Run PR Overview browser regressions",
+        "Run exact-ref Overview browser journeys",
+    )
+
+    assert "if: github.event_name == 'pull_request'" in step
+    assert "set -euo pipefail" in step
+    assert "test -f tests/companion_ui/test_devui_overview_journeys.py" in step
+    assert '--junitxml="$DEVUI_OVERVIEW_PR_JUNIT"' in step
+    assert "required PR Overview journey collection is empty" in step
+    assert "required PR Overview journeys were skipped" in step
+    assert "required PR Overview journey nodeids mismatch" in step
+    assert "required PR Overview journey nodeids are duplicated" in step
+    for nodeid in OVERVIEW_PR_REQUIRED_NODEIDS:
+        module, name = nodeid.split("::", maxsplit=1)
+        assert module in step
+        assert name in step
+    assert "failures or errors" in step
+    assert "\n        continue-on-error:" not in step
+
+    junit_guard = _python_heredoc(_workflow_run("Run PR Overview browser regressions"))
+    junit_path = tmp_path / "junit.xml"
+
+    def junit_case(nodeid: str, *, skipped: bool = False, failed: bool = False) -> str:
+        module, name = nodeid.split("::", maxsplit=1)
+        classname = module.removesuffix(".py").replace("/", ".")
+        child = ""
+        if skipped:
+            child = '<skipped message="not run"/>'
+        elif failed:
+            child = '<failure message="failed"/>'
+        return f'<testcase classname="{classname}" name="{name}">{child}</testcase>'
+
+    scenarios = (
+        ((), (), (), False, "collection is empty"),
+        (OVERVIEW_PR_REQUIRED_NODEIDS[:-1], (), (), False, "nodeids mismatch"),
+        (
+            OVERVIEW_PR_REQUIRED_NODEIDS + (f"{OVERVIEW_JOURNEY_MODULE}::test_extra",),
+            (),
+            (),
+            False,
+            "nodeids mismatch",
+        ),
+        (
+            OVERVIEW_PR_REQUIRED_NODEIDS + (OVERVIEW_PR_REQUIRED_NODEIDS[0],),
+            (),
+            (),
+            False,
+            "nodeids are duplicated",
+        ),
+        (
+            OVERVIEW_PR_REQUIRED_NODEIDS,
+            (OVERVIEW_PR_REQUIRED_NODEIDS[-1],),
+            (),
+            False,
+            "journeys were skipped",
+        ),
+        (
+            OVERVIEW_PR_REQUIRED_NODEIDS,
+            (),
+            (OVERVIEW_PR_REQUIRED_NODEIDS[-1],),
+            False,
+            "failures or errors",
+        ),
+        (OVERVIEW_PR_REQUIRED_NODEIDS, (), (), True, ""),
+    )
+    for nodeids, skipped_nodeids, failed_nodeids, should_pass, expected_error in scenarios:
+        cases = "".join(
+            junit_case(
+                nodeid,
+                skipped=nodeid in skipped_nodeids,
+                failed=nodeid in failed_nodeids,
+            )
+            for nodeid in nodeids
+        )
+        failures = len(failed_nodeids)
+        junit_path.write_text(
+            "<testsuites><testsuite "
+            f'tests="{len(nodeids)}" skipped="{len(skipped_nodeids)}" '
+            f'failures="{failures}" errors="0">{cases}</testsuite></testsuites>\n',
             encoding="utf-8",
         )
         result = subprocess.run(

@@ -13,13 +13,13 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-      "tree": "d15c3c015a844781b83ba46eadef7deda645fcfe",
+    "tree": "1c91860a0ebd42c0f8e615169bc6ada1329bfc55",
     "inventory": {
-      "devui.css": "2d6e19e1f427d186bed8fc4391739baeda724737",
+      "devui.css": "8c9af75f6100ec84550fa1cf5b5965de9498405b",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
       "focus.js": "21946448a21f416653f8e08a393e17c6afff624f",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
-      "overview.js": "4dc939b1a3657c74b3ffa7ae3baae9c6a7000f5e"
+      "overview.js": "f2f827b514b8df34a22d49ae632dc9971395c0e4"
     }
   },
   "transform_allowlist": [
@@ -30,62 +30,237 @@
   ],
   "bindings": [
     {
-      "candidate_files": ["overview.html", "focus.html"],
+      "candidate_files": [
+        "overview.html",
+        "focus.html"
+      ],
       "source_path": "app/web/static/cockpit.html",
-      "source_patterns": ["<section class=\"claim\" id=\"claim\">", "<section class=\"void refuse\">", "<span class=\"btn btn-out\""],
+      "source_patterns": [
+        "<section class=\"claim\" id=\"claim\">",
+        "<section class=\"void refuse\">",
+        "<span class=\"btn btn-out\""
+      ],
       "candidate_patterns": {
-        "overview.html": ["class=\"claim\"", "class=\"band primary\"", "class=\"void refuse\""],
-        "focus.html": ["class=\"claim\"", "class=\"btn btn-out\"", "class=\"void refuse\""]
+        "overview.html": [
+          "class=\"claim\"",
+          "class=\"band primary\"",
+          "class=\"void refuse\""
+        ],
+        "focus.html": [
+          "class=\"claim\"",
+          "class=\"btn btn-out\"",
+          "class=\"void refuse\""
+        ]
       },
       "shared_patterns": {
-        "overview.html": ["class=\"claim\"", "class=\"void refuse\""],
-        "focus.html": ["class=\"claim\"", "class=\"btn btn-out\"", "class=\"void refuse\""]
+        "overview.html": [
+          "class=\"claim\"",
+          "class=\"void refuse\""
+        ],
+        "focus.html": [
+          "class=\"claim\"",
+          "class=\"btn btn-out\"",
+          "class=\"void refuse\""
+        ]
       },
-      "transforms": ["content_binding", "layout_reflow"]
+      "transforms": [
+        "content_binding",
+        "layout_reflow"
+      ]
     },
     {
-      "candidate_files": ["devui.css"],
+      "candidate_files": [
+        "devui.css"
+      ],
       "source_path": "app/web/static/cockpit.css",
-      "source_patterns": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"],
+      "source_patterns": [
+        ".claim{",
+        ".band{",
+        ".card{",
+        ".body{",
+        ".rungs{",
+        ".btn-out{",
+        ".void.refuse{"
+      ],
       "candidate_patterns": {
-        "devui.css": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"]
+        "devui.css": [
+          ".claim{",
+          ".band{",
+          ".card{",
+          ".body{",
+          ".rungs{",
+          ".btn-out{",
+          ".void.refuse{"
+        ]
       },
       "shared_patterns": {
-        "devui.css": [".claim{", ".band{", ".card{", ".body{", ".rungs{", ".btn-out{", ".void.refuse{"]
+        "devui.css": [
+          ".claim{",
+          ".band{",
+          ".card{",
+          ".body{",
+          ".rungs{",
+          ".btn-out{",
+          ".void.refuse{"
+        ]
       },
-      "transforms": ["layout_reflow"]
+      "transforms": [
+        "layout_reflow"
+      ]
     },
     {
-      "candidate_files": ["devui.css"],
+      "candidate_files": [
+        "devui.css"
+      ],
       "source_path": "app/web/static/colors_and_type.css",
-      "source_patterns": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"],
+      "source_patterns": [
+        "--bg-base:",
+        "--font-ui:",
+        "--space-4:",
+        "--radius-sm:"
+      ],
       "candidate_patterns": {
-        "devui.css": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"]
+        "devui.css": [
+          "--bg-base:",
+          "--font-ui:",
+          "--space-4:",
+          "--radius-sm:"
+        ]
       },
       "shared_patterns": {
-        "devui.css": ["--bg-base:", "--font-ui:", "--space-4:", "--radius-sm:"]
+        "devui.css": [
+          "--bg-base:",
+          "--font-ui:",
+          "--space-4:",
+          "--radius-sm:"
+        ]
       },
-      "transforms": ["local_system_font_no_egress_normalization"]
+      "transforms": [
+        "local_system_font_no_egress_normalization"
+      ]
     },
     {
-      "candidate_files": ["overview.js", "focus.js"],
+      "candidate_files": [
+        "overview.js",
+        "focus.js"
+      ],
       "source_path": "app/web/static/cockpit.js",
-      "source_patterns": ["function esc(value) {", "function cardMarkup(item) {", "function bandMarkup(band) {", "fetch(\"/api/cockpit/registry\", { cache: \"no-store\" })"],
+      "source_patterns": [
+        "function esc(value) {",
+        "function cardMarkup(item) {",
+        "function bandMarkup(band) {",
+        "fetch(\"/api/cockpit/registry\", { cache: \"no-store\" })"
+      ],
       "candidate_patterns": {
-        "overview.js": ["function text(parent, tag, value, className) {", "node.textContent =", "function verifiedFocusHref(item) {", "fetch(\"/api/devui/overview\", {method: \"GET\", cache: \"no-store\"})"],
-        "focus.js": ["function text(parent, tag, value, className) {", "node.textContent =", "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"]
+        "overview.js": [
+          "function text(parent, tag, value, className) {",
+          "node.textContent =",
+          "function verifiedFocusHref(item) {",
+          "fetch(\"/api/devui/overview\", {method: \"GET\", cache: \"no-store\"})",
+          "rows(body, evidence, true);"
+        ],
+        "focus.js": [
+          "function text(parent, tag, value, className) {",
+          "node.textContent =",
+          "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"
+        ]
       },
       "shared_patterns": {
-        "overview.js": ["document.createElement(", "textContent =", "fetch(", "\"no-store\""],
-        "focus.js": ["document.createElement(", "textContent =", "fetch(", "\"no-store\""]
+        "overview.js": [
+          "document.createElement(",
+          "textContent =",
+          "fetch(",
+          "\"no-store\""
+        ],
+        "focus.js": [
+          "document.createElement(",
+          "textContent =",
+          "fetch(",
+          "\"no-store\""
+        ]
       },
-      "transforms": ["content_binding", "interaction_binding"]
+      "transforms": [
+        "content_binding",
+        "interaction_binding"
+      ]
     }
   ],
   "safety": {
-    "network_gets": ["/api/devui/overview", "/api/devui/focus?subject=<exact-subject>"],
+    "network_gets": [
+      "/api/devui/overview",
+      "/api/devui/focus?subject=<exact-subject>"
+    ],
     "durable_state": [],
     "mutating_methods": [],
     "external_origins": []
-  }
+  },
+  "consumer_issue": 5596,
+  "candidate_baseline": {
+    "commit": "dd86e54221d04f9c730301ca734491b725c45be4",
+    "role": "pre-#5596 shipped candidate baseline",
+    "objects": {
+      "devui.css": {
+        "sha256": "sha256:9094a547edafcc6bff80f82ddae3b57975cb98890a7b5d2d3a79fac35f6bc8f3",
+        "path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css"
+      },
+      "focus.html": {
+        "sha256": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
+        "path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html"
+      },
+      "focus.js": {
+        "sha256": "sha256:5c7e96a5786e46457919a8e2cb45322f7e2713a471ff42c0476d7f97941d2fc1",
+        "path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js"
+      },
+      "overview.html": {
+        "sha256": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
+        "path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html"
+      },
+      "overview.js": {
+        "sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b",
+        "path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js"
+      }
+    }
+  },
+  "bounded_issue_transformations": [
+    {
+      "issue": 5596,
+      "transformation_id": "issue-5596-axis-container-reflow",
+      "kind": "layout_reflow",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
+      "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4",
+      "source_sha256": "sha256:9094a547edafcc6bff80f82ddae3b57975cb98890a7b5d2d3a79fac35f6bc8f3",
+      "source_anchors": [
+        ".matrix{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-2)}",
+        ".axis b,.axis span{display:block;overflow-wrap:anywhere}",
+        ".overview-rail{min-width:0}",
+        "@media (max-width:900px){.overview-grid,.focus-grid,.matrix{grid-template-columns:1fr}"
+      ],
+      "candidate_anchors": [
+        ".matrix{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--space-2)}",
+        ".axis b,.axis span{display:block;overflow-wrap:normal;word-break:normal}",
+        ".overview-rail,.surface,.body{container-type:inline-size}",
+        "@container (max-width:40rem){.matrix{grid-template-columns:1fr}}"
+      ],
+      "exact_rule": "Preserve the existing matrix tokens and grid, replace only mid-word wrapping with normal word boundaries, establish inline-size containment on the existing overview/focus containers, and move the existing matrix single-column fallback from the viewport media rule to max-width:40rem container scope. No new token, component, interaction, or authority behavior."
+    },
+    {
+      "issue": 5596,
+      "transformation_id": "issue-5596-evidence-single-render",
+      "kind": "content_binding",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+      "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4",
+      "source_sha256": "sha256:2304ea14485da1dadc1d3a2b30460196c080bb5350962caaedc3e3979e48b63b",
+      "source_anchors": [
+        "function renderItem(parent, item) {",
+        "matrix(body, evidence);",
+        "rows(body, evidence);"
+      ],
+      "candidate_anchors": [
+        "function renderItem(parent, item) {",
+        "matrix(body, evidence);",
+        "rows(body, evidence, true);"
+      ],
+      "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes."
+    }
+  ]
 }
