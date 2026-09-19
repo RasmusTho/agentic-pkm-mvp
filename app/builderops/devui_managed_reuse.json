@@ -348,7 +348,7 @@
         "source_ids": [
           "source-overview.js"
         ],
-        "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes.",
+        "exact_rule": "From the pre-#5596 shipped baseline at dd86e54221d04f9c730301ca734491b725c45be4, preserve each evidence object and its matrix(body, evidence) axis values; replace only the duplicate all-field rows(body, evidence) call with rows(body, evidence, true) so axis keys are omitted while evidence_id, claim, source_ref, captured_at, read_watermark and limitation remain rendered. No evidence field, computed value, fetch, navigation, or state behavior changes. Target anchors are authenticated against the immutable intermediate artifact at target_commit; current #5594 target bytes are bound separately by its own transformation.",
         "source_anchors": [
           "function renderItem(parent, item) {",
           "matrix(body, evidence);",
@@ -358,7 +358,12 @@
           "function renderItem(parent, item) {",
           "matrix(body, evidence);",
           "rows(body, evidence, true);"
-        ]
+        ],
+        "target_role": "historical_intermediate",
+        "target_commit": "8056841cf7d060ba7c1cfcb4e46da14eb3206e62",
+        "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
+        "target_content_sha256": "sha256:a578f24e0eecb431cdeb7e60f61483d89b20ab16289106ed881ba479703f7ea2",
+        "target_git_blob_oid": "f2f827b514b8df34a22d49ae632dc9971395c0e"
       },
       {
         "transformation_id": "issue-5594-owner-language-disclosure",

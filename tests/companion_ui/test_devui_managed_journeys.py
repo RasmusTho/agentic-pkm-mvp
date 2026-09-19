@@ -161,6 +161,30 @@ def _keyboard_navigation(page, surface):
             assert page.locator(
                 f'[data-testid="{testid}"] details.technical-disclosure'
             ).count() == count, "Only the admitted navigation and disclosures are keyboard interactive"
+    expected_controls = (
+        ["summary:0", "summary:1", "link:overview-focus-link"]
+        if surface == "overview"
+        else [
+            "link:overview-return",
+            *[
+                f"summary:{testid}:{index}"
+                for testid, count in EXPECTED_FOCUS_DISCLOSURE_COUNTS.items()
+                for index in range(count)
+            ],
+        ]
+    )
+    assert page.evaluate(
+        """surface => Array.from(document.querySelectorAll(
+            'details.technical-disclosure > summary,a[data-testid="overview-focus-link"],a[data-testid="overview-return"]'
+        )).map((element, index) => {
+            if (element.matches('a')) return `link:${element.dataset.testid}`;
+            if (surface === 'overview') return `summary:${index}`;
+            const owner = element.parentElement.closest('[data-testid]');
+            const siblings = Array.from(owner.querySelectorAll('details.technical-disclosure > summary'));
+            return `summary:${owner.dataset.testid}:${siblings.indexOf(element)}`;
+        })""",
+        surface,
+    ) == expected_controls, "Only the admitted navigation and disclosures are keyboard interactive"
     assert page.evaluate(
         """() => Array.from(document.querySelectorAll('details.technical-disclosure > summary')).every(summary =>
             !summary.isContentEditable && !summary.hasAttribute('role') &&
@@ -202,7 +226,16 @@ def _keyboard_navigation(page, surface):
 @pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
 @pytest.mark.parametrize(
     "action",
-    ["button", "link", "tabindex", "editable", "disclosure", "disclosure_misplaced", "summary_editable"],
+    [
+        "button",
+        "link",
+        "tabindex",
+        "editable",
+        "disclosure",
+        "disclosure_misplaced",
+        "body_after_focus",
+        "summary_editable",
+    ],
 )
 def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     managed_sources, monkeypatch, surface, path, action  # noqa: F811 - imported pytest fixture
@@ -218,6 +251,16 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
             if (kind === 'disclosure_misplaced') {
                 const details = Array.from(document.querySelectorAll('details.technical-disclosure'));
                 details.forEach(item => document.querySelector('main').append(item));
+                return;
+            }
+            if (kind === 'body_after_focus') {
+                const card = document.querySelector('[data-testid="overview-now"] article');
+                if (card) {
+                    card.append(card.querySelector('.body'));
+                } else {
+                    const grid = document.querySelector('.focus-grid');
+                    document.querySelector('[data-testid="overview-return"]').closest('.claim').before(grid);
+                }
                 return;
             }
             if (kind === 'summary_editable') {
