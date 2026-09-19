@@ -299,7 +299,7 @@
         "fetch(`/api/devui/focus?subject=${encodeURIComponent(subject)}`, {method: \"GET\", cache: \"no-store\"})"
       ],
       "candidate_anchors": [
-        "function ownerRows(parent, value) {",
+        "function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {",
         "details.className = \"technical-disclosure\";",
         "rows(details, value);"
       ],
