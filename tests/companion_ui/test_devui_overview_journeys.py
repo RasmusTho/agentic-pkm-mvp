@@ -442,10 +442,12 @@ def test_overview_now_card_renders_owner_language_not_raw_field_names() -> None:
             card = page.locator('[data-testid="overview-now"] article').first
             visible = card.inner_text()
             assert "Claim" in visible
-            assert "Availability" in visible
-            assert "Freshness" in visible
             for raw_name in ("subject_ref", "source_ref", "evidence_id", "captured_at"):
                 assert raw_name not in visible
+            card.locator("details.technical-disclosure").nth(1).locator("summary").click()
+            expanded = card.inner_text()
+            assert "Availability" in expanded
+            assert "Freshness" in expanded
         finally:
             context.close()
             browser.close()
