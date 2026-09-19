@@ -565,9 +565,43 @@ def test_managed_overview_exposes_owner_work_context(managed_sources) -> None:
     assert any("claimed" in claim for claim in claims)
     assert any("in_progress" in claim for claim in claims)
     assert any(entry["source_ref"]["source_type"] == "docs-frontmatter" for entry in candidate["evidence"])
+    proposal = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "builderops_mirror"
+    )
+    assert proposal["claim"] is None
+    assert any("does not authorize execution" in limitation for limitation in candidate["limitations"])
+    assert any(
+        entry["source_ref"]["locator"]
+        == "/v1/tasks/task-1?repository=example/fixture#version=1"
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "dispatcher-store"
+    )
     assert any("unknown" in limitation.lower() for limitation in candidate["limitations"])
     assert candidate["navigation_refs"][0]["kind"] == "focus"
     assert source.calls.count(("list_tasks", "example/fixture")) == 1
+
+    for path in source.root.rglob("*"):
+        if path.is_file():
+            os.utime(path, (1, 1))
+    with source.client() as client:
+        withdrawn_docs = client.get("/api/devui/overview").json()
+    withdrawn_candidate = withdrawn_docs["now"][0]
+    withdrawn_capability = next(
+        entry
+        for entry in withdrawn_candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "docs-frontmatter"
+    )
+    assert withdrawn_capability["claim"] is None
+    assert withdrawn_capability["freshness"] == "stale"
+    assert any("fixture-registered-holder" in claim for claim in (
+        entry["claim"] for entry in withdrawn_candidate["evidence"] if entry["claim"]
+    ))
+    assert any(
+        "does not authorize execution" in limitation
+        for limitation in withdrawn_candidate["limitations"]
+    )
 
 
 def test_managed_overview_keeps_unprojectable_tasks_explicit(managed_sources) -> None:

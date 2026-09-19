@@ -806,6 +806,39 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
     monkeypatch
 ):
     source = managed_sources
+    row = source.tasks[0]
+    stamp = row["updated_at"]
+    row["state"] = row["payload"]["status"] = "claimed"
+    row["payload"]["sync_state"] = {
+        "labels": ["agent:blocked", "action:wait-dependency"],
+        "state": "open",
+        "last_pull_at": "2026-08-01T11:58:00+00:00",
+        "comments": [
+            {
+                "body": "\n".join(
+                    [
+                        "receipt: blocker_action.v1",
+                        "action: action:wait-dependency",
+                        "owner: builder",
+                        "next_action: inspect dependency 900",
+                        "unblocks_when: dependency 900 is delivered",
+                        "dependency_refs: []",
+                        "review_at: null",
+                        "last_verified_at: 2026-08-01T11:58:00Z",
+                    ]
+                )
+            }
+        ],
+    }
+    row["lease"] = {
+        "repository": "example/fixture",
+        "resource_id": "task-1",
+        "holder": "fixture-registered-holder",
+        "fencing_token": 1,
+        "expires_at": "2099-09-13T10:00:00+00:00",
+        "lease_kind": "task",
+        "updated_at": stamp,
+    }
     with (
         _server(source, monkeypatch),
         _browser() as (page, context, _browser_instance, external, requests, errors, console),
@@ -815,6 +848,10 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         overview_reads = len(source.calls)
         overview_text = page.locator('[data-testid="overview-now"]').inner_text()
         assert "Explicit docs-linked capability" in overview_text
+        assert "fixture-registered-holder" in overview_text
+        assert "claimed" in overview_text.lower()
+        assert "inspect dependency 900" in overview_text
+        assert "does not authorize execution" in overview_text
         assert "unknown" in overview_text.lower()
         link = page.get_by_role("link", name="Open Focus")
         assert link.get_attribute("href") == FOCUS
@@ -822,6 +859,11 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
             link.click()
         _loaded(page, "focus")
         payload = read.value.json()
+        focus_text = page.locator('[data-testid="devui-focus"]').inner_text()
+        assert "Fixture owner intent." in focus_text
+        assert "Fixture source scope." in focus_text
+        assert "Acceptance Criteria" in focus_text
+        assert "Verify" in focus_text
         assert payload["subject"]["stable_id"] == MANAGED_SUBJECT
         assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
         assert (
@@ -848,7 +890,18 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         _loaded(page, "overview")
         assert "Explicit docs-linked capability" in page.locator('[data-testid="overview-now"]').inner_text()
         assert len(source.calls) > overview_reads
-        assert sum(url == ORIGIN + "/api/devui/overview" for _, url in requests) == 2
+        for path in source.root.rglob("*"):
+            if path.is_file():
+                os.utime(path, (1, 1))
+        page.reload()
+        _loaded(page, "overview")
+        withdrawn_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Explicit docs-linked capability" not in withdrawn_text
+        assert "unknown" in withdrawn_text.lower()
+        assert "fixture-registered-holder" in withdrawn_text
+        assert "claimed" in withdrawn_text.lower()
+        assert "does not authorize execution" in withdrawn_text
+        assert sum(url == ORIGIN + "/api/devui/overview" for _, url in requests) == 3
         assert all(method == "GET" for method, _ in requests)
         assert not external and not errors and not console
         _no_persistence(page, context)
