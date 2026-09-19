@@ -108,6 +108,12 @@ def _context_item(*, number: int = 5599, **overrides: object) -> dict:
 
 def _context_work_provider(*, item: dict, docs_state: str = "fresh") -> dict:
     provider = _work_provider(items=[item])
+    provider["payload"]["sources"][0]["transport"] = {
+        "source_refs": [
+            f"/v1/tasks/task-{item['issue_number']}?repository={item['repo']}#version=1",
+            f"builderops-api:{item['repo']}@epoch=7#sha256={'b' * 64}",
+        ]
+    }
     provider["payload"]["sources"].extend(
         [
             {
@@ -124,7 +130,10 @@ def _context_work_provider(*, item: dict, docs_state: str = "fresh") -> dict:
                     "source_refs": [
                         "https://github.com/RasmusTho/agentic-pkm-mvp/blob/"
                         + "a" * 40
-                        + "/docs/capabilities.yaml"
+                        + "/docs/capabilities.yaml",
+                        "https://github.com/RasmusTho/agentic-pkm-mvp/blob/"
+                        + "a" * 40
+                        + "/docs/FIXTURE/TASK.md",
                     ],
                 },
             },
@@ -135,6 +144,16 @@ def _context_work_provider(*, item: dict, docs_state: str = "fresh") -> dict:
                 "detail": "bounded GitHub read",
                 "stale_after_days": 0,
                 "configured": True,
+                "transport": {
+                    "source_refs": [
+                        "github-rest:RasmusTho/agentic-pkm-mvp@"
+                        + GENERATED_AT
+                        + "#sha256="
+                        + "c" * 64,
+                        "https://github.com/RasmusTho/agentic-pkm-mvp/tree/"
+                        + "d" * 40,
+                    ]
+                },
             },
         ]
     )
@@ -265,6 +284,18 @@ def test_owner_context_preserves_source_linked_work_facts() -> None:
     assert any("in_progress" in claim for claim in claims)
     assert any("read the source blocker" in claim for claim in claims)
     assert any("blocked: waiting for the source" in claim for claim in claims)
+    assert any("Position evidence (source-declared)" in claim for claim in claims)
+    assert any(
+        "/v1/tasks/task-5599?repository=RasmusTho/agentic-pkm-mvp" in claim
+        for claim in claims
+    )
+    flaw = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "builderops_cockpit_flaws"
+    )
+    assert '"dispatcher_status":"claimed"' in flaw["claim"]
+    assert "/v1/tasks/task-5599?repository=RasmusTho/agentic-pkm-mvp" in flaw["claim"]
     assert candidate["evidence"][0]["source_ref"]["version"] == UPDATED_AT
     assert any(
         entry["source_ref"]["source_type"] == "docs-frontmatter"
@@ -295,6 +326,9 @@ def test_owner_context_preserves_independent_source_withdrawals() -> None:
     assert next_step["source_ref"]["version"] == "2026-08-01T11:58:00+00:00"
     assert next_step["captured_at"] == "2026-08-01T11:58:00+00:00"
     assert next_step["read_watermark"] == "2026-08-01T11:58:00+00:00"
+    assert next_step["freshness"] == "unknown"
+    assert next_step["completeness"] == "partial"
+    assert any("does not authorize execution" in limitation for limitation in candidate["limitations"])
     assert next_step["source_ref"]["version"] != GENERATED_AT
     assert any("unknown" in limitation.lower() for limitation in candidate["limitations"])
 
@@ -318,3 +352,32 @@ def test_owner_context_does_not_infer_execution_permission_or_maturity() -> None
     assert "permission" not in serialized
     assert "maturity" not in serialized
     assert "ready_to_try" not in serialized
+
+
+def test_owner_context_preserves_predicate_sources_and_raw_evidence() -> None:
+    item = _context_item(
+        flaws=[
+            {
+                "predicate": "pr_ci_red_on_head_sha",
+                "text": "PR #502 CI is failure on head SHA dddddddddddd",
+                "evidence": {
+                    "check_state": "failure",
+                    "head_sha": "d" * 40,
+                    "pr_number": 502,
+                },
+            }
+        ]
+    )
+    candidate = derive_overview_inputs(
+        work_provider=_context_work_provider(item=item)
+    )["now"][0]
+
+    flaw = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "builderops_cockpit_flaws"
+    )
+    assert '"head_sha":"' + "d" * 40 + '"' in flaw["claim"]
+    assert "github-live[fresh] github-rest:RasmusTho/agentic-pkm-mvp@" in flaw["claim"]
+    assert flaw["source_ref"]["locator"].startswith("github-rest:RasmusTho/agentic-pkm-mvp@")
+    assert flaw["read_watermark"] == GENERATED_AT

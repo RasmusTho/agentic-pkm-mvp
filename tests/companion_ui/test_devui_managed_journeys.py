@@ -42,6 +42,21 @@ EXPECTED_DISCLOSURE_SUMMARIES = {
     ],
     "focus": ["Inspect source and technical details"] * 10,
 }
+EXPECTED_OVERVIEW_EVIDENCE_IDENTITIES = [
+    {
+        "source_type": "builderops_cockpit_working_projection",
+        "source_id": "cockpit:working:github:example/fixture#501",
+    },
+    {"source_type": "docs-frontmatter", "source_id": "capability:fixture"},
+    {
+        "source_type": "dispatcher-store",
+        "source_id": "dispatcher:github:example/fixture#501",
+    },
+    {
+        "source_type": "builderops_mirror",
+        "source_id": "mirror:github:example/fixture#501",
+    },
+]
 EXPECTED_FOCUS_ENTRY_IDENTITIES = {
     "focus-owner-intent": [
         {
@@ -236,6 +251,7 @@ def _keyboard_navigation(
     *,
     navigate=True,
     expected_provider_identity: list[dict[str, object]] | None = None,
+    expected_evidence_identity: list[dict[str, object]] | None = None,
 ):
     """Prove the finite fixture-bound disclosure inventory plus route link."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
@@ -249,8 +265,10 @@ def _keyboard_navigation(
     )
     provider_identity = None
     if surface == "overview":
+        if expected_evidence_identity is None:
+            expected_evidence_identity = EXPECTED_OVERVIEW_EVIDENCE_IDENTITIES
         provider_inventory = page.evaluate(
-            """expectedProviderIdentity => {
+            """({providerIdentity, expectedEvidenceIdentity}) => {
                 const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
                 const frame = document.querySelector('[data-testid="overview-trust-frame"]');
                 const details = trust && trust.querySelector(':scope > details.technical-disclosure');
@@ -264,6 +282,24 @@ def _keyboard_navigation(
                         row.querySelector(':scope > code')?.textContent,
                     ]),
                 }));
+                const evidenceIdentity = entry => {
+                    const details = entry.querySelector(':scope > details.technical-disclosure');
+                    if (!details || details.children.length !== 3 ||
+                        !details.children[0].matches('summary') ||
+                        !details.children[1].classList.contains('matrix') ||
+                        !details.children[2].matches('ul.rungs')) return null;
+                    const row = Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
+                        .find(item => item.querySelector(':scope > b')?.textContent === 'source_ref');
+                    if (!row) return null;
+                    try {
+                        const source = JSON.parse(row.querySelector(':scope > code')?.textContent);
+                        return {source_type: source.source_type, source_id: source.source_id};
+                    } catch (_) { return null; }
+                };
+                const evidence = body => body
+                    ? Array.from(body.querySelectorAll(':scope > .evidence-entry'))
+                        .map(evidenceIdentity)
+                    : [];
                 const checks = {
                     trust_parent: Boolean(frame && trust && details && frame.children.length === 2 &&
                         frame.children[0].matches('h2') && frame.children[1] === trust && trust.parentElement === frame &&
@@ -272,14 +308,20 @@ def _keyboard_navigation(
                         details.children.length === providers.length + 1 && providers.length > 0 &&
                         details.children[0].matches('summary') &&
                         Array.from(details.children).slice(1).every(child => child.matches('section.provider-state'))),
-                    provider_identity: expectedProviderIdentity === null ||
-                        JSON.stringify(identity) === JSON.stringify(expectedProviderIdentity),
+                    provider_identity: providerIdentity === null ||
+                        JSON.stringify(identity) === JSON.stringify(providerIdentity),
+                    evidence_identity: expectedEvidenceIdentity === null ||
+                        JSON.stringify(evidence(document.querySelector('[data-testid="overview-now"] > article.card > .body'))) ===
+                        JSON.stringify(expectedEvidenceIdentity),
                     matrix_parent: Array.from(document.querySelectorAll('[data-testid="overview-trust-matrix"] .matrix'))
                         .every(matrix => matrix.parentElement === details),
                 };
                 return {ok: Object.values(checks).every(Boolean), checks, identity};
             }""",
-            expected_provider_identity,
+            {
+                "providerIdentity": expected_provider_identity,
+                "expectedEvidenceIdentity": expected_evidence_identity,
+            },
         )
         assert provider_inventory["ok"], (
             "Only the admitted navigation and disclosures are keyboard interactive: "
