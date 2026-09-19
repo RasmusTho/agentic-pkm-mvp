@@ -85,7 +85,8 @@ the rolling Known Defects registry Issue #4172; P3 is informational. `bug-to-iss
 ## Proportional delivery
 - Native session-owned PRs use current-head CI, covered `Verify:` targets and plain merge. High-risk
   work or an explicit request adds one independent review, not a different merge protocol. Issue
-  count alone does not escalate. Dispatched executors, in-flight fenced merges and release effects
+  count alone does not escalate; retain mechanism/convergence review before an expensive proof cycle.
+  Dispatched executors, in-flight fenced merges and release effects
   retain their existing protocol; `verification-and-closure :: Routing` owns the distinction.
 - Build the most boring solution that satisfies the contract. New ledgers, registries, abstractions,
   provider layers, or enterprise patterns require explicit demand and must replace something or have
@@ -96,7 +97,6 @@ Exact tiers, supersession, and evidence-reuse mechanics live in
 `docs/development/GOVERNANCE_PROPORTIONALITY.md` and the delivery skills.
 
 ## Change classification
-
 Classify work as current-state correction, enabling change, or target/future-state work. Only the
 first two may change current-state claims, and only when code/evidence supports the new truth.
 

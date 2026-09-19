@@ -54,7 +54,8 @@ Do not end the session unless the shared workflow stop-loss or explicit user sco
 - Classify the PR with the hot-path fields from `PR_HOT_PATH.md`.
 - Verify branch/worktree/current-SHA sanity before any commit or push. The active worktree must be the PR worktree, the branch name must match the PR head branch before commit/push, and local `HEAD`, tracked remote branch, and PR head SHA must agree before trusting CI attachment or merge readiness. [branch-truth-gate]
 - Run only the relevant checks for the lane and risk.
-- Apply **late-change supersession** whenever a late delivery change alters the PR head, scope/authority body, governing contract, or required-check configuration after readiness evidence was collected. Compare the prior/current digest/version of every mutable authority surface — PR body, governing contract, and required-check configuration — alongside the head SHA to detect same-head changes. Determine which evidence depends on that change, record a `late_change_supersession_receipt.v1` with the prior/current heads and digest/version snapshots, affected evidence, and required reruns, and rerun that affected evidence on the current head SHA before handoff. Preserve unrelated evidence only when its dependency is unchanged; never hand off stale evidence to closure.
+- Native delivery reuses evidence per `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Evidence reuse and stop rule`; record affected checks in the existing PR Validation section.
+- On executor/in-flight deliveries apply **late-change supersession** whenever a late delivery change alters the PR head, scope/authority body, governing contract, or required-check configuration after readiness evidence was collected. Compare the prior/current digest/version of every mutable authority surface — PR body, governing contract, and required-check configuration — alongside the head SHA to detect same-head changes. Determine which evidence depends on that change, record a `late_change_supersession_receipt.v1` with the prior/current heads and digest/version snapshots, affected evidence, and required reruns, and rerun that affected evidence on the current head SHA before handoff. Preserve unrelated evidence only when its dependency is unchanged; never hand off stale evidence to closure.
 - Triage review feedback into blocking, cheap fix, out-of-scope, or incorrect/not-applicable.
 - For review-feedback repairs, verify the fixing commit is reachable from the target base branch before declaring the repair complete. If the repair addresses an earlier review thread, reply with the fixing PR or merge commit and resolve the original thread. [base-branch-truth] [review-thread-closure]
 - On resume or recovery, re-check the current branch, `origin/main`, relevant merged PRs, and expected implementation files before continuing publication, integration, or reimplementation. [post-resume-current-state-gate]
@@ -73,12 +74,11 @@ Do not end the session unless the shared workflow stop-loss or explicit user sco
 - When waiting for CI to go green, follow `_shared/CI_WAIT_CONTRACT.md` (shared
   `app.dispatcher.poll_backoff` helper, REST check-runs only, interval + cap + exponential backoff,
   `Retry-After` and x-ratelimit-reset header honoring, calibrated backoff,
-  `scripts/await_pr_checks.sh`). Review is separate: light-path PRs skip it; full-path PRs use
-  `.codex/skills/verification-and-closure/FULL_PATH.md :: Running the local review gate 🤖`; `--codex` remains opt-in. Never
+  `scripts/await_pr_checks.sh`). Review is separate: use `verification-and-closure :: Review` independently of merge mechanics; `--codex` remains opt-in. Never
   tight-poll `gh pr checks`/`gh pr view --json`, and never re-read verdict surfaces as separate
   per-attempt calls — they starve the shared API budget. [ci-wait-contract]
 - If CI reports an unavailable pytest flag such as `-n`/`--dist`, check for `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and require an explicit `-p <plugin_name>` load before adding or changing dependencies. [plugin-load-guard]
-- After a review-fix push where GitHub's merge ref may differ from branch HEAD, fetch `refs/pull/<PR>/merge`, inspect touched symbols in that tree, and run at least one targeted test against the merge-ref worktree before declaring `ready-for-verification`. [merge-ref-validation]
+- After a review-fix push where integration may differ, reuse current CI coverage of the merge ref. Only when that coverage is missing, fetch `refs/pull/<PR>/merge` and run a targeted check of the affected interaction before `ready-for-verification`. [merge-ref-validation]
 
 ## Escalation References
 
