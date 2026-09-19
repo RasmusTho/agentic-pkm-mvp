@@ -1,6 +1,6 @@
 {
   "scope": "Local production create_app/load_configuration and real admitted source boundaries; no deployment or attestation",
-  "recorded_at": "2026-09-19T10:17:30.324406+00:00",
+  "recorded_at": "2026-09-19T10:24:58.180373Z",
   "passed_nodeids": [
     "tests/builderops/test_devui_runtime.py::test_managed_source_packaging_and_isolation_contract",
     "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
@@ -29,23 +29,23 @@
     "Both canonical-case spellings admit the same configured repository while preserving the exact requested subject and source locator; foreign repository, malformed/foreign URL, wrong Issue number/kind and invalid version remain unavailable."
   ],
   "junit": {
-    "evidence_ref": "5596-runtime-proof-r1/junit.xml",
-    "sha256": "sha256:658adcd0aec812da0fd5a738077e13c276b2945e9f7005ee938439cba395498b",
+    "evidence_ref": "5596-runtime-proof-r2/junit.xml",
+    "sha256": "sha256:78b5e297ba4545b39bd506da5f91928cd078c2707eadf6eac709d277891591d9",
     "tests": 5,
     "failures": 0,
     "errors": 0,
     "skips": 0
   },
   "log": {
-    "evidence_ref": "5596-runtime-proof-r1/pytest.log",
-    "sha256": "sha256:f73f6275d762f2148e8cc5d439e21a5fc941413f9f95745afa71726f016a1464"
+    "evidence_ref": "5596-runtime-proof-r2/pytest.log",
+    "sha256": "sha256:08827c5fd5d0ed50c247f65b090aacb2d7649931522041fc137ce3d5f8317397"
   },
   "fixture_code_sha256": {
     "tests/builderops/test_devui_runtime.py": "sha256:47e2e74d7f8117f42ebc8d6199b09eff676d4aed946b4c0a6fcefeb6049bdde6"
   },
   "production_code_sha256": {
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
-    "app/builderops/devui_assets.py": "sha256:b714c5615daf1ce975d9d911cb3c41d7e11955263758d2fb9e0843293bc85bc4",
+    "app/builderops/devui_assets.py": "sha256:086c97790e93390366f5484a7e1d37c4c3e214c0cfc22d713fae3ff06ba00fce",
     "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
     "app/builderops/devui_overview_inputs.py": "sha256:73f68980e9c53ee4d823a7f27277c12c19f3e278414deb5a078e21abf5c7da84",
