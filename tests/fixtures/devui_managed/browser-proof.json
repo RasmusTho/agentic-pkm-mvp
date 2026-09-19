@@ -72,7 +72,7 @@
   ],
   "fixture_code_sha256": {
     ".github/workflows/browser-runtime.yml": "sha256:341bf0839dac99647097566af773ebdb46f7a895b4ed4d6c1ff0db35e581b0f4",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:8a72210da30c9fe7965b8fd0c0dadfe8c117b1d3902788d905034aad7e030a81",
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:787b498e84efd1fa6de062c3dae45aa451a0fead0149ee00b1929073a30bb003",
     "tests/companion_ui/test_devui_managed_journeys.py": "sha256:c08328d6b52936a635127ef030a689462da7cca31e019d21c70c82e014900c02",
     "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a",
     "tests/builderops/test_devui_runtime.py": "sha256:76ea22acf3b2db928895ee9683aa9ecb4028f32536b63c8246c369fe920447ba",
