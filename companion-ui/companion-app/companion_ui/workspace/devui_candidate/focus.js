@@ -57,6 +57,14 @@ const TECHNICAL_FIELDS = new Set([
   "version",
   "workflow_ref",
 ]);
+const EVIDENCE_AXIS_FIELDS = new Set([
+  "availability",
+  "freshness",
+  "coverage",
+  "completeness",
+  "cardinality",
+  "linkage",
+]);
 
 function text(parent, tag, value, className) {
   const node = document.createElement(tag);
@@ -82,12 +90,19 @@ function scalarValue(value) {
   return JSON.stringify(value);
 }
 
-function ownerRows(parent, value) {
+function isEvidenceAxisVector(value) {
+  return typeof value?.claim === "string" &&
+    Object.keys(value || {}).filter((key) => EVIDENCE_AXIS_FIELDS.has(key)).length >= 3;
+}
+
+function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {
   const list = document.createElement("div");
   list.className = "owner-summary";
+  const hideAxes = hideEvidenceAxes && isEvidenceAxisVector(value);
   Object.keys(value || {}).forEach((key) => {
     if (
       TECHNICAL_FIELDS.has(key) ||
+      (hideAxes && EVIDENCE_AXIS_FIELDS.has(key)) ||
       !Object.prototype.hasOwnProperty.call(FIELD_LABELS, key) ||
       (value[key] !== null && typeof value[key] === "object")
     ) return;
@@ -122,18 +137,19 @@ function rows(parent, value) {
 
 function render(testid, value) {
   const target = document.querySelector(`[data-testid="${testid}"] > div`);
+  const hideEvidenceAxes = testid === "focus-governing-sources" || testid === "focus-evidence";
   if (Array.isArray(value)) {
     if (!value.length) text(target, "p", "No server-declared entries.", "empty");
-    value.forEach((entry) => renderEntry(target, entry));
+    value.forEach((entry) => renderEntry(target, entry, hideEvidenceAxes));
     return;
   }
-  renderEntry(target, value || {});
+  renderEntry(target, value || {}, hideEvidenceAxes);
 }
 
-function renderEntry(parent, value) {
+function renderEntry(parent, value, hideEvidenceAxes = false) {
   const entry = document.createElement("div");
   entry.className = "focus-entry";
-  ownerRows(entry, value);
+  ownerRows(entry, value, {hideEvidenceAxes});
   const details = document.createElement("details");
   details.className = "technical-disclosure";
   const summary = text(details, "summary", "Inspect source and technical details");

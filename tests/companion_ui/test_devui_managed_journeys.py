@@ -175,6 +175,48 @@ def _no_persistence(page, context):
     assert page.evaluate("navigator.serviceWorker.getRegistrations().then(x => x.length)") == 0
 
 
+def _assert_focus_technical_axis_disclosure(page):
+    axis_names = {"availability", "freshness", "coverage", "completeness", "cardinality", "linkage"}
+    for testid in ("focus-governing-sources", "focus-evidence"):
+        section = page.locator(f'[data-testid="{testid}"]')
+        entries = section.locator(':scope > div > .focus-entry').all()
+        assert entries
+        for entry in entries:
+            details = entry.locator(':scope > details.technical-disclosure')
+            assert details.count() == 1
+            assert not details.evaluate("element => element.open")
+            axis_rows = details.locator("ul.rungs > li").evaluate_all(
+                """items => items
+                    .map(item => [item.querySelector(':scope > b')?.textContent,
+                                  item.querySelector(':scope > code')?.textContent])
+                    .filter(([key]) => ['availability', 'freshness', 'coverage', 'completeness', 'cardinality', 'linkage'].includes(key))"""
+            )
+            assert axis_rows
+            owner_text = entry.locator(':scope > .owner-summary').inner_text().lower()
+            assert all(axis not in owner_text for axis in axis_names)
+            details.locator("summary").click()
+            assert details.evaluate("element => element.open")
+            expanded_rows = details.locator("ul.rungs > li").all()
+            assert all(row.is_visible() for row in expanded_rows)
+            expanded_axis_rows = details.locator("ul.rungs > li").evaluate_all(
+                """items => items
+                    .map(item => [item.querySelector(':scope > b')?.textContent,
+                                  item.querySelector(':scope > code')?.textContent])
+                    .filter(([key]) => ['availability', 'freshness', 'coverage', 'completeness', 'cardinality', 'linkage'].includes(key))"""
+            )
+            assert expanded_axis_rows == axis_rows
+            details.locator("summary").click()
+
+    conversation = page.locator('[data-testid="focus-conversation"]')
+    assert "unsupported" in conversation.inner_text().lower()
+    assert "not delivered" in conversation.inner_text().lower()
+    next_step = page.locator('[data-testid="focus-next-step"]')
+    assert "unavailable" in next_step.inner_text().lower()
+    assert "infer" in next_step.inner_text().lower()
+    limitation_text = page.locator('[data-testid="focus-limitations"]').inner_text().lower()
+    assert any(token in limitation_text for token in ("acceptance", "unassessed", "owner outcome"))
+
+
 def _capture(page, name):
     folder = os.environ.get("DEVUI_MANAGED_EVIDENCE_DIR")
     if folder:
@@ -638,6 +680,8 @@ def test_managed_journey_hostile_accessibility_and_no_effect_matrix(managed_sour
             assert "<img" in page.locator("body").inner_text()
             assert page.get_by_role("main").get_attribute("aria-labelledby") == surface + "-heading"
             assert page.get_by_role("heading", level=1).count() == 1
+            if surface == "focus":
+                _assert_focus_technical_axis_disclosure(page)
             _keyboard_navigation(page, surface)
             page.goto(ORIGIN + path)
             _loaded(page, surface)

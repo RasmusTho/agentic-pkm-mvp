@@ -928,9 +928,9 @@ Bifrost result contributes only its exact evidence to the full-platform target; 
       action is legal.
 - [ ] Glance, understand, verify, and inspect reveal progressively deeper information about the
       same item without dropping evidence or forcing a product switch.
-- [ ] Technical source identifiers, timestamps, and unknown fields remain reachable under an
-      explicit per-item disclosure while the default view keeps owner-language labels and the
-      existing evidence axes visible.
+- [ ] Technical source identifiers, timestamps, unknown fields, and evidence axes remain reachable
+      under an explicit per-item disclosure while the default view keeps owner-language labels and
+      material source warnings visible.
 - [ ] Every claim names source, freshness, and whether it is confirmed, candidate, stale, unread,
       or unavailable.
 - [ ] When owner intent, a governing decision, or an acceptance criterion changes, the selected

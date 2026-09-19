@@ -586,12 +586,57 @@ def test_overview_card_hides_raw_technical_fields_until_expanded() -> None:
             playwright.stop()
 
 
+def _assert_focus_technical_axis_disclosure(page) -> None:
+    expected_axes = [
+        ["availability", "available"],
+        ["freshness", "fresh"],
+        ["coverage", "complete"],
+        ["cardinality", "nonempty"],
+        ["linkage", "linked"],
+    ]
+    for testid in ("focus-governing-sources", "focus-evidence"):
+        section = page.locator(f'[data-testid="{testid}"]')
+        details = section.locator("details.technical-disclosure").first
+        assert not details.evaluate("element => element.open")
+        axis_rows = details.locator("ul.rungs > li").evaluate_all(
+            """items => items
+                .map(item => [item.querySelector(':scope > b')?.textContent,
+                              item.querySelector(':scope > code')?.textContent])
+                .filter(([key]) => ['availability', 'freshness', 'coverage', 'cardinality', 'linkage'].includes(key))"""
+        )
+        assert axis_rows == expected_axes
+        assert all(not row.is_visible() for row in details.locator("ul.rungs > li").all())
+        visible_default = section.inner_text()
+        assert all(axis not in visible_default for axis, _value in expected_axes)
+        details.locator("summary").click()
+        assert details.evaluate("element => element.open")
+        expanded_rows = details.locator("ul.rungs > li").all()
+        for axis, value in expected_axes:
+            matching_rows = [row for row in expanded_rows if row.locator("b").inner_text() == axis]
+            assert len(matching_rows) == 1
+            assert matching_rows[0].is_visible()
+            assert value in matching_rows[0].inner_text()
+        assert all(row.is_visible() for row in expanded_rows)
+        details.locator("summary").click()
+
+    conversation = page.locator('[data-testid="focus-conversation"]')
+    assert "unsupported" in conversation.inner_text().lower()
+    assert "not delivered" in conversation.inner_text().lower()
+    next_step = page.locator('[data-testid="focus-next-step"]')
+    assert "unavailable" in next_step.inner_text().lower()
+    assert "infer" in next_step.inner_text().lower()
+    limitations = page.locator('[data-testid="focus-limitations"]')
+    limitation_text = limitations.inner_text().lower()
+    assert any(token in limitation_text for token in ("acceptance", "unassessed", "owner outcome"))
+
+
 def test_focus_sections_render_owner_language_not_raw_field_names() -> None:
     with _serve() as (base_url, _client):
         playwright, browser, context, page, _external = _browser(base_url)
         try:
             page.goto(base_url + FOCUS_PATH)
             page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            _assert_focus_technical_axis_disclosure(page)
             for testid in (
                 "focus-owner-intent",
                 "focus-governing-sources",
@@ -615,6 +660,9 @@ def test_focus_sections_render_owner_language_not_raw_field_names() -> None:
                     or "Availability" in visible
                     or "Actor" in visible
                     or "Legality" in visible
+                    or "Claim" in visible
+                    or "Reason" in visible
+                    or "Limitation" in visible
                 )
                 for raw_name in ("source_ref", "authority_ref", "captured_at", "receipt_ref"):
                     assert raw_name not in visible
