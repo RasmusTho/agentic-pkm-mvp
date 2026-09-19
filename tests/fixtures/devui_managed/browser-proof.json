@@ -72,17 +72,19 @@
   ],
   "fixture_code_sha256": {
     ".github/workflows/browser-runtime.yml": "sha256:341bf0839dac99647097566af773ebdb46f7a895b4ed4d6c1ff0db35e581b0f4",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:33530f010715a5edef2da694347e2dea1a7e766866a1cd146026ad05228c28df",
-    "tests/companion_ui/test_devui_managed_journeys.py": "sha256:6fc95ed9c6550144d2d9008d8f88740cff6f0483ca1533749c30e869dc8414c2",
-    "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a"
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:8a72210da30c9fe7965b8fd0c0dadfe8c117b1d3902788d905034aad7e030a81",
+    "tests/companion_ui/test_devui_managed_journeys.py": "sha256:c08328d6b52936a635127ef030a689462da7cca31e019d21c70c82e014900c02",
+    "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a",
+    "tests/builderops/test_devui_runtime.py": "sha256:76ea22acf3b2db928895ee9683aa9ecb4028f32536b63c8246c369fe920447ba",
+    "tests/builderops/test_devui_overview_inputs.py": "sha256:4c4872b5c6a7ce257c9d9bc3441c1658ac3cd8308bbf8acb065c39c9ce8a0586"
   },
   "junit": {
     "errors": 0,
-    "evidence_ref": ".codex-tmp/5595-final-proof/managed-junit.xml",
     "failures": 0,
-    "sha256": "sha256:224115cb5973f338f9b4d4ec3f34f8c14678c1d5b5f93f94da34e02b1ae7d2f3",
     "skips": 0,
-    "tests": 54
+    "tests": 54,
+    "evidence_ref": ".codex-tmp/5599-final-proof/managed-current-junit.xml",
+    "sha256": "sha256:78ba2a06809a24c317420bb04c770ac075e47f326b0361f78ca88b8dbc3a49a6"
   },
   "modes": [
     "desktop",
@@ -163,13 +165,14 @@
   },
   "production_code_sha256": {
     "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db",
-    "app/builderops/devui_assets.py": "sha256:34723e85e3e35fe7221146ccba9e2e1697c9240fc54d84c8822558fa0526592c",
+    "app/builderops/devui_assets.py": "sha256:a937ab36e9ef9f9f27efaf1af74ea0d602b97ba28f936ddec28c5cce7526a58e",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
-    "app/builderops/devui_overview_inputs.py": "sha256:73f68980e9c53ee4d823a7f27277c12c19f3e278414deb5a078e21abf5c7da84",
+    "app/builderops/devui_overview_inputs.py": "sha256:1db8ff25fdecc6d54776a5167a4da0389545acb5ce13f5ff7ba0a2861a06916e",
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
-    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
+    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353",
+    "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d"
   },
-  "raw_capture_package": "Historical #5594 capture hashes retained; #5595 final host-leased managed journey JUnit/log are recorded at .codex-tmp/5595-final-proof/managed-junit.xml and managed.log.",
+  "raw_capture_package": "Current #5599 final host-leased managed 54 proof is bound at .codex-tmp/5599-final-proof/managed-current.stdout and managed-current-junit.xml; the embedded accessibility/visual captures remain explicitly historical inventory.",
   "repository_identity_observation": {
     "canonical_repository": "example/fixture",
     "fixture_repository": "Example/Fixture",
@@ -177,6 +180,38 @@
     "selected_subject": "github:example/fixture#501",
     "source_locator": "https://github.com/Example/Fixture/issues/501"
   },
-  "scope": "#5595 final local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
-  "proof_observed_at": "2026-09-19T18:15:51.083175Z"
+  "scope": "#5599 final local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
+  "proof_observed_at": "2026-09-19T21:19:57.921589Z",
+  "current_proof": {
+    "source_commit": "263c3de19837757e2c0265d7ebe94c092734454b",
+    "execution_id": "5599-final-managed-ad4c548c",
+    "stdout": {
+      "evidence_ref": ".codex-tmp/5599-final-proof/managed-current.stdout",
+      "sha256": "sha256:3e819612346f4bf20db2507c36cdf9c9e3424b9969db18289d7942cfc8035b8c"
+    },
+    "junit": {
+      "evidence_ref": ".codex-tmp/5599-final-proof/managed-current-junit.xml",
+      "sha256": "sha256:78ba2a06809a24c317420bb04c770ac075e47f326b0361f78ca88b8dbc3a49a6",
+      "tests": 54,
+      "skips": 0
+    },
+    "ordinary_overview": {
+      "execution_id": "5599-final-overview-ad4c548c",
+      "stdout": {
+        "evidence_ref": ".codex-tmp/5599-final-proof/overview-current.stdout",
+        "sha256": "sha256:5b6a796a51eb6c0aa5a2dfe6603ced9e18173f730d9ff5958dd7dfe897b6be66"
+      },
+      "junit": {
+        "evidence_ref": ".codex-tmp/5599-final-proof/overview-current-junit.xml",
+        "sha256": "sha256:830d246eb6d0d1c11a9a07504ea3d8558486cc9a6ffeaead68782ca4886ef527",
+        "tests": 21,
+        "skips": 0
+      }
+    },
+    "security_nodes": {
+      "no_egress_effect_free": "tests.companion_ui.test_devui_overview_journeys::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+      "managed_accessibility_no_effect": "tests.companion_ui.test_devui_managed_journeys::test_managed_journey_hostile_accessibility_and_no_effect_matrix"
+    },
+    "historical_exact_ref_inventory": 5
+  }
 }

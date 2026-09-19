@@ -194,7 +194,7 @@
     "mutating_methods": [],
     "external_origins": []
   },
-  "consumer_issue": 5596,
+  "consumer_issue": 5599,
   "candidate_baseline": {
     "commit": "dd86e54221d04f9c730301ca734491b725c45be4",
     "role": "pre-#5596 shipped candidate baseline",
@@ -362,6 +362,80 @@
         "const label = text(details, \"summary\", \"Inspect trust frame\");"
       ],
       "exact_rule": "Preserve the existing trust_frame payload and provider-state vocabulary; bind the existing native details/summary disclosure to a compact source count and keep each source-declared refused provider visible at Glance. Defer complete provider fields only inside the disclosure, without reclassifying detached metadata, inferring freshness/degradation, changing source/API/schema behavior, or adding a visual or authority pattern."
+    },
+    {
+      "issue": 5599,
+      "transformation_id": "issue-5599-overview-source-projection",
+      "kind": "content_binding",
+      "source_path": "app/builderops/devui_overview_inputs.py",
+      "source_commit": "263c3de19837757e2c0265d7ebe94c092734454b",
+      "source_sha256": "sha256:1db8ff25fdecc6d54776a5167a4da0389545acb5ce13f5ff7ba0a2861a06916e",
+      "source_git_blob_oid": "a969b68c98cfafbbb429d7b03024cb3c82b914de",
+      "source_anchors": [
+        "def _capability_evidence(",
+        "def _work_context_evidence(",
+        "def _next_action_evidence(",
+        "def _flaw_evidence(",
+        "def _candidate("
+      ],
+      "candidate_paths": [
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js"
+      ],
+      "candidate_anchors": [
+        "function renderItem(parent, item) {",
+        "matrix(body, evidence);",
+        "rows(body, evidence, true);"
+      ],
+      "candidate_git_blob_oids": {
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js": "bf61c7f1bbe22b54f658f59886134ac892a3260b"
+      },
+      "exact_rule": "Preserve server candidate identity, source order, cardinality, display label, reason, and zones while projecting admitted source-linked capability and owner work context through existing evidence and limitation fields. Holder/status/next_action remain descriptive source facts; no execution permission, maturity, API, schema, reader, writer, or visual behavior is inferred."
+    },
+    {
+      "issue": 5599,
+      "transformation_id": "issue-5599-candidate-wrap-reflow",
+      "kind": "layout_reflow",
+      "source_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css",
+      "source_commit": "dd86e54221d04f9c730301ca734491b725c45be4",
+      "source_sha256": "sha256:9094a547edafcc6bff80f82ddae3b57975cb98890a7b5d2d3a79fac35f6bc8f3",
+      "source_git_blob_oid": "2d6e19e1f427d186bed8fc4391739baeda724737",
+      "source_anchors": [
+        ".rungs code{color:var(--fg-1);overflow-wrap:anywhere}"
+      ],
+      "candidate_paths": [
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css"
+      ],
+      "candidate_anchors": [
+        ".rungs b{color:var(--fg-2);font-weight:var(--weight-medium);overflow-wrap:anywhere}",
+        ".body>.empty{overflow-wrap:break-word}"
+      ],
+      "candidate_git_blob_oids": {
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/devui.css": "0a473a000bf9c15bb4ffbab93088c25e8f25d752"
+      },
+      "exact_rule": "Extend the accepted source-value wrapping grammar to preserved technical labels and full limitation text; retain every text value and axis layout with no new token, visual, interaction, or authority behavior."
+    },
+    {
+      "issue": 5599,
+      "transformation_id": "issue-5599-managed-wrap-reflow",
+      "kind": "layout_reflow",
+      "source_path": "app/web/static/cockpit.css",
+      "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+      "source_sha256": "sha256:d34fadfdd619534f6e0f9480a979b5caae52b65b9b05d8bb6db99fa8ae1d1d93",
+      "source_git_blob_oid": "63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2",
+      "source_anchors": [
+        ".rungs .r-val{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);overflow-wrap:break-word}"
+      ],
+      "target_path": "app/builderops/devui_managed.css",
+      "target_anchors": [
+        ".rungs b{color:var(--fg-2);font-weight:var(--weight-medium);overflow-wrap:anywhere}",
+        ".body>.empty{overflow-wrap:break-word}",
+        ".limitations li{overflow-wrap:break-word}"
+      ],
+      "target_git_blob_oid": "ab2f7a228d1284347d9d2b67ca3388a090244f6d",
+      "exact_rule": "Carry the existing source-value wrapping pattern into the managed copy for labels and complete limitation text, preserving the existing limitations overlay and all text, axis layout, tokens, interactions, and authority boundaries."
     }
+  ],
+  "historical_consumer_issues": [
+    5596
   ]
 }
