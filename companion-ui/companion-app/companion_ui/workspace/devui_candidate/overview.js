@@ -81,11 +81,46 @@ function labelFor(key) {
 }
 
 function scalarValue(value) {
-  if (value == null) return "Unavailable";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function sourceWarning(value) {
+  const warningPhrases = {
+    availability: {
+      unavailable: "the source is unavailable",
+      refused: "the source refused the read",
+      unsupported: "the source does not support this read",
+    },
+    freshness: {
+      stale: "the source is stale",
+      unknown: "source timing is unknown",
+    },
+    completeness: {
+      partial: "required content is incomplete",
+      unread: "required content was not read",
+      missing: "required content is missing",
+    },
+    cardinality: {
+      not_measured: "source item count was not measured",
+    },
+    linkage: {
+      unlinked: "source relation is unlinked",
+      not_assessed: "source relation was not assessed",
+    },
+  };
+  const signals = Object.entries(warningPhrases)
+    .filter(([key, phrases]) =>
+      Object.prototype.hasOwnProperty.call(value || {}, key) &&
+      value[key] !== null &&
+      Object.prototype.hasOwnProperty.call(phrases, value[key])
+    )
+    .map(([key, phrases]) => phrases[value[key]]);
+  if (!signals.length) return null;
+  return `Source evidence requires attention: ${signals
+    .join("; ")}.`;
 }
 
 function ownerRows(parent, value) {
@@ -95,6 +130,7 @@ function ownerRows(parent, value) {
     if (
       TECHNICAL_FIELDS.has(key) ||
       key === "limitations" ||
+      value[key] == null ||
       !Object.prototype.hasOwnProperty.call(FIELD_LABELS, key) ||
       (value[key] !== null && typeof value[key] === "object")
     ) return;
@@ -104,6 +140,8 @@ function ownerRows(parent, value) {
     text(row, "span", scalarValue(value[key]));
     list.appendChild(row);
   });
+  const warning = sourceWarning(value);
+  if (warning) text(list, "p", warning, "owner-warning");
   if (!list.childElementCount && Object.keys(value || {}).length) {
     const row = document.createElement("p");
     row.className = "owner-fact";

@@ -78,7 +78,10 @@ jobs:
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_evidence_axes_no_illegible_wrapping_on_mobile_viewport \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_now_card_renders_owner_language_not_raw_field_names \
             tests/companion_ui/test_devui_overview_journeys.py::test_overview_card_hides_raw_technical_fields_until_expanded \
-            tests/companion_ui/test_devui_overview_journeys.py::test_focus_sections_render_owner_language_not_raw_field_names
+            tests/companion_ui/test_devui_overview_journeys.py::test_focus_sections_render_owner_language_not_raw_field_names \
+            tests/companion_ui/test_devui_overview_journeys.py::test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent \
+            tests/companion_ui/test_devui_overview_journeys.py::test_neutral_not_applicable_and_countable_states_stay_silent \
+            tests/companion_ui/test_devui_overview_journeys.py::test_explicit_limitation_remains_visible_in_overview_and_focus
           python - "$DEVUI_OVERVIEW_PR_JUNIT" <<'PY'
           from pathlib import Path
           import sys
@@ -109,6 +112,18 @@ jobs:
               "test_overview_card_hides_raw_technical_fields_until_expanded",
               f"{TEST_MODULE}::"
               "test_focus_sections_render_owner_language_not_raw_field_names",
+              f"{TEST_MODULE}::"
+              "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[stale]",
+              f"{TEST_MODULE}::"
+              "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[unknown]",
+              f"{TEST_MODULE}::"
+              "test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent[partial]",
+              f"{TEST_MODULE}::"
+              "test_neutral_not_applicable_and_countable_states_stay_silent[not_countable]",
+              f"{TEST_MODULE}::"
+              "test_neutral_not_applicable_and_countable_states_stay_silent[measured_empty]",
+              f"{TEST_MODULE}::"
+              "test_explicit_limitation_remains_visible_in_overview_and_focus",
           )
 
           root = ET.parse(Path(sys.argv[1])).getroot()

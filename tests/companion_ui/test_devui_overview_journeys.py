@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +24,8 @@ except ImportError:
     pytest.skip("playwright package not installed", allow_module_level=True)
 
 from companion_ui.workspace.serve_dev_page import make_handler
+from app.builderops.devui_focus import _source_claim
+from app.builderops.devui_overview import compose_overview_view
 from tests.companion_ui._devui_overview_exact_ref_evidence import (
     ExactRefEvidenceRecorder,
 )
@@ -125,6 +128,7 @@ def _focus() -> dict[str, Any]:
         "cardinality": "nonempty",
         "linkage": "linked",
         "captured_at": "2026-08-28T10:00:00+00:00",
+        "read_watermark": "2026-08-28T10:00:00+00:00",
         "limitation": None,
     }
     return {
@@ -188,9 +192,53 @@ def _focus() -> dict[str, Any]:
     }
 
 
+def _validate_overview_fixture(payload: dict[str, Any]) -> None:
+    candidate = json.loads(json.dumps(payload["now"][0]))
+    candidate["evidence"][0].pop("opaque_diagnostic", None)
+    compose_overview_view(
+        composition={
+            "contract_version": "devui.composition.v1",
+            "authority": "projection_only",
+            "captured_at": payload["composed_at"],
+            "providers": {
+                "fixture": {
+                    "provider": "fixture",
+                    "status": "available",
+                    "authority": "fixture",
+                    "captured_at": payload["composed_at"],
+                    "snapshot": "fixture:42",
+                    "completeness": "complete",
+                }
+            },
+        },
+        candidates={"now": [candidate], "needs_you": [], "ready_to_try": []},
+    )
+
+
+def _validate_focus_fixture(payload: dict[str, Any]) -> None:
+    # Validate only the source claims under mutation.  The journey fixture's
+    # unrelated receipt/observation shortcuts intentionally remain opaque to
+    # this focused source-state check.
+    for section in ("governing_sources", "evidence"):
+        for index, claim in enumerate(payload[section]):
+            _source_claim(claim, label=f"{section}[{index}]")
+
+
 class _Client:
-    def __init__(self, *, focus_status: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        focus_status: int = 200,
+        evidence_state: str | None = None,
+        explicit_limitation: str | None = None,
+        neutral_cardinality: str | None = None,
+        claim_without_support: bool = False,
+    ) -> None:
         self.focus_status = focus_status
+        self.evidence_state = evidence_state
+        self.explicit_limitation = explicit_limitation
+        self.neutral_cardinality = neutral_cardinality
+        self.claim_without_support = claim_without_support
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def get_with_status(
@@ -198,15 +246,95 @@ class _Client:
     ) -> tuple[int, dict[str, Any]]:
         self.calls.append((url, params))
         if url == "/api/devui/overview":
-            return 200, _overview()
+            payload = _overview()
+            evidence = payload["now"][0]["evidence"][0]
+            if self.evidence_state == "stale":
+                evidence.update(freshness="stale", limitation=None)
+            elif self.evidence_state == "unknown":
+                evidence.update(freshness="unknown", limitation=None)
+            elif self.evidence_state == "partial":
+                evidence.update(completeness="partial", limitation=None)
+            if self.explicit_limitation is not None:
+                evidence["limitation"] = self.explicit_limitation
+            if self.claim_without_support:
+                evidence["claim"] = None
+            if self.neutral_cardinality == "not_countable":
+                evidence.update(
+                    claim=None,
+                    completeness="not_applicable",
+                    cardinality="not_countable",
+                    linkage="not_applicable",
+                    limitation="This source does not declare requirement coverage.",
+                )
+            elif self.neutral_cardinality == "measured_empty":
+                evidence.update(
+                    claim="No matching items were measured.",
+                    completeness="complete",
+                    cardinality="measured_empty",
+                    linkage="linked",
+                    limitation=None,
+                )
+            _validate_overview_fixture(payload)
+            return 200, payload
         if self.focus_status != 200:
             return self.focus_status, {"detail": "unavailable"}
-        return 200, _focus()
+        payload = _focus()
+        if self.evidence_state in {"stale", "unknown", "partial"}:
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim["limitation"] = None
+                    if self.evidence_state in {"stale", "unknown"}:
+                        claim["freshness"] = self.evidence_state
+                    else:
+                        claim["coverage"] = "partial"
+        if self.explicit_limitation is not None:
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim["limitation"] = self.explicit_limitation
+        if self.claim_without_support:
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim["claim"] = None
+        if self.neutral_cardinality == "not_countable":
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim.update(
+                        claim=None,
+                        coverage="not_applicable",
+                        cardinality="not_countable",
+                        linkage="not_applicable",
+                        limitation="This source does not declare requirement coverage.",
+                    )
+        elif self.neutral_cardinality == "measured_empty":
+            for section in ("governing_sources", "evidence"):
+                for claim in payload[section]:
+                    claim.update(
+                        claim="No matching items were measured.",
+                        coverage="complete",
+                        cardinality="measured_empty",
+                        linkage="linked",
+                        limitation=None,
+                    )
+        _validate_focus_fixture(payload)
+        return 200, payload
 
 
 @contextmanager
-def _serve(*, focus_status: int = 200) -> Iterator[tuple[str, _Client]]:
-    client = _Client(focus_status=focus_status)
+def _serve(
+    *,
+    focus_status: int = 200,
+    evidence_state: str | None = None,
+    explicit_limitation: str | None = None,
+    neutral_cardinality: str | None = None,
+    claim_without_support: bool = False,
+) -> Iterator[tuple[str, _Client]]:
+    client = _Client(
+        focus_status=focus_status,
+        evidence_state=evidence_state,
+        explicit_limitation=explicit_limitation,
+        neutral_cardinality=neutral_cardinality,
+        claim_without_support=claim_without_support,
+    )
     handler = make_handler(
         client=client,  # type: ignore[arg-type]
         api_base_url="http://127.0.0.1:18000",
@@ -539,12 +667,190 @@ def test_overview_now_card_renders_owner_language_not_raw_field_names() -> None:
             card = page.locator('[data-testid="overview-now"] article').first
             visible = card.inner_text()
             assert "Claim" in visible
+            owner_summary = card.locator(".evidence-entry > .owner-summary")
+            assert "Source evidence requires attention" not in owner_summary.inner_text()
+            assert "Unavailable" not in owner_summary.inner_text()
             for raw_name in ("subject_ref", "source_ref", "evidence_id", "captured_at"):
                 assert raw_name not in visible
             card.locator("details.technical-disclosure").nth(1).locator("summary").click()
             expanded = card.inner_text()
             assert "Availability" in expanded
             assert "Freshness" in expanded
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+@pytest.mark.parametrize("evidence_state", ["stale", "unknown", "partial"])
+def test_degraded_evidence_warning_stays_visible_and_null_limitation_stays_absent(
+    evidence_state: str,
+) -> None:
+    with _serve(evidence_state=evidence_state) as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            overview_owner_summary = page.locator(
+                '[data-testid="overview-now"] article .evidence-entry > .owner-summary'
+            )
+            overview_text = overview_owner_summary.inner_text()
+            assert "Source evidence requires attention" in overview_text
+            assert {
+                "stale": "the source is stale",
+                "unknown": "source timing is unknown",
+                "partial": "required content is incomplete",
+            }[evidence_state] in overview_text
+            assert "Limitation" not in overview_text
+            assert "Unavailable" not in overview_text
+            assert all(
+                axis not in overview_text.lower()
+                for axis in ("availability", "freshness", "completeness", "cardinality", "linkage")
+            )
+            overview_details = page.locator(
+                '[data-testid="overview-now"] article details.technical-disclosure'
+            ).nth(1)
+            overview_details.locator("summary").click()
+            overview_rows = overview_details.locator("ul.rungs > li").evaluate_all(
+                """items => Object.fromEntries(items.map(item => [
+                    item.querySelector(':scope > b')?.textContent,
+                    item.querySelector(':scope > code')?.textContent,
+                ]))"""
+            )
+            overview_axes = overview_details.locator(".matrix > .axis").evaluate_all(
+                """items => Object.fromEntries(items.map(item => [
+                    item.dataset.axis, item.dataset.value,
+                ]))"""
+            )
+            assert overview_rows["limitation"] == "null"
+            if evidence_state in {"stale", "unknown"}:
+                assert overview_axes["freshness"] == evidence_state
+            else:
+                assert overview_axes["completeness"] == evidence_state
+
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in ("focus-governing-sources", "focus-evidence"):
+                owner_summary = page.locator(
+                    f'[data-testid="{testid}"] .focus-entry > .owner-summary'
+                ).first
+                focus_text = owner_summary.inner_text()
+                assert "Source evidence requires attention" in focus_text
+                assert {
+                    "stale": "the source is stale",
+                    "unknown": "source timing is unknown",
+                    "partial": "required content is incomplete",
+                }[evidence_state] in focus_text
+                assert "Limitation" not in focus_text
+                assert "Unavailable" not in focus_text
+                assert all(
+                    axis not in focus_text.lower()
+                    for axis in ("availability", "freshness", "coverage", "cardinality", "linkage")
+                )
+                focus_details = page.locator(
+                    f'[data-testid="{testid}"] .focus-entry details.technical-disclosure'
+                ).first
+                focus_details.locator("summary").click()
+                focus_rows = focus_details.locator("ul.rungs > li").evaluate_all(
+                    """items => Object.fromEntries(items.map(item => [
+                        item.querySelector(':scope > b')?.textContent,
+                        item.querySelector(':scope > code')?.textContent,
+                    ]))"""
+                )
+                assert focus_rows["limitation"] == "null"
+                if evidence_state in {"stale", "unknown"}:
+                    assert focus_rows["freshness"] == evidence_state
+                else:
+                    assert focus_rows["coverage"] == evidence_state
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+@pytest.mark.parametrize("neutral_cardinality", ["not_countable", "measured_empty"])
+def test_neutral_not_applicable_and_countable_states_stay_silent(
+    neutral_cardinality: str,
+) -> None:
+    with _serve(neutral_cardinality=neutral_cardinality) as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            overview_owner_summary = page.locator(
+                '[data-testid="overview-now"] article .evidence-entry > .owner-summary'
+            )
+            assert "Source evidence requires attention" not in overview_owner_summary.inner_text()
+            overview_details = page.locator(
+                '[data-testid="overview-now"] article details.technical-disclosure'
+            ).nth(1)
+            overview_details.locator("summary").click()
+            overview_axes = overview_details.locator(".matrix > .axis").evaluate_all(
+                """items => Object.fromEntries(items.map(item => [
+                    item.dataset.axis, item.dataset.value,
+                ]))"""
+            )
+            if neutral_cardinality == "not_countable":
+                assert overview_axes["completeness"] == "not_applicable"
+                assert overview_axes["cardinality"] == "not_countable"
+                assert overview_axes["linkage"] == "not_applicable"
+            else:
+                assert overview_axes["completeness"] == "complete"
+                assert overview_axes["cardinality"] == "measured_empty"
+                assert overview_axes["linkage"] == "linked"
+
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in ("focus-governing-sources", "focus-evidence"):
+                section = page.locator(f'[data-testid="{testid}"]')
+                assert "Source evidence requires attention" not in section.locator(
+                    ".focus-entry > .owner-summary"
+                ).first.inner_text()
+                details = section.locator(".focus-entry details.technical-disclosure").first
+                details.locator("summary").click()
+                rows = details.locator("ul.rungs > li").evaluate_all(
+                    """items => Object.fromEntries(items.map(item => [
+                        item.querySelector(':scope > b')?.textContent,
+                        item.querySelector(':scope > code')?.textContent,
+                    ]))"""
+                )
+                if neutral_cardinality == "not_countable":
+                    assert rows["coverage"] == "not_applicable"
+                    assert rows["cardinality"] == "not_countable"
+                    assert rows["linkage"] == "not_applicable"
+                else:
+                    assert rows["coverage"] == "complete"
+                    assert rows["cardinality"] == "measured_empty"
+                    assert rows["linkage"] == "linked"
+        finally:
+            context.close()
+            browser.close()
+            playwright.stop()
+
+
+def test_explicit_limitation_remains_visible_in_overview_and_focus() -> None:
+    limitation = "Source read is bounded to the admitted fixture scope."
+    with _serve(
+        explicit_limitation=limitation, claim_without_support=True
+    ) as (base_url, _client):
+        playwright, browser, context, page, _external = _browser(base_url)
+        try:
+            page.goto(base_url + "/devui/overview")
+            page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
+            overview_owner_summary = page.locator(
+                '[data-testid="overview-now"] article .evidence-entry > .owner-summary'
+            )
+            assert "Limitation" in overview_owner_summary.inner_text()
+            assert limitation in overview_owner_summary.inner_text()
+
+            page.goto(base_url + FOCUS_PATH)
+            page.wait_for_selector('[data-testid="focus-load-state"][data-state="loaded"]')
+            for testid in ("focus-governing-sources", "focus-evidence"):
+                owner_summary = page.locator(
+                    f'[data-testid="{testid}"] .focus-entry > .owner-summary'
+                ).first
+                assert "Limitation" in owner_summary.inner_text()
+                assert limitation in owner_summary.inner_text()
         finally:
             context.close()
             browser.close()

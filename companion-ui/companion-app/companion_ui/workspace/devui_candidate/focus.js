@@ -83,7 +83,6 @@ function labelFor(key) {
 }
 
 function scalarValue(value) {
-  if (value == null) return "Unavailable";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
@@ -91,8 +90,43 @@ function scalarValue(value) {
 }
 
 function isEvidenceAxisVector(value) {
-  return typeof value?.claim === "string" &&
-    Object.keys(value || {}).filter((key) => EVIDENCE_AXIS_FIELDS.has(key)).length >= 3;
+  return Object.keys(value || {}).filter((key) => EVIDENCE_AXIS_FIELDS.has(key)).length >= 3;
+}
+
+function sourceWarning(value) {
+  const warningPhrases = {
+    availability: {
+      unavailable: "the source is unavailable",
+      refused: "the source refused the read",
+      unsupported: "the source does not support this read",
+    },
+    freshness: {
+      stale: "the source is stale",
+      unknown: "source timing is unknown",
+    },
+    coverage: {
+      partial: "required content is incomplete",
+      unread: "required content was not read",
+      missing: "required content is missing",
+    },
+    cardinality: {
+      not_measured: "source item count was not measured",
+    },
+    linkage: {
+      unlinked: "source relation is unlinked",
+      not_assessed: "source relation was not assessed",
+    },
+  };
+  const signals = Object.entries(warningPhrases)
+    .filter(([key, phrases]) =>
+      Object.prototype.hasOwnProperty.call(value || {}, key) &&
+      value[key] !== null &&
+      Object.prototype.hasOwnProperty.call(phrases, value[key])
+    )
+    .map(([key, phrases]) => phrases[value[key]]);
+  if (!signals.length) return null;
+  return `Source evidence requires attention: ${signals
+    .join("; ")}.`;
 }
 
 function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {
@@ -103,6 +137,7 @@ function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {
     if (
       TECHNICAL_FIELDS.has(key) ||
       (hideAxes && EVIDENCE_AXIS_FIELDS.has(key)) ||
+      value[key] == null ||
       !Object.prototype.hasOwnProperty.call(FIELD_LABELS, key) ||
       (value[key] !== null && typeof value[key] === "object")
     ) return;
@@ -112,6 +147,8 @@ function ownerRows(parent, value, {hideEvidenceAxes = false} = {}) {
     text(row, "span", scalarValue(value[key]));
     list.appendChild(row);
   });
+  const warning = sourceWarning(value);
+  if (warning) text(list, "p", warning, "owner-warning");
   if (!list.childElementCount && Object.keys(value || {}).length) {
     const row = document.createElement("p");
     row.className = "owner-fact";

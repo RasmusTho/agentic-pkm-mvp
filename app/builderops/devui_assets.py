@@ -18,9 +18,9 @@ ROUTES = {
 ASSET_SHA256 = {
     "devui.css": "7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76",
     "focus.html": "ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
-    "focus.js": "e88b858d8779e689b340f15e092b3aef1c5d5aefa1deb4799375a47cf490cfa3",
+    "focus.js": "47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
     "overview.html": "71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
-    "overview.js": "1e19a46cbb357e2740aef152f1da6fcd9fa798c084d2deeeac22a8d7e8a45199",
+    "overview.js": "44dcc72f6ad26eb6f5eb802dfa3c8cb1b981d8f864e5b017af8d54f8995750f9",
 }
 INVENTORY_SHA256 = (
     "sha256:"
