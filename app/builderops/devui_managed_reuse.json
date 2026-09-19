@@ -934,13 +934,13 @@
     ]
   },
   "independent_review": {
-    "reviewer_identity": "pending:root-supplied-fresh-final-payload-review",
-    "independent_from_author": null,
-    "independence_basis": "Final payload will be frozen after the c039 source/test/asset repair, fresh host-leased proof, and artifact commit; no final review pass is claimed yet.",
-    "reviewed_payload_sha256": null,
-    "reviewed_at": null,
-    "verdict": "pending",
+    "reviewer_identity": "codex-review:/root/final_review_5600_r2",
+    "independent_from_author": true,
+    "independence_basis": "Fresh author-independent complete Issue #5594 / PR #5600 review in a separate read-only context. I independently inspected the live full Issue/PR/parent contract and complete changed behavior; executed source-valid production-render probes; authenticated exact source OIDs, hashes, anchors, tokens, CSS overlay, candidate gate, managed proof consumers, raw JUnit/captures and host-lease observations; and verified final source/test/asset/CI/docs equal the frozen c039 review dependencies. No code, Git, GitHub, lifecycle mutation or helper delegation was performed. This approves only the exact constrained-reuse payload and reviewed behavior; sealed publication, current-head CI, original review-thread resolution and final mutable authority readbacks remain separate gates.",
+    "reviewed_payload_sha256": "sha256:6142433d1391ea7ce7b2f4a7fb3bb4cd428ec77772c88c6c4c2325d04779056b",
+    "reviewed_at": "2026-09-19T16:48:42.791992Z",
+    "verdict": "pass",
     "findings": []
   },
-  "receipt_sha256": "sha256:9bfbedf101773bf1ab55a8bdc114467e3e18e0d8b43e6209792b60ccd272d819"
+  "receipt_sha256": "sha256:44ed626c6b49707ea0bcf92ad08bbd3593d922a8229e7d9cf5808456d2d2670c"
 }
