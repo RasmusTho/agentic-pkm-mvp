@@ -9,11 +9,13 @@ source/trust contract required for a source-owned ``Now`` item.
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from urllib.parse import quote
 
+from app.builderops.cockpit_chain import FLAW_PREDICATES
 from app.builderops.devui_focus import CONTRACT_VERSION as FOCUS_CONTRACT_VERSION
 from typing import Any
 
@@ -27,6 +29,22 @@ _RFC3339_TIMESTAMP = re.compile(
 _GITHUB_REPOSITORY = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\Z",
     re.ASCII,
+)
+_SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z", re.ASCII)
+_CONTEXT_FIELDS = frozenset(
+    {
+        "claimed_by",
+        "status",
+        "capability_lane",
+        "sources",
+        "next_action",
+        "next_action_evidence",
+        "mirror_watermark",
+        "chain_position",
+        "position_evidence",
+        "position_unresolved_reason",
+        "flaws",
+    }
 )
 
 
@@ -59,7 +77,11 @@ def _items(value: Any) -> Sequence[Any] | None:
     return value
 
 
-def _trusted_working_items(work_provider: Any) -> tuple[str, Sequence[Any]] | None:
+def _trusted_working_items(
+    work_provider: Any,
+) -> tuple[
+    str, Sequence[Any], dict[str, Mapping[str, Any]], Mapping[str, Any]
+] | None:
     """Return the one admitted working list and its captured-at watermark."""
 
     provider = _object(work_provider)
@@ -94,6 +116,7 @@ def _trusted_working_items(work_provider: Any) -> tuple[str, Sequence[Any]] | No
         return None
     dispatcher_states: list[str] = []
     source_names: set[str] = set()
+    source_map: dict[str, Mapping[str, Any]] = {}
     for raw_source in sources:
         source = _object(raw_source)
         if source is None:
@@ -102,6 +125,7 @@ def _trusted_working_items(work_provider: Any) -> tuple[str, Sequence[Any]] | No
         if name is None or name in source_names:
             return None
         source_names.add(name)
+        source_map[name] = source
         if name == "dispatcher-store":
             if (
                 source.get("configured") is not True
@@ -117,10 +141,13 @@ def _trusted_working_items(work_provider: Any) -> tuple[str, Sequence[Any]] | No
     if bands is None:
         return None
     working_bands: list[Mapping[str, Any]] = []
+    flaws_header: Mapping[str, Any] = {}
     for raw_band in bands:
         band = _object(raw_band)
         if band is not None and band.get("key") == "working":
             working_bands.append(band)
+        if band is not None and band.get("key") == "flawed":
+            flaws_header = _object(band.get("header")) or {}
     if len(working_bands) != 1:
         return None
     working = working_bands[0]
@@ -134,10 +161,570 @@ def _trusted_working_items(work_provider: Any) -> tuple[str, Sequence[Any]] | No
         or count != len(items)
     ):
         return None
-    return captured_at, items
+    return captured_at, items, source_map, flaws_header
 
 
-def _candidate(*, item: Any, captured_at: str) -> dict[str, Any] | None:
+def _source_axes(source: Mapping[str, Any] | None) -> tuple[str, str, str, str]:
+    """Map one source's declared read state to existing evidence axes."""
+
+    state = source.get("state") if source is not None else "unavailable"
+    if state == "fresh":
+        return "available", "fresh", "complete", "linked"
+    if state == "empty":
+        return "available", "fresh", "complete", "unlinked"
+    if state == "stale":
+        return "available", "stale", "partial", "unlinked"
+    return "unavailable", "unknown", "unread", "unlinked"
+
+
+def _source_watermark(
+    source: Mapping[str, Any] | None, *, fallback: str
+) -> tuple[str, str | None]:
+    """Return a source read time and its optional read watermark."""
+
+    watermark = _timestamp(source.get("last_successful_read")) if source else None
+    return watermark or fallback, watermark
+
+
+def _source_transport(source: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    if source is None:
+        return None
+    return _object(source.get("transport"))
+
+
+def _transport_refs(source: Mapping[str, Any] | None) -> tuple[str, ...]:
+    transport = _source_transport(source)
+    refs = _items(transport.get("source_refs")) if transport is not None else None
+    if refs is None:
+        return ()
+    return tuple(ref for ref in refs if isinstance(ref, str) and ref.strip())
+
+
+def _task_source_ref(
+    *, source: Mapping[str, Any] | None, repo: str, task_id: str | None, fallback: str
+) -> str:
+    """Keep the addressed task reference when the producer supplied one."""
+
+    expected = f"/v1/tasks/{task_id}?repository={repo}" if task_id else None
+    if expected is None:
+        return fallback
+    for reference in _transport_refs(source):
+        if expected in reference:
+            return reference
+    return fallback
+
+
+def _source_locator(
+    *,
+    source: Mapping[str, Any] | None,
+    source_name: str,
+    repo: str,
+    task_id: str | None,
+    fallback: str,
+) -> str:
+    if source_name == "dispatcher-store":
+        return _task_source_ref(source=source, repo=repo, task_id=task_id, fallback=fallback)
+    references = _transport_refs(source)
+    return references[0] if references else fallback
+
+
+def _capability_source_ref(refs: Sequence[Any] | None) -> str | None:
+    """Preserve the complete admitted docs reference set."""
+
+    candidates = [ref for ref in refs or () if isinstance(ref, str) and ref.strip()]
+    return "|".join(candidates) if candidates else None
+
+
+def _source_ref(
+    *,
+    source_type: str,
+    source_id: str,
+    locator: str,
+    version: str,
+) -> dict[str, str]:
+    return {
+        "source_type": source_type,
+        "source_id": source_id,
+        "locator": locator,
+        "version": version,
+    }
+
+
+def _evidence(
+    *,
+    evidence_id: str,
+    claim: str | None,
+    source_ref: Mapping[str, str],
+    availability: str,
+    freshness: str,
+    completeness: str,
+    cardinality: str,
+    linkage: str,
+    captured_at: str,
+    read_watermark: str | None = None,
+    limitation: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "evidence_id": evidence_id,
+        "claim": claim,
+        "source_ref": dict(source_ref),
+        "availability": availability,
+        "freshness": freshness,
+        "completeness": completeness,
+        "cardinality": cardinality,
+        "linkage": linkage,
+        "captured_at": captured_at,
+        "limitation": limitation,
+    }
+    if read_watermark is not None:
+        result["read_watermark"] = read_watermark
+    return result
+
+
+def _context_enabled(item: Mapping[str, Any], sources: Mapping[str, Mapping[str, Any]]) -> bool:
+    return bool(_CONTEXT_FIELDS.intersection(item) or "docs-frontmatter" in sources)
+
+
+def _capability_evidence(
+    *,
+    source: Mapping[str, Any] | None,
+    item: Mapping[str, Any],
+    subject_id: str,
+    captured_at: str,
+) -> tuple[dict[str, Any], str | None]:
+    lane = _object(item.get("capability_lane"))
+    docs = _source_transport(source)
+    docs_state = source.get("state") if source is not None else "unavailable"
+    docs_read_at, docs_watermark = _source_watermark(source, fallback=captured_at)
+    repo = _nonblank(item.get("repo")) or "unknown"
+    lane_key = _nonblank(lane.get("key")) if lane else None
+    lane_name = _nonblank(lane.get("name")) if lane else None
+    candidate_sha = _nonblank(docs.get("candidate_sha")) if docs else None
+    refs = _items(docs.get("source_refs")) if docs else None
+    locator = _capability_source_ref(refs)
+    linked = (
+        lane is not None
+        and lane.get("rung") == "proven"
+        and lane_key is not None
+        and lane_name is not None
+        and docs_state == "fresh"
+        and docs is not None
+        and docs.get("repository") == repo
+        and docs.get("outcome") == "available"
+        and candidate_sha is not None
+        and _SOURCE_SHA.fullmatch(candidate_sha) is not None
+        and isinstance(locator, str)
+        and bool(locator.strip())
+    )
+    if linked:
+        assert lane_key is not None
+        assert isinstance(locator, str)
+        assert candidate_sha is not None
+        source_ref = _source_ref(
+            source_type="docs-frontmatter",
+            source_id=lane_key,
+            locator=locator,
+            version=candidate_sha,
+        )
+        return (
+            _evidence(
+                evidence_id=f"capability:{subject_id}:{candidate_sha}",
+                claim=f"Explicit docs-linked capability: {lane_name}.",
+                source_ref=source_ref,
+                availability="available",
+                freshness="fresh",
+                completeness="complete",
+                cardinality="nonempty",
+                linkage="linked",
+                captured_at=docs_read_at,
+                read_watermark=docs_watermark,
+            ),
+            None,
+        )
+
+    source_id = lane_key or subject_id
+    source_version = candidate_sha or docs_watermark or f"state:{docs_state}"
+    source_ref = _source_ref(
+        source_type="docs-frontmatter",
+        source_id=source_id,
+        locator=locator or "/api/cockpit/registry#docs-frontmatter",
+        version=source_version,
+    )
+    limitation = (
+        "Capability is unknown: the explicit docs edge is unavailable, stale, "
+        "unlinked, or not proven for this source item."
+    )
+    return (
+        _evidence(
+            evidence_id=f"capability-unknown:{subject_id}:{source_version}",
+            claim=None,
+            source_ref=source_ref,
+            availability=_source_axes(source)[0],
+            freshness=_source_axes(source)[1],
+            completeness=_source_axes(source)[2],
+            cardinality="not_countable",
+            linkage="unlinked",
+            captured_at=docs_read_at,
+            read_watermark=docs_watermark,
+            limitation=limitation,
+        ),
+        limitation,
+    )
+
+
+def _work_context_evidence(
+    *,
+    source: Mapping[str, Any] | None,
+    item: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    subject_id: str,
+    captured_at: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    source_captured, source_watermark = _source_watermark(source, fallback=captured_at)
+    source_state = source.get("state") if source is not None else "unavailable"
+    availability, freshness, completeness, linkage = _source_axes(source)
+    repo = _nonblank(item.get("repo")) or "unknown"
+    task_id = _nonblank(item.get("id")) or _nonblank(item.get("task_id"))
+    task_ref = _task_source_ref(
+        source=source,
+        repo=repo,
+        task_id=task_id,
+        fallback="/api/cockpit/registry#working",
+    )
+    version = _timestamp(item.get("updated_at")) or source_watermark or captured_at
+    source_ref = _source_ref(
+        source_type="dispatcher-store",
+        source_id=f"dispatcher:{subject_id}",
+        locator=task_ref,
+        version=version,
+    )
+    parts: list[str] = []
+    holder = _nonblank(item.get("claimed_by"))
+    status = _nonblank(item.get("status"))
+    position = _nonblank(item.get("chain_position"))
+    observed_at = _timestamp(item.get("updated_at"))
+    if holder:
+        parts.append(f"Registered holder (source-declared): {holder}.")
+    if status:
+        parts.append(f"Observed work status (source-declared): {status}.")
+    position_limitation: str | None = None
+    if position:
+        position_evidence = _object(item.get("position_evidence"))
+        position_dependencies = ["dispatcher-store"]
+        if position_evidence is not None and position_evidence.get("open_authority_work"):
+            position_dependencies.append("github-live")
+        position_scope: list[str] = []
+        dependency_states: list[tuple[str, str, bool]] = []
+        for dependency_name in position_dependencies:
+            dependency = sources.get(dependency_name)
+            raw_dependency_state = (
+                dependency.get("state") if dependency is not None else None
+            )
+            dependency_state = (
+                raw_dependency_state
+                if isinstance(raw_dependency_state, str)
+                else "unavailable"
+            )
+            dependency_read, dependency_watermark = _source_watermark(
+                dependency, fallback="unknown"
+            )
+            dependency_states.append(
+                (dependency_name, dependency_state, dependency_watermark is not None)
+            )
+            position_scope.append(
+                f"{dependency_name}[{dependency_state}] "
+                + _source_locator(
+                    source=dependency,
+                    source_name=dependency_name,
+                    repo=repo,
+                    task_id=task_id,
+                    fallback=f"/api/cockpit/registry#{dependency_name}",
+                )
+                + f" @ {dependency_read}"
+            )
+        position_detail: list[str] = []
+        if position_evidence is not None:
+            position_detail.append(
+                "Position evidence (source-declared): "
+                + json.dumps(position_evidence, sort_keys=True, separators=(",", ":"))
+                + "."
+            )
+        position_detail.append("Position source scope: " + "; ".join(position_scope) + ".")
+        dependencies_fresh = source_state == "fresh" and all(
+            dependency_state == "fresh" and has_watermark
+            for _dependency_name, dependency_state, has_watermark in dependency_states
+        )
+        if dependencies_fresh:
+            parts.append(f"Observed chain position: {position}.")
+            parts.extend(position_detail)
+        else:
+            unresolved_dependencies = ", ".join(
+                f"{dependency_name} ({dependency_state})"
+                for dependency_name, dependency_state, has_watermark in dependency_states
+                if dependency_state != "fresh" or not has_watermark
+            )
+            position_limitation = (
+                "Observed chain position is unknown because its source dependencies are not fresh: "
+                + (unresolved_dependencies or "dispatcher-store")
+                + ". "
+                + " ".join(position_detail)
+            )
+    if observed_at:
+        parts.append(f"Observed update time: {observed_at}.")
+    unresolved = _nonblank(item.get("position_unresolved_reason"))
+    limitations: list[str] = []
+    if position_limitation:
+        limitations.append(position_limitation)
+    if unresolved:
+        limitations.append(f"Observed chain position is unknown: {unresolved}")
+    if not parts:
+        limitations.append("Observed holder and work status are unavailable from the admitted source.")
+    claim = " ".join(parts) if parts and source_state == "fresh" else None
+    if claim is None and not limitations:
+        limitations.append("Observed holder and work status remain unknown because this source is not fresh.")
+    return (
+        [
+            _evidence(
+                evidence_id=f"work-context:{subject_id}:{version}",
+                claim=claim,
+                source_ref=source_ref,
+                availability=availability,
+                freshness=freshness,
+                completeness=completeness,
+                cardinality="nonempty" if parts else "not_countable",
+                linkage=linkage,
+                captured_at=source_captured,
+                read_watermark=source_watermark,
+                limitation=position_limitation or (None if claim else limitations[0]),
+            )
+        ],
+        limitations,
+    )
+
+
+def _next_action_evidence(
+    *,
+    item: Mapping[str, Any],
+    source: Mapping[str, Any] | None,
+    subject_id: str,
+    captured_at: str,
+) -> tuple[dict[str, Any], str]:
+    watermark = _timestamp(item.get("mirror_watermark"))
+    next_action = _nonblank(item.get("next_action"))
+    version = watermark or captured_at
+    repo = _nonblank(item.get("repo")) or "unknown"
+    source_ref = _source_ref(
+        source_type="builderops_mirror",
+        source_id=f"mirror:{subject_id}",
+        locator=_task_source_ref(
+            source=source,
+            repo=repo,
+            task_id=_nonblank(item.get("id")) or _nonblank(item.get("task_id")),
+            fallback="/api/cockpit/registry#mirror",
+        ),
+        version=version,
+    )
+    if next_action and watermark:
+        evidence_name = _nonblank(item.get("next_action_evidence"))
+        evidence_suffix = f" Evidence: {evidence_name}." if evidence_name else ""
+        claim = f"Proposed next step (source proposal): {next_action}.{evidence_suffix}"
+        evidence = _evidence(
+            evidence_id=f"next-action:{subject_id}:{watermark}",
+            claim=claim,
+            source_ref=source_ref,
+            availability="available",
+            freshness="unknown",
+            completeness="partial",
+            cardinality="nonempty",
+            linkage="linked",
+            captured_at=watermark,
+            read_watermark=watermark,
+        )
+        return evidence, (
+            "Proposed next step retains the mirror watermark, but its freshness is unknown; "
+            "the proposal does not authorize execution."
+        )
+    limitation = (
+        "Proposed next step is unavailable; blocker absence is unknown and "
+        "does not authorize execution."
+    )
+    evidence = _evidence(
+        evidence_id=f"next-action-unknown:{subject_id}:{version}",
+        claim=None,
+        source_ref=source_ref,
+        availability="available" if watermark else "unavailable",
+        freshness="unknown",
+        completeness="partial" if watermark else "unread",
+        cardinality="not_countable",
+        linkage="linked" if watermark else "unlinked",
+        captured_at=watermark or captured_at,
+        read_watermark=watermark,
+        limitation=limitation,
+    )
+    return evidence, limitation
+
+
+def _flaw_evidence(
+    *,
+    item: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    subject_id: str,
+    captured_at: str,
+) -> list[dict[str, Any]]:
+    flaws = item.get("flaws")
+    if not isinstance(flaws, Sequence) or isinstance(flaws, (str, bytes)):
+        return []
+    version = _timestamp(item.get("updated_at")) or captured_at
+    dependencies = {
+        predicate["name"]: tuple(predicate["requires"])
+        for predicate in FLAW_PREDICATES
+    }
+    repo = _nonblank(item.get("repo")) or "unknown"
+    task_id = _nonblank(item.get("id")) or _nonblank(item.get("task_id"))
+    result: list[dict[str, Any]] = []
+    for index, raw_flaw in enumerate(flaws):
+        flaw = _object(raw_flaw)
+        text = _nonblank(flaw.get("text")) if flaw else None
+        predicate = _nonblank(flaw.get("predicate")) if flaw else None
+        if text is None:
+            continue
+        required = dependencies.get(predicate or "", ("dispatcher-store",))
+        source_lines: list[str] = []
+        source_refs: list[str] = []
+        source_states: list[str] = []
+        for source_name in required:
+            dependency = sources.get(source_name)
+            state = dependency.get("state") if dependency is not None else "unavailable"
+            read_at, _watermark = _source_watermark(dependency, fallback=captured_at)
+            reference = _task_source_ref(
+                source=dependency,
+                repo=repo,
+                task_id=task_id,
+                fallback=f"/api/cockpit/registry#{source_name}",
+            )
+            if source_name != "dispatcher-store":
+                reference = _source_locator(
+                    source=dependency,
+                    source_name=source_name,
+                    repo=repo,
+                    task_id=task_id,
+                    fallback=f"/api/cockpit/registry#{source_name}",
+                )
+            source_lines.append(f"{source_name}[{state}] {reference} @ {read_at}")
+            source_refs.append(reference)
+            source_states.append(str(state))
+        raw_evidence = _object(flaw.get("evidence")) if flaw else None
+        raw_text = (
+            json.dumps(raw_evidence, sort_keys=True, separators=(",", ":"))
+            if raw_evidence is not None
+            else "{}"
+        )
+        claim = (
+            f"Source-reported flaw: {text}. "
+            f"Evidence: {raw_text}. "
+            "Producer sources: "
+            + "; ".join(source_lines)
+            + "."
+        )
+        freshness = "fresh" if source_states and all(state == "fresh" for state in source_states) else "unknown"
+        completeness = "complete" if freshness == "fresh" else "partial"
+        source_locator = "|".join(source_refs)
+        limitation = None
+        if freshness != "fresh":
+            limitation = (
+                f"Predicate {predicate or index} is not fully evaluable: "
+                + ", ".join(
+                    f"{name} ({sources.get(name, {}).get('state', 'unavailable')})"
+                    for name in required
+                )
+                + "."
+            )
+        result.append(
+            _evidence(
+                evidence_id=f"flaw:{subject_id}:{predicate or index}:{version}",
+                claim=claim,
+                source_ref=_source_ref(
+                    source_type="builderops_cockpit_flaws",
+                    source_id=f"{subject_id}:{predicate or index}",
+                    locator=source_locator or "/api/cockpit/registry#flawed",
+                    version=version,
+                ),
+                availability="available",
+                freshness=freshness,
+                completeness=completeness,
+                cardinality="nonempty",
+                linkage="linked",
+                captured_at=captured_at,
+                read_watermark=None if len(required) > 1 else _source_watermark(
+                    sources.get(required[0]), fallback=captured_at
+                )[1],
+                limitation=limitation,
+            )
+        )
+    return result
+
+
+def _append_work_context(
+    *,
+    candidate: dict[str, Any],
+    item: Mapping[str, Any],
+    sources: Mapping[str, Mapping[str, Any]],
+    flaws_header: Mapping[str, Any],
+    captured_at: str,
+) -> None:
+    subject_id = candidate["subject_ref"]["source_id"]
+    docs_evidence, docs_limitation = _capability_evidence(
+        source=sources.get("docs-frontmatter"),
+        item=item,
+        subject_id=subject_id,
+        captured_at=captured_at,
+    )
+    candidate["evidence"].append(docs_evidence)
+    if docs_limitation:
+        candidate["limitations"].append(docs_limitation)
+    work_evidence, work_limitations = _work_context_evidence(
+        source=sources.get("dispatcher-store"),
+        item=item,
+        sources=sources,
+        subject_id=subject_id,
+        captured_at=captured_at,
+    )
+    candidate["evidence"].extend(work_evidence)
+    candidate["limitations"].extend(work_limitations)
+    next_evidence, next_limitation = _next_action_evidence(
+        item=item,
+        source=sources.get("dispatcher-store"),
+        subject_id=subject_id,
+        captured_at=captured_at,
+    )
+    candidate["evidence"].append(next_evidence)
+    if next_limitation:
+        candidate["limitations"].append(next_limitation)
+    candidate["evidence"].extend(
+        _flaw_evidence(
+            item=item,
+            sources=sources,
+            subject_id=subject_id,
+            captured_at=captured_at,
+        )
+    )
+    candidate["limitations"].append(
+        "Flaw coverage is source-scoped; absence of a rendered flaw is not a blocker-free claim."
+    )
+    if flaws_header:
+        candidate["limitations"].append(
+            "Flaw evaluation scope (source-declared): "
+            + json.dumps(flaws_header, sort_keys=True, separators=(",", ":"))
+        )
+
+
+def _candidate(
+    *,
+    item: Any,
+    captured_at: str,
+    sources: Mapping[str, Mapping[str, Any]],
+    flaws_header: Mapping[str, Any],
+) -> dict[str, Any] | None:
     source = _object(item)
     if source is None:
         return None
@@ -159,7 +746,7 @@ def _candidate(*, item: Any, captured_at: str) -> dict[str, Any] | None:
 
     subject_id = f"github:{repo}#{issue_number}"
     evidence_id = f"cockpit-working:{subject_id}:{updated_at}"
-    return {
+    candidate = {
         "subject_ref": {
             "source_type": "github_issue",
             "source_id": subject_id,
@@ -191,6 +778,15 @@ def _candidate(*, item: Any, captured_at: str) -> dict[str, Any] | None:
         "navigation_refs": [],
         "limitations": [],
     }
+    if _context_enabled(source, sources):
+        _append_work_context(
+            candidate=candidate,
+            item=source,
+            sources=sources,
+            flaws_header=flaws_header,
+            captured_at=captured_at,
+        )
+    return candidate
 
 
 def _receipt_candidate(receipt_provider: Any) -> dict[str, Any] | None:
@@ -282,9 +878,14 @@ def derive_overview_inputs(
     trusted = _trusted_working_items(work_provider)
     candidates: list[dict[str, Any]] = []
     if trusted is not None:
-        captured_at, items = trusted
+        captured_at, items, sources, flaws_header = trusted
         for item in items:
-            candidate = _candidate(item=item, captured_at=captured_at)
+            candidate = _candidate(
+                item=item,
+                captured_at=captured_at,
+                sources=sources,
+                flaws_header=flaws_header,
+            )
             if candidate is None:
                 candidates = []
                 break

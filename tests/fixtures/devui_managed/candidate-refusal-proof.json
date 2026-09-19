@@ -1,6 +1,6 @@
 {
   "asset_sha256": {
-    "app/builderops/devui_managed.css": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76",
+    "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
@@ -8,19 +8,23 @@
   },
   "fixture_code_sha256": {
     ".github/workflows/browser-runtime.yml": "sha256:341bf0839dac99647097566af773ebdb46f7a895b4ed4d6c1ff0db35e581b0f4",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:33530f010715a5edef2da694347e2dea1a7e766866a1cd146026ad05228c28df",
-    "tests/builderops/test_devui_runtime.py": "sha256:47e2e74d7f8117f42ebc8d6199b09eff676d4aed946b4c0a6fcefeb6049bdde6"
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:787b498e84efd1fa6de062c3dae45aa451a0fead0149ee00b1929073a30bb003",
+    "tests/builderops/test_devui_runtime.py": "sha256:dc653086428aa979a2923b243e4908dbf05049e556d7b9420c31767d1abd0f71",
+    "tests/companion_ui/test_devui_managed_journeys.py": "sha256:c08328d6b52936a635127ef030a689462da7cca31e019d21c70c82e014900c02",
+    "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a",
+    "tests/builderops/test_devui_overview_inputs.py": "sha256:5037437b0439f5d7c9dd8f9d90f36291186e5d4fbce2d37adec00fac61b0b294"
   },
   "junit": {
     "errors": 0,
-    "evidence_ref": ".codex-tmp/5595-final-proof/runtime-junit.xml",
     "failures": 0,
-    "sha256": "sha256:780805ab1b04d406c34f657b840d3f20f7be1aafd49a1bb3c79b041d8c38eac3",
-    "tests": 5
+    "skips": 1,
+    "tests": 73,
+    "evidence_ref": ".codex-tmp/5599-final-proof/unit-final-junit.xml",
+    "sha256": "sha256:c3969149337c5faea8b472c2a2897e20dd53d8599171b2220e4636f875a9ed79"
   },
   "log": {
-    "evidence_ref": ".codex-tmp/5595-final-proof/runtime.log",
-    "sha256": "sha256:74b08cadb15796f483175eba36d06d6bd301acb720656704fc3890152d84a779"
+    "evidence_ref": ".codex-tmp/5599-final-proof/unit-final.stdout",
+    "sha256": "sha256:1a0b345c38dfa0e3830405936dea888c14d8e0ec709dd54f790422794dea67ab"
   },
   "mutations": [
     "missing",
@@ -30,11 +34,78 @@
     "extra"
   ],
   "passed_nodeids": [
+    "tests.builderops.test_devui_overview_inputs::test_adapter_is_pure_and_admits_only_trusted_unique_working_band",
+    "tests.builderops.test_devui_overview_inputs::test_working_threads_map_to_source_ordered_now_candidates",
+    "tests.builderops.test_devui_overview_inputs::test_now_candidates_copy_only_repo_issue_number_title_why_now_and_updated_at",
+    "tests.builderops.test_devui_overview_inputs::test_now_candidates_preserve_order_cardinality_and_duplicates",
+    "tests.builderops.test_devui_overview_inputs::test_now_candidates_add_no_authority_delivery_or_navigation_claims",
+    "tests.builderops.test_devui_overview_inputs::test_refusal_uncountable_and_malformed_work_remain_explicit",
+    "tests.builderops.test_devui_overview_inputs::test_nonworking_bands_are_ignored_and_withdrawals_stay_closed",
+    "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_source_linked_work_facts",
+    "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_independent_source_withdrawals",
+    "tests.builderops.test_devui_overview_inputs::test_owner_context_does_not_infer_execution_permission_or_maturity",
+    "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_predicate_sources_and_raw_evidence",
+    "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_flaw_evaluation_scope",
+    "tests.builderops.test_devui_overview_inputs::test_owner_context_does_not_join_another_task_reference",
+    "tests.builderops.test_devui_runtime::test_standalone_startup_boundary",
+    "tests.builderops.test_devui_runtime::test_managed_overview_admission",
+    "tests.builderops.test_devui_runtime::test_managed_configuration_keeps_listener_private",
+    "tests.builderops.test_devui_runtime::test_managed_overview_reads_admitted_sources",
+    "tests.builderops.test_devui_runtime::test_managed_overview_exposes_owner_work_context",
+    "tests.builderops.test_devui_runtime::test_managed_overview_keeps_unprojectable_tasks_explicit",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[native_heartbeat-True-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[lease_activity-True-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[expired_recent_activity-True-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[old_activity-False-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[missing_activity-False-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[fresh_task-True-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[newer_native_heartbeat-True-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[concurrent_heartbeat-True-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[malformed_activity-False-False]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[malformed_heartbeat-False-False]",
+    "tests.builderops.test_devui_runtime::test_managed_source_preserves_native_activity[generic_lease-False-False]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[unavailable]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[mismatched]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[changed]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[epoch_changed]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[receipt_missing]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[github_unavailable]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[github_partial]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[docs_missing]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[docs_stale]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[docs_mismatched]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[bad_item]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[task_cap]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[duplicate_task]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[timeout]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[credential_revoked]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[docs_extra]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[docs_symlink]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[receipt_timeout]",
+    "tests.builderops.test_devui_runtime::test_managed_source_failure_matrix[unprojected_bad_lease]",
+    "tests.builderops.test_devui_runtime::test_managed_source_receipt_timeout_preserves_admitted_work_deterministically",
+    "tests.builderops.test_devui_runtime::test_managed_source_receipt_epoch_change_does_not_reopen_task_snapshot",
+    "tests.builderops.test_devui_runtime::test_managed_source_default_quota_withdrawal[117-True]",
+    "tests.builderops.test_devui_runtime::test_managed_source_default_quota_withdrawal[118-False]",
+    "tests.builderops.test_devui_runtime::test_managed_source_receipt_cap_with_qualified_larger_quota[managed_sources0]",
+    "tests.builderops.test_devui_runtime::test_managed_source_scope_and_candidate_binding",
+    "tests.builderops.test_devui_runtime::test_managed_source_admission_precedes_reads",
+    "tests.builderops.test_devui_runtime::test_managed_source_credentials_remain_server_side",
     "tests.builderops.test_devui_runtime::test_managed_source_packaging_and_isolation_contract",
-    "tests.builderops.test_devui_runtime::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+    "tests.builderops.test_devui_runtime::test_managed_overview_rereads_sources_and_preserves_vm102",
+    "tests.builderops.test_devui_runtime::test_managed_journey_serves_exact_packaged_asset_allowlist",
+    "tests.builderops.test_devui_runtime::test_managed_journey_boots_without_product_or_companion_gateway",
+    "tests.builderops.test_devui_runtime::test_managed_focus_uses_admitted_repository_source_and_honest_states",
+    "tests.builderops.test_devui_runtime::test_managed_focus_projects_issue_declarations_through_existing_fields",
     "tests.builderops.test_devui_runtime::test_managed_focus_preserves_canonical_repository_case[github:example/fixture#501]",
     "tests.builderops.test_devui_runtime::test_managed_focus_preserves_canonical_repository_case[github:Example/Fixture#501]",
-    "tests.builderops.test_devui_runtime::test_managed_focus_uses_admitted_repository_source_and_honest_states"
+    "tests.builderops.test_devui_runtime::test_managed_journey_admission_and_typed_query_failure_matrix",
+    "tests.builderops.test_devui_runtime::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
+    "tests.builderops.test_devui_runtime::test_first_read_observation_preserves_admission_and_authority_boundaries",
+    "tests.builderops.test_devui_runtime::test_first_read_observation_binds_bounded_documents_to_full_candidate",
+    "tests.builderops.test_devui_runtime::test_first_read_observation_refuses_unbound_bounded_documents[missing]",
+    "tests.builderops.test_devui_runtime::test_first_read_observation_refuses_unbound_bounded_documents[asset]",
+    "tests.builderops.test_devui_runtime::test_first_read_observation_refuses_unbound_bounded_documents[digest]"
   ],
   "postconditions": [
     "503 explicit candidate unavailability for each route and mutation",
@@ -45,14 +116,15 @@
   ],
   "production_code_sha256": {
     "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db",
-    "app/builderops/devui_assets.py": "sha256:34723e85e3e35fe7221146ccba9e2e1697c9240fc54d84c8822558fa0526592c",
+    "app/builderops/devui_assets.py": "sha256:a937ab36e9ef9f9f27efaf1af74ea0d602b97ba28f936ddec28c5cce7526a58e",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
-    "app/builderops/devui_overview_inputs.py": "sha256:73f68980e9c53ee4d823a7f27277c12c19f3e278414deb5a078e21abf5c7da84",
+    "app/builderops/devui_overview_inputs.py": "sha256:0b32deefebd5c91f98a43e6ffbd4e3de2aa8aa6130011bbd083cfb1ce177db84",
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
-    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
+    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353",
+    "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d"
   },
-  "raw_proof_package": "Historical #5594 refusal captures retained; #5595 final host-leased runtime admission JUnit/log are recorded at .codex-tmp/5595-final-proof/runtime-junit.xml and runtime.log.",
-  "recorded_at": "2026-09-19T16:35:28.131985Z",
+  "raw_proof_package": "The refusal/runtime proof remains the previously authenticated 73-collected/1-skip receipt at .codex-tmp/5599-final-proof until current-head CI supplies its repaired-source execution; dependency declarations above are current bytes.",
+  "recorded_at": "2026-09-19T21:27:29.240788Z",
   "repository_identity_cases": {
     "accepted_subjects": [
       "github:example/fixture#501",
@@ -80,6 +152,29 @@
     "/api/devui/overview",
     "/api/devui/focus"
   ],
-  "scope": "#5595 final local production create_app/load_configuration and real admitted source boundaries; no deployment or attestation",
-  "proof_observed_at": "2026-09-19T18:19:14.081038Z"
+  "scope": "#5599 final local production source projection and managed runtime admission boundaries; no deployment or attestation",
+  "proof_observed_at": "2026-09-19T21:27:29.240788Z",
+  "current_proof": {
+    "source_commit": "ad4c548cda04ef667d0b94f47b9b4d95233f5a9a",
+    "execution_id": "5599-final-unit-ad4c548c",
+    "stdout": {
+      "evidence_ref": ".codex-tmp/5599-final-proof/unit-final.stdout",
+      "sha256": "sha256:1a0b345c38dfa0e3830405936dea888c14d8e0ec709dd54f790422794dea67ab"
+    },
+    "junit": {
+      "evidence_ref": ".codex-tmp/5599-final-proof/unit-final-junit.xml",
+      "sha256": "sha256:c3969149337c5faea8b472c2a2897e20dd53d8599171b2220e4636f875a9ed79",
+      "tests": 73,
+      "skips": 1
+    },
+    "new_ac_nodes": [
+      "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_source_linked_work_facts",
+      "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_independent_source_withdrawals",
+      "tests.builderops.test_devui_overview_inputs::test_owner_context_does_not_infer_execution_permission_or_maturity",
+      "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_predicate_sources_and_raw_evidence",
+      "tests.builderops.test_devui_overview_inputs::test_owner_context_preserves_flaw_evaluation_scope",
+      "tests.builderops.test_devui_overview_inputs::test_owner_context_does_not_join_another_task_reference",
+      "tests.builderops.test_devui_runtime::test_managed_overview_exposes_owner_work_context"
+    ]
+  }
 }

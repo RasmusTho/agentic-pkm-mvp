@@ -36,9 +36,27 @@ EXPECTED_DISCLOSURE_SUMMARIES = {
         "Inspect trust frame",
         "Inspect subject source details",
         "Inspect evidence details",
+        "Inspect evidence details",
+        "Inspect evidence details",
+        "Inspect evidence details",
     ],
     "focus": ["Inspect source and technical details"] * 10,
 }
+EXPECTED_OVERVIEW_EVIDENCE_IDENTITIES = [
+    {
+        "source_type": "builderops_cockpit_working_projection",
+        "source_id": "cockpit:working:github:example/fixture#501",
+    },
+    {"source_type": "docs-frontmatter", "source_id": "capability:fixture"},
+    {
+        "source_type": "dispatcher-store",
+        "source_id": "dispatcher:github:example/fixture#501",
+    },
+    {
+        "source_type": "builderops_mirror",
+        "source_id": "mirror:github:example/fixture#501",
+    },
+]
 EXPECTED_FOCUS_ENTRY_IDENTITIES = {
     "focus-owner-intent": [
         {
@@ -233,6 +251,7 @@ def _keyboard_navigation(
     *,
     navigate=True,
     expected_provider_identity: list[dict[str, object]] | None = None,
+    expected_evidence_identity: list[dict[str, object]] | None = None,
 ):
     """Prove the finite fixture-bound disclosure inventory plus route link."""
     destination = FOCUS if surface == "overview" else "/devui/overview"
@@ -246,8 +265,10 @@ def _keyboard_navigation(
     )
     provider_identity = None
     if surface == "overview":
+        if expected_evidence_identity is None:
+            expected_evidence_identity = EXPECTED_OVERVIEW_EVIDENCE_IDENTITIES
         provider_inventory = page.evaluate(
-            """expectedProviderIdentity => {
+            """({providerIdentity, expectedEvidenceIdentity}) => {
                 const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
                 const frame = document.querySelector('[data-testid="overview-trust-frame"]');
                 const details = trust && trust.querySelector(':scope > details.technical-disclosure');
@@ -261,6 +282,26 @@ def _keyboard_navigation(
                         row.querySelector(':scope > code')?.textContent,
                     ]),
                 }));
+                const evidenceIdentity = entry => {
+                    const details = entry.querySelector(':scope > details.technical-disclosure');
+                    if (!details || entry.children.length !== 2 ||
+                        !entry.children[0].classList.contains('owner-summary') ||
+                        entry.children[1] !== details || details.children.length !== 3 ||
+                        !details.children[0].matches('summary') ||
+                        !details.children[1].classList.contains('matrix') ||
+                        !details.children[2].matches('ul.rungs')) return null;
+                    const row = Array.from(details.querySelectorAll(':scope > ul.rungs > li'))
+                        .find(item => item.querySelector(':scope > b')?.textContent === 'source_ref');
+                    if (!row) return null;
+                    try {
+                        const source = JSON.parse(row.querySelector(':scope > code')?.textContent);
+                        return {source_type: source.source_type, source_id: source.source_id};
+                    } catch (_) { return null; }
+                };
+                const evidence = body => body
+                    ? Array.from(body.querySelectorAll(':scope > .evidence-entry'))
+                        .map(evidenceIdentity)
+                    : [];
                 const checks = {
                     trust_parent: Boolean(frame && trust && details && frame.children.length === 2 &&
                         frame.children[0].matches('h2') && frame.children[1] === trust && trust.parentElement === frame &&
@@ -269,14 +310,20 @@ def _keyboard_navigation(
                         details.children.length === providers.length + 1 && providers.length > 0 &&
                         details.children[0].matches('summary') &&
                         Array.from(details.children).slice(1).every(child => child.matches('section.provider-state'))),
-                    provider_identity: expectedProviderIdentity === null ||
-                        JSON.stringify(identity) === JSON.stringify(expectedProviderIdentity),
+                    provider_identity: providerIdentity === null ||
+                        JSON.stringify(identity) === JSON.stringify(providerIdentity),
+                    evidence_identity: expectedEvidenceIdentity === null ||
+                        JSON.stringify(evidence(document.querySelector('[data-testid="overview-now"] > article.card > .body'))) ===
+                        JSON.stringify(expectedEvidenceIdentity),
                     matrix_parent: Array.from(document.querySelectorAll('[data-testid="overview-trust-matrix"] .matrix'))
                         .every(matrix => matrix.parentElement === details),
                 };
                 return {ok: Object.values(checks).every(Boolean), checks, identity};
             }""",
-            expected_provider_identity,
+            {
+                "providerIdentity": expected_provider_identity,
+                "expectedEvidenceIdentity": expected_evidence_identity,
+            },
         )
         assert provider_inventory["ok"], (
             "Only the admitted navigation and disclosures are keyboard interactive: "
@@ -314,7 +361,8 @@ def _keyboard_navigation(
                     card && body && subject && evidence && evidenceDetails && link) &&
                     card.children[2] === body && card.lastElementChild === link &&
                     link.parentElement === card && link.matches('a[data-testid="overview-focus-link"]') &&
-                    controlChildren.length === 2 && controlChildren[0] === subject &&
+                    controlChildren.length === 5 && controlChildren[0] === subject &&
+                    controlChildren.slice(1).every(child => child.classList.contains('evidence-entry')) &&
                     controlChildren[1] === evidence && evidence.parentElement === body &&
                     body.firstElementChild?.classList.contains('owner-summary') &&
                     Array.from(body.children).indexOf(body.firstElementChild) < Array.from(body.children).indexOf(subject) &&
@@ -416,10 +464,13 @@ def _keyboard_navigation(
                     const trust = document.querySelector('[data-testid="overview-trust-matrix"]');
                     const card = document.querySelector('[data-testid="overview-now"] > article.card');
                     const body = card && card.querySelector(':scope > .body');
+                    const evidenceSummaries = body
+                        ? Array.from(body.querySelectorAll(':scope > .evidence-entry > details.technical-disclosure > summary'))
+                        : [];
                     return [
                         trust && trust.querySelector(':scope > details.technical-disclosure > summary'),
                         body && body.querySelector(':scope > details.technical-disclosure > summary'),
-                        body && body.querySelector(':scope > .evidence-entry > details.technical-disclosure > summary'),
+                        ...evidenceSummaries,
                         card && card.querySelector(':scope > a[data-testid="overview-focus-link"]'),
                     ];
                 })()
@@ -497,7 +548,7 @@ def _keyboard_navigation(
         expected_focus = [
             page.locator('[data-testid="overview-trust-matrix"] details.technical-disclosure > summary'),
             card.locator(':scope > .body > details.technical-disclosure > summary'),
-            card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary'),
+            *card.locator(':scope > .body > .evidence-entry > details.technical-disclosure > summary').all(),
             card.locator(':scope > a[data-testid="overview-focus-link"]'),
         ]
     else:
@@ -755,19 +806,67 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
     monkeypatch
 ):
     source = managed_sources
+    row = source.tasks[0]
+    stamp = row["updated_at"]
+    row["state"] = row["payload"]["status"] = "claimed"
+    row["payload"]["sync_state"] = {
+        "labels": ["agent:blocked", "action:wait-dependency"],
+        "state": "open",
+        "last_pull_at": "2026-08-01T11:58:00+00:00",
+        "comments": [
+            {
+                "body": "\n".join(
+                    [
+                        "receipt: blocker_action.v1",
+                        "action: action:wait-dependency",
+                        "owner: builder",
+                        "next_action: inspect dependency 900",
+                        "unblocks_when: dependency 900 is delivered",
+                        "dependency_refs: []",
+                        "review_at: null",
+                        "last_verified_at: 2026-08-01T11:58:00Z",
+                    ]
+                )
+            }
+        ],
+    }
+    row["lease"] = {
+        "repository": "example/fixture",
+        "resource_id": "task-1",
+        "holder": "fixture-registered-holder",
+        "fencing_token": 1,
+        "expires_at": "2099-09-13T10:00:00+00:00",
+        "lease_kind": "task",
+        "updated_at": stamp,
+    }
     with (
         _server(source, monkeypatch),
         _browser() as (page, context, _browser_instance, external, requests, errors, console),
     ):
-        first = page.goto(ORIGIN + "/devui/overview")
+        with page.expect_response(ORIGIN + "/api/devui/overview") as initial:
+            first = page.goto(ORIGIN + "/devui/overview")
         _loaded(page, "overview")
+        first_payload = initial.value.json()
+        first_candidate = first_payload["now"][0]
         overview_reads = len(source.calls)
+        overview_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Explicit docs-linked capability" in overview_text
+        assert "fixture-registered-holder" in overview_text
+        assert "claimed" in overview_text.lower()
+        assert "inspect dependency 900" in overview_text
+        assert "does not authorize execution" in overview_text
+        assert "unknown" in overview_text.lower()
         link = page.get_by_role("link", name="Open Focus")
         assert link.get_attribute("href") == FOCUS
         with page.expect_response(lambda r: "/api/devui/focus?" in r.url) as read:
             link.click()
         _loaded(page, "focus")
         payload = read.value.json()
+        focus_text = page.locator('[data-testid="devui-focus"]').inner_text()
+        assert "Fixture owner intent." in focus_text
+        assert "Fixture source scope." in focus_text
+        assert "Preserve fixture declarations." in focus_text
+        assert "tests/fixture.py::test_declaration" in focus_text
         assert payload["subject"]["stable_id"] == MANAGED_SUBJECT
         assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
         assert (
@@ -790,10 +889,69 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
             assert first.headers[key] == read.value.headers[key]
         assert payload["receipts"] == payload["execution_observations"] == []
         _capture(page, "managed-focus")
-        page.get_by_role("link", name="Return to Overview").click()
+        candidate_manifest = json.loads((source.root / "manifest.json").read_text())
+        (source.root / "docs" / "matrix.md").write_text(
+            (source.root / "docs" / "matrix.md").read_text().replace("#501", "#503")
+        )
+        (source.root / "docs" / "FIXTURE" / "TASK.md").write_text(
+            (source.root / "docs" / "FIXTURE" / "TASK.md")
+            .read_text()
+            .replace("github_issue: 501", "github_issue: 503")
+        )
+        package_candidate(
+            source.root,
+            repository=source.environment["DEVUI_REPOSITORY"],
+            source_sha=source.environment["DEVUI_SOURCE_SHA"],
+            capabilities=candidate_manifest["capabilities"],
+            matrix=candidate_manifest["matrix"],
+        )
+        with page.expect_response(ORIGIN + "/api/devui/overview") as returned:
+            page.get_by_role("link", name="Return to Overview").click()
         _loaded(page, "overview")
+        returned_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Fixture work" in returned_text
+        assert "Explicit docs-linked capability" not in returned_text
+        assert "Capability is unknown" in returned_text
+        assert "fixture-registered-holder" in returned_text
+        assert "claimed" in returned_text.lower()
+        assert "inspect dependency 900" in returned_text
+        assert "does not authorize execution" in returned_text
+        returned_candidate = returned.value.json()["now"][0]
+        assert returned_candidate["subject_ref"] == first_candidate["subject_ref"]
+        for key in (
+            "x-pkm-runtime-git-sha",
+            "x-devui-image-digest",
+            "x-devui-config-fingerprint",
+            "x-devui-asset-inventory",
+        ):
+            assert returned.value.headers[key] == first.headers[key]
+        returned_capability = next(
+            entry
+            for entry in returned_candidate["evidence"]
+            if entry["source_ref"]["source_type"] == "docs-frontmatter"
+        )
+        assert returned_candidate["reason"] == "claimed · claimed by fixture-registered-holder"
+        assert returned_capability["claim"] is None
+        assert returned_capability["freshness"] == "fresh"
+        assert returned_capability["linkage"] == "unlinked"
+        assert any(
+            "Capability is unknown" in limitation
+            for limitation in returned_candidate["limitations"]
+        )
         assert len(source.calls) > overview_reads
-        assert sum(url == ORIGIN + "/api/devui/overview" for _, url in requests) == 2
+        for path in source.root.rglob("*"):
+            if path.is_file():
+                os.utime(path, (1, 1))
+        page.reload()
+        _loaded(page, "overview")
+        withdrawn_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Fixture work" in withdrawn_text
+        assert "Explicit docs-linked capability" not in withdrawn_text
+        assert "unknown" in withdrawn_text.lower()
+        assert "fixture-registered-holder" in withdrawn_text
+        assert "claimed" in withdrawn_text.lower()
+        assert "does not authorize execution" in withdrawn_text
+        assert sum(url == ORIGIN + "/api/devui/overview" for _, url in requests) == 3
         assert all(method == "GET" for method, _ in requests)
         assert not external and not errors and not console
         _no_persistence(page, context)
@@ -813,6 +971,8 @@ def test_managed_journey_hostile_accessibility_and_no_effect_matrix(managed_sour
             assert "default-src 'none'" in response.headers["content-security-policy"]
             assert page.locator("img").count() == 0
             assert "<img" in page.locator("body").inner_text()
+            if surface == "overview":
+                assert "Explicit docs-linked capability" in page.locator('[data-testid="overview-now"]').inner_text()
             assert page.get_by_role("main").get_attribute("aria-labelledby") == surface + "-heading"
             assert page.get_by_role("heading", level=1).count() == 1
             if surface == "focus":

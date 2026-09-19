@@ -532,6 +532,134 @@ def test_managed_overview_reads_admitted_sources(managed_sources) -> None:
     )
 
 
+def test_managed_overview_exposes_owner_work_context(managed_sources, monkeypatch) -> None:
+    source = managed_sources
+    row = source.tasks[0]
+    stamp = row["updated_at"]
+    row["state"] = "claimed"
+    row["payload"]["status"] = "claimed"
+    row["payload"]["sync_state"] = {
+        "labels": [],
+        "last_pull_at": "2026-09-13T09:00:00+00:00",
+    }
+    row["lease"] = {
+        "repository": "example/fixture",
+        "resource_id": "task-1",
+        "holder": "fixture-registered-holder",
+        "fencing_token": 1,
+        "expires_at": "2099-09-13T10:00:00+00:00",
+        "lease_kind": "task",
+        "updated_at": stamp,
+    }
+
+    with source.client() as client:
+        response = client.get("/api/devui/overview")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["display_label"] for item in payload["now"]] == ["Fixture work"]
+    candidate = payload["now"][0]
+    claims = [entry["claim"] for entry in candidate["evidence"] if entry["claim"]]
+    assert any("fixture" in claim.lower() and "capability" in claim.lower() for claim in claims)
+    assert any("fixture-registered-holder" in claim for claim in claims)
+    assert any("claimed" in claim for claim in claims)
+    assert any("in_progress" in claim for claim in claims)
+    assert any(entry["source_ref"]["source_type"] == "docs-frontmatter" for entry in candidate["evidence"])
+    proposal = next(
+        entry
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "builderops_mirror"
+    )
+    assert proposal["claim"] is None
+    assert any("does not authorize execution" in limitation for limitation in candidate["limitations"])
+    assert any(
+        entry["source_ref"]["locator"]
+        == "/v1/tasks/task-1?repository=example/fixture#version=1"
+        for entry in candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "dispatcher-store"
+    )
+    assert any("unknown" in limitation.lower() for limitation in candidate["limitations"])
+    assert candidate["navigation_refs"][0]["kind"] == "focus"
+    assert source.calls.count(("list_tasks", "example/fixture")) == 1
+
+    for path in source.root.rglob("*"):
+        if path.is_file():
+            os.utime(path, (1, 1))
+    with source.client() as client:
+        withdrawn_docs = client.get("/api/devui/overview").json()
+    withdrawn_candidate = withdrawn_docs["now"][0]
+    withdrawn_capability = next(
+        entry
+        for entry in withdrawn_candidate["evidence"]
+        if entry["source_ref"]["source_type"] == "docs-frontmatter"
+    )
+    assert withdrawn_capability["claim"] is None
+    assert withdrawn_capability["freshness"] == "stale"
+    assert any("fixture-registered-holder" in claim for claim in (
+        entry["claim"] for entry in withdrawn_candidate["evidence"] if entry["claim"]
+    ))
+    assert any(
+        "does not authorize execution" in limitation
+        for limitation in withdrawn_candidate["limitations"]
+    )
+
+    # The live PR is a positive position edge, so an old retained GitHub
+    # snapshot withdraws only that edge while the dispatcher holder/status
+    # remain source-declared. A fresh read restores the same candidate and
+    # position through the same managed API -> composition -> Overview path.
+    from dataclasses import replace
+    from datetime import datetime, timedelta, timezone
+
+    from app.builderops import devui_sources
+
+    original_github_reader = devui_sources.cockpit_github_plane.default_github_reader
+
+    def stale_github_reader(repository):
+        snapshot = original_github_reader(repository)
+        return replace(
+            snapshot,
+            read_at=(datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
+        )
+
+    monkeypatch.setattr(
+        devui_sources.cockpit_github_plane,
+        "default_github_reader",
+        stale_github_reader,
+    )
+    with source.client() as client:
+        stale_payload = client.get("/api/devui/overview").json()
+    stale_candidate = stale_payload["now"][0]
+    stale_github = _managed_source(stale_payload, "github-live")
+    stale_claims = [entry["claim"] for entry in stale_candidate["evidence"] if entry["claim"]]
+    assert stale_github["state"] == "stale"
+    assert stale_candidate["subject_ref"] == candidate["subject_ref"]
+    assert len(stale_candidate["evidence"]) == len(candidate["evidence"])
+    assert any("fixture-registered-holder" in claim and "claimed" in claim for claim in stale_claims)
+    assert not any("Observed chain position: in_progress" in claim for claim in stale_claims)
+    assert any(
+        "Observed chain position is unknown" in limitation
+        and "github-live[stale]" in limitation
+        and '"open_authority_work":502' in limitation
+        and stale_github["last_successful_read"] in limitation
+        for limitation in stale_candidate["limitations"]
+    )
+
+    monkeypatch.setattr(
+        devui_sources.cockpit_github_plane,
+        "default_github_reader",
+        original_github_reader,
+    )
+    with source.client() as client:
+        fresh_payload = client.get("/api/devui/overview").json()
+    fresh_candidate = fresh_payload["now"][0]
+    fresh_claims = [entry["claim"] for entry in fresh_candidate["evidence"] if entry["claim"]]
+    assert _managed_source(fresh_payload, "github-live")["state"] == "fresh"
+    assert fresh_candidate["subject_ref"] == candidate["subject_ref"]
+    assert len(fresh_candidate["evidence"]) == len(candidate["evidence"])
+    assert any("fixture-registered-holder" in claim and "claimed" in claim for claim in fresh_claims)
+    assert any("Observed chain position: in_progress" in claim for claim in fresh_claims)
+
+
 def test_managed_overview_keeps_unprojectable_tasks_explicit(managed_sources) -> None:
     managed_sources.tasks[:] = _native_unprojected_tasks(managed_sources)
     with managed_sources.client() as client:

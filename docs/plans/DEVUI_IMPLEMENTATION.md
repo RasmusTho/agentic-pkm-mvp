@@ -129,6 +129,12 @@ those stages; they do not replace any source, action, design, deployment or acce
 
 M1 is useful before M2. Its bounded implementation is delivered by #5543; source preparation,
 operator qualification and actual first-read observations remain pending; #4749 remains the complete Stage A parent-validation pilot.
+The bounded #5599 continuation adds source-linked capability and work context to the existing
+Overview evidence/limitations projection. Its repository proof preserves source order, identity,
+zones, producer-scoped evidence, independent read times and withdrawals; complete admitted docs
+references remain bound without filename inference; mirror-watermarked proposals remain
+freshness-unknown without their own admitted freshness evidence; it does not establish managed-host, live-source,
+owner-pilot, execution-permission, maturity, legality, or owner-acceptance evidence.
 Infrastructure and authority work may run earlier wherever the selected
 operation requires it; later milestone placement never waives a prerequisite. M2 uses a separately
 authorized Issue-delivery operation. Start Model Inquiry is an earlier integration exercise and

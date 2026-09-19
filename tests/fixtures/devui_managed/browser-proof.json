@@ -1,6 +1,6 @@
 {
   "asset_sha256": {
-    "app/builderops/devui_managed.css": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76",
+    "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
@@ -72,17 +72,19 @@
   ],
   "fixture_code_sha256": {
     ".github/workflows/browser-runtime.yml": "sha256:341bf0839dac99647097566af773ebdb46f7a895b4ed4d6c1ff0db35e581b0f4",
-    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:33530f010715a5edef2da694347e2dea1a7e766866a1cd146026ad05228c28df",
-    "tests/companion_ui/test_devui_managed_journeys.py": "sha256:6fc95ed9c6550144d2d9008d8f88740cff6f0483ca1533749c30e869dc8414c2",
-    "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a"
+    "companion-ui/companion-app/companion_ui/workspace/devui_candidate_provenance.json": "sha256:787b498e84efd1fa6de062c3dae45aa451a0fead0149ee00b1929073a30bb003",
+    "tests/companion_ui/test_devui_managed_journeys.py": "sha256:c08328d6b52936a635127ef030a689462da7cca31e019d21c70c82e014900c02",
+    "tests/companion_ui/test_devui_overview_journeys.py": "sha256:c0978ab2cc291814ffd00a86ae5642c9c0ec06cd51a9de222468c2228b45fd6a",
+    "tests/builderops/test_devui_runtime.py": "sha256:dc653086428aa979a2923b243e4908dbf05049e556d7b9420c31767d1abd0f71",
+    "tests/builderops/test_devui_overview_inputs.py": "sha256:5037437b0439f5d7c9dd8f9d90f36291186e5d4fbce2d37adec00fac61b0b294"
   },
   "junit": {
     "errors": 0,
-    "evidence_ref": ".codex-tmp/5595-final-proof/managed-junit.xml",
     "failures": 0,
-    "sha256": "sha256:224115cb5973f338f9b4d4ec3f34f8c14678c1d5b5f93f94da34e02b1ae7d2f3",
     "skips": 0,
-    "tests": 54
+    "tests": 54,
+    "evidence_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc-junit.xml",
+    "sha256": "sha256:55de99a3c8c4d0431a26955fa67b5044e3ceeee15262b7b9066dca48da808a10"
   },
   "modes": [
     "desktop",
@@ -163,13 +165,14 @@
   },
   "production_code_sha256": {
     "app/builderops/control_plane/models.py": "sha256:5d3339b6f462132db13312a486ceb786e7f39b054f4e31835493b331d9d246db",
-    "app/builderops/devui_assets.py": "sha256:34723e85e3e35fe7221146ccba9e2e1697c9240fc54d84c8822558fa0526592c",
+    "app/builderops/devui_assets.py": "sha256:a937ab36e9ef9f9f27efaf1af74ea0d602b97ba28f936ddec28c5cce7526a58e",
     "app/builderops/devui_focus_inputs.py": "sha256:d5739d769a895f481a8ae5259d5ec6fdf270bdc6665136c23dc4fd5a8c2103f4",
-    "app/builderops/devui_overview_inputs.py": "sha256:73f68980e9c53ee4d823a7f27277c12c19f3e278414deb5a078e21abf5c7da84",
+    "app/builderops/devui_overview_inputs.py": "sha256:0b32deefebd5c91f98a43e6ffbd4e3de2aa8aa6130011bbd083cfb1ce177db84",
     "app/builderops/devui_runtime.py": "sha256:76e3b29161710e9077f3934c5997793b3df633fb40b481bfed9e00be19e4e2d2",
-    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353"
+    "app/builderops/devui_sources.py": "sha256:ffb2b4ead5722e883847dc810b07ae4c5ff2595f5579f5ac1e7cb16a4694d353",
+    "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d"
   },
-  "raw_capture_package": "Historical #5594 capture hashes retained; #5595 final host-leased managed journey JUnit/log are recorded at .codex-tmp/5595-final-proof/managed-junit.xml and managed.log.",
+  "raw_capture_package": "Current #5599 repaired-head host-leased managed 54 and ordinary Overview 21 proofs are bound at .codex-tmp/5599-source04-final-proof; embedded accessibility/visual captures remain explicitly historical inventory.",
   "repository_identity_observation": {
     "canonical_repository": "example/fixture",
     "fixture_repository": "Example/Fixture",
@@ -177,6 +180,38 @@
     "selected_subject": "github:example/fixture#501",
     "source_locator": "https://github.com/Example/Fixture/issues/501"
   },
-  "scope": "#5595 final local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
-  "proof_observed_at": "2026-09-19T18:15:51.083175Z"
+  "scope": "#5599 final local real production_app at direct loopback; source services/gh and explicit browser fault boundaries are fixtures; no deployment or owner acceptance",
+  "proof_observed_at": "2026-09-19T23:04:30.579326+00:00",
+  "current_proof": {
+    "source_commit": "f7adc2b34a3a207663699c932cbddfa5362a22a0",
+    "execution_id": "5599-repaired-managed-f7adc",
+    "stdout": {
+      "evidence_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc.stdout",
+      "sha256": "sha256:c0c33aa7338cddb2250b87d53a72e172431e5d9d4dbed93c5d963cf1407ccf58"
+    },
+    "junit": {
+      "evidence_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc-junit.xml",
+      "sha256": "sha256:55de99a3c8c4d0431a26955fa67b5044e3ceeee15262b7b9066dca48da808a10",
+      "tests": 54,
+      "skips": 0
+    },
+    "ordinary_overview": {
+      "execution_id": "5599-repaired-overview-f7adc",
+      "stdout": {
+        "evidence_ref": ".codex-tmp/5599-source04-final-proof/overview-f7adc.stdout",
+        "sha256": "sha256:21f9c933fc730750f13bbe17a3ac5c819f54b5c89ada07f5bb7b2c3ab8560ed2"
+      },
+      "junit": {
+        "evidence_ref": ".codex-tmp/5599-source04-final-proof/overview-f7adc-junit.xml",
+        "sha256": "sha256:497722bc47f2abd0b7d689034bfff83a1535ce485253876bd621701bb6767fdd",
+        "tests": 21,
+        "skips": 0
+      }
+    },
+    "security_nodes": {
+      "no_egress_effect_free": "tests.companion_ui.test_devui_overview_journeys::test_gateway_shell_is_safe_accessible_no_egress_and_effect_free",
+      "managed_accessibility_no_effect": "tests.companion_ui.test_devui_managed_journeys::test_managed_journey_hostile_accessibility_and_no_effect_matrix"
+    },
+    "historical_exact_ref_inventory": 5
+  }
 }
