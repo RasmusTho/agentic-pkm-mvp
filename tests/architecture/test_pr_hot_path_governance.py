@@ -764,6 +764,7 @@ def test_native_delivery_separates_review_from_executor_merge_protocol() -> None
     assert "Never\n  switch an in-flight attempt to native delivery" in router
     assert "current-head CI cannot be replaced by local evidence" in router
     assert "closure attribution" in router
+    assert "the PR base must be the repository's live default branch" in router
     assert "post-merge-owner-doc :: Reuse an existing assessment" in router
 
 

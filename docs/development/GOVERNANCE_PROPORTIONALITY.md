@@ -54,6 +54,9 @@ covering the actual risk. P0/P1 repairs require a fresh clean review. Native PR 
 from release authority: promotion plans, channel isolation, operator acknowledgment and live
 verification still apply when deploying. Dispatched executors, already-started authenticated merge
 attempts, and contracts explicitly requiring independent closure retain the fenced full path.
+Native delivery with a nonempty closing set requires the repository's live default branch as
+the PR base, because GitHub closing keywords do not close Issues on other branches. Route such
+non-default-base deliveries to the full path before merge, with explicit authenticated closure.
 
 ## Evidence reuse and stop rule
 

@@ -15,6 +15,8 @@ Choose once, before collecting evidence:
 - **Native delivery:** an interactive Builder session owns the PR, with no dispatched executor,
   authenticated verified-merge attempt, or release operation in progress. Applies to issue-free,
   single-Issue, and approved bounded multi-Issue PRs. Review depth is independent of merge mechanics.
+  When the closing set is nonempty, the PR base must be the repository's live default branch;
+  otherwise select the full path before any merge, with explicit authenticated Issue closure.
 - **Executor/in-flight delivery:** a dispatched verification context or host-fenced executor owns
   the effects, a verified-merge authority/phase receipt already exists, the governing contract
   explicitly requires that protocol, or this is a release/promotion operation. Read
@@ -76,7 +78,7 @@ and re-read those same threads before terminal closure. Do not scan unrelated hi
 1. Confirm the exact closing set and all its ACs, current head, relevant required/repo-standard CI,
    review disposition, and owner-doc conclusion. Approved multi-Issue work must satisfy
    `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`; Issue count alone adds no review round.
-2. Immediately before merge, refresh head/base/title/body and GitHub closing references. Compare
+2. Immediately before merge, refresh head/base/title/body, repository default branch and GitHub closing references. Compare
    with the inspected authority and exact closing set; reject unexpected refs, scope, or head drift.
    Inspect commit messages for unintended closing keywords. On drift, stop the effect and resolve
    only the affected evidence. Never mutate or neutralize the body to manufacture readiness.
