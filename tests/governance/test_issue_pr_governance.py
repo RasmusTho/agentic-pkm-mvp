@@ -203,7 +203,7 @@ def test_post_merge_proof_uses_non_closing_validation_authority() -> None:
     ).read_text(encoding="utf-8")
 
     assert "parent-validation authority or an explicit non-closing lifecycle" in hot_path
-    assert "must remain open through that proof" in closure_guidance
+    assert "keep its parent or explicit acceptance Issue open" in closure_guidance
 
 
 def _read_workflow() -> str:

@@ -221,7 +221,7 @@ Delivery rules:
   recompute the next pickup target. Inspect Project state only for an explicitly Project-scoped run.
   As part of that parent upkeep, refresh the parent's structured child ledger
   (`builderops:epic-delivery-ledger v1`) per
-  `verification-and-closure :: Parent Issue Closure :: Structured child ledger (epic delivery ledger v1)`
+  `.codex/skills/verification-and-closure/FULL_PATH.md :: Structured child ledger (epic delivery ledger v1)`
   instead of hand-editing prose child tables.
 - Stop forcing the current issue when it is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input. Apply the [no-progress final gate](#no-progress-final-gate) before treating that stop as a delivery conclusion.
 

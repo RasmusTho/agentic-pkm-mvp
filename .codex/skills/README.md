@@ -34,7 +34,9 @@ Conditional / maintenance path:
 
 This file owns the canonical workflow chain. Skills reference this chain instead of redefining it; if a skill's inline chain disagrees with this file, this file wins. Issue maintenance is part of the conditional path, not the hot path. Execute transitions under `## Workflow continuation` below.
 
-Delivery depth is tiered (`AGENTS.md :: Proportional delivery`): single-issue (or issue-free) Tier 1 and Tier 2 PRs take the light path — required CI green, self-verified `Verify:` targets, `Final-Review-Rounds: 0`, plain merge with native closing keywords — while Tier 3, multi-issue, and TCD high-risk PRs run the full review + verified-merge ceremony in `verification-and-closure`.
+Delivery review follows risk (`AGENTS.md :: Proportional delivery`); merge mechanics follow
+`verification-and-closure :: Routing`. Session-owned PRs use native merge, including approved
+bounded multi-Issue work. Required independent review does not select the executor protocol.
 
 ## Workflow continuation
 
@@ -370,7 +372,7 @@ The invariant is enforced across the chain:
 
 - Creation: `docs-to-issue`, `feature-breakdown`, `bug-to-issue` produce `Verify:`-bearing ACs.
 - Repair: `issue-maintenance-change-control` treats missing `Verify:` as malformed contract.
-- Consumption: `issue-to-code` gates on `Verify:` presence and runs test-first for behavioral ACs.
+- Consumption: `issue-to-code` gates on `Verify:` presence and reuses meaningful coverage before adding tests.
 - Closure: `verification-and-closure` resolves every `Verify:` target before merge.
 
 ## Cross-cutting invariant: minimal shared leases

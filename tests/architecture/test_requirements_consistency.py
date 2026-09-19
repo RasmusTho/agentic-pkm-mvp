@@ -209,7 +209,13 @@ def test_sidecar_dependencies_are_installed_by_ci_without_core_leak() -> None:
     )
     install_text = steps[install_index]["run"]
 
-    assert install_index < selection_index
+    # Selection is stdlib-only and can precede provisioning. Dependencies must
+    # be installed before execution, including the collectability fitness target.
+    execution_index = next(
+        i for i, step in enumerate(steps)
+        if step.get("name") == "Run scoped not-pg unit tests"
+    )
+    assert max(install_index, selection_index) < execution_index
     assert "pip install --requirement mimer-mcp-sidecar/requirements.txt" in install_text
     assert "pip install --no-deps --editable mimer-mcp-sidecar" in install_text
     assert "mcp" not in (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")

@@ -14,13 +14,26 @@ If a post-merge follow-up is ever classified as `agent:blocked` or `agent:needs-
 `_shared/BLOCKER_ACTION_CONTRACT.md`: use one compatible canonical `action:*` label and a valid
 `blocker_action.v1` receipt. This skill does not assign either lifecycle by default.
 
+## Reuse an existing assessment
+
+Use the PR's pre-merge owner-doc assessment when it identifies the inspected claims/paths and the
+merged change matches that assessed candidate. Check merge identity and the relevant file delta;
+do not re-read every owner document. Record the appropriate existing PR-specific outcome below.
+A material merge-resolution change, missing assessment, changed acceptance claim, or newly observed
+contradiction triggers a fresh bounded assessment of only the affected claims. A stage transition
+alone does not. This reuses review work, not an unverified label or caller assertion.
+
+For native delivery, derive exact closing Issues and an open governing parent from the inspected
+canonical PR body, native closure attribution and merge readback. For executor/in-flight delivery,
+use its existing authenticated authority receipt. Never require an executor receipt on a native PR.
+
 ## The one question
 
 For the merged PR, read:
 
 1. The merge diff (files changed, with their before/after).
 2. The exact authenticated closing issue(s), plus any distinct open governing parent, including their
-   `Source Docs` lists. Recover these identities from the trusted
+   `Source Docs` lists. On the executor/in-flight path recover these identities from the trusted
    `verified_issue_set_merge_authority.v1` PR receipt; do not infer them from a temporarily
    neutralized body or from `closingIssuesReferences` alone.
 3. Every owner doc the diff could plausibly affect. Pick these by judgment from:
@@ -52,8 +65,9 @@ distinct open governing parent. Deduplicate the target when the governor is itse
 issue-free lane, post it on the PR instead. A generic receipt, a receipt for another PR, a watchdog
 reminder, or a stale notification does not satisfy this gate.
 
-After posting, read back every required target and verify the exact PR-specific prefix. The trusted
-authority receipt remains on the PR and binds the target set even while the body is neutralized.
+After posting, read back every required target and verify the exact PR-specific prefix. On the
+executor/in-flight path the trusted authority receipt remains on the PR and binds the target set
+even while the body is neutralized; native delivery keeps its canonical body and closure readback.
 [owner-doc-receipt-gate]
 
 ## Outcomes

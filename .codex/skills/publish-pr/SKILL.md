@@ -33,8 +33,8 @@ Route every unsupported case there without trying to coerce it into the normal c
 
 - existing-PR update or review repair -> `pr-integration` and
   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`;
-- multi-Issue PR -> `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope` and the current full
-  verification path;
+- multi-Issue PR -> `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope` and
+  `verification-and-closure :: Routing`;
 - issue-free docs/governance publication or Direct Repair -> the matching current lane contract in
   `docs/development/PR_HOT_PATH.md`;
 - Tier 3, full-path, or any auth/security/data/migration/concurrency/external-API/
