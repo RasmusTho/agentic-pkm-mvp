@@ -329,7 +329,7 @@
           "source-cockpit-wrap",
           "source-devui.css"
         ],
-        "exact_rule": "The managed CSS is byte-for-byte the shipped devui.css followed only by .limitations li{overflow-wrap:break-word} and a newline. Transfer the accepted .rungs .r-val source-value wrapping declaration to complete limitation text. No other layout, token, visual, interaction or authority change."
+        "exact_rule": "The managed CSS remains byte-for-byte the shipped devui.css, including the existing source-value wrapping pattern extended to .rungs b and .body>.empty for preserved technical labels and limitation text, followed only by .limitations li{overflow-wrap:break-word} and a newline. No other layout, token, visual, interaction or authority change."
       },
       {
         "transformation_id": "issue-5596-axis-container-reflow",
@@ -547,7 +547,7 @@
       },
       {
         "decision_id": "decision-managed-limitations-wrap",
-        "target_ref": "app/builderops/devui_managed.css :: .limitations li",
+        "target_ref": "app/builderops/devui_managed.css :: .rungs b, .body > .empty, .limitations li",
         "source_ids": [
           "source-cockpit-wrap"
         ],
@@ -576,7 +576,7 @@
       },
       {
         "target_path": "app/builderops/devui_managed.css",
-        "content_sha256": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76"
+        "content_sha256": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d"
       }
     ],
     "zero_novel_visual_language": {

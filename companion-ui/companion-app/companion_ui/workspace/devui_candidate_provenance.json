@@ -13,9 +13,9 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "3db9787566cbf7945e16612ce89d7502065619fa",
+    "tree": "354f9d2c97c7c411f17bd2d070ef32bcdd521023",
     "inventory": {
-      "devui.css": "20fddd9d9462d181cb648411e7302781234e6000",
+      "devui.css": "0a473a000bf9c15bb4ffbab93088c25e8f25d752",
       "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
       "focus.js": "2a11e4a04f204d1bca615a269757c06b380160e4",
       "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",

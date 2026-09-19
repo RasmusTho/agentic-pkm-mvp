@@ -862,8 +862,8 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         focus_text = page.locator('[data-testid="devui-focus"]').inner_text()
         assert "Fixture owner intent." in focus_text
         assert "Fixture source scope." in focus_text
-        assert "Acceptance Criteria" in focus_text
-        assert "Verify" in focus_text
+        assert "Preserve fixture declarations." in focus_text
+        assert "tests/fixture.py::test_declaration" in focus_text
         assert payload["subject"]["stable_id"] == MANAGED_SUBJECT
         assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
         assert (
@@ -886,9 +886,33 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
             assert first.headers[key] == read.value.headers[key]
         assert payload["receipts"] == payload["execution_observations"] == []
         _capture(page, "managed-focus")
-        page.get_by_role("link", name="Return to Overview").click()
+        row["payload"]["issue_number"] = 502
+        row["payload"]["title"] = "Unlinked fixture work"
+        with page.expect_response(ORIGIN + "/api/devui/overview") as returned:
+            page.get_by_role("link", name="Return to Overview").click()
         _loaded(page, "overview")
-        assert "Explicit docs-linked capability" in page.locator('[data-testid="overview-now"]').inner_text()
+        returned_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Unlinked fixture work" in returned_text
+        assert "Explicit docs-linked capability" not in returned_text
+        assert "Capability is unknown" in returned_text
+        assert "fixture-registered-holder" in returned_text
+        assert "claimed" in returned_text.lower()
+        assert "inspect dependency 900" in returned_text
+        assert "does not authorize execution" in returned_text
+        returned_candidate = returned.value.json()["now"][0]
+        returned_capability = next(
+            entry
+            for entry in returned_candidate["evidence"]
+            if entry["source_ref"]["source_type"] == "docs-frontmatter"
+        )
+        assert returned_candidate["reason"] == "claimed · claimed by fixture-registered-holder"
+        assert returned_capability["claim"] is None
+        assert returned_capability["freshness"] == "fresh"
+        assert returned_capability["linkage"] == "unlinked"
+        assert any(
+            "Capability is unknown" in limitation
+            for limitation in returned_candidate["limitations"]
+        )
         assert len(source.calls) > overview_reads
         for path in source.root.rglob("*"):
             if path.is_file():
@@ -896,6 +920,7 @@ def test_standalone_overview_focus_return_preserves_subject_and_candidate(
         page.reload()
         _loaded(page, "overview")
         withdrawn_text = page.locator('[data-testid="overview-now"]').inner_text()
+        assert "Unlinked fixture work" in withdrawn_text
         assert "Explicit docs-linked capability" not in withdrawn_text
         assert "unknown" in withdrawn_text.lower()
         assert "fixture-registered-holder" in withdrawn_text

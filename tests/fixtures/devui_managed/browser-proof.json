@@ -1,6 +1,6 @@
 {
   "asset_sha256": {
-    "app/builderops/devui_managed.css": "sha256:7f1660cb7de61aa36029048b322dce7b4d79b3b4ae7e225ce20fe91f86095f76",
+    "app/builderops/devui_managed.css": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js": "sha256:47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
     "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb",
