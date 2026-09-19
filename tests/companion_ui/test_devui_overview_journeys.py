@@ -67,6 +67,10 @@ def _overview() -> dict[str, Any]:
                 "linkage": "linked",
                 "captured_at": "2026-08-28T10:00:00+00:00",
                 "read_watermark": "2026-08-28T10:00:00+00:00",
+                "opaque_diagnostic": {
+                    "commit_sha": "ab" * 20,
+                    "source_id": "private-source-marker",
+                },
                 "limitation": None,
             }
         ],
@@ -379,6 +383,9 @@ def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
             page.wait_for_selector('[data-testid="overview-load-state"][data-state="loaded"]')
             card_body = page.locator('[data-testid="overview-now"] article .body')
             assert card_body.locator(".matrix [data-axis]").count() == 5
+            assert all(
+                not axis.is_visible() for axis in card_body.locator(".matrix [data-axis]").all()
+            )
             for axis in ("availability", "freshness", "completeness", "cardinality", "linkage"):
                 assert card_body.locator("b").filter(has_text=axis).count() == 1
             evidence_rows = card_body.locator(".rungs").nth(1)
@@ -392,6 +399,9 @@ def test_overview_evidence_axes_render_exactly_once_per_entry() -> None:
             ):
                 assert evidence_rows.locator("b").filter(has_text=field).count() == 1
             card_body.locator("details.technical-disclosure").nth(1).locator("summary").click()
+            assert all(
+                axis.is_visible() for axis in card_body.locator(".matrix [data-axis]").all()
+            )
             evidence_text = evidence_rows.inner_text()
             assert "working-4836" in evidence_text
             assert "Working projection contains this item." in evidence_text
@@ -460,6 +470,7 @@ def test_overview_card_hides_raw_technical_fields_until_expanded() -> None:
                 not item.is_visible()
                 for item in card.locator("code").filter(has_text="cockpit:working:4836").all()
             )
+            assert "private-source-marker" not in card.inner_text()
             details.nth(0).locator("summary").click()
             details.nth(1).locator("summary").click()
             assert any(
@@ -469,6 +480,7 @@ def test_overview_card_hides_raw_technical_fields_until_expanded() -> None:
                 item.is_visible()
                 for item in card.locator("code").filter(has_text="cockpit:working:4836").all()
             )
+            assert "private-source-marker" in card.inner_text()
         finally:
             context.close()
             browser.close()
@@ -507,6 +519,7 @@ def test_focus_sections_render_owner_language_not_raw_field_names() -> None:
                 )
                 for raw_name in ("source_ref", "authority_ref", "captured_at", "receipt_ref"):
                     assert raw_name not in visible
+                assert "2026-08-28T10:00:00+00:00" not in visible
         finally:
             context.close()
             browser.close()
@@ -533,8 +546,13 @@ def test_gateway_shell_is_safe_accessible_no_egress_and_effect_free() -> None:
             assert page.locator("h1").count() == 1
             assert page.get_by_role("main").get_attribute("aria-labelledby") == "overview-heading"
             assert page.get_by_role("link", name="Open Focus").count() == 1
+            expected_disclosures = [
+                "Inspect subject source details",
+                "Inspect evidence details",
+            ]
+            assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_disclosures
             page.keyboard.press("Tab")
-            for _ in range(page.locator("details.technical-disclosure > summary").count() + 1):
+            for _ in range(len(expected_disclosures) + 1):
                 focused = page.locator(":focus")
                 assert focused.evaluate(
                     "element => element.matches('details.technical-disclosure > summary, a[data-testid=overview-focus-link]')"

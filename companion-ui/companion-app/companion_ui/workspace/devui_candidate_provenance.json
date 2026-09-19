@@ -306,7 +306,7 @@
       "kind": "layout_reflow",
       "source_path": "app/web/static/cockpit.css",
       "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
-      "source_sha256": "sha256:63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2",
+      "source_sha256": "sha256:d34fadfdd619534f6e0f9480a979b5caae52b65b9b05d8bb6db99fa8ae1d1d93",
       "source_anchors": [
         ".card>summary{list-style:none;cursor:pointer;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}",
         ".card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
@@ -315,7 +315,28 @@
         ".technical-disclosure>summary{list-style:none;cursor:pointer;padding:var(--space-2) var(--space-3);",
         ".technical-disclosure>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}"
       ],
-      "exact_rule": "Reuse the existing Cockpit details/summary keyboard, focus, hover, border, and token grammar for the bounded disclosure wrapper; add no new token, visual language, persistence, or effect."
+      "exact_rule": "Reuse the exact immutable Cockpit details/summary focus, hover, border, cursor and token grammar for finite technical disclosures; adapt only the bounded wrapper selector and content binding, with no new visual or interaction decision.",
+      "source_git_blob_oid": "63a0f8ef81d3f6fbbabc8c2e85460716ed5a6ec2"
+    },
+    {
+      "issue": 5594,
+      "transformation_id": "issue-5594-disclosure-source-behavior",
+      "kind": "interaction_binding",
+      "source_path": "app/web/static/cockpit.js",
+      "source_commit": "339ec73ef93fb8af96a6dd7b1d739c147f5f69ea",
+      "source_sha256": "sha256:8bfdc94692eb6d8038f0883b7cb7f7e9346acde357e6af9b515b4120a9164b78",
+      "source_git_blob_oid": "6a51c15179e2b67779e9ea0e2f0615da2e81f9b8",
+      "source_anchors": [
+        "function cardMarkup(item) {",
+        "`<details class=\"card ${CARD_CLASS[item.band] || \"\"}\">`",
+        "`<summary>`"
+      ],
+      "candidate_anchors": [
+        "function technicalDetails(parent, summary, value, omitAxes = false) {",
+        "details.className = \"technical-disclosure\";",
+        "summary.dataset.testid = \"devui-technical-disclosure\";"
+      ],
+      "exact_rule": "Reuse the immutable Cockpit cardMarkup details/summary disclosure structure and bound keyboard interaction; adapt only the owner-language content renderer and finite technical disclosure wrapper, preserving GET-only/no-egress behavior."
     }
   ]
 }

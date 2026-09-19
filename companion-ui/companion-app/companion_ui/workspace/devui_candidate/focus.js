@@ -50,6 +50,7 @@ const TECHNICAL_FIELDS = new Set([
   "read_watermark",
   "receipt_ref",
   "risk_id",
+  "observed_at",
   "source_id",
   "source_ref",
   "source_type",
@@ -85,7 +86,11 @@ function ownerRows(parent, value) {
   const list = document.createElement("div");
   list.className = "owner-summary";
   Object.keys(value || {}).forEach((key) => {
-    if (TECHNICAL_FIELDS.has(key)) return;
+    if (
+      TECHNICAL_FIELDS.has(key) ||
+      !Object.prototype.hasOwnProperty.call(FIELD_LABELS, key) ||
+      (value[key] !== null && typeof value[key] === "object")
+    ) return;
     const row = document.createElement("p");
     row.className = "owner-fact";
     text(row, "b", labelFor(key));

@@ -31,6 +31,13 @@ from app.builderops.devui_sources import package_candidate
 pytestmark = pytest.mark.browser_runtime
 ORIGIN = "http://127.0.0.1:8113"
 FOCUS = "/devui/focus?subject=github%3Aexample%2Ffixture%23501"
+EXPECTED_DISCLOSURE_SUMMARIES = {
+    "overview": [
+        "Inspect subject source details",
+        "Inspect evidence details",
+    ],
+    "focus": ["Inspect source and technical details"] * 10,
+}
 
 
 @contextmanager
@@ -126,6 +133,10 @@ def _keyboard_navigation(page, surface):
     link = page.get_by_role("link", name=name)
     assert link.count() == 1
     assert link.get_attribute("href") == destination
+    expected_summaries = EXPECTED_DISCLOSURE_SUMMARIES[surface]
+    assert page.locator("details.technical-disclosure > summary").all_text_contents() == expected_summaries, (
+        "Only the admitted navigation and disclosures are keyboard interactive"
+    )
     assert page.evaluate(
         """expected => Array.from(document.querySelectorAll('*')).filter(el =>
             (el.tabIndex >= 0 || el.isContentEditable) &&
@@ -135,8 +146,7 @@ def _keyboard_navigation(page, surface):
         link.element_handle(),
     ), "Only the admitted navigation and disclosures are keyboard interactive"
     page.bring_to_front()
-    disclosure_count = page.locator("details.technical-disclosure > summary").count()
-    for _ in range(max(4, disclosure_count + 2)):
+    for _ in range(len(expected_summaries) + 2):
         page.keyboard.press("Tab")
         assert page.evaluate(
             """expected => [document.body, document.documentElement, expected]
@@ -154,7 +164,7 @@ def _keyboard_navigation(page, surface):
 
 
 @pytest.mark.parametrize("surface,path", [("overview", "/devui/overview"), ("focus", FOCUS)])
-@pytest.mark.parametrize("action", ["button", "link", "tabindex", "editable"])
+@pytest.mark.parametrize("action", ["button", "link", "tabindex", "editable", "disclosure"])
 def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
     managed_sources, monkeypatch, surface, path, action  # noqa: F811 - imported pytest fixture
 ):
@@ -166,9 +176,15 @@ def test_managed_keyboard_proof_rejects_unexpected_interactive_action(
         _loaded(page, surface)
         # Fault injection into the actual production-served DOM, not a substitute page.
         page.evaluate("""kind => {
-            const el = document.createElement(kind === 'button' ? 'button' :
-                kind === 'link' ? 'a' : 'div');
+            const el = document.createElement(kind === 'disclosure' ? 'details' :
+                kind === 'button' ? 'button' : kind === 'link' ? 'a' : 'div');
             el.textContent = 'Unexpected action';
+            if (kind === 'disclosure') {
+                el.className = 'technical-disclosure';
+                const summary = document.createElement('summary');
+                summary.textContent = 'Unreviewed injected disclosure';
+                el.replaceChildren(summary, document.createElement('p'));
+            }
             if (kind === 'link') el.href = '/unexpected-action';
             if (kind === 'tabindex') { el.tabIndex = 0; el.setAttribute('role', 'button'); }
             if (kind === 'editable') el.contentEditable = 'true';

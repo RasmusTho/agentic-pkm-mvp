@@ -92,7 +92,12 @@ function ownerRows(parent, value) {
   const list = document.createElement("div");
   list.className = "owner-summary";
   Object.keys(value || {}).forEach((key) => {
-    if (TECHNICAL_FIELDS.has(key) || key === "limitations") return;
+    if (
+      TECHNICAL_FIELDS.has(key) ||
+      key === "limitations" ||
+      !Object.prototype.hasOwnProperty.call(FIELD_LABELS, key) ||
+      (value[key] !== null && typeof value[key] === "object")
+    ) return;
     const row = document.createElement("p");
     row.className = "owner-fact";
     text(row, "b", labelFor(key));
@@ -191,11 +196,11 @@ function renderItem(parent, item) {
     const evidenceBox = document.createElement("div");
     evidenceBox.className = "evidence-entry";
     ownerRows(evidenceBox, evidence);
-    matrix(evidenceBox, evidence);
     const details = document.createElement("details");
     details.className = "technical-disclosure";
     const summary = text(details, "summary", "Inspect evidence details");
     summary.dataset.testid = "devui-technical-disclosure";
+    matrix(details, evidence);
     rows(details, evidence, true);
     evidenceBox.appendChild(details);
     body.appendChild(evidenceBox);
