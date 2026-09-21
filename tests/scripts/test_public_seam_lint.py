@@ -139,3 +139,18 @@ def test_verification_process_map_machine_reference_is_registered() -> None:
         "disposition": "stay",
         "issue": "#3602",
     } in rows
+
+
+def test_dispatcher_repository_default_is_registered_as_public_identity() -> None:
+    rows = json.loads(REGISTER.read_text(encoding="utf-8"))["rows"]
+
+    assert {
+        "artifact": "app/dispatcher/repositories.py",
+        "category": "iv",
+        "why_load_bearing": (
+            "The shared dispatcher defaults identify a public governed repository "
+            "by owner/repository name, not personal vault data."
+        ),
+        "disposition": "stay",
+        "issue": "#5495",
+    } in rows

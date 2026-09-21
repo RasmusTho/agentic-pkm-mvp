@@ -1094,9 +1094,10 @@ def test_pull_command_upserts_issues(tmp_env):
             "number": 102,
             "title": "Test issue 2",
             "state": "open",
-            "labels": [{"name": "prio:med"}],
+            "labels": [{"name": "prio:med"}, {"name": "agent:ready"}],
             "createdAt": "2026-04-20T10:00:00Z",
             "updatedAt": "2026-04-21T12:00:00Z",
+            "body": VALID_READY_BODY,
         },
     ]
     mock_source.get_rate_limit.return_value = {"remaining": 5000, "reset": "2026-04-25T10:00:00Z"}

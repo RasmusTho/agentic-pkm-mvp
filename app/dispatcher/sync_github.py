@@ -290,19 +290,43 @@ _LABEL_STATUS: dict[str, str] = {
 
 
 def _label_names(payload: dict[str, Any]) -> list[str]:
+    raw_labels = payload.get("labels", [])
+    if not isinstance(raw_labels, list):
+        return []
     return [
         str(lbl.get("name") or lbl) if isinstance(lbl, dict) else str(lbl)
-        for lbl in payload.get("labels", [])
+        for lbl in raw_labels
     ]
 
 
 def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
-    labels = _label_names(payload)
+    number = payload.get("number")
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int)
+        or number <= 0
+    ):
+        return "agent:ready result has no valid exact issue number"
+
+    raw_labels = payload.get("labels")
+    if not isinstance(raw_labels, list):
+        return "agent:ready result has no valid labels list"
+    labels: list[str] = []
+    for label in raw_labels:
+        if isinstance(label, str) and label:
+            labels.append(label)
+        elif isinstance(label, dict):
+            name = label.get("name")
+            if not isinstance(name, str) or not name:
+                return "agent:ready result contains an invalid label entry"
+            labels.append(name)
+        else:
+            return "agent:ready result contains an invalid label entry"
     if "agent:ready" not in labels:
-        return None
+        return "agent:ready result is missing the required label"
     report = classify_issue_body(
         payload.get("body") or "",
-        issue_number=payload.get("number"),
+        issue_number=number,
         labels=labels,
     )
     if report.readiness_classification == "ready_candidate":
@@ -929,21 +953,19 @@ class PullSyncAdapter:
                 validation_failure = _ready_validation_failure(issue)
                 number = issue.get("number")
                 if validation_failure is not None:
-                    if isinstance(number, int):
+                    if (
+                        isinstance(number, int)
+                        and not isinstance(number, bool)
+                        and number > 0
+                    ):
                         invalid_ready_issue_numbers.add(number)
                     skipped.append(f"issue={number or '?'}: {validation_failure}")
                     continue
                 task = normalize_github_issue(issue, repo, now=pull_at)
-                existing = self._store.get_task(task.task_id)
-                if existing is not None and existing.status in {"claimed", "in_progress"}:
-                    task.status = existing.status
-                    task.claimed_by = existing.claimed_by
-                    task.lease_id = existing.lease_id
-                    task.lease_expires_at = existing.lease_expires_at
-                    task.blocked_reason = existing.blocked_reason
-                    task.last_heartbeat_at = existing.last_heartbeat_at
-                self._store.upsert_task(task)
-                upserted.append(task)
+                write_result = self._store.upsert_synced_task(
+                    task, ready_issue_observed=True
+                )
+                upserted.append(write_result.task)
                 if isinstance(number, int):
                     ready_issue_numbers.add(number)
             except Exception as exc:
@@ -966,7 +988,7 @@ class PullSyncAdapter:
                     existing = self._store.get_task(task.task_id)
                     if existing is not None and existing.status in {"claimed", "in_progress"}:
                         continue
-                    self._store.upsert_task(task)
+                    self._store.upsert_synced_task(task)
                 except Exception as exc:
                     skipped.append(f"blocker issue={issue.get('number', '?')}: {exc}")
 
@@ -1044,10 +1066,16 @@ class PullSyncAdapter:
                 if task.issue_number in invalid_ready_issue_numbers:
                     reconciled_task_ids.add(task.task_id)
                     from_status = task.status
+                    from_blocked_reason = task.blocked_reason
                     task.status = "blocked"
                     task.blocked_reason = "agent:ready strict readiness validation failed"
                     task.updated_at = pull_at
-                    self._store.upsert_task(task)
+                    write_result = self._store.upsert_synced_task(
+                        task,
+                        expected_state=(from_status, from_blocked_reason),
+                    )
+                    if not write_result.state_transition_applied:
+                        continue
                     self._store.append_event(
                         EventRecord(
                             event_id=str(uuid.uuid4()),
@@ -1066,10 +1094,17 @@ class PullSyncAdapter:
                     continue
                 if task.issue_number in ready_issue_numbers:
                     if task.status == "blocked":
+                        from_status = task.status
+                        from_blocked_reason = task.blocked_reason
                         task.status = "ready"
                         task.blocked_reason = None
                         task.updated_at = pull_at
-                        self._store.upsert_task(task)
+                        write_result = self._store.upsert_synced_task(
+                            task,
+                            expected_state=(from_status, from_blocked_reason),
+                        )
+                        if not write_result.state_transition_applied:
+                            continue
                         self._store.append_event(
                             EventRecord(
                                 event_id=str(uuid.uuid4()),
@@ -1106,6 +1141,7 @@ class PullSyncAdapter:
                     reason = "agent-ready-label-removed"
 
                 from_status = task.status
+                from_blocked_reason = task.blocked_reason
                 task.status = next_status
                 reconciled_task_ids.add(task.task_id)
                 if reason == "agent-ready-readiness-unvalidated":
@@ -1115,7 +1151,12 @@ class PullSyncAdapter:
                 elif next_status != "blocked":
                     task.blocked_reason = None
                 task.updated_at = pull_at
-                self._store.upsert_task(task)
+                write_result = self._store.upsert_synced_task(
+                    task,
+                    expected_state=(from_status, from_blocked_reason),
+                )
+                if not write_result.state_transition_applied:
+                    continue
                 self._store.append_event(
                     EventRecord(
                         event_id=str(uuid.uuid4()),

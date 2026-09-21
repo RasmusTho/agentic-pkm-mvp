@@ -253,10 +253,15 @@ def test_release_emits_event(store: SqliteStore) -> None:
     assert events[1].payload["reason"] == "completed"
 
 
-def test_expired_lease_reclaim(store: SqliteStore) -> None:
+def test_expired_lease_reclaim_invalidates_ready_evidence(
+    store: SqliteStore,
+) -> None:
     from datetime import datetime, timezone, timedelta
 
-    task = _task()
+    old_pull_at = (
+        datetime.now(timezone.utc) - timedelta(minutes=5)
+    ).isoformat(timespec="microseconds")
+    task = _task(sync_state={"last_pull_at": old_pull_at})
     store.upsert_task(task)
 
     claimed_task, lease = claim(store, "task-1", "agent-1", ttl_minutes=1)
@@ -282,8 +287,18 @@ def test_expired_lease_reclaim(store: SqliteStore) -> None:
     assert refetched.lease_id is None
     assert refetched.claimed_by is None
     assert refetched.status == "ready"
+    assert refetched.sync_state is not None
+    assert "last_pull_at" not in refetched.sync_state
+    assert "ready_scan_invalidated_at" in refetched.sync_state
 
-
+    # A sync that captured its ready snapshot before lease expiry cannot
+    # restore that evidence after the atomic reclamation.
+    stale_snapshot = _task(sync_state={"last_pull_at": old_pull_at})
+    store.upsert_synced_task(stale_snapshot, ready_issue_observed=True)
+    after_stale_sync = store.get_task("task-1")
+    assert after_stale_sync is not None and after_stale_sync.sync_state is not None
+    assert "last_pull_at" not in after_stale_sync.sync_state
+    assert "ready_scan_invalidated_at" in after_stale_sync.sync_state
 def test_reclaim_ignores_expired_orphan_lease(store: SqliteStore) -> None:
     past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
         timespec="microseconds"
@@ -318,6 +333,134 @@ def _expire_lease(store: SqliteStore, lease_id: str) -> str:
     lease.heartbeat_at = past_time
     store.upsert_lease(lease)
     return past_time
+
+
+def test_expired_terminal_lease_fences_stale_ready_snapshot(
+    store: SqliteStore,
+) -> None:
+    old_pull_at = (
+        datetime.now(timezone.utc) - timedelta(minutes=5)
+    ).isoformat(timespec="microseconds")
+    store.upsert_task(_task(sync_state={"last_pull_at": old_pull_at}))
+    _, lease = claim(store, "task-1", "agent-1", ttl_minutes=1)
+
+    terminal = store.get_task("task-1")
+    assert terminal is not None
+    terminal.status = "completed"
+    store.upsert_task(terminal)
+    _expire_lease(store, lease.lease_id)
+
+    assert reclaim_expired_leases(store, actor="dispatcher") == ["task-1"]
+    reclaimed = store.get_task("task-1")
+    assert reclaimed is not None and reclaimed.sync_state is not None
+    assert reclaimed.status == "completed"
+    assert reclaimed.lease_id is None
+    protected_at = reclaimed.sync_state["terminal_state_protected_at"]
+    assert "last_pull_at" not in reclaimed.sync_state
+
+    stale_snapshot = _task(
+        status="ready",
+        sync_state={"last_pull_at": old_pull_at},
+    )
+    stale_write = store.upsert_synced_task(
+        stale_snapshot, ready_issue_observed=True
+    )
+    after_stale_sync = store.get_task("task-1")
+    assert after_stale_sync is not None and after_stale_sync.sync_state is not None
+    assert after_stale_sync.status == "completed"
+    assert after_stale_sync.sync_state["terminal_state_protected_at"] == protected_at
+    assert "last_pull_at" not in after_stale_sync.sync_state
+    assert stale_write.state_transition_applied is False
+
+    fresh_pull_at = (
+        datetime.fromisoformat(protected_at) + timedelta(seconds=1)
+    ).isoformat(timespec="microseconds")
+    fresh_write = store.upsert_synced_task(
+        _task(status="ready", sync_state={"last_pull_at": fresh_pull_at}),
+        ready_issue_observed=True,
+    )
+    assert fresh_write.task.status == "ready"
+    assert fresh_write.task.sync_state is not None
+    assert "terminal_state_protected_at" not in fresh_write.task.sync_state
+    assert "ready_scan_invalidated_at" not in fresh_write.task.sync_state
+    assert fresh_write.task.sync_state["last_pull_at"] == fresh_pull_at
+
+
+@pytest.mark.parametrize(
+    ("terminal_fence", "ready_marker", "incoming_pull_at"),
+    [
+        (
+            "2026-09-21",
+            "2026-09-21T00:00:00+00:00",
+            "2026-09-22T00:00:00+00:00",
+        ),
+        (
+            "2026-09-21T12:00:00+00:00",
+            "2026-09-21T12:00:00+00:00",
+            "2026-09-21T13:00:00",
+        ),
+    ],
+    ids=["malformed-terminal-fence", "timezone-free-ready-observation"],
+)
+def test_malformed_terminal_fence_cannot_reopen_terminal_task(
+    store: SqliteStore,
+    terminal_fence: str,
+    ready_marker: str,
+    incoming_pull_at: str,
+) -> None:
+    store.upsert_task(
+        _task(
+            status="completed",
+            sync_state={
+                "ready_scan_invalidated_at": ready_marker,
+                "terminal_state_protected_at": terminal_fence,
+            },
+        )
+    )
+
+    write = store.upsert_synced_task(
+        _task(status="ready", sync_state={"last_pull_at": incoming_pull_at}),
+        ready_issue_observed=True,
+    )
+
+    stored = store.get_task("task-1")
+    assert stored is not None and stored.sync_state is not None
+    assert stored.status == "completed"
+    assert stored.sync_state["terminal_state_protected_at"] == terminal_fence
+    assert "last_pull_at" not in stored.sync_state
+    assert write.task.status == "completed"
+    assert write.state_transition_applied is False
+
+
+@pytest.mark.parametrize(
+    ("invalidated_at", "incoming_pull_at"),
+    [
+        ("2026-09-21", "2026-09-21T23:00:00+00:00"),
+        ("2026-09-21T12:00:00+00:00", "2026-09-21T13:00:00"),
+    ],
+    ids=["date-only-invalidation", "timezone-free-observation"],
+)
+def test_unzoned_sync_timestamps_cannot_clear_ready_invalidation(
+    store: SqliteStore,
+    invalidated_at: str,
+    incoming_pull_at: str,
+) -> None:
+    store.upsert_task(
+        _task(sync_state={"ready_scan_invalidated_at": invalidated_at})
+    )
+
+    write = store.upsert_synced_task(
+        _task(sync_state={"last_pull_at": incoming_pull_at}),
+        ready_issue_observed=True,
+    )
+
+    stored = store.get_task("task-1")
+    assert stored is not None and stored.sync_state is not None
+    assert stored.status == "ready"
+    assert "last_pull_at" not in stored.sync_state
+    assert stored.sync_state["ready_scan_invalidated_at"] == invalidated_at
+    assert write.task.sync_state == stored.sync_state
+    assert write.state_transition_applied is False
 
 
 def test_claim_takeover_stale_succeeds_with_attributed_receipt(store: SqliteStore) -> None:

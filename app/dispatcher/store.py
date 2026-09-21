@@ -12,6 +12,8 @@ import hashlib
 import json
 import re
 import sqlite3
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
@@ -31,6 +33,13 @@ from app.dispatcher.schema import (
 class DispatcherStore(Protocol):
     def initialize(self) -> None: ...
     def upsert_task(self, task: TaskRecord) -> None: ...
+    def upsert_synced_task(
+        self,
+        task: TaskRecord,
+        *,
+        ready_issue_observed: bool = False,
+        expected_state: tuple[str, str | None] | None = None,
+    ) -> "SyncedTaskWriteResult": ...
     def get_task(self, task_id: str) -> TaskRecord | None: ...
     def upsert_lease(self, lease: LeaseRecord) -> None: ...
     def get_lease(self, lease_id: str) -> LeaseRecord | None: ...
@@ -53,6 +62,26 @@ def _loads(value: str | None) -> Any:
     if value is None or value == "":
         return None
     return json.loads(value)
+
+
+def _parse_sync_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
+class SyncedTaskWriteResult:
+    """Persisted task plus whether this write applied its expected transition."""
+
+    task: TaskRecord
+    state_transition_applied: bool
 
 
 _PRE_TRUST_REQUEST_FIELDS = frozenset(
@@ -832,50 +861,203 @@ class SqliteStore:
 
     def upsert_task(self, task: TaskRecord) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO dispatcher_tasks (
-                    task_id, issue_number, title, status, priority, repo,
-                    source_anchor_refs, claimed_by, lease_id, lease_expires_at,
-                    linked_pr, blocked_reason, last_heartbeat_at, sync_state,
-                    created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(task_id) DO UPDATE SET
-                    issue_number=excluded.issue_number,
-                    title=excluded.title,
-                    status=excluded.status,
-                    priority=excluded.priority,
-                    repo=excluded.repo,
-                    source_anchor_refs=excluded.source_anchor_refs,
-                    claimed_by=excluded.claimed_by,
-                    lease_id=excluded.lease_id,
-                    lease_expires_at=excluded.lease_expires_at,
-                    linked_pr=excluded.linked_pr,
-                    blocked_reason=excluded.blocked_reason,
-                    last_heartbeat_at=excluded.last_heartbeat_at,
-                    sync_state=excluded.sync_state,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    task.task_id,
-                    task.issue_number,
-                    task.title,
-                    task.status,
-                    task.priority,
-                    task.repo,
-                    _dumps(list(task.source_anchor_refs)),
-                    task.claimed_by,
-                    task.lease_id,
-                    task.lease_expires_at,
-                    task.linked_pr,
-                    task.blocked_reason,
-                    task.last_heartbeat_at,
-                    _dumps(task.sync_state),
-                    task.created_at,
-                    task.updated_at,
-                ),
-            )
+            self._upsert_task_in_transaction(conn, task)
             conn.commit()
+
+    def upsert_synced_task(
+        self,
+        task: TaskRecord,
+        *,
+        ready_issue_observed: bool = False,
+        expected_state: tuple[str, str | None] | None = None,
+    ) -> SyncedTaskWriteResult:
+        """Persist a GitHub snapshot without overwriting a concurrent claim.
+
+        Claim and sync writes both take SQLite's write lock before inspecting
+        task state. Whichever transaction commits first is therefore visible
+        to the other; a sync snapshot that follows a claim carries forward its
+        current lease fields instead of writing a stale ready state over them,
+        even when another operation has marked the task blocked without
+        releasing its lease. Ready-scan invalidation is cleared only by a
+        newer, strictly validated ready-list observation. Reconciliation can
+        pass ``expected_state`` so its transition is compared with the current
+        row under this same write lock.
+        """
+        state_transition_applied = False
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = conn.execute(
+                    """
+                    SELECT *
+                    FROM dispatcher_tasks
+                    WHERE task_id = ?
+                    """,
+                    (task.task_id,),
+                ).fetchone()
+                if existing is None and expected_state is not None:
+                    # A task removed after reconciliation selected it must not
+                    # be recreated from that stale in-memory copy.
+                    conn.rollback()
+                    return SyncedTaskWriteResult(
+                        task=task, state_transition_applied=False
+                    )
+
+                persisted = task
+                if existing is not None:
+                    existing_sync_state = _loads(existing["sync_state"])
+                    if not isinstance(existing_sync_state, dict):
+                        existing_sync_state = {}
+                    persisted_sync_state = (
+                        dict(task.sync_state)
+                        if isinstance(task.sync_state, dict)
+                        else {}
+                    )
+                    invalidated_at = (
+                        existing_sync_state.get("ready_scan_invalidated_at")
+                    )
+                    if invalidated_at is not None:
+                        invalidated_time = _parse_sync_timestamp(invalidated_at)
+                        incoming_pull_time = _parse_sync_timestamp(
+                            persisted_sync_state.get("last_pull_at")
+                        )
+                        has_fresh_ready_evidence = bool(
+                            ready_issue_observed
+                            and invalidated_time is not None
+                            and incoming_pull_time is not None
+                            and incoming_pull_time > invalidated_time
+                        )
+                        if has_fresh_ready_evidence:
+                            persisted_sync_state.pop(
+                                "ready_scan_invalidated_at", None
+                            )
+                        else:
+                            # A pull timestamp is captured before remote reads.
+                            # A later open-issue or blocker scan is not evidence
+                            # that this task appeared in the validated ready set.
+                            persisted_sync_state.pop("last_pull_at", None)
+                            persisted_sync_state[
+                                "ready_scan_invalidated_at"
+                            ] = invalidated_at
+
+                    terminal_protected_at = existing_sync_state.get(
+                        "terminal_state_protected_at"
+                    )
+                    terminal_time = _parse_sync_timestamp(terminal_protected_at)
+                    incoming_pull_time = _parse_sync_timestamp(
+                        persisted_sync_state.get("last_pull_at")
+                    )
+                    may_reopen_terminal = bool(
+                        terminal_protected_at is not None
+                        and ready_issue_observed
+                        and terminal_time is not None
+                        and incoming_pull_time is not None
+                        and incoming_pull_time > terminal_time
+                    )
+                    terminal_state_fenced = terminal_protected_at is not None
+                    if terminal_state_fenced:
+                        if may_reopen_terminal:
+                            persisted_sync_state.pop(
+                                "terminal_state_protected_at", None
+                            )
+                        else:
+                            # Only a newer validated ready-list entry may
+                            # reopen terminal work after lease reclamation.
+                            persisted_sync_state.pop("last_pull_at", None)
+                            persisted_sync_state[
+                                "terminal_state_protected_at"
+                            ] = terminal_protected_at
+
+                    if (
+                        invalidated_at is not None
+                        or terminal_protected_at is not None
+                    ):
+                        persisted = replace(
+                            persisted, sync_state=persisted_sync_state
+                        )
+                    current_state = (existing["status"], existing["blocked_reason"])
+                    expected_state_matches = (
+                        expected_state is None or expected_state == current_state
+                    )
+                    preserve_lifecycle_state = bool(
+                        not expected_state_matches
+                        or (
+                            terminal_state_fenced and not may_reopen_terminal
+                        )
+                        or existing["status"] in {"claimed", "in_progress"}
+                        or existing["lease_id"] is not None
+                    )
+                    if expected_state is not None and expected_state_matches:
+                        state_transition_applied = bool(
+                            not preserve_lifecycle_state
+                            and current_state != (task.status, task.blocked_reason)
+                        )
+                    if preserve_lifecycle_state:
+                        persisted = replace(
+                            persisted,
+                            status=existing["status"],
+                            claimed_by=existing["claimed_by"],
+                            lease_id=existing["lease_id"],
+                            lease_expires_at=existing["lease_expires_at"],
+                            blocked_reason=existing["blocked_reason"],
+                            last_heartbeat_at=existing["last_heartbeat_at"],
+                        )
+                self._upsert_task_in_transaction(conn, persisted)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return SyncedTaskWriteResult(
+            task=persisted, state_transition_applied=state_transition_applied
+        )
+
+    @staticmethod
+    def _upsert_task_in_transaction(
+        conn: sqlite3.Connection, task: TaskRecord
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO dispatcher_tasks (
+                task_id, issue_number, title, status, priority, repo,
+                source_anchor_refs, claimed_by, lease_id, lease_expires_at,
+                linked_pr, blocked_reason, last_heartbeat_at, sync_state,
+                created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                issue_number=excluded.issue_number,
+                title=excluded.title,
+                status=excluded.status,
+                priority=excluded.priority,
+                repo=excluded.repo,
+                source_anchor_refs=excluded.source_anchor_refs,
+                claimed_by=excluded.claimed_by,
+                lease_id=excluded.lease_id,
+                lease_expires_at=excluded.lease_expires_at,
+                linked_pr=excluded.linked_pr,
+                blocked_reason=excluded.blocked_reason,
+                last_heartbeat_at=excluded.last_heartbeat_at,
+                sync_state=excluded.sync_state,
+                updated_at=excluded.updated_at
+            """,
+            (
+                task.task_id,
+                task.issue_number,
+                task.title,
+                task.status,
+                task.priority,
+                task.repo,
+                _dumps(list(task.source_anchor_refs)),
+                task.claimed_by,
+                task.lease_id,
+                task.lease_expires_at,
+                task.linked_pr,
+                task.blocked_reason,
+                task.last_heartbeat_at,
+                _dumps(task.sync_state),
+                task.created_at,
+                task.updated_at,
+            ),
+        )
 
     def get_task(self, task_id: str) -> TaskRecord | None:
         with self._connect() as conn:

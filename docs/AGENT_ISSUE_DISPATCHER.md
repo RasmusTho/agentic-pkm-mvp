@@ -24,6 +24,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - GitHub pull-sync boundary (#625) is shipped: `app/dispatcher/sync_github.py` provides the `PullSyncAdapter`, `GhCliIssueSource`, and `normalize_github_issue` normalisation function.
 - Bootstrap-and-sync wiring (#637) is shipped: `pull --repo` and `pull --configured-repos`, shared BuilderOps repository configuration, `make dispatcher-init` (init + pull), `make dispatcher-sync` (pull only), and missing-DB guard for CLI commands.
 - Fresh exact-task pickup (#5495) checks per-repository sync age and readiness before claim, refreshes the configured repo set once when evidence is missing or stale, and reports read-only sync age and coverage through `status`.
+- Pull-sync acquires SQLite's write lock before re-reading and updating each task. This serializes refresh writes with `claim`: a claim committed first keeps its lease fields, and a claim starting later sees the refreshed row. A non-null task lease reference is preserved regardless of task status because a blocked task can still hold a lease.
+- Manual release and expired-lease reclamation clear a task's `last_pull_at` ready-scan evidence and record an invalidation timestamp. Only a newer, strictly validated ready-list entry with a well-formed labels array containing `agent:ready`, a positive integer issue number, and timezone-aware timestamps for that exact task clears it; an open-issue or blocker snapshot cannot. A pull that started before release cannot restore old evidence when it finishes later, so the next governed pickup must perform a fresh configured-repository read before claiming.
+- Expiry reclamation also records a terminal-state fence when it clears a stray lease from `completed`, `done`, or `failed` work. A snapshot captured before reclamation cannot overwrite that terminal state; a newer validated ready-list observation may reopen it.
 - Complete command (#642) is shipped: `python -m app.dispatcher complete <task_id> --agent <agent_id>` marks tasks finished and releases leases cleanly.
 - Fallback policy (#639) is shipped: dispatcher loop, TTL, heartbeat cadence, and GitHub-label-only fallback are documented in `AGENTS.md` and `.codex/skills/issue-to-code/SKILL.md`.
 - Dispatcher cleanup in verification-and-closure (#662) is shipped: ensures leases are released when issues are merged, partially delivered, or abandoned.
@@ -646,8 +649,10 @@ store, and the reclaimer rechecks the captured task-linked lease's ownership, un
 expiry inside its SQLite write transaction. A concurrent stale takeover therefore wins its lease-ID
 fence, while repeated selections are harmless. Only unreleased, expired leases still referenced by
 a dispatcher task are eligible; terminal `completed`/`done` and failed status are preserved while
-clearing a stray lease, so automatic recovery cannot requeue a failed lifecycle outcome. Orphan
-lease rows are intentionally left for separate maintenance.
+clearing a stray lease, and a timestamp fence prevents an older ready snapshot from overwriting that
+terminal state. A newer strictly validated ready-list observation is required to reopen it. Nonterminal
+reclamation clears old ready evidence and stores its own invalidation timestamp. Orphan lease rows are
+intentionally left for separate maintenance.
 This path reads and mutates only dispatcher SQLite state and emits the existing `task.released`
 expiry event; it does not query or mutate GitHub Issues, labels, Projects, Kanban, or any external
 API.

@@ -295,8 +295,9 @@ original label set releases the lease; an exact match with the intended replacem
 claim. Any other or unreadable label set retains the lease for recovery. The success receipt
 contains `task_id`, `lease_id`, `holder`, and `evidence=verified-dispatcher-lease`.
 
-If a successful dispatcher status read confirms `db_exists=false`, or the status command exits
-nonzero as allowed by the builder-agent instructions, the same wrapper reads the exact GitHub Issue
+When dispatcher status selects degraded mode because a successful status read confirms
+`db_exists=false`, or the status command exits nonzero as allowed by the builder-agent instructions,
+the same wrapper reads the exact GitHub Issue
 and requires the requested issue number, `state=open`, exactly one agent-state label
 (`agent:ready`), and strict readiness validation. It then posts a durable claimant-intent comment containing agent, session, branch,
 worktree, `coordination_mode`, and `fallback_reason`, and replaces the agent labels. This path has
@@ -315,7 +316,7 @@ scripts/issue_pickup_claim.sh \
 ```
 
 Explicit label-only fallback is refused if a successful status response shows the dispatcher
-database exists. A failed `pickup-refresh` while the dispatcher is available is a stop condition,
+database exists. A failed automatic dispatcher refresh while the dispatcher is available is a stop condition,
 not permission to bypass its lease state.
 
 Preserve the wrapper's receipt in the PR body. Do not reconstruct a dispatcher-backed receipt from
