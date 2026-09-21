@@ -36,14 +36,96 @@ def _write_cutover_ack(state_dir: Path) -> None:
 
 
 def test_default_repos_include_agentic_and_bifrost() -> None:
+    from app.dispatcher.repositories import (
+        DEFAULT_REPOS as SHARED_DEFAULT_REPOS,
+        EXTRA_REPOS_ENV,
+        LEGACY_EXTRA_REPOS_ENV,
+        configured_repositories,
+    )
     from app.ops.builderops_startup import DEFAULT_REPOS, build_parser
 
     assert "RasmusTho/agentic-pkm-mvp" in DEFAULT_REPOS
     assert "RasmusTho/bifrost" in DEFAULT_REPOS
+    assert DEFAULT_REPOS == SHARED_DEFAULT_REPOS
+    extra_repo = "RasmusTho/extra-builder"
+    assert configured_repositories({EXTRA_REPOS_ENV: extra_repo}) == (
+        *SHARED_DEFAULT_REPOS,
+        extra_repo,
+    )
+    assert configured_repositories(
+        {LEGACY_EXTRA_REPOS_ENV: "RasmusTho/legacy-one RasmusTho/legacy-two"}
+    ) == (
+        *SHARED_DEFAULT_REPOS,
+        "RasmusTho/legacy-one",
+        "RasmusTho/legacy-two",
+    )
     # No --repo provided: argparse default is None so run_bootstrap can fall
-    # back to DEFAULT_REPOS.
+    # back to the shared defaults plus explicitly configured additions.
     args = build_parser().parse_args([])
     assert args.repo is None
+
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    init_target = makefile[makefile.index("dispatcher-init:") : makefile.index("dispatcher-sync:")]
+    sync_target = makefile[makefile.index("dispatcher-sync:") : makefile.index("# ── Dev/test DB")]
+    assert "pull --configured-repos" in init_target
+    assert "pull --configured-repos" in sync_target
+    pickup_script = (REPO_ROOT / "scripts" / "issue_pickup_claim.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'pickup-refresh "$TASK_ID" --repo "$REPO"' in pickup_script
+
+
+def test_builderops_startup_passes_shared_and_invocation_repos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from argparse import Namespace
+
+    from app.dispatcher.repositories import DEFAULT_REPOS, EXTRA_REPOS_ENV
+    from app.ops import builderops_startup
+
+    environment_repo = "RasmusTho/environment-extra"
+    invocation_repo = "RasmusTho/invocation-extra"
+    monkeypatch.setenv(EXTRA_REPOS_ENV, environment_repo)
+    monkeypatch.delenv("BUILDEROPS_BOOTSTRAP_REPO", raising=False)
+    dispatcher_repos: list[str] = []
+
+    def fake_dispatcher_bootstrap(**kwargs: object) -> dict[str, object]:
+        repos = kwargs["repos"]
+        assert isinstance(repos, list)
+        dispatcher_repos.extend(repos)
+        return {
+            "status": "ok",
+            "initialized": False,
+            "db_exists": True,
+            "db_path": "dispatcher.sqlite3",
+            "github_sync": {"status": "skipped"},
+        }
+
+    monkeypatch.setattr(
+        builderops_startup, "_dispatcher_bootstrap", fake_dispatcher_bootstrap
+    )
+    monkeypatch.setattr(
+        builderops_startup, "_signboard_export", lambda **_kwargs: {"status": "ok"}
+    )
+    monkeypatch.setattr(
+        builderops_startup, "_builderops_readiness", lambda **_kwargs: {"status": "ok"}
+    )
+
+    result = builderops_startup.run_bootstrap(
+        Namespace(
+            root=str(REPO_ROOT),
+            repo=[invocation_repo],
+            gh_bin="gh",
+            rate_limit_min=25,
+            skip_github_sync=True,
+            status_output=None,
+            startup_status_path=None,
+        )
+    )
+
+    expected = [*DEFAULT_REPOS, environment_repo, invocation_repo]
+    assert result["repos"] == expected
+    assert dispatcher_repos == expected
 
 
 def test_dev_start_full_invokes_builderops_bootstrap() -> None:
@@ -184,6 +266,8 @@ def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> 
             "DISPATCHER_EVENTS_PATH": str(tmp_path / "dispatcher" / "events.jsonl"),
             "SIGNBOARD_ROOT": str(tmp_path / "signboard"),
             "BUILDEROPS_DB_PATH": str(tmp_path / "builderops" / "builderops.sqlite3"),
+            "DISPATCHER_EXTRA_GITHUB_REPOS": "",
+            "BUILDEROPS_BOOTSTRAP_REPO": "",
         }
     )
 
@@ -210,7 +294,10 @@ def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "degraded"
-    assert payload["repos"] == ["RasmusTho/agentic-pkm-mvp"]
+    assert payload["repos"] == [
+        "RasmusTho/agentic-pkm-mvp",
+        "RasmusTho/bifrost",
+    ]
     assert "gh_not_found" in payload["reasons"]
     assert payload["dispatcher"]["db_exists"] is True
     assert payload["signboard"]["status"] == "ok"

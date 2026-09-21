@@ -286,3 +286,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent, and the documented CLI selects a local SQLite store that this run is not authorized to use. No store write was attempted; convert this entry to a LearningSignal when the admitted source is available. PR #5509 repairs the named source pointers and records both P1 findings before a fresh independent review.
 
 --- retro 2026-09-14: applied 2/2 proposals ---
+
+## 2026-09-21 — #5495 (dispatcher freshness and lease-safe sync)
+**Source:** issue-to-code / independent convergence review
+**Diverged:** The plan used a pre-write task read to preserve claims, but a claim could commit before the sync upsert and have its lease reference overwritten.
+**Upstream artifact:** `docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` — keep refresh task writes serialized with claims before applying snapshots.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent and no connected BuilderOps writer is available. No store write was attempted.

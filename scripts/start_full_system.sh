@@ -882,10 +882,10 @@ if [ "${BUILDEROPS_BOOTSTRAP:-1}" = "1" ]; then
   case "${builderops_bootstrap_environment:-}" in
     dev|prod)
       set_phase "builderops_bootstrap"
-      # BUILDEROPS_BOOTSTRAP_REPO, when set, is a space-separated owner/repo
-      # list (e.g. "RasmusTho/agentic-pkm-mvp RasmusTho/bifrost"). Left unset,
-      # builderops_startup.py falls back to its own multi-repo DEFAULT_REPOS
-      # — do not hardcode a single repo here, or that fallback never runs.
+      # BUILDEROPS_BOOTSTRAP_REPO, when set, is a space-separated list of
+      # additional owner/repo identities. The shared dispatcher configuration
+      # always includes its required defaults; do not turn this into a repo
+      # override or hardcode a single repository here.
       builderops_bootstrap_repo_args=()
       if [ -n "${BUILDEROPS_BOOTSTRAP_REPO:-}" ]; then
         for builderops_bootstrap_repo in ${BUILDEROPS_BOOTSTRAP_REPO}; do

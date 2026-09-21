@@ -532,6 +532,49 @@ def test_pull_skips_invalid_agent_ready_issue_without_queueing(
     assert "missing_required_sections" in " ".join(meta.get("skipped_notes", []))
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"labels": [{"name": "prio:high"}]},
+        {"number": "101"},
+        {"labels": {"agent:ready": True}},
+        {"labels": [{"name": "agent:ready"}, {"name": 7}]},
+    ],
+    ids=[
+        "ready-label-missing",
+        "issue-number-not-an-integer",
+        "labels-container-not-a-list",
+        "malformed-label-entry",
+    ],
+)
+def test_malformed_ready_result_cannot_clear_fences_or_reopen_terminal_task(
+    tmp_store: SqliteStore,
+    overrides: dict[str, Any],
+) -> None:
+    invalidation_at = "2026-04-24T00:00:00+00:00"
+    existing = normalize_github_issue(
+        SAMPLE_ISSUE_HIGH, REPO, now=invalidation_at
+    )
+    existing.status = "completed"
+    existing.sync_state = {
+        "ready_scan_invalidated_at": invalidation_at,
+        "terminal_state_protected_at": invalidation_at,
+    }
+    tmp_store.upsert_task(existing)
+
+    malformed_ready_result = {**SAMPLE_ISSUE_HIGH, **overrides}
+    source = _mock_source([malformed_ready_result], open_issues=[])
+    upserted = PullSyncAdapter(store=tmp_store, source=source).pull(REPO)
+
+    assert upserted == []
+    stored = tmp_store.get_task(_tid(101))
+    assert stored is not None and stored.sync_state is not None
+    assert stored.status == "completed"
+    assert "last_pull_at" not in stored.sync_state
+    assert stored.sync_state["ready_scan_invalidated_at"] == invalidation_at
+    assert stored.sync_state["terminal_state_protected_at"] == invalidation_at
+
+
 def test_pull_demotes_existing_invalid_agent_ready_when_snapshot_unavailable(
     tmp_store: SqliteStore,
 ) -> None:
@@ -596,7 +639,11 @@ def test_pull_blocks_unvalidated_agent_ready_from_open_snapshot(
 
 def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
     """PullSyncAdapter.pull upserts normalised tasks and records success meta."""
-    issues = [SAMPLE_ISSUE_HIGH, SAMPLE_ISSUE_LOW]
+    ready_low = {
+        **SAMPLE_ISSUE_LOW,
+        "labels": [{"name": "prio:low"}, {"name": "agent:ready"}],
+    }
+    issues = [SAMPLE_ISSUE_HIGH, ready_low]
     source = _mock_source(issues, rate_limit={"remaining": 4800, "reset": "2026-04-25T10:00:00Z"})
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
@@ -668,6 +715,149 @@ def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> No
     stored_ip = tmp_store.get_task(_tid(102))
     assert stored_ip is not None
     assert stored_ip.status == "in_progress", "pull-sync must not clobber in_progress status"
+
+
+@pytest.mark.parametrize("block_before_sync", [False, True], ids=["claimed", "blocked-with-lease"])
+def test_pull_preserves_claim_acquired_before_sync_upsert(
+    tmp_store: SqliteStore,
+    monkeypatch: pytest.MonkeyPatch,
+    block_before_sync: bool,
+) -> None:
+    """A stale ready snapshot must preserve a claim committed before its write."""
+    from app.dispatcher.leases import claim
+    from app.dispatcher.queue import block
+
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO)
+    tmp_store.upsert_task(task)
+    task_id = _tid(101)
+    original_upsert = tmp_store.upsert_synced_task
+    claim_created = False
+
+    def claim_before_sync_upsert(sync_task: Any, **kwargs: Any) -> Any:
+        nonlocal claim_created
+        if sync_task.task_id == task_id and not claim_created:
+            claim_created = True
+            claim(tmp_store, task_id, "racing-agent")
+            if block_before_sync:
+                block(tmp_store, task_id, "blocked while leased", "racing-agent")
+        return original_upsert(sync_task, **kwargs)
+
+    monkeypatch.setattr(tmp_store, "upsert_synced_task", claim_before_sync_upsert)
+    adapter = PullSyncAdapter(
+        store=tmp_store,
+        source=_mock_source([SAMPLE_ISSUE_HIGH]),
+    )
+
+    upserted = adapter.pull(REPO)
+
+    assert claim_created is True
+    expected_status = "blocked" if block_before_sync else "claimed"
+    assert upserted[0].status == expected_status
+    stored = tmp_store.get_task(task_id)
+    assert stored is not None
+    assert stored.status == expected_status
+    assert stored.claimed_by == "racing-agent"
+    assert stored.lease_id is not None
+    lease = tmp_store.get_lease(stored.lease_id)
+    assert lease is not None
+    assert lease.resource == "issue:101"
+    assert lease.released_at is None
+    with pytest.raises(ValueError, match="already has active lease"):
+        claim(tmp_store, task_id, "second-agent")
+
+
+@pytest.mark.parametrize(
+    "strict_invalid", [False, True], ids=["label-removed", "strict-readiness-invalid"]
+)
+def test_reconcile_does_not_emit_event_for_blocked_task_preserved_by_lease(
+    tmp_store: SqliteStore,
+    strict_invalid: bool,
+) -> None:
+    from app.dispatcher.leases import claim
+    from app.dispatcher.queue import block
+
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO)
+    task.status = "ready"
+    tmp_store.upsert_task(task)
+    task_id = _tid(101)
+    claim(tmp_store, task_id, "racing-agent")
+    block(tmp_store, task_id, "blocked while leased", "racing-agent")
+    blocked = tmp_store.get_task(task_id)
+    assert blocked is not None and blocked.lease_id is not None
+
+    if strict_invalid:
+        issue = {**SAMPLE_ISSUE_HIGH, "body": INVALID_READY_BODY}
+        source = _mock_source([issue], open_issues=[issue])
+    else:
+        open_issue = {
+            **SAMPLE_ISSUE_HIGH,
+            "labels": [{"name": "prio:high"}],
+        }
+        source = _mock_source([], open_issues=[open_issue])
+
+    PullSyncAdapter(store=tmp_store, source=source).pull(REPO)
+
+    stored = tmp_store.get_task(task_id)
+    assert stored is not None
+    assert stored.status == "blocked"
+    assert stored.blocked_reason == "blocked while leased"
+    assert stored.lease_id == blocked.lease_id
+    assert [
+        event
+        for event in tmp_store.list_events(task_id=task_id)
+        if event.event_type == "sync.reconciled"
+    ] == []
+
+
+def test_reconcile_does_not_log_transition_after_same_state_race(
+    tmp_store: SqliteStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.dispatcher.leases import claim
+    from app.dispatcher.queue import block
+
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO)
+    task.status = "ready"
+    tmp_store.upsert_task(task)
+    task_id = _tid(101)
+    invalid_issue = {**SAMPLE_ISSUE_HIGH, "body": INVALID_READY_BODY}
+    original_upsert = tmp_store.upsert_synced_task
+    raced = False
+
+    def block_before_reconcile_write(
+        sync_task: Any, **kwargs: Any
+    ) -> Any:
+        nonlocal raced
+        if sync_task.task_id == task_id and "expected_state" in kwargs and not raced:
+            raced = True
+            claim(tmp_store, task_id, "racing-agent")
+            block(
+                tmp_store,
+                task_id,
+                "agent:ready strict readiness validation failed",
+                "racing-agent",
+            )
+        return original_upsert(sync_task, **kwargs)
+
+    monkeypatch.setattr(
+        tmp_store, "upsert_synced_task", block_before_reconcile_write
+    )
+    PullSyncAdapter(
+        store=tmp_store,
+        source=_mock_source([invalid_issue], open_issues=[]),
+    ).pull(REPO)
+
+    assert raced is True
+    stored = tmp_store.get_task(task_id)
+    assert stored is not None
+    assert stored.status == "blocked"
+    assert stored.blocked_reason == "agent:ready strict readiness validation failed"
+    assert stored.lease_id is not None
+    assert [
+        event
+        for event in tmp_store.list_events(task_id=task_id)
+        if event.event_type == "sync.reconciled"
+    ] == []
 
 
 def test_pull_creates_new_task_from_github(tmp_store: SqliteStore) -> None:

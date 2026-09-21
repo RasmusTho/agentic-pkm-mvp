@@ -16,8 +16,16 @@ from pathlib import Path
 from typing import Any
 
 from app.builderops.config import DEFAULT_DB_NAME, default_state_dir, load_paths
+from app.dispatcher.repositories import (
+    DEFAULT_REPOS as DISPATCHER_DEFAULT_REPOS,
+    EXTRA_REPOS_ENV,
+    LEGACY_EXTRA_REPOS_ENV,
+    RepositoryConfigurationError,
+    configured_repositories,
+    normalize_repositories,
+)
 
-DEFAULT_REPOS = ("RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost")
+DEFAULT_REPOS = DISPATCHER_DEFAULT_REPOS
 DEFAULT_RATE_LIMIT_MIN = 25
 
 
@@ -350,7 +358,16 @@ def _merge_startup_status(path: Path, result: dict[str, Any]) -> None:
 def run_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).resolve()
     env = dict(os.environ)
-    repos = list(args.repo) if args.repo else list(DEFAULT_REPOS)
+    configuration_error: str | None = None
+    try:
+        repos = list(
+            normalize_repositories(
+                (*configured_repositories(env), *(args.repo or []))
+            )
+        )
+    except RepositoryConfigurationError as exc:
+        repos = []
+        configuration_error = str(exc)
     result: dict[str, Any] = {
         "ok": True,
         "status": "ok",
@@ -359,16 +376,25 @@ def run_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         "repos": repos,
     }
 
-    result["dispatcher"] = _dispatcher_bootstrap(
-        python_bin=sys.executable,
-        root=root,
-        repos=repos,
-        env=env,
-        gh_bin=args.gh_bin,
-        rate_limit_min=args.rate_limit_min,
-        skip_github_sync=args.skip_github_sync,
-        result=result,
-    )
+    if configuration_error is not None:
+        result["dispatcher"] = {
+            "status": "degraded",
+            "reason": "repository_configuration_invalid",
+            "detail": configuration_error,
+            "github_sync": {"status": "not_run"},
+        }
+        _append_reason(result, "repository_configuration_invalid")
+    else:
+        result["dispatcher"] = _dispatcher_bootstrap(
+            python_bin=sys.executable,
+            root=root,
+            repos=repos,
+            env=env,
+            gh_bin=args.gh_bin,
+            rate_limit_min=args.rate_limit_min,
+            skip_github_sync=args.skip_github_sync,
+            result=result,
+        )
     result["signboard"] = _signboard_export(
         python_bin=sys.executable,
         root=root,
@@ -399,8 +425,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help=(
-            "GitHub repo (owner/repo); may be repeated. "
-            f"Defaults to: {', '.join(DEFAULT_REPOS)}"
+            "Additional GitHub repo (owner/repo); may be repeated. Required "
+            f"defaults are always included. Configure persistent additions with "
+            f"{EXTRA_REPOS_ENV} (legacy alias: {LEGACY_EXTRA_REPOS_ENV})."
         ),
     )
     parser.add_argument("--root", default=str(Path.cwd()))

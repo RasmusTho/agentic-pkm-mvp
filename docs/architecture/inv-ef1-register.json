@@ -2443,6 +2443,13 @@
       "why_load_bearing": "The bounded qualification owner document distinguishes repository conformance for the public governed Bifrost constituent from unproved live acceptance, not a personal vault or secret.",
       "disposition": "stay",
       "issue": "#5405"
+    },
+    {
+      "artifact": "app/dispatcher/repositories.py",
+      "category": "iv",
+      "why_load_bearing": "The shared dispatcher defaults identify a public governed repository by owner/repository name, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5495"
     }
   ]
 }

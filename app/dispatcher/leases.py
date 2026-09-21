@@ -558,6 +558,14 @@ def release(
     task.last_heartbeat_at = None
     task.lease_expires_at = None
 
+    # The ready scan predates this lease and may predate the GitHub label
+    # transition to agent:in-progress. Keep an invalidation timestamp as well
+    # as clearing the scan evidence, so a pull already in flight cannot restore
+    # its older ready snapshot after this release commits.
+    task.sync_state = dict(task.sync_state or {})
+    task.sync_state.pop("last_pull_at", None)
+    task.sync_state["ready_scan_invalidated_at"] = now
+
     if task.blocked_reason is None:
         task.status = "ready"
     else:
@@ -629,9 +637,9 @@ def _reclaim_one(
 
     Returns the emitted ``task.released`` event on success, else ``None``.
     """
-    now = _utc_now()
     with store._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        now = _utc_now()
 
         task_row = conn.execute(
             "SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)
@@ -673,9 +681,28 @@ def _reclaim_one(
         if task_row["status"] in {"completed", "done", "failed"}:
             # A legacy/manual update can leave a terminal task lease-linked.
             # Clear that stale ownership without resurrecting terminal work.
+            # Fence snapshots captured before reclamation; only a later
+            # validated ready-list observation may reopen the task.
             next_status = task_row["status"]
+            sync_state = json.loads(task_row["sync_state"] or "{}")
+            if not isinstance(sync_state, dict):
+                sync_state = {}
+            sync_state.pop("last_pull_at", None)
+            sync_state["ready_scan_invalidated_at"] = now
+            sync_state["terminal_state_protected_at"] = now
+            sync_state_json = json.dumps(
+                sync_state, sort_keys=True, ensure_ascii=False
+            )
         else:
             next_status = "blocked" if task_row["blocked_reason"] is not None else "ready"
+            sync_state = json.loads(task_row["sync_state"] or "{}")
+            if not isinstance(sync_state, dict):
+                sync_state = {}
+            sync_state.pop("last_pull_at", None)
+            sync_state["ready_scan_invalidated_at"] = now
+            sync_state_json = json.dumps(
+                sync_state, sort_keys=True, ensure_ascii=False
+            )
         cleared = conn.execute(
             """
             UPDATE dispatcher_tasks
@@ -684,10 +711,11 @@ def _reclaim_one(
                 last_heartbeat_at = NULL,
                 lease_expires_at = NULL,
                 status = ?,
+                sync_state = ?,
                 updated_at = ?
             WHERE task_id = ? AND lease_id = ?
             """,
-            (next_status, now, task_id, lease_id),
+            (next_status, sync_state_json, now, task_id, lease_id),
         )
         if cleared.rowcount == 0:
             conn.rollback()

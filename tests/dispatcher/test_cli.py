@@ -44,6 +44,8 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DISPATCHER_EXTRA_GITHUB_REPOS", raising=False)
+    monkeypatch.delenv("BUILDEROPS_BOOTSTRAP_REPO", raising=False)
     return env
 
 
@@ -763,6 +765,95 @@ def test_status_command(tmp_env):
     assert data["singleton"]["state"] == "active"
 
 
+def test_status_reports_sync_age_and_repo_coverage(
+    tmp_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from app.dispatcher.repositories import (
+        DEFAULT_REPOS,
+        EXTRA_REPOS_ENV,
+        LEGACY_EXTRA_REPOS_ENV,
+    )
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    extra_repo = "RasmusTho/extra-builder"
+    configured_repos = [*DEFAULT_REPOS, extra_repo]
+    monkeypatch.delenv(LEGACY_EXTRA_REPOS_ENV, raising=False)
+    monkeypatch.setenv(EXTRA_REPOS_ENV, extra_repo)
+    _run(["init", "--json"])
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_issues.return_value = []
+    source.list_open_issues.return_value = []
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=source):
+        pull_code, pull_data = _run(["pull", "--configured-repos", "--json"])
+
+    assert pull_code == 0, pull_data
+    assert [call.args[0] for call in source.list_issues.call_args_list] == configured_repos
+
+    code, data = _run(["status", "--json"])
+
+    assert code == 0
+    assert data["configured_repositories"] == configured_repos
+    assert data["repository_configuration"]["state"] == "valid"
+    assert data["last_sync"]["age_seconds"] is not None
+    assert data["last_sync"]["age_seconds"] <= data["last_sync"][
+        "freshness_threshold_seconds"
+    ]
+    assert data["last_sync"]["fresh"] is True
+    coverage = data["repository_coverage"]
+    assert coverage["state"] == "fresh"
+    assert coverage["configured_repositories"] == configured_repos
+    assert coverage["fresh_repositories"] == configured_repos
+    assert coverage["ready_scan_complete"] is True
+    assert coverage["complete"] is True
+    assert set(coverage["age_seconds_by_repository"]) == set(configured_repos)
+
+
+def test_status_does_not_call_single_repository_pull_complete_coverage(
+    tmp_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from app.dispatcher.repositories import (
+        DEFAULT_REPOS,
+        EXTRA_REPOS_ENV,
+        LEGACY_EXTRA_REPOS_ENV,
+    )
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    monkeypatch.delenv(EXTRA_REPOS_ENV, raising=False)
+    monkeypatch.delenv(LEGACY_EXTRA_REPOS_ENV, raising=False)
+    _run(["init", "--json"])
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_issues.return_value = []
+    source.list_open_issues.return_value = []
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=source):
+        pull_code, pull_data = _run(["pull", "--repo", DEFAULT_REPOS[0], "--json"])
+
+    assert pull_code == 0, pull_data
+    assert pull_data["sync_result"] == "ok"
+    assert pull_data["repository_coverage"]["missing_repositories"] == [DEFAULT_REPOS[1]]
+
+    code, data = _run(["status", "--json"])
+
+    assert code == 0
+    assert data["last_sync"]["batch_fresh"] is True
+    assert data["last_sync"]["ready_scan_fresh"] is False
+    assert data["last_sync"]["fresh"] is False
+    assert data["repository_coverage"]["state"] == "incomplete"
+    assert data["repository_coverage"]["missing_repositories"] == [DEFAULT_REPOS[1]]
+    assert data["repository_coverage"]["complete"] is False
+
+
 def test_status_reports_missing_singleton_without_initializing(tmp_env):
     code, data = _run(["status", "--json"])
     assert code == 0
@@ -1003,9 +1094,10 @@ def test_pull_command_upserts_issues(tmp_env):
             "number": 102,
             "title": "Test issue 2",
             "state": "open",
-            "labels": [{"name": "prio:med"}],
+            "labels": [{"name": "prio:med"}, {"name": "agent:ready"}],
             "createdAt": "2026-04-20T10:00:00Z",
             "updatedAt": "2026-04-21T12:00:00Z",
+            "body": VALID_READY_BODY,
         },
     ]
     mock_source.get_rate_limit.return_value = {"remaining": 5000, "reset": "2026-04-25T10:00:00Z"}
@@ -1079,6 +1171,53 @@ def test_pull_command_multi_repo_aggregates_and_qualifies_ids(tmp_env):
     task_ids = {t["task_id"] for t in queue_data["tasks"]}
     assert "github-RasmusTho--agentic-pkm-mvp-issue-21" in task_ids
     assert "github-RasmusTho--bifrost-issue-21" in task_ids
+
+
+def test_pull_reports_zero_reconciled_after_later_repo_ready_scan_fails(
+    tmp_env,
+    store: SqliteStore,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from app.dispatcher.pull_batch import pull_repositories
+    from app.dispatcher.repositories import DEFAULT_REPOS
+    from app.dispatcher.sync_github import GitHubIssueSource, normalize_github_issue
+
+    first_repo, failed_repo = DEFAULT_REPOS
+    issue = {
+        "number": 21,
+        "title": "Previously ready issue",
+        "state": "open",
+        "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
+        "createdAt": "2026-04-20T10:00:00Z",
+        "updatedAt": "2026-04-21T12:00:00Z",
+        "body": VALID_READY_BODY,
+    }
+    store.upsert_task(
+        normalize_github_issue(issue, first_repo, now="2026-09-21T12:00:00+00:00")
+    )
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_open_issues.return_value = []
+
+    def list_issues(repository: str, **_kwargs: object) -> list[dict]:
+        if repository == first_repo:
+            return []
+        raise RuntimeError("ready issue read failed")
+
+    source.list_issues.side_effect = list_issues
+
+    result = pull_repositories(
+        store,
+        (first_repo, failed_repo),
+        configured_repositories=(first_repo, failed_repo),
+        source=source,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["repos"][first_repo]["reconciled"] == 1
+    assert result.payload["repos"][failed_repo]["reconciled"] == 0
 
 
 def test_pull_command_reports_sync_source_failure(tmp_env):
