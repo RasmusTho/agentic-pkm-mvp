@@ -704,6 +704,49 @@ control-lens source, state, coverage, deviation, interaction, and sequencing con
 `docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`. Both are target specifications; neither reference
 claims that the Builder System Control runtime or UI is delivered.
 
+### DEVUI-SHAPING-BOUNDARY — pre-subject shaping (proposed)
+
+This boundary is proposed, not accepted. No contract, route, code, or UI is delivered for it, and no
+other boundary in this document depends on it. It records a gap found by the 2026-09-21
+owner-experience design pass, whose novel scope passed the live Yggdrasil design-system gate, and the
+one candidate resolution that pass judged testable.
+
+The gap is that every delivered and specified owner surface begins at a stable subject. Focus admits
+exactly one stable Issue or capability reference. `ConversationContextPack.v1` carries a required
+`subject_ref` and is opened from a valid Focus subject; it is immutable once hashed and expires with
+its sources. The owner loop begins earlier, at an intent or need that has no subject yet. devUI
+therefore has no lawful place for the work of turning a need into something the rest of the chain can
+accept, and must not acquire one by creating a persistent intent store, a parallel intention type, a
+second task system, or a transcript store.
+
+The proposed resolution keeps every one of those prohibitions. A shaping surface is a transient
+composition over a proposed change to an existing owner document. Its durable form is that document
+and its normal review chain; devUI holds nothing and remembers nothing. A capability reference
+already becomes stable through its owning document, so no new identity kind is introduced.
+
+The surface presents fixed positions rather than free prose: the need, the affected product or
+factory context, the constraints that must hold, options with their consequences, known gaps,
+acceptance intent, and the proposed next step. Each position carries its origin — owner-written,
+source-cited, or model-proposed — and an origin changes only when that position's content changes.
+Acceptance intent is authored in the form the governing Issue will carry, because the delivered
+source-declared acceptance-criteria projection is the only admitted carrier into Focus.
+
+Leaving the surface is the only durable act, and it is the existing docs change, review, and merge
+chain. It creates no Issue, no delivery run, no mandate, and no owner acceptance. While required
+positions are missing the exit is unavailable and states why; an unavailable exit is a stated
+precondition, not an owner decision.
+
+Source state governs per position, never per page. A stale cited source withdraws only the positions
+resting on it and blocks an exit whose acceptance intent binds it, while a fresh sibling claim in the
+same position is unaffected. When model access is degraded, model-proposed positions are withdrawn
+rather than replayed, substituted, or fabricated, and owner-written and source-cited positions
+remain. The surface must stay usable for owner writing with no model available.
+
+Shaping is not Focus, not the Conversation Port, and not Builder System Control. It holds no subject,
+admits no command, and reaches no external effect, so it does not change the three connected owner
+views above. A later slice may hand a completed draft to those surfaces only through the stable
+reference its owning document creates.
+
 ### Visual composition hypothesis (pre-handoff)
 
 The following is a candidate composition brief for the governed Yggdrasil design handoff, not an
@@ -873,7 +916,8 @@ This remains delivered repository/proof truth, not production-deployed or owner-
 Not delivered now: request/preview/authenticated approval in one owner experience; complete PostgreSQL
 client-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
 provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
-Control route/UI and whole lens; managed DevUI production deployment; owner pilot and live
+Control route/UI and whole lens; the proposed pre-subject shaping surface, which has no accepted
+contract; managed DevUI production deployment; owner pilot and live
 candidate-bound owner trial/acceptance. The separate
 [outcome contract](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09)
 was defined by #5503 and its production writer/read transport implemented by #5404. Facts remain
