@@ -243,3 +243,112 @@ def test_pick_track_url_falls_back_to_first_when_no_preferred_ext():
         {"ext": "srt", "url": "https://example.com/manual.srt"},
     ]
     assert plugin._pick_track_url(tracks) == "https://example.com/manual.ttml"
+
+
+def test_region_tagged_language_selects_base_language_manual_track():
+    # yt-dlp reports the video language as a full BCP-47 tag ("en-US") while
+    # keying the caption tracks by base subtag ("en"). Exact-key matching
+    # misreads such a video as captionless (#5610).
+    info = _base_info(
+        language="en-US",
+        subtitles={"en": [{"ext": "vtt", "url": "https://example.com/manual-en.vtt"}]},
+        automatic_captions={},
+    )
+
+    selection = plugin.select_caption_track(info)
+
+    assert selection.available is True
+    assert selection.language == "en"
+    assert selection.acquisition_method == "captions_manual"
+    assert selection.track_url == "https://example.com/manual-en.vtt"
+
+
+def test_exact_language_tag_preferred_over_base_subtag():
+    # When the creator published a track under the exact reported tag, that
+    # track is the original one — the base-subtag track is the wider match and
+    # must only be used as the fallback.
+    info = _base_info(
+        language="pt-BR",
+        subtitles={
+            "pt": [{"ext": "vtt", "url": "https://example.com/manual-pt.vtt"}],
+            "pt-BR": [{"ext": "vtt", "url": "https://example.com/manual-pt-BR.vtt"}],
+        },
+        automatic_captions={},
+    )
+
+    selection = plugin.select_caption_track(info)
+
+    assert selection.available is True
+    assert selection.language == "pt-BR"
+    assert selection.track_url == "https://example.com/manual-pt-BR.vtt"
+
+
+def test_region_tagged_language_auto_pass_rejects_translated_tracks(monkeypatch):
+    # Normalizing the region subtag must widen the automatic pass to the
+    # video's own base language only — never to a machine-*translated* key
+    # (YOUTUBE_SOURCE_SPEC.md § Transcript acquisition, point 1).
+    info = _base_info(
+        language="en-US",
+        subtitles={},
+        automatic_captions={
+            "en": [{"ext": "vtt", "url": "https://example.com/auto-en.vtt"}],
+            "de": [{"ext": "vtt", "url": "https://example.com/auto-de-translated.vtt"}],
+            "sv": [{"ext": "vtt", "url": "https://example.com/auto-sv-translated.vtt"}],
+        },
+    )
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
+
+    requested_urls: list[str] = []
+
+    def fake_caption_body(url: str) -> str:
+        requested_urls.append(url)
+        return "WEBVTT\n\nHello auto world"
+
+    monkeypatch.setattr(plugin, "fetch_caption_body", fake_caption_body)
+
+    outcome = plugin.fetch(FAKE_URL)
+
+    assert outcome.acquisition_method == "captions_auto"
+    assert outcome.language == "en"
+    assert requested_urls == ["https://example.com/auto-en.vtt"]
+    for translated_url in (
+        "https://example.com/auto-de-translated.vtt",
+        "https://example.com/auto-sv-translated.vtt",
+    ):
+        assert translated_url not in requested_urls
+
+
+def test_fetch_region_tagged_language_uses_caption_path(monkeypatch):
+    # Enforcement: the fix must hold at the production call site
+    # (`fetch()` -> `select_caption_track`), not only in isolation. A
+    # region-tagged video with a manual track must never reach the ASR chain.
+    info = _base_info(
+        language="en-GB",
+        subtitles={"en": [{"ext": "vtt", "url": "https://example.com/manual-en.vtt"}]},
+        automatic_captions={},
+    )
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
+    monkeypatch.setattr(plugin, "fetch_caption_body", lambda url: "WEBVTT\n\nHello world")
+
+    selection_calls: list[str | None] = []
+    real_select = plugin.select_caption_track
+
+    def tracking_select(caption_info):
+        selection_calls.append(caption_info.get("language"))
+        return real_select(caption_info)
+
+    monkeypatch.setattr(plugin, "select_caption_track", tracking_select)
+
+    def forbidden_transcribe(*args, **kwargs):
+        raise AssertionError("ASR chain ran for a captioned video")
+
+    monkeypatch.setattr(plugin, "transcribe_source", forbidden_transcribe)
+
+    outcome = plugin.fetch(FAKE_URL)
+
+    # `select_caption_track` was reached from the production `fetch()` path.
+    assert selection_calls == ["en-GB"]
+    assert outcome.ok is True
+    assert outcome.acquisition_method == "captions_manual"
+    assert outcome.language == "en"
+    assert outcome.record["caption_body"] == "WEBVTT\n\nHello world"

@@ -124,6 +124,29 @@ class CaptionSelection:
     body: str | None = None
 
 
+def _language_tag_candidates(video_language: str) -> tuple[str, ...]:
+    """Ordered caption-track lookup keys for one reported video language.
+
+    yt-dlp reports the video language as a full BCP-47 tag (`en-US`) but keys
+    each caption track by whichever tag that track carries — most often the
+    bare base subtag (`en`). A plain exact-key lookup therefore misreads every
+    region-tagged video as captionless and pushes it onto the ASR fallback
+    (#5610).
+
+    Exactly two keys are tried, in this order: the reported tag, then its base
+    subtag. The exact tag wins whenever the creator published under it, so a
+    `pt-BR` video still prefers its `pt-BR` track over a wider `pt` one. The
+    search deliberately stops there — matching in the other direction (a base
+    language reaching every region-tagged key) would widen the *automatic*
+    pass toward machine-*translated* keys, which are banned from the chain
+    (YOUTUBE_SOURCE_SPEC.md § Transcript acquisition, point 1).
+    """
+    base = video_language.partition("-")[0]
+    if base and base != video_language:
+        return (video_language, base)
+    return (video_language,)
+
+
 def select_caption_track(
     info: dict[str, Any], *, original_languages: tuple[str, ...] = ("en", "sv")
 ) -> CaptionSelection:
@@ -139,10 +162,13 @@ def select_caption_track(
     Language selection (the "original language" resolution):
 
     - **Video language known** — that language is the *only* candidate, for both
-      the manual and the automatic pass. The `en`/`sv` defaults are NOT mixed in:
-      for e.g. a `de` video whose `automatic_captions` carry only auto-*translated*
-      `en`/`sv` entries, looking up those keys would request a translated track.
-      A known-language video with no track in its own language is captionless.
+      the manual and the automatic pass, matched through
+      :func:`_language_tag_candidates` so a region-tagged report (`en-US`)
+      still finds a track keyed by its base subtag (`en`). The `en`/`sv`
+      defaults are NOT mixed in: for e.g. a `de` video whose
+      `automatic_captions` carry only auto-*translated* `en`/`sv` entries,
+      looking up those keys would request a translated track. A
+      known-language video with no track in its own language is captionless.
       (A manual or auto track in the video's own language is accepted even when
       that language is outside `original_languages` — original-language-only
       refers to the video's language; wrong-language *rejection* is the
@@ -165,8 +191,8 @@ def select_caption_track(
     video_language = info.get("language")
 
     if video_language:
-        manual_candidates: tuple[str, ...] = (video_language,)
-        automatic_candidates: tuple[str, ...] = (video_language,)
+        manual_candidates: tuple[str, ...] = _language_tag_candidates(video_language)
+        automatic_candidates: tuple[str, ...] = manual_candidates
     else:
         manual_candidates = original_languages
         automatic_candidates = ()  # conservative: never guess at auto-caption keys
