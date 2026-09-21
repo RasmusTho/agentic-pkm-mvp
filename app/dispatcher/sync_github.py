@@ -863,6 +863,7 @@ class PullSyncAdapter:
         threshold, the expensive open-issues scan and stale reconcile are
         skipped. Essential read (agent:ready list) is always attempted.
         """
+        self.last_reconciled_count = 0
         import time as _time
         pull_at = datetime.now(timezone.utc).isoformat()
         rate_limit: dict[str, Any] | None = None

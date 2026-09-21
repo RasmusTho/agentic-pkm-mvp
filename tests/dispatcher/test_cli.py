@@ -1173,6 +1173,53 @@ def test_pull_command_multi_repo_aggregates_and_qualifies_ids(tmp_env):
     assert "github-RasmusTho--bifrost-issue-21" in task_ids
 
 
+def test_pull_reports_zero_reconciled_after_later_repo_ready_scan_fails(
+    tmp_env,
+    store: SqliteStore,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from app.dispatcher.pull_batch import pull_repositories
+    from app.dispatcher.repositories import DEFAULT_REPOS
+    from app.dispatcher.sync_github import GitHubIssueSource, normalize_github_issue
+
+    first_repo, failed_repo = DEFAULT_REPOS
+    issue = {
+        "number": 21,
+        "title": "Previously ready issue",
+        "state": "open",
+        "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
+        "createdAt": "2026-04-20T10:00:00Z",
+        "updatedAt": "2026-04-21T12:00:00Z",
+        "body": VALID_READY_BODY,
+    }
+    store.upsert_task(
+        normalize_github_issue(issue, first_repo, now="2026-09-21T12:00:00+00:00")
+    )
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_open_issues.return_value = []
+
+    def list_issues(repository: str, **_kwargs: object) -> list[dict]:
+        if repository == first_repo:
+            return []
+        raise RuntimeError("ready issue read failed")
+
+    source.list_issues.side_effect = list_issues
+
+    result = pull_repositories(
+        store,
+        (first_repo, failed_repo),
+        configured_repositories=(first_repo, failed_repo),
+        source=source,
+    )
+
+    assert result.exit_code == 1
+    assert result.payload["repos"][first_repo]["reconciled"] == 1
+    assert result.payload["repos"][failed_repo]["reconciled"] == 0
+
+
 def test_pull_command_reports_sync_source_failure(tmp_env):
     """pull command surfaces adapter-recorded source failures in its receipt."""
     from unittest.mock import MagicMock, patch

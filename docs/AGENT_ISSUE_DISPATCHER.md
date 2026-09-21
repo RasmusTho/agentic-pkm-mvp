@@ -738,6 +738,8 @@ The dispatcher pulls issue state from GitHub in a narrow, read-only adapter boun
 
 Pull-sync contract:
 - The adapter reads GitHub issue fields and normalises them into local `TaskRecord` rows.
+- Configured `owner/repository` identities are deduplicated case-insensitively while retaining the first spelling, so casing variants cannot create separate task and lease identities for one GitHub repository.
+- Per-repository reconciliation counts describe only transitions from that pull attempt; a failed ready-issue read reports zero reconciliations.
 - No write-back: the adapter never writes labels, comments, or status back to GitHub in the MVP.
 - GitHub Projects is not queried or mutated in the sync hot path.
 - Sync state (`last_pull_at`, `sync_result`, `sync_note`, rate-limit metadata) is recorded locally as a `_sync_meta:<provider>` task row.

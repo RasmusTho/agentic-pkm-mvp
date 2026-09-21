@@ -20,6 +20,7 @@ class RepositoryConfigurationError(ValueError):
 def normalize_repositories(repositories: Iterable[str]) -> tuple[str, ...]:
     """Validate and deduplicate explicit ``owner/repository`` identities."""
     normalized: list[str] = []
+    seen: set[str] = set()
     for value in repositories:
         if not isinstance(value, str):
             raise RepositoryConfigurationError("repository identity must be text")
@@ -28,7 +29,9 @@ def normalize_repositories(repositories: Iterable[str]) -> tuple[str, ...]:
             raise RepositoryConfigurationError(
                 f"invalid GitHub repository identity: {repository!r}"
             )
-        if repository not in normalized:
+        identity = repository.casefold()
+        if identity not in seen:
+            seen.add(identity)
             normalized.append(repository)
     return tuple(normalized)
 
