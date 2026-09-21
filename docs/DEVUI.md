@@ -704,12 +704,13 @@ control-lens source, state, coverage, deviation, interaction, and sequencing con
 `docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`. Both are target specifications; neither reference
 claims that the Builder System Control runtime or UI is delivered.
 
-### DEVUI-SHAPING-BOUNDARY — pre-subject shaping (proposed)
+### DEVUI-SHAPING-BOUNDARY — pre-subject shaping (gap open, resolution withdrawn)
 
-This boundary is proposed, not accepted. No contract, route, code, or UI is delivered for it, and no
-other boundary in this document depends on it. It records a gap found by the 2026-09-21
-owner-experience design pass, whose novel scope passed the live Yggdrasil design-system gate, and the
-one candidate resolution that pass judged testable.
+This boundary records an open gap and no accepted resolution. No contract, route, code, or UI is
+delivered for it, and no other boundary in this document depends on it. The gap was found by the
+2026-09-21 owner-experience design pass, whose novel scope passed the live Yggdrasil design-system
+gate. The one candidate resolution that pass judged testable was put to the owner at Gate 1 of #5606
+and **withdrawn on 2026-09-21 owner observation**. No child slice was filed and none is ready.
 
 The gap is that every delivered and specified owner surface begins at a stable subject. Focus admits
 exactly one stable Issue or capability reference. `ConversationContextPack.v1` carries a required
@@ -717,35 +718,41 @@ exactly one stable Issue or capability reference. `ConversationContextPack.v1` c
 its sources. The owner loop begins earlier, at an intent or need that has no subject yet. devUI
 therefore has no lawful place for the work of turning a need into something the rest of the chain can
 accept, and must not acquire one by creating a persistent intent store, a parallel intention type, a
-second task system, or a transcript store.
+second task system, or a transcript store. That prohibition is unchanged by the withdrawal and binds
+any successor.
 
-The proposed resolution keeps every one of those prohibitions. A shaping surface is a transient
-composition over a proposed change to an existing owner document. Its durable form is that document
-and its normal review chain; devUI holds nothing and remembers nothing. A capability reference
-already becomes stable through its owning document, so no new identity kind is introduced.
-
-The surface presents fixed positions rather than free prose: the need, the affected product or
+The withdrawn resolution proposed a surface of fixed positions — the need, the affected product or
 factory context, the constraints that must hold, options with their consequences, known gaps,
-acceptance intent, and the proposed next step. Each position carries its origin — owner-written,
-source-cited, or model-proposed — and an origin changes only when that position's content changes.
-Acceptance intent is authored in the form the governing Issue will carry, because the delivered
-source-declared acceptance-criteria projection is the only admitted carrier into Focus.
+acceptance intent, and the proposed next step — which the owner filled progressively, each position
+carrying an owner-written, source-cited, or model-proposed origin, and whose exit stayed unavailable
+until the owner had written the required positions. The owner rejected it as over-specified against a
+stated operating model in which an agent authors approximately 99% of the material and the human
+intervenes in approximately 1% of cases. Under that model owner authorship is the exception, so an
+exit gated on owner authorship stops being a safeguard and becomes a requirement that the owner
+perform the drafting by hand, and the cost the resolution already acknowledged — that shaping
+produces a document change — falls on the party least able to absorb it.
 
-Leaving the surface is the only durable act, and it is the existing docs change, review, and merge
-chain. It creates no Issue, no delivery run, no mandate, and no owner acceptance. While required
-positions are missing the exit is unavailable and states why; an unavailable exit is a stated
-precondition, not an owner decision.
+The withdrawal is of that resolution, not of everything it contained. Recorded as unresolved design
+input, admitted here as neither accepted contract nor shipped truth:
 
-Source state governs per position, never per page. A stale cited source withdraws only the positions
-resting on it and blocks an exit whose acceptance intent binds it, while a fresh sibling claim in the
-same position is unaffected. When model access is degraded, model-proposed positions are withdrawn
-rather than replayed, substituted, or fabricated, and owner-written and source-cited positions
-remain. The surface must stay usable for owner writing with no model available.
+- A transient composition whose durable form is an existing owner document and its normal review
+  chain remains the cheapest known exit, and it was not what the owner rejected. It is cheap
+  precisely when an agent, not the owner, produces the draft.
+- Per-claim source state is distinct from an authorship precondition. A stale cited source
+  withdrawing only the claims resting on it, and blocking an exit whose acceptance intent binds it,
+  is a correctness property that holds regardless of who authored the claim. An exit blocked because
+  the owner has not written enough is the authorship gate that was rejected.
+- Honest degradation is likewise independent: model-derived material is withdrawn rather than
+  replayed, substituted, or fabricated when model access fails.
+- Acceptance intent, wherever it is authored, must take the form the governing Issue will carry,
+  because the delivered source-declared acceptance-criteria projection is the only admitted carrier
+  into Focus.
 
-Shaping is not Focus, not the Conversation Port, and not Builder System Control. It holds no subject,
-admits no command, and reaches no external effect, so it does not change the three connected owner
-views above. A later slice may hand a completed draft to those surfaces only through the stable
-reference its owning document creates.
+No successor resolution is recorded here. Any successor must start from agent-authored drafting with
+rare owner intervention rather than owner-authored positions, must hold no subject, admit no command
+and reach no external effect, and must be put to owner observation before it is written into this
+document as a resolution. A later slice may hand a completed draft to Focus, the Conversation Port,
+or Builder System Control only through the stable reference its owning document creates.
 
 ### Visual composition hypothesis (pre-handoff)
 
@@ -916,8 +923,8 @@ This remains delivered repository/proof truth, not production-deployed or owner-
 Not delivered now: request/preview/authenticated approval in one owner experience; complete PostgreSQL
 client-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
 provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
-Control route/UI and whole lens; the proposed pre-subject shaping surface, which has no accepted
-contract; managed DevUI production deployment; owner pilot and live
+Control route/UI and whole lens; the pre-subject shaping surface, whose one candidate resolution was
+withdrawn at Gate 1 of #5606 and which has no accepted contract; managed DevUI production deployment; owner pilot and live
 candidate-bound owner trial/acceptance. The separate
 [outcome contract](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09)
 was defined by #5503 and its production writer/read transport implemented by #5404. Facts remain
