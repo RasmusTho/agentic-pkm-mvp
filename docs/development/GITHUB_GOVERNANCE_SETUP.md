@@ -133,6 +133,11 @@ Interpretation rule:
 - GitHub Project `Status` is an optional legacy projection of lifecycle state, not a pickup gate or source of truth.
 - GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project state when they disagree.
 - Agent labels qualify pickup or blocker state; they do not replace Issue/PR lifecycle truth.
+- Project #1 is the human-visible Kanban. BuilderOps dispatcher pickup uses the explicit repository
+  set in `DISPATCHER_EXTRA_GITHUB_REPOS` (with `BUILDEROPS_BOOTSTRAP_REPO` retained as a
+  compatibility input) plus the two required defaults; it does not discover repos from Project
+  membership or read Project fields as claim authority. Keep repo membership aligned through the
+  existing batched workflow at `scripts/reconcile_builderops_project_status.sh`.
 
 Required views:
 - `Kanban` grouped by `Status`

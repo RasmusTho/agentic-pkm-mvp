@@ -165,7 +165,7 @@ later canary/active routing requires a separately authorized child contract.
 - Do not leave blocked Issues in `In Progress`.
 - Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.
 - Treat dispatcher lease acquisition plus removal of `agent:ready` as the fast claim handshake.
-- In GitHub-label-only fallback, removal of `agent:ready` plus a durable claim-receipt comment naming agent, session, branch, and worktree is the shared one-owner signal.
+- In GitHub-label-only fallback, removal of `agent:ready` plus a durable claim-receipt comment records pickup intent; it provides no exclusive lease and assumes one active writer.
 
 Allowed labels: the canonical taxonomy in `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
@@ -289,13 +289,20 @@ relevant dispatcher tests. They cannot bypass the wrapper, its verified claim,
 or current stale-takeover semantics; when they conflict, preserve the material
 for diagnosis and follow the current contract instead.
 
-If dispatcher claim verification fails, the wrapper exits without changing the Issue label. If the
-lease was verified but label removal fails, it releases the lease before failing. The success receipt
+If exact-task refresh or dispatcher claim verification fails, the wrapper exits without a
+label-only retry or GitHub label mutation. After a verified lease, a readback exactly matching the
+original label set releases the lease; an exact match with the intended replacement completes the
+claim. Any other or unreadable label set retains the lease for recovery. The success receipt
 contains `task_id`, `lease_id`, `holder`, and `evidence=verified-dispatcher-lease`.
 
-When dispatcher status selects degraded mode, the same wrapper posts a durable claimant-intent
-comment containing agent, session, branch, worktree, `coordination_mode`, and `fallback_reason`
-before the same atomic `agent:*` → exactly `agent:in-progress` transition. Explicit fallback can be selected with:
+If a successful dispatcher status read confirms `db_exists=false`, or the status command exits
+nonzero as allowed by the builder-agent instructions, the same wrapper reads the exact GitHub Issue
+and requires the requested issue number, `state=open`, exactly one agent-state label
+(`agent:ready`), and strict readiness validation. It then posts a durable claimant-intent comment containing agent, session, branch,
+worktree, `coordination_mode`, and `fallback_reason`, and replaces the agent labels. This path has
+no exclusive lease or compare-and-swap and assumes one active writer; do not use it for concurrent
+pickup. A malformed successful response, inconsistent status fields, or an existing but unusable
+database fails closed. Explicit fallback can be selected with:
 
 ```bash
 scripts/issue_pickup_claim.sh \
@@ -306,6 +313,10 @@ scripts/issue_pickup_claim.sh \
   --coordination-mode github-label-only-fallback \
   --fallback-reason <reason>
 ```
+
+Explicit label-only fallback is refused if a successful status response shows the dispatcher
+database exists. A failed `pickup-refresh` while the dispatcher is available is a stop condition,
+not permission to bypass its lease state.
 
 Preserve the wrapper's receipt in the PR body. Do not reconstruct a dispatcher-backed receipt from
 `status --json`, database existence, or a separate label command.

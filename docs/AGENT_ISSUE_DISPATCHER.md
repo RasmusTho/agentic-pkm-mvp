@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-08-12
-Last verified against: #3603 BCP-05 migration branch, #3814, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py`, `app/dispatcher/verification_consumer.py`, `app/builderops/control_plane/{client,service,store}.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
+Last reviewed: 2026-09-21
+Last verified against: #5495 dispatcher freshness and configured-repository implementation, #3603 BCP-05 migration branch, #3814, `app/dispatcher/verification_api.py`, `app/dispatcher/verification_merge.py`, `app/dispatcher/verification_consumer.py`, `app/builderops/control_plane/{client,service,store}.py`, `AGENTS.md`, and `.codex/skills/verification-and-closure/SKILL.md`
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -22,7 +22,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 - Dispatcher runtime/storage foundation (#622), queue/lease lifecycle (#623), and agent-facing CLI (#624) are shipped.
 - GitHub pull-sync boundary (#625) is shipped: `app/dispatcher/sync_github.py` provides the `PullSyncAdapter`, `GhCliIssueSource`, and `normalize_github_issue` normalisation function.
-- Bootstrap-and-sync wiring (#637) is shipped: `python -m app.dispatcher pull --repo <owner/repo>` command, `make dispatcher-init` (init + pull), `make dispatcher-sync` (pull only), and missing-DB guard for CLI commands.
+- Bootstrap-and-sync wiring (#637) is shipped: `pull --repo` and `pull --configured-repos`, shared BuilderOps repository configuration, `make dispatcher-init` (init + pull), `make dispatcher-sync` (pull only), and missing-DB guard for CLI commands.
+- Fresh exact-task pickup (#5495) checks per-repository sync age and readiness before claim, refreshes the configured repo set once when evidence is missing or stale, and reports read-only sync age and coverage through `status`.
 - Complete command (#642) is shipped: `python -m app.dispatcher complete <task_id> --agent <agent_id>` marks tasks finished and releases leases cleanly.
 - Fallback policy (#639) is shipped: dispatcher loop, TTL, heartbeat cadence, and GitHub-label-only fallback are documented in `AGENTS.md` and `.codex/skills/issue-to-code/SKILL.md`.
 - Dispatcher cleanup in verification-and-closure (#662) is shipped: ensures leases are released when issues are merged, partially delivered, or abandoned.
@@ -31,7 +32,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 - Agents are now wired to use the dispatcher as the hot-path claim primitive (issue-to-code skill).
 - Dispatcher operates in shadow mode: agents call claim/heartbeat/complete while GitHub labels remain durable truth.
-- Fallback to GitHub-label-only claim is always available when dispatcher is unavailable.
+- GitHub-label-only fallback is available when status confirms the dispatcher database is absent or
+  the status command itself exits nonzero, as required by the builder-agent instructions. It is a
+  best-effort intent signal without an exclusive lease and assumes one active writer.
 - Three adoption receipts verified and logged on parent feature issue (#636).
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
@@ -656,11 +659,22 @@ Design boundary:
 
 Canonical loop:
 0. Run `scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>`.
-   The wrapper checks `status --json`, claims the exact repo-qualified `github-<owner>--<repo>-issue-<N>`
-   task (matching the id `dispatcher pull` assigns; pass `--task-id` to override) when dispatcher-backed,
-   verifies the active lease and holder, and only then removes `agent:ready`. Dispatcher database or
-   singleton existence is availability evidence, not claim evidence. In degraded mode the wrapper
-   posts a durable claimant-intent comment with identity and fallback reason before label removal.
+   The wrapper checks `status --json`, then asks `pickup-refresh` to validate the exact
+   repo-qualified `github-<owner>--<repo>-issue-<N>` task (matching the id `dispatcher pull` assigns;
+   pass `--task-id` to override). A fresh per-repository ready scan and exact-task observation are
+   required before the dispatcher claim. A missing or stale task triggers one pull of every
+   configured repository; the wrapper verifies the active lease and holder and only then removes
+   `agent:ready`. Dispatcher database or singleton existence is availability evidence, not claim
+   evidence. If refresh cannot prove the exact ready task while dispatcher-backed coordination is
+   available, pickup stops without falling back or changing GitHub. Explicit label-only mode is also
+   refused while a successful status read shows that the dispatcher database exists. A nonzero
+   status-command exit selects the governed label-only fallback; malformed successful output,
+   inconsistent mode/database fields, and an existing but unusable database fail closed. The wrapper
+   then reads the exact issue directly and requires matching issue number, open state, exactly one
+   agent-state label (`agent:ready`), and strict issue-readiness validation before posting its durable
+   claimant-intent comment and replacing labels. This degraded path has no exclusive lease or
+   compare-and-swap, so it is best effort and assumes one active writer; concurrent pickup must wait
+   for dispatcher recovery.
 1. `next`: optional queue discovery only; it does not replace exact-task pickup verification.
 2. `claim`: performed by the pickup wrapper for the exact task. Default TTL: **90 minutes**.
 3. `work`: execute issue scope locally.
@@ -675,7 +689,7 @@ Operational expectations:
 - Agents must not mutate lifecycle truth in dispatcher in ways that conflict with GitHub issue/PR truth.
 - Dispatcher outputs should be compact and actionable for CLI-driven agents.
 - Failure to heartbeat before expiry makes the claim recoverable by others after lease expiry processing.
-- Commands requiring a live DB (`next`, `claim`, `queue`, `pull`) exit 1 with `{"ok": false, "error": "dispatcher not initialised — run: make dispatcher-init"}` when the DB is missing.
+- Commands requiring a live DB (`next`, `claim`, `queue`, `pull`, `pickup-refresh`) exit 1 with `{"ok": false, "error": "dispatcher not initialised — run: make dispatcher-init"}` when the DB is missing.
 
 ## Dispatcher Singleton Preparation
 
@@ -723,12 +737,18 @@ Pull-sync contract:
 - GitHub Projects is not queried or mutated in the sync hot path.
 - Sync state (`last_pull_at`, `sync_result`, `sync_note`, rate-limit metadata) is recorded locally as a `_sync_meta:<provider>` task row.
 - Sync failures record an `error` state in sync metadata and leave all existing task rows untouched.
+- The shared repository configuration lives in `app/dispatcher/repositories.py`: the required
+  defaults are `RasmusTho/agentic-pkm-mvp` and `RasmusTho/bifrost`; comma-separated additions use
+  `DISPATCHER_EXTRA_GITHUB_REPOS`. The legacy space-separated `BUILDEROPS_BOOTSTRAP_REPO` remains
+  accepted as an additional input. Additions extend the defaults and cannot silently replace them.
+  Dispatcher CLI, BuilderOps startup, Make targets, pickup refresh, and status use this same set.
 
 Implementation surface:
 - `app/dispatcher/sync_github.py` — `GitHubIssueSource` protocol, `GhCliIssueSource` (concrete `gh`-CLI-backed implementation), `PullSyncAdapter`, `normalize_github_issue`, sync-state helpers.
 - `GitHubIssueSource` is a mockable protocol; the adapter never imports `requests`, `httpx`, or a GitHub SDK.
 - `GhCliIssueSource` uses the `gh` CLI to list open issues with `agent:ready` label; requires `gh` authentication at runtime but is fully mockable in tests.
-- `python -m app.dispatcher pull --repo <owner/repo> --json` is the shipped CLI command for pull sync.
+- `python -m app.dispatcher pull --repo <owner/repo> --json` is the shipped CLI command for pull sync;
+  `--configured-repos` uses the shared defaults and explicit additions.
   `--repo` may be repeated (`--repo owner/a --repo owner/b`) to pull multiple repos into the same
   dispatcher store in one call; each repo's issues upsert independently and aggregate into one JSON
   receipt under `repos`. Task IDs are repo-qualified (`github-<owner>--<repo>-issue-<n>`) so the same
@@ -736,10 +756,19 @@ Implementation surface:
   repo so pulling one repo cannot reconcile another repo's tasks. The id has exactly one
   implementation — `app/dispatcher/sync_github.py::github_issue_task_id` — and every consumer,
   including the pickup wrapper's default `TASK_ID`, derives through it rather than respelling the
-  format (INV-DG-2, #4440). `make dispatcher-init` and
-  `make dispatcher-sync` pull both `RasmusTho/agentic-pkm-mvp` and `RasmusTho/bifrost` (the two live
-  Yggdrasil-ecosystem repos with an active `agent:ready` backlog today); `app.ops.builderops_startup`
-  defaults to the same pair (`DEFAULT_REPOS`) when the full-stack launcher doesn't override `--repo`.
+  format (INV-DG-2, #4440). `make dispatcher-init`, `make dispatcher-sync`, and
+  `app.ops.builderops_startup` use the shared configured set. Startup `--repo` values extend that
+  set for the bootstrap invocation; persistent additions belong in the shared environment setting.
+- `python -m app.dispatcher pickup-refresh <task_id> --repo <owner/repo> --json` accepts an exact task
+  from a fresh successful or partial ready scan for its own repository when that scan is at most
+  900 seconds old and the task was observed in that scan as `ready`. Missing, stale, or mismatched
+  evidence triggers one pull across the configured set. The command returns `ready=true` only when
+  the target repository's ready read succeeded, the exact ID was returned, the local row matches
+  that repository, and the row remains unclaimed and ready after reconciliation. It makes no GitHub
+  writes and never uses Project status.
+- Each bounded pull records per-repository pull time, result, ready-scan availability, counts, and
+  note under `_sync_meta:github.repo_results`; aggregate status keeps partial, failed, missing, stale,
+  and unknown repository coverage distinct.
 - Tests in `tests/dispatcher/test_sync_github.py` use only mocked data; no live GitHub API access is required.
 
 ## Sync Failure Behavior
@@ -751,8 +780,13 @@ If the `GitHubIssueSource` raises during `list_issues`:
 4. Existing task rows in the store are unaffected.
 
 Observable signals:
-- Sync meta row (`_sync_meta:github`) carries `sync_result` and `sync_note` for last-attempt observability.
+- Sync meta row (`_sync_meta:github`) carries `sync_result`, `sync_note`, and the per-repository
+  batch receipt for last-attempt observability.
 - `get_sync_meta(store, provider)` returns the raw metadata dict for CLI or diagnostic use.
+- `python -m app.dispatcher status --json` is read-only and reports aggregate sync age, the
+  900-second freshness threshold, the configured repository set, per-repository ages, and ready-scan
+  coverage. Missing or legacy per-repository evidence is shown as unavailable rather than treated as
+  fresh.
 
 ## Kill-Switch Partial Sync (#4606)
 
@@ -766,13 +800,21 @@ suppresses the non-essential open-issues scan, the pull is truncated, not failed
   `lrn_20260730235456_f70f8ccc`).
 - `python -m app.dispatcher pull --json` keeps `ok=true`/exit 0 (not a hard source failure) but
   reports `sync_result=partial` and `kill_switch_active=true` top-level and per repo.
-- `python -m app.dispatcher status --json` exposes an additive read-only `last_sync` summary
-  (`last_pull_at`, `sync_result`, `sync_note`, `kill_switch_active`) so pickup tooling can
-  distinguish a complete sync from a truncated one without spending GitHub API calls.
-- Provider-wide partial-sync metadata is not task-specific absence evidence: the essential
-  `agent:ready` scan still ran. `scripts/issue_pickup_claim.sh` therefore keeps a missing-task claim
-  failure opaque and leaves `agent:ready` untouched instead of advertising a lease-bypassing
-  label-only rerun from the partial row alone.
+- `pull --json` reports a batch receipt, aggregate outcome, and coverage; `status --json` exposes the
+  same last-sync result plus freshness and per-repository coverage without spending GitHub API calls.
+- A `partial` result means the essential `agent:ready` read ran, even when the non-essential
+  open-issue scan was suppressed. It may prove a task present when that exact ID was returned, but a
+  provider-wide `partial` value alone never proves why a task is absent.
+- On dispatcher-backed pickup, `pickup-refresh` either accepts a recent exact ready observation or
+  performs one configured multi-repository pull. A failed target read, successful scan that omits
+  the task, task that is no longer ready, malformed evidence, or active lease causes refusal without
+  a GitHub read/write fallback. The label-only path is available only when status confirms the
+  dispatcher database is absent or the status command exits nonzero; it requires a fresh exact issue
+  read and strict readiness validation before posting its durable intent receipt. It has no exclusive
+  lease, so it assumes one active writer and is not safe for concurrent pickup.
+- If a GitHub label PUT returns an error, the wrapper compares the readback with the exact intended
+  and original label sets. An exact intended match is success; an exact original match releases the
+  dispatcher lease; any other or unreadable set retains the lease and reports an unknown outcome.
 
 ## Optional Future Projections
 
@@ -809,11 +851,18 @@ make dispatcher-init          # runs: python -m app.dispatcher init + pull
 python -m app.dispatcher status --json   # verify db_exists: true
 ```
 
-`make dispatcher-init` is the canonical first-time bootstrap: it initialises the schema and pulls open `agent:ready` issues from GitHub in one step. To re-sync issues without reinitialising:
+`make dispatcher-init` is the canonical first-time bootstrap: it initialises the schema and pulls open `agent:ready` issues from every configured repository in one step. To re-sync issues without reinitialising:
 
 ```bash
-make dispatcher-sync          # runs: python -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --repo RasmusTho/bifrost
+make dispatcher-sync          # runs: python -m app.dispatcher pull --configured-repos
 ```
+
+The required repository defaults are `RasmusTho/agentic-pkm-mvp` and `RasmusTho/bifrost`.
+`DISPATCHER_EXTRA_GITHUB_REPOS` adds comma-separated `owner/repo` identities across startup, sync,
+pickup, and status; it cannot remove either default. The existing whitespace-separated
+`BUILDEROPS_BOOTSTRAP_REPO` remains a compatibility input and also adds repositories. A startup
+`--repo` argument adds repositories for that one bootstrap invocation; use an environment setting
+for additions that must also appear in later pickup and status commands.
 
 ### Setup on each agent machine
 
@@ -866,7 +915,8 @@ GitHub Issues/PRs/CI remain durable delivery truth, dispatcher state remains a l
 surface, and GitHub Project remains an optional projection.
 
 GitHub Project v2 / GraphQL reconciliation stays out of dispatcher `next`, `claim`, `heartbeat`,
-and `complete`. Low-frequency/batched projection repair is exposed separately through
+and `complete`. GitHub Project #1 remains a human-facing projection; repository sync membership is
+explicitly configured and does not come from Project contents. Low-frequency/batched projection repair is exposed separately through
 `scripts/reconcile_builderops_project_status.sh`, which delegates to the existing project
 reconciliation helper.
 

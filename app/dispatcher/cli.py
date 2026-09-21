@@ -27,6 +27,13 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.darwin_containment import select_verification_containment
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import LeaseRecord, TaskRecord
+from app.dispatcher.pickup_refresh import last_sync_status, pickup_refresh_reason
+from app.dispatcher.pull_batch import pull_repositories
+from app.dispatcher.repositories import (
+    RepositoryConfigurationError,
+    configured_repositories as configured_github_repositories,
+    normalize_repositories,
+)
 from app.dispatcher.singleton import (
     DEFAULT_SINGLETON_TTL_SECONDS,
     DispatcherSingletonBusyError,
@@ -37,7 +44,6 @@ from app.dispatcher.store import SqliteStore
 from app.dispatcher.sync_github import (
     PROVIDER_IDENTITY,
     GhCliIssueSource,
-    PullSyncAdapter,
     get_sync_meta,
     get_sync_meta_readonly,
 )
@@ -45,6 +51,7 @@ from app.dispatcher.sync_github import (
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
+    "pickup-refresh",
     "cleanup-guard", "export-signboard", "signboard-validate", "backup", "mode",
 ])
 
@@ -448,6 +455,13 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     control_plane: dict[str, Any]
     fallback_reason: str | None = None
     last_sync: dict[str, Any] | None = None
+    repository_configuration: dict[str, Any]
+    try:
+        configured_repos = configured_github_repositories()
+        repository_configuration = {"state": "valid"}
+    except RepositoryConfigurationError as exc:
+        configured_repos = ()
+        repository_configuration = {"state": "invalid", "error": str(exc)}
     if status["db_exists"]:
         from app.dispatcher.control_plane import readonly_state
         try:
@@ -464,20 +478,45 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
         # GitHub API calls (#4606). Read-only: status is an observation
         # command and must not initialize or migrate the database.
         sync_meta = get_sync_meta_readonly(paths.db_path, PROVIDER_IDENTITY)
-        if sync_meta:
-            last_sync = {
-                "last_pull_at": sync_meta.get("last_pull_at"),
-                "sync_result": sync_meta.get("sync_result"),
-                "sync_note": sync_meta.get("sync_note"),
-                "kill_switch_active": bool(sync_meta.get("kill_switch_active")),
-            }
+        last_sync = last_sync_status(sync_meta, configured_repos)
     else:
         control_plane = {"mode": "unavailable", "revision": None}
+    repository_coverage = (
+        last_sync["repository_coverage"]
+        if last_sync is not None
+        else {
+            "state": "unavailable",
+            "configured_repositories": list(configured_repos),
+            "ready_scan_repositories": [],
+            "fresh_repositories": [],
+            "partial_repositories": [],
+            "failed_repositories": [],
+            "stale_repositories": [],
+            "missing_repositories": list(configured_repos),
+            "unknown_repositories": [],
+            "age_seconds_by_repository": {repo: None for repo in configured_repos},
+            "ready_scan_complete": False,
+            "complete": False,
+        }
+    )
+    if repository_configuration["state"] == "invalid":
+        repository_coverage = {
+            **repository_coverage,
+            "state": "unavailable",
+            "configuration_error": repository_configuration["error"],
+            "ready_scan_complete": False,
+            "complete": False,
+        }
+        if last_sync is not None:
+            last_sync = {**last_sync, "repository_coverage": repository_coverage}
     _emit({
         "ok": True,
         **status,
         "control_plane": control_plane,
         "last_sync": last_sync,
+        "configured_repositories": list(configured_repos),
+        "repository_configuration": repository_configuration,
+        "repository_coverage": repository_coverage,
         **_coordination_payload(
             bool(status["db_exists"]) and fallback_reason is None,
             fallback_reason=fallback_reason,
@@ -1100,97 +1139,132 @@ def _cmd_verification_cycle(
 
 
 def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
-    # With ``action="append"`` args.repo is a list; a single --repo X still
-    # arrives as a one-element list.
-    repos = args.repo
-    if not repos:
-        return _emit_error("--repo is required for pull command", args.json)
-
-    source = GhCliIssueSource()
-    adapter = PullSyncAdapter(store=store, source=source)
-
-    total_upserted = 0
-    total_reconciled = 0
-    per_repo: dict[str, dict[str, Any]] = {}
-    failures: list[str] = []
-    partials: list[str] = []
-    kill_switch_partial = False
-    last_sync_result: str | None = None
-    last_sync_note: str | None = None
     try:
-        for repo in repos:
-            upserted = adapter.pull(repo)
-            # Sync-meta is provider-scoped (shared across repos for one gh
-            # identity), so inspect it immediately after each pull — before the
-            # next iteration overwrites it — to attribute failures per repo.
-            sync_meta = get_sync_meta(store, PROVIDER_IDENTITY) or {}
-            reconciled = getattr(adapter, "last_reconciled_count", 0)
-            result = sync_meta.get("sync_result")
-            note = sync_meta.get("sync_note")
-            last_sync_result = result
-            last_sync_note = note
-            repo_entry: dict[str, Any] = {
-                "upserted": len(upserted),
-                "reconciled": reconciled,
-                "sync_result": result,
-            }
-            if result == "error":
-                repo_entry["sync_note"] = note or "dispatcher pull source failed"
-                failures.append(f"{repo}: {repo_entry['sync_note']}")
-            else:
-                # Partial is not a hard source failure (#4606): the essential
-                # ready read succeeded, so its upserts count — but the
-                # truncation must stay visible per repo and top-level.
-                if result == "partial":
-                    repo_entry["sync_note"] = note or "dispatcher pull partial sync"
-                    repo_entry["kill_switch_active"] = bool(
-                        sync_meta.get("kill_switch_active")
-                    )
-                    if repo_entry["kill_switch_active"]:
-                        kill_switch_partial = True
-                    partials.append(f"{repo}: {repo_entry['sync_note']}")
-                total_upserted += len(upserted)
-                total_reconciled += reconciled
-            per_repo[repo] = repo_entry
-    except Exception as exc:
-        return _emit_error(f"pull failed: {exc}", args.json)
+        configured_repos = configured_github_repositories()
+        if args.configured_repos:
+            repos = configured_repos
+        elif args.repo:
+            repos = normalize_repositories(args.repo)
+        else:
+            return _emit_error(
+                "--repo or --configured-repos is required for pull command", args.json
+            )
+        if not repos:
+            return _emit_error("configured GitHub repository set is empty", args.json)
+        result = pull_repositories(
+            store,
+            repos,
+            configured_repositories=configured_repos,
+            source=GhCliIssueSource(),
+        )
+    except RepositoryConfigurationError as exc:
+        return _emit_error(f"repository configuration invalid: {exc}", args.json)
+    _emit(result.payload, args.json)
+    return result.exit_code
 
-    if failures:
-        # sync_note is the joined per-repo failure list, not last_sync_note:
-        # in a mixed-outcome pull the last-processed repo can be a successful
-        # one, which would leave sync_note blank while ok=False/error names a
-        # real failure — the per-repo detail already lives in "repos".
+
+def _cmd_pickup_refresh(args: argparse.Namespace, store: SqliteStore) -> int:
+    """Ensure the exact task is freshly observed in its repo's ready set."""
+    try:
+        configured_repos = configured_github_repositories()
+    except RepositoryConfigurationError as exc:
         _emit({
             "ok": False,
-            "error": "pull failed: " + "; ".join(failures),
-            "upserted": total_upserted,
-            "reconciled": total_reconciled,
-            "skipped": 0,
-            "provider": "github",
-            "sync_result": "error",
-            "sync_note": "; ".join(failures),
-            "repos": per_repo,
+            "ready": False,
+            "action": "refuse",
+            "reason": "repository_configuration_invalid",
+            "detail": str(exc),
         }, args.json)
         return 1
 
-    payload: dict[str, Any] = {
-        "ok": True,
-        "upserted": total_upserted,
-        "reconciled": total_reconciled,
-        "skipped": 0,
-        "provider": "github",
-        "sync_result": last_sync_result,
-        "sync_note": last_sync_note,
-        "repos": per_repo,
-    }
-    if partials:
-        # In a mixed multi-repo pull the last-processed repo can be a complete
-        # one; the aggregate outcome must still read as partial (#4606).
-        payload["sync_result"] = "partial"
-        payload["sync_note"] = "; ".join(partials)
-        payload["kill_switch_active"] = kill_switch_partial
-    _emit(payload, args.json)
-    return 0
+    if args.repo not in configured_repos:
+        _emit({
+            "ok": False,
+            "ready": False,
+            "action": "refuse",
+            "reason": "repository_not_configured",
+            "repository": args.repo,
+        }, args.json)
+        return 1
+
+    sync_meta = get_sync_meta(store, PROVIDER_IDENTITY)
+    task = store.get_task(args.task_id)
+    refresh_reason = pickup_refresh_reason(task, sync_meta, args.repo)
+    if refresh_reason is None:
+        _emit({
+            "ok": True,
+            "ready": True,
+            "action": "claim",
+            "reason": "fresh_ready_observation",
+            "refreshed": False,
+            "task_id": args.task_id,
+            "repository": args.repo,
+        }, args.json)
+        return 0
+
+    try:
+        batch = pull_repositories(
+            store,
+            configured_repos,
+            configured_repositories=configured_repos,
+            source=GhCliIssueSource(),
+        )
+    except RepositoryConfigurationError as exc:
+        _emit({
+            "ok": False,
+            "ready": False,
+            "action": "refuse",
+            "reason": "repository_configuration_invalid",
+            "detail": str(exc),
+        }, args.json)
+        return 1
+
+    repo_result = batch.payload["repos"].get(args.repo)
+    refreshed_task = store.get_task(args.task_id)
+    observed_ready = args.task_id in batch.observed_ready_task_ids
+    task_pull_at = (
+        refreshed_task.sync_state.get("last_pull_at")
+        if refreshed_task is not None and isinstance(refreshed_task.sync_state, dict)
+        else None
+    )
+    target_read_succeeded = (
+        isinstance(repo_result, dict)
+        and isinstance(repo_result.get("sync_result"), str)
+        and repo_result.get("sync_result") in {"ok", "partial"}
+        and repo_result.get("ready_issue_scan") is True
+    )
+    ready = (
+        target_read_succeeded
+        and observed_ready
+        and refreshed_task is not None
+        and refreshed_task.repo == args.repo
+        and refreshed_task.status == "ready"
+        and task_pull_at == repo_result.get("last_pull_at")
+    )
+
+    if ready:
+        reason = "refreshed_and_observed_ready"
+    elif not target_read_succeeded:
+        reason = "target_repository_sync_failed"
+    elif not observed_ready:
+        reason = "task_not_in_observed_ready_set"
+    else:
+        reason = "task_not_ready_after_refresh"
+    _emit({
+        "ok": ready,
+        "ready": ready,
+        "action": "claim" if ready else "refuse",
+        "reason": reason,
+        "refresh_reason": refresh_reason,
+        "refreshed": True,
+        "observed_ready": observed_ready,
+        "task_id": args.task_id,
+        "repository": args.repo,
+        "repository_sync": repo_result,
+        "sync_result": batch.payload["sync_result"],
+        "repository_coverage": batch.payload["repository_coverage"],
+    }, args.json)
+    return 0 if ready else 1
 
 
 def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
@@ -1309,6 +1383,7 @@ _COMMAND_MAP = {
     "verification-status": _cmd_verification_status,
     "verification-cycle": _cmd_verification_cycle,
     "pull": _cmd_pull,
+    "pickup-refresh": _cmd_pickup_refresh,
     "export-signboard": _cmd_export_signboard,
     "signboard-validate": _cmd_signboard_validate,
     "health": _cmd_health,
@@ -1474,12 +1549,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
-    p.add_argument(
+    pull_repositories_group = p.add_mutually_exclusive_group()
+    pull_repositories_group.add_argument(
         "--repo",
-        required=True,
         action="append",
+        default=None,
         help="GitHub repo (owner/repo); may be repeated for multiple repos",
     )
+    pull_repositories_group.add_argument(
+        "--configured-repos",
+        action="store_true",
+        help="Use the canonical defaults plus DISPATCHER_EXTRA_GITHUB_REPOS",
+    )
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser(
+        "pickup-refresh",
+        help="Refresh configured GitHub repos once and verify an exact ready task",
+    )
+    p.add_argument("task_id", help="Repo-qualified dispatcher task identity")
+    p.add_argument("--repo", required=True, help="Task GitHub repository (owner/repo)")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser(

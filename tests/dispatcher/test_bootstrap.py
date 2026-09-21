@@ -27,6 +27,8 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DISPATCHER_EXTRA_GITHUB_REPOS", raising=False)
+    monkeypatch.delenv("BUILDEROPS_BOOTSTRAP_REPO", raising=False)
     return env
 
 

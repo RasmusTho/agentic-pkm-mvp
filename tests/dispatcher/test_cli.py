@@ -44,6 +44,8 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DISPATCHER_EXTRA_GITHUB_REPOS", raising=False)
+    monkeypatch.delenv("BUILDEROPS_BOOTSTRAP_REPO", raising=False)
     return env
 
 
@@ -761,6 +763,95 @@ def test_status_command(tmp_env):
     assert "db_path" in data
     assert "singleton" in data
     assert data["singleton"]["state"] == "active"
+
+
+def test_status_reports_sync_age_and_repo_coverage(
+    tmp_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from app.dispatcher.repositories import (
+        DEFAULT_REPOS,
+        EXTRA_REPOS_ENV,
+        LEGACY_EXTRA_REPOS_ENV,
+    )
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    extra_repo = "RasmusTho/extra-builder"
+    configured_repos = [*DEFAULT_REPOS, extra_repo]
+    monkeypatch.delenv(LEGACY_EXTRA_REPOS_ENV, raising=False)
+    monkeypatch.setenv(EXTRA_REPOS_ENV, extra_repo)
+    _run(["init", "--json"])
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_issues.return_value = []
+    source.list_open_issues.return_value = []
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=source):
+        pull_code, pull_data = _run(["pull", "--configured-repos", "--json"])
+
+    assert pull_code == 0, pull_data
+    assert [call.args[0] for call in source.list_issues.call_args_list] == configured_repos
+
+    code, data = _run(["status", "--json"])
+
+    assert code == 0
+    assert data["configured_repositories"] == configured_repos
+    assert data["repository_configuration"]["state"] == "valid"
+    assert data["last_sync"]["age_seconds"] is not None
+    assert data["last_sync"]["age_seconds"] <= data["last_sync"][
+        "freshness_threshold_seconds"
+    ]
+    assert data["last_sync"]["fresh"] is True
+    coverage = data["repository_coverage"]
+    assert coverage["state"] == "fresh"
+    assert coverage["configured_repositories"] == configured_repos
+    assert coverage["fresh_repositories"] == configured_repos
+    assert coverage["ready_scan_complete"] is True
+    assert coverage["complete"] is True
+    assert set(coverage["age_seconds_by_repository"]) == set(configured_repos)
+
+
+def test_status_does_not_call_single_repository_pull_complete_coverage(
+    tmp_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from app.dispatcher.repositories import (
+        DEFAULT_REPOS,
+        EXTRA_REPOS_ENV,
+        LEGACY_EXTRA_REPOS_ENV,
+    )
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    monkeypatch.delenv(EXTRA_REPOS_ENV, raising=False)
+    monkeypatch.delenv(LEGACY_EXTRA_REPOS_ENV, raising=False)
+    _run(["init", "--json"])
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+    source.list_issues.return_value = []
+    source.list_open_issues.return_value = []
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=source):
+        pull_code, pull_data = _run(["pull", "--repo", DEFAULT_REPOS[0], "--json"])
+
+    assert pull_code == 0, pull_data
+    assert pull_data["sync_result"] == "ok"
+    assert pull_data["repository_coverage"]["missing_repositories"] == [DEFAULT_REPOS[1]]
+
+    code, data = _run(["status", "--json"])
+
+    assert code == 0
+    assert data["last_sync"]["batch_fresh"] is True
+    assert data["last_sync"]["ready_scan_fresh"] is False
+    assert data["last_sync"]["fresh"] is False
+    assert data["repository_coverage"]["state"] == "incomplete"
+    assert data["repository_coverage"]["missing_repositories"] == [DEFAULT_REPOS[1]]
+    assert data["repository_coverage"]["complete"] is False
 
 
 def test_status_reports_missing_singleton_without_initializing(tmp_env):

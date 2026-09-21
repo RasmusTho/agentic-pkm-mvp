@@ -487,6 +487,25 @@ def record_sync_failure(
     _write_sync_meta(store, provider, sync_state, pull_at)
 
 
+def record_sync_batch_summary(
+    store: DispatcherStore,
+    provider: str,
+    pull_at: str,
+    *,
+    sync_result: str,
+    sync_note: str | None,
+    extra: dict[str, Any],
+) -> None:
+    """Persist the per-repository result of one bounded multi-repo pull."""
+    sync_state = SyncState(
+        last_pull_at=pull_at,
+        sync_result=sync_result,
+        sync_note=sync_note,
+        extra=dict(extra),
+    )
+    _write_sync_meta(store, provider, sync_state, pull_at)
+
+
 def _write_sync_meta(
     store: DispatcherStore,
     provider: str,

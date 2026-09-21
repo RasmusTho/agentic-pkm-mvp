@@ -84,6 +84,7 @@ def test_issue_pickup_records_dispatcher_or_fallback_mode() -> None:
     assert "github-label-only-fallback" in skill
     assert "coordination_mode=$RECEIPT_COORDINATION_MODE" in script
     assert "fallback_reason=$RECEIPT_FALLBACK_REASON" in script
+    assert 'pickup-refresh "$TASK_ID" --repo "$REPO"' in script
 
 
 def test_issue_pickup_receipt_requires_real_claim_evidence() -> None:
@@ -97,6 +98,9 @@ def test_issue_pickup_receipt_requires_real_claim_evidence() -> None:
         "--agent <agent_id>"
     ) in skill
     assert "python -m app.dispatcher claim <task_id>" not in skill
+    assert script.index("pickup-refresh \"$TASK_ID\"") < script.index(
+        'claim "$TASK_ID" --agent "$AGENT_ID"'
+    )
     assert "lease_id=$RECEIPT_LEASE_ID" in script
     assert "holder=$RECEIPT_HOLDER" in script
     assert "evidence=verified-dispatcher-lease" in script
