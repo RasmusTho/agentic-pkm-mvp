@@ -30,15 +30,16 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
    - computes per-source `next_due` from `last_attempt_at` + effective interval (priority sources
      first), honoring per-source backoff state after failures (contract §Retry and backoff);
    - runs due discovery polls (YSS-05 `poll_source`) within a per-tick time budget;
-   - drains the request queue through a bounded in-process executor
-     (`youtubeSync.maxConcurrentAcquisitions`, default 2) so slow egress (ASR fallback) never
-     blocks the tick; the executor is fed/reaped per tick, never unbounded;
+   - **does not drain.** Narrowed 2026-09-22 (#3921): acquisition egress cannot run inside the
+     watcher cycle, which holds a shared ingress flock, so a multi-minute download there stalls
+     vault watching and blocks a foreground rebind. Draining stays the operator-invoked
+     `youtube-inbox-dev drain` command (#5613); a bounded background drain is its own slice;
    - global pause and per-source pause (registry `enabled=false`) short-circuit with
      `paused_global`/`paused_source` reasons;
    - **safe shutdown:** in-flight drains finish or are abandoned to durable retryable state; no
      new work is claimed after stop is requested.
-3. **Single-run lease (INV-YSS-6):** a durable lease row (key `lease:youtube_sync`, TTL 10 min,
-   heartbeat each tick) in a generic sync-state table (the `episode_engine_state` key/value
+3. **Single-run lease (INV-YSS-6):** a durable lease row (key `lease:youtube_sync`, TTL 10 min;
+   no heartbeat is needed now that the tick holds it only for bounded, timeout-capped polling) in a generic sync-state table (the `episode_engine_state` key/value
    pattern; forward-only migration). The watcher sub-tick and any CLI-invoked run claim the same
    lease; a live lease blocks overlap, a stale lease is taken over after expiry. "Sync now"
    (CLI/UI) performs one lease-guarded immediate attempt regardless of backoff.
@@ -87,12 +88,15 @@ The lease, the budgeted tick, and derived staleness kill those classes.
 - [ ] Failure backoff is exponential with cap and reason-coded; manual "Sync now" performs one
       immediate lease-guarded attempt without resetting backoff on failure.
       Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_backoff_and_manual_sync_now`
-- [ ] Global pause and per-source pause stop polling with the correct reason codes and stop
-      claiming new drains; in-flight work lands durably (safe shutdown).
-      Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_pause_and_safe_shutdown_semantics`
-- [ ] Drain concurrency never exceeds `maxConcurrentAcquisitions`, and a slow drain does not
-      delay the next discovery tick beyond its budget.
-      Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_bounded_concurrency_and_tick_budget`
+- [ ] Global pause and per-source pause stop polling with the correct reason codes, and a paused
+      runner does not touch the lease.
+      Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_pause_semantics`
+- [ ] The tick performs discovery only and never acquisition, so it cannot block the watcher cycle
+      on external media egress.
+      Verify: `tests/knowledge_acquisition/test_youtube_sync_scheduler.py::test_tick_never_performs_acquisition`
+- [ ] The durable state store reads its own rows against real Postgres, so a row-shape mistake
+      cannot leave the whole capability inert behind a memory-backed test suite.
+      Verify: `tests/knowledge_acquisition/test_youtube_sync_state_pg.py::test_pg_state_store_reads_its_own_rows`
 - [ ] The watcher sub-tick wiring is exception-isolated and both-flags-gated (no egress, no lease
       churn when disabled) — asserted at the registry-loop production call site.
       Verify: `tests/watcher/test_registry_youtube_sync_tick.py::test_sub_tick_gated_and_exception_isolated`

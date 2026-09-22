@@ -48,6 +48,21 @@ def _utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def _column(row: Any, name: str) -> Any:
+    """Read one column from a row whose factory may be dict or tuple shaped.
+
+    ``app.db.db.conn_rw`` binds ``row_factory=dict_row``, so ``fetchone()``
+    returns a mapping keyed by column name -- while the sibling KA stores use
+    their own tuple-row connection. Indexing a dict row positionally raises
+    ``KeyError(0)`` with the table fully present, which is exactly the failure
+    an earlier revision of this module shipped: every tick died in the schema
+    preflight and surfaced only as ``error: \"0\"``. Both shapes are handled
+    here, the same way ``app/episodes/engine_state.py`` and ``app/db/db.py``
+    already do.
+    """
+    return row[name] if isinstance(row, dict) else row[0]
+
+
 class MemorySyncStateStore:
     """Volatile store for the ``not_pg`` lane and in-process tests."""
 
@@ -118,9 +133,11 @@ class PostgresSyncStateStore:
         from app.db.db import conn_rw
 
         with conn_rw() as conn, conn.cursor() as cur:
-            cur.execute("SELECT to_regclass(%s)", (f"public.{TABLE_NAME}",))
+            cur.execute(
+                "SELECT to_regclass(%s) AS present", (f"public.{TABLE_NAME}",)
+            )
             row = cur.fetchone()
-            if not row or row[0] is None:
+            if not row or _column(row, "present") is None:
                 raise SyncStateSchemaMissingError(_MIGRATION_HINT)
 
     def acquire_lease(
@@ -191,9 +208,11 @@ class PostgresSyncStateStore:
         with conn_rw() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT value FROM {TABLE_NAME} WHERE key = %s", (key,))
             row = cur.fetchone()
-        if not row or row[0] is None:
+        if not row:
             return None
-        value = row[0]
+        value = _column(row, "value")
+        if value is None:
+            return None
         return value if isinstance(value, dict) else json.loads(value)
 
     def set(self, key: str, value: Mapping[str, Any]) -> None:

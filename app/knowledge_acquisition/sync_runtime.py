@@ -116,11 +116,14 @@ def run_scheduled_sync_tick(
             registry=SourceRegistry.for_runtime(),
             requests=AcquisitionRequests.for_runtime(),
             state=state_for_runtime(),
-            vault_context=vault_context,
             api_client=api_client,
             clock=(lambda: now) if now is not None else None,
-            # No holder is passed: `default_holder()` derives one per process,
-            # because a shared constant here silently voids the lease.
+            # No holder is passed, because a shared constant silently voids the
+            # lease. `default_holder()` derives one per *instance*, and this
+            # function builds a fresh instance every tick, so a runner does not
+            # reclaim its own lease after a hard kill -- it waits out the TTL.
+            # That is the behaviour a TTL exists for, but it is not the same as
+            # a stable per-process identity, so do not read it as one.
             reconciled=_RECONCILED,
         )
 

@@ -1,13 +1,13 @@
-"""YSS-06 (#3921): per-source scheduling, lease, pause and drain for source sync.
+"""YSS-06 (#3921): per-source discovery scheduling, lease and pause for source sync.
 
 Implements `docs/YOUTUBE_SOURCE_SYNC/SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md`.
 This module is the *when*: it decides which sources are due, bounds how much
-acquisition runs per tick, and keeps two runners from doing the same work. The
-*what* already exists and is not reimplemented here — discovery is YSS-05's
-``poll_source`` and each queue row runs through YSS-04's ``drain_one``.
+often it polls them, and keeps two runners from doing the same work. The *what*
+already exists and is not reimplemented here: discovery is YSS-05's
+``poll_source``, and the queue it fills is drained elsewhere.
 
 Deliberately pure logic with injected collaborators (clock, registry, queue,
-state store, poll/drain callables). The tick is driven by the existing watcher
+state store, poll callable). The tick is driven by the existing watcher
 registry loop rather than a new long-running process, so everything here must
 be callable synchronously from that loop and must never raise into it.
 
@@ -72,13 +72,14 @@ NON_FAILURE_REASON_CODES: frozenset[str] = frozenset(
     {"paused_source", "policy_unsupported", "not_modified"}
 )
 
-#: How long a tick may spend before it stops starting new work. The tick runs
-#: inside the shared watcher loop, so the budget is what keeps file watching
-#: responsive while an acquisition is slow.
+#: How long a tick may spend starting new polls. The tick runs inside the
+#: shared watcher loop, so the budget bounds how much of that cycle one sync
+#: pass can consume when many sources come due at once.
 DEFAULT_TICK_BUDGET_SECONDS = 30.0
 
 #: Lease identity and lifetime (INV-YSS-6). The TTL outlives a normal tick by a
-#: wide margin so an ordinary slow drain never looks abandoned.
+#: wide margin: every poll is timeout-bounded, so a live runner never looks
+#: abandoned and no heartbeat is needed to keep it alive.
 LEASE_KEY = "lease:youtube_sync"
 LEASE_TTL_SECONDS = 600
 
@@ -196,7 +197,6 @@ class SyncScheduler:
         registry: Any,
         requests: Any,
         state: SyncStateStore,
-        vault_context: Any,
         api_client: Any = None,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -209,7 +209,6 @@ class SyncScheduler:
         self._registry = registry
         self._requests = requests
         self._state = state
-        self._vault_context = vault_context
         self._api_client = api_client
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._monotonic = monotonic
@@ -230,7 +229,7 @@ class SyncScheduler:
     # -- public entrypoints ---------------------------------------------------
 
     def tick(self) -> TickOutcome:
-        """One scheduled pass: poll what is due, then drain within budget."""
+        """One scheduled pass: poll every source that is due, within budget."""
         if self._paused():
             # Deliberately before the lease: a paused runner must not churn the
             # lease, or it would keep taking it away from an unpaused one.
