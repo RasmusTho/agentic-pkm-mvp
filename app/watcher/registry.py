@@ -77,6 +77,9 @@ DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
 
 MIN_TICK_SLEEP_SECONDS = 0.05
 BRIEFING_TICK_INTERVAL_SECONDS = 15 * 60
+# YSS-06 (#3921). The sub-tick fires often; per-source due-times decide the
+# actual polls, so this is a ceiling on scheduler wake-ups, not a poll rate.
+YOUTUBE_SYNC_TICK_INTERVAL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -795,6 +798,25 @@ class BriefingTickCadence:
             return False
         # Claim before composition so a failed write cannot create a tight
         # watcher retry loop. The dated note remains the idempotency truth.
+        self.last_attempt_at = now
+        return True
+
+
+@dataclass
+class SyncTickCadence:
+    """Sparse cadence for the YouTube sync sub-tick (YSS-06, #3921)."""
+
+    last_attempt_at: float | None = None
+    interval_seconds: float = YOUTUBE_SYNC_TICK_INTERVAL_SECONDS
+
+    def claim_if_due(self, *, now: float) -> bool:
+        if (
+            self.last_attempt_at is not None
+            and now - self.last_attempt_at < self.interval_seconds
+        ):
+            return False
+        # Claim before the run, exactly as the briefing cadence does: a failing
+        # scheduler must not turn into a tight retry loop inside the watcher.
         self.last_attempt_at = now
         return True
 
@@ -2496,8 +2518,11 @@ def _run_registry_cycle(
     now: float,
     briefing_cadence: BriefingTickCadence,
     process_panel_notes_inline: bool,
+    sync_cadence: SyncTickCadence | None = None,
 ) -> dict[str, dict[str, object]]:
     """Run one complete compatibility-aware watcher cycle under the ingress fence."""
+
+    sync_cadence = sync_cadence if sync_cadence is not None else SyncTickCadence()
 
     with _compatibility_watcher_window(reconciler):
         _adopt_idle_selected_binding(cfg, reconciler)
@@ -2533,6 +2558,11 @@ def _run_registry_cycle(
             cfg,
             now=now,
             cadence=briefing_cadence,
+        )
+        summaries["youtube_sync"] = _run_youtube_sync_tick(
+            cfg,
+            now=now,
+            cadence=sync_cadence,
         )
         summaries["journal_review"] = _run_journal_review_tick(cfg)
         if reconciler is not None and rebind_cycle is not None:
@@ -2625,6 +2655,7 @@ def run_registry_forever(
     }
     tick_limit = max_ticks if max_ticks is not None and max_ticks > 0 else None
     briefing_cadence = BriefingTickCadence()
+    sync_cadence = SyncTickCadence()
 
     tick = 0
     while True:
@@ -2636,6 +2667,7 @@ def run_registry_forever(
             now=now,
             briefing_cadence=briefing_cadence,
             process_panel_notes_inline=False,
+            sync_cadence=sync_cadence,
         )
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
@@ -2707,6 +2739,47 @@ def _run_briefing_tick(
         return {"triggered": False, "reason": "generation_failed", "error": str(exc)}
 
 
+def _run_youtube_sync_tick(
+    cfg: RegistryConfig,
+    *,
+    now: float,
+    cadence: SyncTickCadence,
+) -> dict[str, object]:
+    """Run the sparse YouTube source-sync hook once per registry cycle (YSS-06).
+
+    Gated by BOTH `youtubeSync.enabled` (vault-shared intent) and
+    `youtubeSync.runnerEnabled` (vault-local machine binding): two machines
+    sharing a vault must not both poll, so intent alone is never enough. Both
+    false means zero work and zero egress — the gates are checked before the
+    scheduler is even constructed, so a disabled runner never touches the lease.
+
+    Exception-isolated like the relevance tick: a sync failure can never break
+    vault watching, which is the tick host's actual job.
+    """
+
+    if not cfg.enable:
+        return {"triggered": False, "reason": "watcher_disabled"}
+    if cfg.stop_file.exists():
+        return {"triggered": False, "reason": "watcher_paused"}
+    if not cadence.claim_if_due(now=now):
+        return {"triggered": False, "reason": "cadence_not_due"}
+    try:
+        context = VaultManager().validate_vault(cfg.vault_path)
+        if context.status != "selected" or not context.active_vault_path:
+            return {"triggered": False, "reason": "vault_not_selected"}
+
+        from app.knowledge_acquisition.sync_runtime import run_scheduled_sync_tick
+
+        outcome = run_scheduled_sync_tick(
+            vault_context=context,
+            now=datetime.fromtimestamp(now, tz=timezone.utc),
+        )
+        return {"triggered": outcome.reason == "ran", **outcome.as_dict()}
+    except Exception as exc:
+        logger.exception("youtube source sync tick failed")
+        return {"triggered": False, "reason": "sync_failed", "error": str(exc)}
+
+
 def _run_journal_review_tick(cfg: RegistryConfig) -> dict[str, object]:
     """Advance durable checked journal intent on every production watcher cycle."""
 
@@ -2750,6 +2823,7 @@ def _run_journal_review_tick(cfg: RegistryConfig) -> dict[str, object]:
 __all__ = [
     "WatcherSpec",
     "BriefingTickCadence",
+    "SyncTickCadence",
     "RegistryConfig",
     "load_registry_config",
     "run_registry_once",

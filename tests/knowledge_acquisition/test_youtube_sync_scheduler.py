@@ -1,0 +1,396 @@
+"""YSS-06 (#3921) tests for per-source scheduling, lease, backoff and drain.
+
+Everything is driven through the production ``SyncScheduler`` with an injected
+clock and in-memory collaborators: no real egress, no database, no sleeping.
+The lease uses the real ``MemorySyncStateStore``, so the exclusion assertions
+exercise genuine lease semantics rather than a bespoke test double.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import pytest
+
+from app.knowledge_acquisition.sync_scheduler import (
+    BACKOFF_CAP_SECONDS,
+    DEFAULT_CADENCE_SECONDS,
+    LEASE_KEY,
+    LEASE_TTL_SECONDS,
+    SyncScheduler,
+    backoff_delay_seconds,
+    resolve_cadence_seconds,
+)
+from app.knowledge_acquisition.sync_state import MemorySyncStateStore
+
+pytestmark = pytest.mark.not_pg
+
+START = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@dataclass
+class _Clock:
+    now: datetime = START
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now = self.now + timedelta(seconds=seconds)
+
+
+@dataclass
+class _Binding:
+    binding_id: str
+    collection_kind: str = "inbox_playlist"
+    enabled: bool = True
+    poll_interval_seconds: int = 180
+    last_attempt_at: str | None = None
+
+
+@dataclass
+class _Registry:
+    rows: list[_Binding] = field(default_factory=list)
+
+    def list_all(self) -> tuple[_Binding, ...]:
+        return tuple(self.rows)
+
+    def mark_attempted(self, binding_id: str, at: datetime) -> None:
+        self.rows = [
+            replace(row, last_attempt_at=at.isoformat()) if row.binding_id == binding_id else row
+            for row in self.rows
+        ]
+
+
+@dataclass
+class _Row:
+    request_id: str
+    status: str = "in_progress"
+
+
+class _Queue:
+    """Stands in for AcquisitionRequests: hands out one claimed row per call."""
+
+    def __init__(self, rows: list[_Row] | None = None) -> None:
+        self.pending = list(rows or [])
+        self.claims = 0
+        self.stale_resets = 0
+        self._lock = threading.Lock()
+
+    def claim_batch(self, limit: int, **kwargs: Any) -> list[_Row]:
+        with self._lock:
+            self.claims += 1
+            if not self.pending:
+                return []
+            return [self.pending.pop(0)]
+
+    def reset_stale_in_progress(self, **kwargs: Any) -> int:
+        self.stale_resets += 1
+        return 0
+
+
+@dataclass
+class _PollResult:
+    discovered: int = 0
+    enqueued: int = 0
+    deduped: int = 0
+    reason_code: str | None = None
+
+
+def _make(
+    *,
+    registry: _Registry,
+    queue: _Queue | None = None,
+    state: MemorySyncStateStore | None = None,
+    clock: _Clock | None = None,
+    poll_fn: Any = None,
+    drain_fn: Any = None,
+    holder: str = "watcher",
+    **kwargs: Any,
+) -> tuple[SyncScheduler, _Clock, MemorySyncStateStore, _Queue]:
+    clock = clock or _Clock()
+    state = state or MemorySyncStateStore()
+    queue = queue if queue is not None else _Queue()
+    sched = SyncScheduler(
+        registry=registry,
+        requests=queue,
+        state=state,
+        vault_context=object(),
+        clock=clock,
+        poll_fn=poll_fn or (lambda binding, **kw: _PollResult()),
+        drain_fn=drain_fn or (lambda row, **kw: replace(row, status="completed")),
+        holder=holder,
+        **kwargs,
+    )
+    return sched, clock, state, queue
+
+
+def test_inbox_poll_discovers_and_enqueues_within_interval() -> None:
+    registry = _Registry([_Binding("inbox", last_attempt_at=START.isoformat())])
+    polled: list[str] = []
+
+    def poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        polled.append(binding.binding_id)
+        registry.mark_attempted(binding.binding_id, clock.now)
+        return _PollResult(discovered=1, enqueued=1)
+
+    sched, clock, _state, _queue = _make(registry=registry, poll_fn=poll)
+
+    # The first tick after start is the catch-up pass: every enabled source is
+    # due regardless of cadence, because the node may have been off for days.
+    catch_up = sched.tick()
+    assert catch_up.reason == "ran"
+    assert polled == ["inbox"]
+
+    # From then on cadence governs: nothing is polled before the interval.
+    polled.clear()
+    clock.advance(DEFAULT_CADENCE_SECONDS["inbox_playlist"] - 1)
+    early = sched.tick()
+    assert polled == []
+    assert early.skipped["inbox"] == "not_due"
+
+    # Within one inbox interval the item is discovered and enqueued, through
+    # the production tick -> poll -> enqueue path.
+    clock.advance(1)
+    second = sched.tick()
+
+    assert polled == ["inbox"]
+    assert second.discovered == 1
+    assert second.enqueued == 1
+
+
+def test_default_cadences_and_overrides() -> None:
+    assert resolve_cadence_seconds(_Binding("a", collection_kind="inbox_playlist")) == 180
+    assert (
+        resolve_cadence_seconds(
+            _Binding("b", collection_kind="playlist", poll_interval_seconds=3600)
+        )
+        == 3600
+    )
+    assert (
+        resolve_cadence_seconds(
+            _Binding("c", collection_kind="subscriptions", poll_interval_seconds=21600)
+        )
+        == 21600
+    )
+
+    # A per-source override wins when usable.
+    assert (
+        resolve_cadence_seconds(
+            _Binding("d", collection_kind="playlist", poll_interval_seconds=900)
+        )
+        == 900
+    )
+
+    # Invalid overrides fall back to the kind default rather than polling at an
+    # unintended rate. `True` is checked explicitly: bool is an int subclass.
+    for bad in (0, -1, True, "600", None):
+        binding = _Binding("e", collection_kind="playlist")
+        binding.poll_interval_seconds = bad  # type: ignore[assignment]
+        assert resolve_cadence_seconds(binding) == 3600
+
+    # An unknown kind is polled conservatively, not aggressively. The override
+    # is cleared so the kind default is what answers.
+    unknown = _Binding("f", collection_kind="whatever")
+    unknown.poll_interval_seconds = None  # type: ignore[assignment]
+    assert resolve_cadence_seconds(unknown) == 21600
+
+
+def test_overlapping_runs_excluded_by_lease_at_call_site() -> None:
+    # Enforcement: exclusion must hold at the production call site, so both
+    # schedulers are real and share one real lease store.
+    registry = _Registry([_Binding("inbox")])
+    state = MemorySyncStateStore()
+    clock = _Clock()
+    polls: list[str] = []
+
+    def poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        polls.append(binding.binding_id)
+        return _PollResult()
+
+    first, _c, _s, _q = _make(
+        registry=registry, state=state, clock=clock, poll_fn=poll, holder="watcher"
+    )
+    second, _c2, _s2, _q2 = _make(
+        registry=registry, state=state, clock=clock, poll_fn=poll, holder="cli"
+    )
+
+    # Hold the lease as a third party so neither runner can claim it.
+    assert state.acquire_lease(
+        key=LEASE_KEY, holder="other-runner", ttl_seconds=LEASE_TTL_SECONDS, now=clock.now
+    )
+    assert first.tick().reason == "lease_held"
+    assert second.sync_now().reason == "lease_held"
+    assert polls == []
+
+    # A stale lease is taken over rather than honoured forever: the previous
+    # holder may simply have been killed.
+    clock.advance(LEASE_TTL_SECONDS + 1)
+    assert first.tick().reason == "ran"
+    assert polls == ["inbox"]
+
+
+def test_offline_then_online_reconciles_without_duplicates() -> None:
+    # Stop -> videos accumulate -> restart. The first tick after start treats
+    # every enabled source as due and resets stale in-progress rows, so nothing
+    # is lost and nothing is enqueued twice.
+    registry = _Registry(
+        [_Binding("inbox", last_attempt_at=(START - timedelta(days=3)).isoformat())]
+    )
+    seen: list[str] = []
+
+    def poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        seen.append(binding.binding_id)
+        registry.mark_attempted(binding.binding_id, clock.now)
+        # Re-discovery of an already-known item converges as a dedup, not a
+        # second request (INV-YSS-2 lives in the queue, asserted here as the
+        # scheduler faithfully reporting it).
+        return _PollResult(discovered=2, enqueued=1, deduped=1)
+
+    sched, clock, _state, queue = _make(registry=registry, poll_fn=poll)
+
+    outcome = sched.tick()
+
+    assert queue.stale_resets == 1, "restart must reset rows stranded in_progress"
+    assert seen == ["inbox"]
+    assert outcome.enqueued == 1
+    assert outcome.deduped == 1
+
+    # The catch-up is once, not every tick: the second tick respects cadence.
+    seen.clear()
+    sched.tick()
+    assert seen == []
+
+
+def test_backoff_and_manual_sync_now() -> None:
+    assert backoff_delay_seconds(0) == 0
+    assert backoff_delay_seconds(1) == 60
+    assert backoff_delay_seconds(2) == 240
+    assert backoff_delay_seconds(20) == BACKOFF_CAP_SECONDS, "backoff must be capped"
+
+    registry = _Registry([_Binding("inbox", last_attempt_at=START.isoformat())])
+    attempts: list[str] = []
+
+    def failing_poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        attempts.append("poll")
+        registry.mark_attempted(binding.binding_id, clock.now)
+        return _PollResult(reason_code="network_error")
+
+    sched, clock, state, _queue = _make(registry=registry, poll_fn=failing_poll)
+
+    clock.advance(180)
+    sched.tick()
+    assert len(attempts) == 1
+
+    # One failure adds 60s on top of the 180s cadence, so the source is not due
+    # again at 180s.
+    clock.advance(180)
+    sched.tick()
+    assert len(attempts) == 1, "a failed source must back off, not retry at cadence"
+
+    clock.advance(61)
+    sched.tick()
+    assert len(attempts) == 2
+
+    # "Sync now" runs immediately regardless of backoff...
+    sched.sync_now("inbox")
+    assert len(attempts) == 3
+
+    # ...but a failed manual attempt does not reset the backoff, or an operator
+    # retry would become a way to escape the cap.
+    backoff = state.get("backoff:inbox") or {}
+    assert backoff["consecutive_failures"] >= 2
+
+
+def test_pause_and_safe_shutdown_semantics() -> None:
+    registry = _Registry([_Binding("inbox"), _Binding("paused-source", enabled=False)])
+    polls: list[str] = []
+
+    def poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        polls.append(binding.binding_id)
+        return _PollResult()
+
+    paused = {"value": True}
+    state = MemorySyncStateStore()
+    sched, clock, _state, queue = _make(
+        registry=registry,
+        state=state,
+        poll_fn=poll,
+        paused=lambda: paused["value"],
+    )
+
+    # Global pause short-circuits before the lease: a paused runner must not
+    # churn the lease away from an unpaused one.
+    assert sched.tick().reason == "paused_global"
+    assert polls == []
+    assert state.get(LEASE_KEY) is None, "paused tick must not touch the lease"
+
+    paused["value"] = False
+    outcome = sched.tick()
+    # Per-source pause is the registry's `enabled` flag; the disabled source is
+    # not polled and is not reported as merely 'not due'.
+    assert polls == ["inbox"]
+    assert "paused-source" not in outcome.skipped
+
+    # Safe shutdown: no new work is claimed after stop is requested.
+    polls.clear()
+    queue.pending.append(_Row("req-1"))
+    sched.request_stop()
+    clock.advance(10_000)
+    stopped = sched.tick()
+    assert polls == []
+    assert stopped.drained == 0
+    assert queue.pending == [_Row("req-1")], "stopped tick must leave work durable"
+
+
+def test_bounded_concurrency_and_tick_budget() -> None:
+    registry = _Registry([_Binding("inbox")])
+    queue = _Queue([_Row(f"req-{index}") for index in range(8)])
+
+    live = 0
+    peak = 0
+    guard = threading.Lock()
+    release = threading.Event()
+
+    def slow_drain(row: _Row, **kwargs: Any) -> _Row:
+        nonlocal live, peak
+        with guard:
+            live += 1
+            peak = max(peak, live)
+        release.wait(timeout=2)
+        with guard:
+            live -= 1
+        return replace(row, status="completed")
+
+    sched, _clock, _state, _queue = _make(
+        registry=registry,
+        queue=queue,
+        drain_fn=slow_drain,
+        max_concurrent=2,
+    )
+
+    release.set()
+    outcome = sched.tick()
+
+    assert peak <= 2, "drain concurrency must never exceed maxConcurrentAcquisitions"
+    assert outcome.drained == 8
+    assert outcome.drain_outcomes == {"completed": 8}
+
+    # A slow drain must not let one tick run unbounded: the budget stops it
+    # starting new work, and the already-claimed row still lands durably.
+    monotonic = {"value": 0.0}
+    budgeted, _c, _s, budget_queue = _make(
+        registry=_Registry([]),
+        queue=_Queue([_Row(f"slow-{index}") for index in range(5)]),
+        drain_fn=lambda row, **kw: replace(row, status="completed"),
+        max_concurrent=1,
+        tick_budget_seconds=1.0,
+        monotonic=lambda: monotonic.__setitem__("value", monotonic["value"] + 0.6)
+        or monotonic["value"],
+    )
+    result = budgeted.tick()
+    assert result.drained < 5, "the tick budget must stop a long drain from running forever"
+    assert budget_queue.pending, "unclaimed work stays in the queue for the next tick"

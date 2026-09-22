@@ -589,7 +589,10 @@ class DormantSettingsRebindReconciler:
         summaries: Mapping[str, Mapping[str, object]],
     ) -> None:
         for name, summary in summaries.items():
-            if name in {"briefing", "journal_review"}:
+            # Sparse sub-ticks share this summaries map with the per-spec vault
+            # scans but are not scans, so they carry no `scan_complete` marker.
+            # A new sub-tick must be added here or it reads as a failed scan.
+            if name in {"briefing", "journal_review", "youtube_sync"}:
                 continue
             if summary.get("scan_complete") is not True:
                 reason = summary.get("scan_incomplete_reason") or "unknown"
