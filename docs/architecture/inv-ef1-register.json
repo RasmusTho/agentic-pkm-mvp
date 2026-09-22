@@ -2478,6 +2478,13 @@
       "why_load_bearing": "The parent contract names the public Bifrost constituent and its repository as an adoption slice, not personal vault data.",
       "disposition": "stay",
       "issue": "#5617"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_DESIGN_SYSTEM_V2/PROMOTE_DESIGN_SYSTEM_GOVERNANCE.md",
+      "category": "iv",
+      "why_load_bearing": "The final task spec names the public Bifrost constituent repository as a prerequisite delivery before parent promotion, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5626"
     }
   ]
 }
