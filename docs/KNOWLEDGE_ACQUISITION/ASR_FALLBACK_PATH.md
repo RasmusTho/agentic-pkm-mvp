@@ -17,6 +17,25 @@ When KA-01 records a captionless item, transcribe it locally through the **exist
 `app/media/transcribe.py` chain (yt-dlp audio → ffmpeg → faster-whisper) and persist the result as
 a `raw` record shaped identically to the caption path.
 
+**This chain's health is bound to the `yt-dlp` pin (#5611).** YouTube changes its anti-bot behaviour
+continuously, and a stale release silently stops being able to fetch media: the pin sat at
+`2026.3.17` for six months, selected the `android_vr` player client, and every ASR media download
+failed with `HTTP 403` while all unit tests stayed green. Treat a stale pin as the first suspect
+whenever this path starts returning `403`, and re-verify with a real acquisition rather than tests.
+
+Acquisition receipt, 2026-09-22, from the dev runtime image: with `yt-dlp 2026.8.19`, this path's own
+production entrypoint `app/media/transcribe.py :: download_audio` fetched 18,791,294 bytes for video
+`aircAruvnKk`, where `yt-dlp 2026.3.17` returned `HTTP 403` from the same host and image. Measured in
+isolation, neither a PO-token provider server nor a JavaScript runtime was required for that download
+to succeed; only the version differed.
+
+**On the declared PO-token provider:** `youtube_plugin._PO_TOKEN_PROVIDER_EXTRACTOR_ARGS` names
+yt-dlp's HTTP provider (`youtubepot-bgutilhttp`), and the plugin package is installed in the image,
+but **no provider server is deployed in any channel**. The hook is therefore inert today rather than
+load-bearing — YouTube is not currently challenging this path for a token. Deploying a provider is a
+future change to make on evidence, not a standing requirement; note that the server image must match
+the installed plugin's major version, which `:latest` did not.
+
 ## What This Task Does
 
 - Wires the captionless outcome to `transcribe_source()` (reuse, not rewrite; diarization hook and
