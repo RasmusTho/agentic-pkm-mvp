@@ -18,14 +18,17 @@ Bring the native Bifrost clients into the same design system as the web surfaces
 ## What This Task Does
 
 This task is delivered in the constituent repository `RasmusTho/bifrost`, under that repository's
-ecosystem authority (ADR-0050). The Issue is filed there after YDS-01 merges, when a tagged token
-version exists to pin.
+ecosystem authority (ADR-0050). The Issue is filed there after YDS-01 merges. No release or Git tag
+is created: the pin is the token `VERSION` plus the exact hub merge-commit SHA that produced the
+generated Swift file.
 
-- Vendors `YggdrasilTokens.swift` from a tagged token version, and records that version.
+- Vendors `YggdrasilTokens.swift` from a named hub commit, and records the token `VERSION` and that
+  commit SHA.
 - Backs `YggTheme` colours, spacing, and radius with those tokens. Typography stays on iOS Dynamic
   Type, mapped to Yggdrasil roles.
 - Ships Dark with `.preferredColorScheme(.dark)`. Shell waits for the web trial to graduate.
-- Adds a Bifrost CI check that the vendored file matches the pinned release.
+- Adds a Bifrost CI check that the vendored file is byte-identical to
+  `design-system/yggdrasil/dist/YggdrasilTokens.swift` at the pinned hub commit.
 
 ## Concretely
 
@@ -38,7 +41,7 @@ Today Bifrost uses stock iOS colours, so the native apps do not look like Yggdra
 ## Acceptance Criteria
 
 - [ ] The Bifrost Issue and its PR are linked from the parent feature issue, with the pinned token
-  version.
+  `VERSION` and hub commit SHA.
   - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/PARENT_FEATURE_ISSUE.md :: Validation / Acceptance Path`
 - [ ] The spec records S5 as delivered.
   - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Rollout`

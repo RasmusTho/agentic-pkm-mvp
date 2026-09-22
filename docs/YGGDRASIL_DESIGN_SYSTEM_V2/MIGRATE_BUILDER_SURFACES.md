@@ -23,8 +23,13 @@ palettes.
   `app/builderops/ckm/overview_html.py`, `companion_ui/workspace/devui_candidate/devui.css`, and
   the served managed stylesheet `app/builderops/devui_managed.css` onto tokens from the served
   binding sheet.
-- Updates `ASSET_SHA256` in `app/builderops/devui_assets.py`, and its provenance tests, in the same
-  change as the managed stylesheet.
+- Gives the served DevUI a token source. Today `overview.html` and `focus.html` load only
+  `/devui/assets/devui.css`, and `ROUTES` in `app/builderops/devui_assets.py` exposes no token
+  sheet. This task adds a `/devui/assets/colors_and_type.css` route that serves the generated
+  sheet, references it from both served HTML pages before `devui.css`, and removes the inline
+  `:root` declarations from `devui_managed.css` only after that.
+- Updates `ASSET_SHA256` in `app/builderops/devui_assets.py` for every changed asset (the new token
+  sheet, `devui.css`, `overview.html`, `focus.html`) and its provenance tests, in the same change.
 - Moves readable `var(--fg-3)` uses to `fg-2` (including `cockpit.*`), opts in to the new focus
   ring, and sets compact density on every Builder surface.
 
@@ -45,8 +50,11 @@ would leave the real DevUI on its old inlined tokens.
 - [ ] Every `var(--fg-3)` in a Builder consumer sits on an allowlisted disabled, placeholder, or
   decorative selector.
   - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_fg3_only_on_allowlisted_selectors`
-- [ ] The served DevUI stylesheet matches its pinned hash after migration.
+- [ ] Every changed DevUI asset (token sheet, stylesheet, both HTML pages) matches its pinned hash.
   - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_managed_devui_asset_hash_matches_migrated_stylesheet`
+- [ ] Both served DevUI pages load the token sheet, and every `var(--…)` they use resolves to a
+  declared token.
+  - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_served_devui_pages_resolve_every_token_variable`
 - [ ] The spec records S4 as delivered.
   - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Rollout`
 

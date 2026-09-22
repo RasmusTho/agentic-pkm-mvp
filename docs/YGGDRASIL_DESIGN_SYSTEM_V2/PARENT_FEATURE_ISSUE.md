@@ -44,7 +44,8 @@ promotion.
 
 ## Acceptance Criteria
 
-- [ ] Every child in this repository is terminal, with an exact-merge receipt on this issue.
+- [ ] Every child is terminal with an exact-merge receipt on this issue, including the YDS-05 PR in
+  `RasmusTho/bifrost`.
   - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Rollout`
 - [ ] The live design system is in byte parity with the binding sheet, and the owner confirms it no
   longer shows as Legacy.
@@ -61,7 +62,8 @@ In execution order:
 3. `MIGRATE_COMPANION_SURFACES.md` (YDS-03, #5629) and `MIGRATE_BUILDER_SURFACES.md` (YDS-04, #5630). These can
    run in parallel.
 4. `ADOPT_TOKENS_IN_BIFROST.md` (YDS-05). Filed in `RasmusTho/bifrost` after YDS-01.
-5. `PROMOTE_DESIGN_SYSTEM_GOVERNANCE.md` (YDS-06, #5631). Final child, with the parent-closure handoff.
+5. `PROMOTE_DESIGN_SYSTEM_GOVERNANCE.md` (YDS-06, #5631). Final child, after YDS-05; carries the
+   parent-closure handoff.
 
 ## Verification Path
 

@@ -5,8 +5,8 @@ task_id: YDS-06
 github_issue: 5631
 source_anchor: "docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Rollout"
 parent_capability: Yggdrasil Design System v2
-prerequisites: [YDS-01, YDS-02, YDS-03, YDS-04]
-depends_on: [ESTABLISH_TOKEN_SOURCE_AND_GENERATOR.md, RECONCILE_LIVE_DESIGN_SYSTEM.md, MIGRATE_COMPANION_SURFACES.md, MIGRATE_BUILDER_SURFACES.md]
+prerequisites: [YDS-01, YDS-02, YDS-03, YDS-04, YDS-05]
+depends_on: [ESTABLISH_TOKEN_SOURCE_AND_GENERATOR.md, RECONCILE_LIVE_DESIGN_SYSTEM.md, MIGRATE_COMPANION_SURFACES.md, MIGRATE_BUILDER_SURFACES.md, ADOPT_TOKENS_IN_BIFROST.md]
 can_parallelize_with: []
 ---
 
@@ -25,8 +25,8 @@ through the token source instead of the old hand-copied sheet.
   `.codex/skills/yggdrasil-design-handoff/SKILL.md` to point at the generated sheet and version.
 - Records the owner's Shell trial outcome (graduate, change, or drop) and adjusts the spec to match.
 - Promotes `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md` from a target-state spec to an owner doc.
-- Hands the parent feature issue to `verification-and-closure`. YDS-05 is either delivered or
-  recorded as an explicit open follow-up.
+- Hands the parent feature issue to `verification-and-closure`. This task starts only after YDS-05
+  is delivered in the Bifrost repository, because Bifrost adoption is part of the capability.
 
 ## Concretely
 

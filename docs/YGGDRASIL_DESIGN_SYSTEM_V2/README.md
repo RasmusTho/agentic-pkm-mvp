@@ -226,8 +226,9 @@ Bifrost stays native. It adopts Yggdrasil **colours, spacing, and radius** throu
 follows on iOS only after the web trial graduates (city backdrop and rim light map to SwiftUI
 gradients and shadows). Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
 roles (`display` → New York serif as the closest native analogue to EB Garamond unless the font
-is bundled; UI → SF Pro). Bifrost vendors a pinned token version and records it. A Bifrost CI check
-compares its vendored file against the tagged release here. The cross-repo contract lives under
+is bundled; UI → SF Pro). Bifrost vendors the generated Swift file from a named hub commit and
+records the token `VERSION` and commit SHA. A Bifrost CI check compares its vendored file against
+that commit. No release or tag is required. The cross-repo contract lives under
 the ecosystem authority Bifrost already declares (ADR-0050). This spec does not override it.
 
 ## Rollout
