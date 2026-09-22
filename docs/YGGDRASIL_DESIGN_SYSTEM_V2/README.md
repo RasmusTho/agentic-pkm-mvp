@@ -103,8 +103,10 @@ Existing consumers change nothing to stay correct. Renames, if any, are a later 
 
 ### Theme and density selection (web)
 
-- Theme: `data-theme="dark" | "light"` on the root element. With no attribute, Dark applies.
-  A surface may follow `prefers-color-scheme` only when it opts in with `data-theme="system"`.
+- Theme: `data-theme="dark" | "light" | "system"` on the root element. This is the whole
+  grammar. A missing attribute means `dark`. `system` resolves to Shell under
+  `prefers-color-scheme: light` and to Dark otherwise. Any other value is invalid and falls back
+  to `dark`.
   During the trial, Light is a per-user choice in the Companion and is not a surface default.
 - Density: `data-density="comfortable" | "compact"`, with comfortable as the default.
 - Both are pure token and material swaps. No component CSS may branch on theme or density.
@@ -115,6 +117,13 @@ Contrast measured on `bg-base` `#070b12` (WCAG 2.x relative luminance): `fg-1` 1
 `accent` 8.90, `cyan` 10.87, `vault` 12.21, `agent` 7.16, `amber` 8.20, `destructive` 5.62, all
 at least 4.5:1. `fg-3` is 2.56, so v2 documents it as disabled/decorative only: it must never
 carry readable content. S1 adds a CI contrast check over role/surface pairs for both themes.
+
+A token-level check cannot prove how a token is used, and today readable text does use `fg-3`
+(for example the "Vault online" status in `canvas_suggestion_flow.html` and a link in
+`converse_layout.html`). `var(--fg-3)` appears in about 17 consumer files across Companion,
+Cockpit, DevUI, and CKM. The rule therefore lands as a migration, not a declaration. S3 and S4
+move readable `fg-3` uses to `fg-2` and add a usage-level check: every `var(--fg-3)` in a
+consumer must sit on an allowlisted disabled, placeholder, or decorative selector.
 
 ### Yggdrasil Light "Shell" (trial)
 
@@ -188,7 +197,10 @@ Other type steps and spacing are unchanged between profiles.
 
 - Correct the "DM Sans" comment. Space Grotesk stays the UI face.
 - Load JetBrains Mono from Google Fonts, dropping `fonts.bunny.net`.
-- Dark focus ring: a 2px solid `--border-focus` (cyan) outline, with no glow by default.
+- Dark focus ring: a 2px solid `--border-focus` (cyan) outline, with no glow by default. This is
+  a visible change, so S1 does not apply it globally. The sheet keeps today's global
+  `:focus-visible` rule and glow utility classes. The new ring and the effects layer ship as
+  opt-in, and each surface switches during its S3/S4 migration.
 - Move `.glow-*`, `.text-glow-*`, `.grid-bg`, `.border-cyan`, and `.border-gold` into an opt-in
   effects layer (`[data-effects="on"]` or explicit `.fx-*` classes), documented as state-only.
 - Honour `prefers-reduced-motion` by zeroing `--duration-*`.
@@ -198,11 +210,12 @@ Other type steps and spacing are unchanged between profiles.
 | Surface | Repo | Today | Default density | Migration slice |
 |---|---|---|---|---|
 | Companion workspace dev page and drawers (`companion_ui/workspace/*`) | this | Inlined token subset plus about 260 hex literals across modules | comfortable | S3 |
-| Canvas suggestion flow, panel visual shell, converse layout (`companion-ui/companion-app/*.html`) | this | Binding sheet | comfortable | S3 (verify only) |
-| BuilderOps Cockpit (`app/web/static/cockpit.*`) | this | Binding sheet (byte-parity copy) | compact | S4 (verify only) |
+| Canvas suggestion flow, panel visual shell, converse layout (`companion-ui/companion-app/*.html`) | this | Binding sheet; readable `fg-3` uses | comfortable | S3 |
+| BuilderOps Cockpit (`app/web/static/cockpit.*`) | this | Binding sheet (byte-parity copy); `fg-3` uses | compact | S4 |
 | Signboard (`app/web/static/signboard.*`) | this | Own palette | compact | S4 |
 | Legacy web dashboard (`app/web/static/index.html`) | this | Partial | compact | S4 |
-| DevUI candidate (`companion_ui/workspace/devui_candidate/`) | this | Partial | compact | S4 |
+| DevUI candidate (`companion_ui/workspace/devui_candidate/`) and served managed DevUI (`app/builderops/devui_managed.css`, hash-pinned in `devui_assets.py`) | this | Partial, inlined dark tokens | compact | S4 |
+| CKM overview (`app/builderops/ckm/overview_html.py`) | this | Own inlined token copy | compact | S4 |
 | Bifrost: Heimdal capture, Mimer knowledge (`Yggdrasil/DesignSystem/Theme.swift`) | `RasmusTho/bifrost` | iOS system colours | native (Dynamic Type) | S5 |
 | Claude Design live system `f2b13410-…` | Claude Design | Legacy; README drift (DS-1); no exports (DS-2) | — | S2 |
 
@@ -221,10 +234,10 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 
 | Slice | Outcome | Depends on | Notes |
 |---|---|---|---|
-| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, Shell theme and material, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Existing consumers render identically in Dark/comfortable. |
+| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, Shell theme and material, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Dark token values, the global `:focus-visible` rule, and the existing utility classes are unchanged, so existing consumers render identically in Dark/comfortable. New rules (focus ring, effects layer, Shell, density) are opt-in. |
 | **S2** Live system reconciliation | Claude Design system republished from S1 output (Dark and Shell), no longer Legacy; README matches tokens (closes DS-1); component previews promoted to exports (DS-2); gate records new SHA-256 | S1 | **Owner-assisted:** needs a working Claude Design login. Until S2 lands, the byte-parity gate fails closed and new design generation waits. |
-| **S3** Companion migration | Workspace modules use tokens only; inlined subset replaced by the served sheet; off-palette colours removed; per-user Light (Shell) toggle for the trial | S1 | Hex-literal ceiling test per module. **Trial gate:** the owner uses Shell in the Companion and then decides whether it graduates, needs changes, or is dropped. |
-| **S4** Builder UI migration | Signboard, legacy dashboard, and DevUI candidate on tokens with compact density; Cockpit verified | S1 | Can run in parallel with S3. |
+| **S3** Companion migration | Workspace modules, renderer modules, and the canvas/converse/panel pages use tokens only; inlined subset replaced by the served sheet; off-palette colours removed; readable `fg-3` moved to `fg-2`; opt in to the new focus ring; per-user Light (Shell) toggle for the trial | S1 | Hex-literal ceiling test per module. **Trial gate:** the owner uses Shell in the Companion and then decides whether it graduates, needs changes, or is dropped. |
+| **S4** Builder UI migration | Cockpit, Signboard, legacy dashboard, CKM overview (`app/builderops/ckm/overview_html.py`), the DevUI candidate, and the **served managed DevUI stylesheet** `app/builderops/devui_managed.css` on tokens with compact density. Includes updating `ASSET_SHA256` in `app/builderops/devui_assets.py` and its provenance tests. Readable `fg-3` moved to `fg-2`; opt in to the new focus ring. | S1 | Can run in parallel with S3. |
 | **S5** Bifrost adoption | `YggTheme` backed by generated Swift tokens; version pin and parity check | S1 | Filed in `RasmusTho/bifrost`. |
 | **S6** Governance promotion | DP-11, `DESIGN_HANDOFF_GOVERNANCE.md`, and `yggdrasil-design-handoff` skill point at the token source, version, and effects rule; this doc becomes the owner doc | S1, S2 | Via `post-merge-owner-doc`. |
 
