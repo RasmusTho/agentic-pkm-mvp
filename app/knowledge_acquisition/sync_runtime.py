@@ -98,9 +98,16 @@ def run_scheduled_sync_tick(
 
     from app.vault.settings_service import SettingsService
 
-    effective = SettingsService().effective_settings(vault_context)
-    if not _both_gates_open(effective):
+    service = SettingsService()
+    # The two gates come from the governed accessor, never the ordinary
+    # resolver: `resolve_accepted_runtime_gating` fails closed to the
+    # registered safe default for first-seen, denied, cross-file, or otherwise
+    # unreceipted disk input, so an unreviewed settings edit cannot switch a
+    # runner on. `effective_settings` is the operator-facing view and is used
+    # only for the non-gating tuning value below.
+    if not _both_gates_open(service.resolve_accepted_runtime_gating(vault_context)):
         return TickOutcome(reason="disabled")
+    effective = service.effective_settings(vault_context)
 
     owns_process_marker = scheduler is None
     if scheduler is None:

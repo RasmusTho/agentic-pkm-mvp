@@ -2753,6 +2753,11 @@ def _run_youtube_sync_tick(
     false means zero work and zero egress — the gates are checked before the
     scheduler is even constructed, so a disabled runner never touches the lease.
 
+    This function reads neither key itself. Both are resolved one layer down in
+    `app.knowledge_acquisition.sync_runtime` through
+    `SettingsService.resolve_accepted_runtime_gating`, the governed accessor
+    that fails closed to the safe default on unreceipted disk input.
+
     Exception-isolated like the relevance tick: a sync failure can never break
     vault watching, which is the tick host's actual job.
     """

@@ -465,14 +465,15 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 -> 940 -> 944 (site unchanged) when "
         "#3452 added conflict-quarantine receipt policy above the manager."
     ),
-    ("app/vault/settings_service.py", 617): (
+    ("app/vault/settings_service.py", 632): (
         "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 (site unchanged); re-pinned per this census's "
-        "own directly-related-repair convention when YSS-01 (#3916) added the "
+        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 -> 632 (site unchanged); re-pinned per this "
+        "census's own directly-related-repair convention: YSS-01 (#3916) added the "
         "youtubeSync.* SettingDefinitions and the scaffold action constant "
-        "earlier in the file."
+        "earlier in the file, and YSS-06 (#3921) added "
+        "youtubeSync.maxConcurrentAcquisitions among them."
     ),
     ("app/instance/vault_registry.py", 2977): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
