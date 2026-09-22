@@ -341,4 +341,198 @@ def test_v1_command_remains_single_inbox_and_manual(
         forbidden not in help_result.output.lower()
         for forbidden in ("schedule", "backfill", "multi-playlist", "public api key")
     )
-    assert set(youtube_cli.youtube_inbox_dev.commands) == {"connect", "select", "sync", "status"}
+    assert set(youtube_cli.youtube_inbox_dev.commands) == {
+        "connect",
+        "select",
+        "sync",
+        "status",
+        "drain",
+    }
+
+
+@dataclass(frozen=True)
+class _Row:
+    """The fields `drain` reads off a claimed queue row."""
+
+    request_id: str
+    status: str = "in_progress"
+    source_kind: str = "youtube_url"
+
+
+class _Queue:
+    """Stands in for `AcquisitionRequests`, handing out one claimed row per call."""
+
+    def __init__(self, rows: list[_Row]) -> None:
+        self._pending = list(rows)
+        self.claim_limits: list[int] = []
+
+    def claim_batch(self, limit: int, **kwargs: Any) -> list[_Row]:
+        self.claim_limits.append(limit)
+        if not self._pending:
+            return []
+        return [self._pending.pop(0)]
+
+
+class _VaultManager:
+    def __init__(self, context: Any) -> None:
+        self._context = context
+
+    def context(self) -> Any:
+        return self._context
+
+
+def _selected_vault() -> Any:
+    from app.vault.manager import VaultContext
+
+    return VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_name="Synthetic Vault",
+        active_vault_path="/tmp/synthetic-vault",
+    )
+
+
+def _install_drain_doubles(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    queue: _Queue,
+    vault_context: Any,
+    outcome_for: Any,
+) -> list[str]:
+    drained: list[str] = []
+
+    def fake_drain_one(request: Any, **kwargs: Any) -> Any:
+        assert kwargs["queue"] is queue
+        assert kwargs["vault_context"] is vault_context
+        drained.append(request.request_id)
+        return outcome_for(request)
+
+    monkeypatch.setattr(youtube_cli, "drain_one", fake_drain_one)
+    monkeypatch.setattr(
+        youtube_cli, "AcquisitionRequests", type("Q", (), {"for_runtime": staticmethod(lambda: queue)})
+    )
+    monkeypatch.setattr(
+        youtube_cli, "get_vault_manager", lambda: _VaultManager(vault_context)
+    )
+    return drained
+
+
+def test_drain_runs_claimed_requests_through_drain_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Enforcement: the production `drain` command must reach the real
+    # `drain_one` adapter for every claimed row, and stop when the queue is
+    # empty rather than burning the whole --max budget.
+    queue = _Queue([_Row("req-1"), _Row("req-2")])
+    context = _selected_vault()
+    drained = _install_drain_doubles(
+        monkeypatch,
+        queue=queue,
+        vault_context=context,
+        outcome_for=lambda row: _Row(row.request_id, status="completed"),
+    )
+
+    result = CliRunner().invoke(
+        cli, ["youtube-inbox-dev", "drain", "--max", "5"], env=_dev_env()
+    )
+
+    assert result.exit_code == 0
+    assert drained == ["req-1", "req-2"]
+    receipt = _json_lines(result.output)[-1]
+    assert receipt["status"] == "drained"
+    assert receipt["claimed"] == 2
+    assert receipt["outcomes"] == {"completed": 2}
+    # Claimed one at a time, and the empty claim ends the pass before --max.
+    assert queue.claim_limits == [1, 1, 1]
+
+
+def test_drain_refuses_without_selected_vault_before_claiming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No writable target means no row may be claimed: a claimed row would sit
+    # `in_progress` until the stale reset, blocking the next drain.
+    from app.vault.manager import VaultContext
+
+    queue = _Queue([_Row("req-1")])
+    drained = _install_drain_doubles(
+        monkeypatch,
+        queue=queue,
+        vault_context=VaultContext(status="none"),
+        outcome_for=lambda row: row,
+    )
+
+    result = CliRunner().invoke(cli, ["youtube-inbox-dev", "drain"], env=_dev_env())
+
+    assert result.exit_code != 0
+    assert "no vault is selected" in result.output
+    assert queue.claim_limits == []
+    assert drained == []
+
+
+def test_drain_isolates_per_item_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A row that `drain_one` returns to retryable state must not end the pass;
+    # the remaining claimed rows still run and the receipt counts each outcome.
+    queue = _Queue([_Row("req-1"), _Row("req-2"), _Row("req-3")])
+    context = _selected_vault()
+    outcomes = {
+        "req-1": "pending",
+        "req-2": "dead_lettered",
+        "req-3": "completed",
+    }
+    drained = _install_drain_doubles(
+        monkeypatch,
+        queue=queue,
+        vault_context=context,
+        outcome_for=lambda row: _Row(row.request_id, status=outcomes[row.request_id]),
+    )
+
+    result = CliRunner().invoke(cli, ["youtube-inbox-dev", "drain"], env=_dev_env())
+
+    assert result.exit_code == 0
+    assert drained == ["req-1", "req-2", "req-3"]
+    receipt = _json_lines(result.output)[-1]
+    assert receipt["claimed"] == 3
+    assert receipt["outcomes"] == {"pending": 1, "dead_lettered": 1, "completed": 1}
+
+
+def test_drain_output_is_secret_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    planted_client_secret = "planted-client-secret-" + secrets.token_hex(8)
+    planted_store_key = secrets.token_hex(32)
+    env = {
+        "PKM_ENVIRONMENT": "dev",
+        "YOUTUBE_OAUTH_CLIENT_ID": "synthetic-client-id",
+        "YOUTUBE_OAUTH_CLIENT_SECRET": planted_client_secret,
+        "YOUTUBE_TOKEN_STORE_KEY": planted_store_key,
+    }
+    context = _selected_vault()
+
+    queue = _Queue([_Row("req-1")])
+    _install_drain_doubles(
+        monkeypatch,
+        queue=queue,
+        vault_context=context,
+        outcome_for=lambda row: _Row(row.request_id, status="completed"),
+    )
+    success = CliRunner().invoke(cli, ["youtube-inbox-dev", "drain"], env=env)
+
+    reflected = "reflected-internal-detail-" + secrets.token_hex(8)
+
+    def failing_drain_one(request: Any, **kwargs: Any) -> Any:
+        del request, kwargs
+        raise V1InboxConfigurationError(reflected)
+
+    failing_queue = _Queue([_Row("req-1")])
+    _install_drain_doubles(
+        monkeypatch,
+        queue=failing_queue,
+        vault_context=context,
+        outcome_for=lambda row: row,
+    )
+    monkeypatch.setattr(youtube_cli, "drain_one", failing_drain_one)
+    failure = CliRunner().invoke(cli, ["youtube-inbox-dev", "drain"], env=env)
+
+    assert success.exit_code == 0
+    assert failure.exit_code != 0
+    for output in (success.output, failure.output):
+        assert planted_client_secret not in output
+        assert planted_store_key not in output

@@ -937,14 +937,25 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/heimdal/",
             "app/knowledge_acquisition/",
             "app/source_egress.py",
+            # The dev-only YouTube Inbox route composes this subsystem's
+            # services and nothing else, so it is owned here rather than by a
+            # cli-shaped owner. Without it the file fell through the SUBSYSTEMS
+            # loop into `unowned` (exit 2) on PR #5614.
+            "app/cli/youtube_inbox_dev.py",
             "docs/HEIMDAL/",
             "docs/KARAKEEP_MIMER_ACQUISITION/",
             "docs/KNOWLEDGE_ACQUISITION/",
+            "docs/YOUTUBE_SOURCE_SYNC/",
             "docs/EVENTS.md",
             "tests/heimdal/",
             "tests/knowledge_acquisition/",
+            "tests/cli/test_youtube_inbox_dev_cli.py",
         ),
-        ("tests/heimdal", "tests/knowledge_acquisition"),
+        (
+            "tests/heimdal",
+            "tests/knowledge_acquisition",
+            "tests/cli/test_youtube_inbox_dev_cli.py",
+        ),
     ),
     (
         "journaling",
