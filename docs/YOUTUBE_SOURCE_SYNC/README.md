@@ -99,8 +99,9 @@ Out of scope (owned elsewhere or explicitly deferred):
   observation log is never written.
 - **Reuse over new infrastructure:** V1 reuses the existing acquisition queue, shared
   outbox/idempotency helpers, and durable cursor discipline; WriteGuard remains the only
-  vault-write gate. No runner, scheduler, lease, parallel outbox, or receipt substrate is
-  introduced.
+  vault-write gate. No parallel outbox or receipt substrate is introduced. YSS-06 (#3921) since
+  added scheduling on the *existing* watcher registry loop plus one durable single-runner lease
+  row — still no new long-running process, and still no second write path.
 
 ## Normative shared contract
 
@@ -199,7 +200,9 @@ tests`, `mypy app`, and the focused subsystem suite are the publication baseline
 ## Validation / Acceptance path
 
 The parent feature issue is the V1 validation hub. Repository acceptance names the exact manual
-routes and tests; no scheduler, rich UI, or real-account operator drill is implied by this V1.
+routes and tests; no rich UI or real-account operator drill is implied by this V1. Continuous
+scheduling was outside V1's acceptance set and arrived separately through YSS-06 (#3921) after the
+owner lifted that slice's deferral on 2026-09-22.
 
 ## Relationship to GitHub issues
 
