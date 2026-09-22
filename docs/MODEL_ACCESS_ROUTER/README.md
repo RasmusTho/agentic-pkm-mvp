@@ -1,4 +1,4 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066. Parent validation Issue #5618 is open and blocked. No router, Product migration, new provider auth, Mac mini profile, or rollout is claimed as shipped.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066. Parent validation Issue #5618 is open and blocked. No router, Product migration, new provider auth, designated-host profile, or rollout is claimed as shipped.
 Doc role: Capability specification
 Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
@@ -17,7 +17,7 @@ Deliver one provider-neutral model-access facade that can be used by Product and
 - llm_contract is the neutral, side-effect-free kernel. Builder may not import the Product router or fabric.
 - Model Inquiry's codex_subscription is a compatibility alias only; its current single_target and no-fallback semantics do not change.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
-- Product acceptance is gated on a Mac mini host-local profile and a sanitized runtime receipt. This specification does not add secrets to Git, provision API keys, download models, or deploy to a release channel.
+- Product acceptance is gated on a host-local macOS execution profile and a sanitized runtime receipt. The concrete machine identity is host-local and not committed. This specification does not add secrets to Git, provision API keys, download models, or deploy to a release channel.
 
 ## Existing Backlog Reconciliation
 
@@ -56,7 +56,7 @@ The neutral catalog descriptor is shared; Product model IDs/pricing/user-facing 
 5. Capability preservation: fallback is eligible only when the candidate satisfies every requested capability. Ollama lacking a capability such as native tools is a terminal preflight refusal, not a degraded route.
 6. Catalog failure: failed refresh may use a snapshot only while it is within maximum stale age and the owning policy allows it. A stale, unordered, or unverifiable snapshot cannot auto-promote; with no pinned policy target, routing fails closed.
 7. Partial Product migration: unmigrated Product callers continue through the legacy facade. Migrated callers go through one shared route and one adapter; no dual execution/shadow inference is permitted.
-8. Host and rollout gates: missing Mac mini auth, missing Ollama model, or failed acceptance leaves the parent blocked. No model download, API key creation, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
+8. Host and rollout gates: missing designated-host auth, missing Ollama model, or failed acceptance leaves the parent blocked. No model download, API key creation, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
 
 ## Implementation Tasks
 
@@ -65,15 +65,15 @@ The neutral catalog descriptor is shared; Product model IDs/pricing/user-facing 
 3. [Formalize Ollama and preflight-only fallback](FORMALIZE_OLLAMA_AND_PREFLIGHT_FALLBACK.md) — MARR-03; depends on MARR-01 and MARR-02
 4. [Discover and select from fresh model catalogs](DISCOVER_FRESH_MODEL_CATALOGS.md) — MARR-04; depends on MARR-01–03
 5. [Migrate Product LLM callers to the shared facade](MIGRATE_PRODUCT_LLM_CALLERS.md) — MARR-05; depends on MARR-01–04
-6. [Prove the Mac mini host profile and acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06; depends on MARR-01–05
+6. [Prove the designated macOS host profile and acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06; depends on MARR-01–05
 7. [Roll out through release channels with config rollback](ROLLOUT_WITH_CONFIG_ROLLBACK.md) — MARR-07; depends on MARR-06 and explicit release-channel operator acknowledgment
 
 ## Capability Acceptance
 
 - [ ] All seven task receipts are linked here and to the parent validation issue.
 - [ ] Contract/adapter/catalog/Product behavior passes the task-level fake-provider and integration tests.
-- [ ] The Mac mini receipt proves CLI version/auth status, exact Luna route, Ollama probe, compatible preflight fallback, and correct refusal for a tool route that Ollama cannot satisfy; it contains no credential or endpoint secret.
-- [ ] Owner docs describe only behavior proven by merged implementation and the Mac mini acceptance receipt.
+- [ ] The designated-host receipt proves CLI version/auth status, exact Luna route, Ollama probe, compatible preflight fallback, and correct refusal for a tool route that Ollama cannot satisfy; it contains no credential or endpoint secret.
+- [ ] Owner docs describe only behavior proven by merged implementation and the designated-host acceptance receipt.
 - [ ] Dev → test → prod follows the release-channel skills; production is not claimed until the operator-acknowledged release and verification receipts exist.
 - [ ] The parent validation issue receives the final acceptance and owner-doc handoff before closure.
 
@@ -85,7 +85,7 @@ The parent feature issue is [#5618](https://github.com/RasmusTho/agentic-pkm-mvp
 
 - Sharing or collapsing Product and Builder policy, registry, credential, fallback, health, or receipt authority.
 - Provisioning API keys, changing subscription/account settings, or enabling metered inference.
-- Downloading or modifying Ollama models or editing the Mac mini's host-local credentials.
+- Downloading or modifying Ollama models or editing the designated host's host-local credentials.
 - Model Inquiry fallback, cross-provider retry after inference starts, dual execution, or shadow inference.
 - Embedding identity migration.
 - Executing a production deployment directly from a code/specification PR.

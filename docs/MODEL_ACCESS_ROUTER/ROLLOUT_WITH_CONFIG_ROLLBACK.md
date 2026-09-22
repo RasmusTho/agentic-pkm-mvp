@@ -24,11 +24,11 @@ Actual test/prod channel mutations, deployment, and rollback use the established
 
 ## Concretely
 
-Before a stage advances, its candidate ref, route configuration, migration/config delta, health checks, Mac mini receipt, and rollback target are recorded. If a gate fails, the release workflow returns to the last verified pinned compatible route and runs the owning verification procedure.
+Before a stage advances, its candidate ref, route configuration, migration/config delta, health checks, designated-host receipt, and rollback target are recorded. If a gate fails, the release workflow returns to the last verified pinned compatible route and runs the owning verification procedure.
 
 ## Why This Matters
 
-A valid PR or local Mac mini smoke does not prove that a release channel is ready. Separating router code from controlled rollout prevents an adapter change from silently reaching prod.
+A valid PR or designated-host smoke does not prove that a release channel is ready. Separating router code from controlled rollout prevents an adapter change from silently reaching prod.
 
 ## Acceptance Criteria
 

@@ -26,7 +26,7 @@ The facade is policy-agnostic. Product calls supply Product policy; Builder call
 
 ### D2 — Codex CLI subscription transport is explicitly allowed for Product
 
-Product may use the host-local authenticated Codex CLI on the designated Mac mini for declared agent/text routes. The CLI session and CODEX_HOME, executable path, and other host configuration remain host-local and outside Git. The adapter binds an exact model and reasoning effort before execution and invokes `codex exec --ephemeral` in a dedicated empty working directory, never in a Product workspace or repository. It must enforce `--sandbox read-only`, disable the CLI shell/execution features (`shell_tool` and `unified_exec`), ignore ambient user/project tool configuration, and pass only an explicit host-local environment allowlist needed for authentication. The adapter advertises no Product tool capability. If the installed CLI cannot prove and enforce this profile, Product routing fails closed before inference. Structured output is validated and CLI version/auth mode/host provenance is sanitized.
+Product may use the host-local authenticated Codex CLI on the designated macOS execution host for declared agent/text routes. The concrete machine identity, CLI session and CODEX_HOME, executable path, and other host configuration remain host-local and outside Git. The adapter binds an exact model and reasoning effort before execution and invokes `codex exec --ephemeral` in a dedicated empty working directory, never in a Product workspace or repository. It must enforce `--sandbox read-only`, disable the CLI shell/execution features (`shell_tool` and `unified_exec`), ignore ambient user/project tool configuration, and pass only an explicit host-local environment allowlist needed for authentication. The adapter advertises no Product tool capability. If the installed CLI cannot prove and enforce this profile, Product routing fails closed before inference. Structured output is validated and CLI version/auth mode/host provenance is sanitized.
 
 The Codex app-server model/list catalog may be used for read-only, account-scoped availability and capability discovery. Catalog discovery is not inference. Model list order alone is not release chronology and may not auto-promote a target. A provider-supplied release timestamp or explicit provider replacement/upgrade relation is required for automatic latest-compatible selection; otherwise the Product policy's pinned model remains authoritative.
 
@@ -76,7 +76,7 @@ Embedding identity remains in its existing subsystem and is not routed through t
 1. Amend this ADR only through the normal docs-authoring/PR path and publish the linked capability specifications.
 2. Implement contract, facade, adapter, catalog, and Product migration slices in dependency order with fake-provider tests.
 3. Keep host paths and sessions out of Git; do not download Ollama models or provision API credentials as part of these slices.
-4. Produce a Mac mini acceptance receipt covering Codex version/auth, Luna route, Ollama probe, compatible preflight fallback, and rejected tool-capability fallback.
+4. Produce a designated-host acceptance receipt covering Codex version/auth, Luna route, Ollama probe, compatible preflight fallback, and rejected tool-capability fallback.
 5. Plan and execute dev → test → prod only through the release-channel skills and their operator-acknowledged gates. A config rollback restores the last pinned route; this ADR authorizes no deployment by itself.
 
 ## Related decisions and owner docs

@@ -1,6 +1,6 @@
 ---
-name: Prove Mac Mini Host Profile and Acceptance
-description: Validate the host-local Codex subscription and Ollama routes on the designated Mac mini and produce one sanitized acceptance receipt.
+name: Prove Designated macOS Host Profile and Acceptance
+description: Validate the host-local Codex subscription and Ollama routes on the designated macOS execution host and produce one sanitized acceptance receipt.
 task_id: MARR-06
 github_issue: 5624
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: Delivery gates
@@ -18,7 +18,7 @@ Prove that the shipped route works on the intended execution host using existing
 
 ## What This Task Does
 
-On the designated Mac mini, inspect codex --version, codex login status, the account-scoped model catalog, Ollama host health, and already-present model metadata. Run the smallest bounded acceptance calls required by the parent: Luna route, compatible preflight fallback, and correct tool-capability refusal. The receipt contains exact route metadata and status only; no prompt contents, credential values, endpoint secrets, environment variables, CODEX_HOME, or raw session output.
+On the designated macOS execution host, inspect codex --version, codex login status, the account-scoped model catalog, Ollama host health, and already-present model metadata. Run the smallest bounded acceptance calls required by the parent: Luna route, compatible preflight fallback, and correct tool-capability refusal. The receipt contains exact route metadata and status only; no prompt contents, credential values, endpoint secrets, environment variables, CODEX_HOME, concrete machine identity, or raw session output.
 
 Host-local PATH, CODEX_HOME, Codex subscription session, and Ollama endpoint settings remain outside Git. Do not download a model or change auth to make the receipt pass. If a required model is absent, record the unavailable state and leave the parent blocked.
 
@@ -46,7 +46,7 @@ Fake-provider tests cannot establish that this host's subscription session, CLI 
 ## How to Verify (Pre-Merge)
 
 - Run pytest -q tests/model_access/test_mac_mini_acceptance_receipt.py.
-- On the designated Mac mini, follow the checked-in host-local acceptance procedure and attach its sanitized receipt; do not include raw stdout, environment, keychain output, or session files.
+- On the designated macOS execution host, follow the checked-in host-local acceptance procedure and attach its sanitized receipt; do not include raw stdout, environment, keychain output, concrete machine identity, or session files.
 - Verify no host configuration or repository credential files changed as a side effect.
 
 ## Out of Scope

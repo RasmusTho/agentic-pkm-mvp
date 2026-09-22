@@ -57,7 +57,7 @@ Model Inquiry already has a bounded CLI bridge, but Product cannot route through
 
 ## Out of Scope
 
-- Modifying Mac mini configuration or subscription state.
+- Modifying designated-host configuration or subscription state.
 - Enabling arbitrary command execution, writes, or Product native tools without a separately verified sandbox/contract.
 - Selecting a replacement model after the route was resolved.
 
