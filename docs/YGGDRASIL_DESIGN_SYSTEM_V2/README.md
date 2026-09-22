@@ -24,7 +24,7 @@ Owner decisions recorded 2026-09-22:
   approved **for trial**. It is inspired by the Ghost in the Shell (2017) posters: porcelain work
   surfaces floating on a glitching neon city. Four earlier light directions were reviewed and
   rejected the same day because they felt generic, "90s", or "too My Little Pony": a plain cool
-  light, Niflheim / Grid Daylight / Neon Paper, a prismatic Bifröst, and a muted porcelain Shell.
+  light, a frost / Tron-grid / neon-signage trio, a prismatic rainbow-bridge look, and a muted porcelain Shell.
   The review page is kept at [`exploration/2026-09-22-shell-light-theme.html`](exploration/2026-09-22-shell-light-theme.html).
   Shell graduates from trial only after the owner uses it in the Companion (S3).
 - **App feel:** one shared core (colour, type, meaning) with per-surface **density profiles**;
