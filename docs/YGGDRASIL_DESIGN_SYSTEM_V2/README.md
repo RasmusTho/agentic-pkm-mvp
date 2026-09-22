@@ -1,4 +1,4 @@
-State: Target-state capability specification. Nothing in this document is shipped. Current binding
+State: Target-state capability specification, filed as parent #5626 with children #5627–#5631 (YDS-01 ready). Nothing in this document is shipped. Current binding
 token truth remains `companion-ui/companion-app/colors_and_type.css` under `docs/DESIGN_PRINCIPLES.md
 :: 11. Shared Visual Language` until a slice below is delivered and its owner doc is promoted.
 Doc role: Capability specification directory README for the Yggdrasil Design System v2 refinement.
@@ -244,6 +244,47 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 Sequencing risk: S1 changes the bytes of the binding sheet, so the live gate fails closed until S2
 lands. Schedule S1 and S2 back to back. Otherwise S1 must be held while design generation is
 active.
+
+## Implementation Tasks
+
+| Task | Slice | Issue |
+|---|---|---|
+| [Establish the Token Source and Generator](ESTABLISH_TOKEN_SOURCE_AND_GENERATOR.md) | S1 · YDS-01 | #5627 |
+| [Reconcile the Live Design System](RECONCILE_LIVE_DESIGN_SYSTEM.md) | S2 · YDS-02 | #5628 |
+| [Migrate the Companion Surfaces](MIGRATE_COMPANION_SURFACES.md) | S3 · YDS-03 | #5629 |
+| [Migrate the Builder Surfaces](MIGRATE_BUILDER_SURFACES.md) | S4 · YDS-04 | #5630 |
+| [Adopt the Tokens in Bifrost](ADOPT_TOKENS_IN_BIFROST.md) | S5 · YDS-05 | filed in `RasmusTho/bifrost` after YDS-01 |
+| [Promote the Design System Governance](PROMOTE_DESIGN_SYSTEM_GOVERNANCE.md) | S6 · YDS-06 | #5631 |
+
+The parent validation hub is #5626, described in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
+
+## Cross-Task Invariants / Interaction Safety
+
+These invariants hold across the tasks, which all read or write the same token outputs.
+
+1. **Live parity window.** The binding sheet's bytes equal the live Claude Design sheet, except
+   between the YDS-01 merge and the YDS-02 reconciliation. In that window the gate fails closed
+   and no design generation runs. *Partial failure:* if YDS-02 cannot run after YDS-01 merges (for
+   example, the Claude Design login fails), the window stays closed. Recovery is to finish YDS-02,
+   not to hand-edit the live sheet or relax the gate. YDS-01 therefore merges only when YDS-02 can
+   run right after.
+2. **Generated outputs only.** Consumers read generated outputs, and nobody hand-edits them.
+   YDS-01's freshness test fails any drift, so later tasks change values only through the source.
+3. **Dark compatibility.** No task changes a Dark token name or value. YDS-03 and YDS-04 can land in
+   either order, because a surface that is not yet migrated still renders correctly from the
+   unchanged sheet.
+4. **Pinned asset hashes move together.** A change to `app/builderops/devui_managed.css` and its
+   `ASSET_SHA256` entry ship in the same YDS-04 change. A stylesheet change without the hash
+   update fails the DevUI provenance tests.
+5. **Shell stays opt-in.** No surface defaults to Shell before YDS-06 records the owner's trial
+   decision. Bifrost ships Dark only until then.
+
+## Relationship to GitHub Issues
+
+The parent feature issue is the live validation hub. Child Issues are filed from the task files
+above: YDS-01 as ready, and the others as blocked on their prerequisites. YDS-05 is filed in the
+Bifrost repository once a token version exists to pin. Issue numbers are written back into each
+task file's `github_issue:` frontmatter and into the table above when filed.
 
 ## Out of scope
 

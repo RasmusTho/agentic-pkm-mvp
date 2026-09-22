@@ -2457,6 +2457,27 @@
       "why_load_bearing": "The design-system spec names the public Bifrost constituent (native client repo RasmusTho/bifrost) as a token consumer and its YggTheme adoption slice, not personal vault data.",
       "disposition": "stay",
       "issue": "#5617"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_DESIGN_SYSTEM_V2/ADOPT_TOKENS_IN_BIFROST.md",
+      "category": "iv",
+      "why_load_bearing": "The task spec names the public Bifrost constituent repository as the consumer that adopts generated Swift tokens, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5617"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_DESIGN_SYSTEM_V2/ESTABLISH_TOKEN_SOURCE_AND_GENERATOR.md",
+      "category": "iv",
+      "why_load_bearing": "The task spec names the public Bifrost constituent as a consumer of the generated Swift output, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5617"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_DESIGN_SYSTEM_V2/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "The parent contract names the public Bifrost constituent and its repository as an adoption slice, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5617"
     }
   ]
 }
