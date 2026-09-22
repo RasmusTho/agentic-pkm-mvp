@@ -25,6 +25,13 @@ from app.knowledge_acquisition.sync_scheduler import (
 
 logger = logging.getLogger(__name__)
 
+#: Whether this process has already run the post-start catch-up pass. The
+#: scheduler is rebuilt every tick so it always sees current settings and vault
+#: binding, which means the catch-up marker cannot live on the instance: it
+#: would reset every minute and defeat every per-source cadence. Module state
+#: dies with the process, which is exactly the lifetime this marker wants.
+_RECONCILED = False
+
 ENABLED_KEY = "youtubeSync.enabled"
 RUNNER_ENABLED_KEY = "youtubeSync.runnerEnabled"
 MAX_CONCURRENT_KEY = "youtubeSync.maxConcurrentAcquisitions"
@@ -87,12 +94,15 @@ def run_scheduled_sync_tick(
 ) -> TickOutcome:
     """One scheduled sync pass, or a reason code explaining why none ran."""
 
+    global _RECONCILED
+
     from app.vault.settings_service import SettingsService
 
     effective = SettingsService().effective_settings(vault_context)
     if not _both_gates_open(effective):
         return TickOutcome(reason="disabled")
 
+    owns_process_marker = scheduler is None
     if scheduler is None:
         from app.knowledge_acquisition.acquisition_requests import AcquisitionRequests
         from app.knowledge_acquisition.source_registry import SourceRegistry
@@ -113,9 +123,15 @@ def run_scheduled_sync_tick(
                 _setting(effective, MAX_CONCURRENT_KEY, DEFAULT_MAX_CONCURRENT_ACQUISITIONS)
             ),
             holder="watcher",
+            reconciled=_RECONCILED,
         )
 
-    return scheduler.tick()
+    outcome = scheduler.tick()
+    if owns_process_marker:
+        # Only a scheduler this function built speaks for this process; an
+        # injected one belongs to its caller and must not rewrite the marker.
+        _RECONCILED = scheduler.reconciled
+    return outcome
 
 
 __all__ = [

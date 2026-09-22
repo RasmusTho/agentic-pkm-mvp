@@ -56,6 +56,14 @@ BACKOFF_BASE_SECONDS = 60
 BACKOFF_FACTOR = 4
 BACKOFF_CAP_SECONDS = 6 * 60 * 60
 
+#: `poll_source` reports both transient failures and benign dispositions
+#: through one `reason_code` field. Backing off on a benign one would keep a
+#: source un-polled for hours after the operator fixed nothing — re-enabling a
+#: paused source must take effect at its next cadence, not after the cap.
+NON_FAILURE_REASON_CODES: frozenset[str] = frozenset(
+    {"paused_source", "policy_unsupported", "not_modified"}
+)
+
 #: How long a tick may spend before it stops starting new work. The tick runs
 #: inside the shared watcher loop, so the budget is what keeps file watching
 #: responsive while an acquisition is slow.
@@ -183,6 +191,7 @@ class SyncScheduler:
         max_concurrent: int = DEFAULT_MAX_CONCURRENT_ACQUISITIONS,
         tick_budget_seconds: float = DEFAULT_TICK_BUDGET_SECONDS,
         paused: Callable[[], bool] = lambda: False,
+        reconciled: bool = False,
     ) -> None:
         self._registry = registry
         self._requests = requests
@@ -197,8 +206,16 @@ class SyncScheduler:
         self._max_concurrent = max(1, int(max_concurrent))
         self._tick_budget_seconds = float(tick_budget_seconds)
         self._paused = paused
-        self._reconciled = False
+        # Whether this *process* has already caught up after start. A caller
+        # that builds a scheduler per tick must pass the previous value in, or
+        # every tick re-runs the catch-up pass and cadence never applies.
+        self._reconciled = reconciled
         self._stopping = False
+
+    @property
+    def reconciled(self) -> bool:
+        """True once the catch-up pass has run, for a per-tick caller to carry."""
+        return self._reconciled
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -372,8 +389,10 @@ class SyncScheduler:
             logger.exception("source poll failed for %s", binding.binding_id)
             self._record_poll_result(binding.binding_id, failed=True)
             return None
+        reason_code = getattr(result, "reason_code", None)
         self._record_poll_result(
-            binding.binding_id, failed=bool(getattr(result, "reason_code", None))
+            binding.binding_id,
+            failed=bool(reason_code) and reason_code not in NON_FAILURE_REASON_CODES,
         )
         return result
 

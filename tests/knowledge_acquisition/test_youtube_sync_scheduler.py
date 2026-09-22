@@ -394,3 +394,59 @@ def test_bounded_concurrency_and_tick_budget() -> None:
     result = budgeted.tick()
     assert result.drained < 5, "the tick budget must stop a long drain from running forever"
     assert budget_queue.pending, "unclaimed work stays in the queue for the next tick"
+
+
+def test_benign_reason_codes_do_not_accumulate_backoff() -> None:
+    # `poll_source` reports benign dispositions through the same `reason_code`
+    # field as transient failures. Backing off on those would keep a source
+    # un-polled for hours after the operator fixed nothing.
+    registry = _Registry([_Binding("inbox", last_attempt_at=START.isoformat())])
+    attempts: list[str] = []
+
+    def benign_poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        attempts.append("poll")
+        registry.mark_attempted(binding.binding_id, clock.now)
+        return _PollResult(reason_code="paused_source")
+
+    sched, clock, state, _queue = _make(registry=registry, poll_fn=benign_poll)
+
+    sched.tick()  # catch-up pass
+    clock.advance(180)
+    sched.tick()
+
+    assert len(attempts) == 2, "a benign disposition must not delay the next poll"
+    assert (state.get("backoff:inbox") or {}).get("consecutive_failures") == 0
+
+
+def test_reconciled_marker_survives_per_tick_construction() -> None:
+    # Production rebuilds the scheduler every tick so it sees current settings.
+    # The catch-up marker must therefore be carried in, or every tick re-runs
+    # the catch-up pass and no per-source cadence ever applies.
+    registry = _Registry([_Binding("inbox", last_attempt_at=START.isoformat())])
+    state = MemorySyncStateStore()
+    clock = _Clock()
+    polls: list[str] = []
+
+    def poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        polls.append(binding.binding_id)
+        registry.mark_attempted(binding.binding_id, clock.now)
+        return _PollResult()
+
+    reconciled = False
+    for _ in range(3):
+        sched = SyncScheduler(
+            registry=registry,
+            requests=_Queue(),
+            state=state,
+            vault_context=object(),
+            clock=clock,
+            poll_fn=poll,
+            drain_fn=lambda row, **kw: row,
+            reconciled=reconciled,
+        )
+        sched.tick()
+        reconciled = sched.reconciled
+        clock.advance(60)
+
+    # One catch-up poll, then cadence: 60s and 120s later the inbox is not due.
+    assert polls == ["inbox"], f"cadence was defeated by per-tick construction: {polls}"
