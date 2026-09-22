@@ -30,15 +30,19 @@ PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev select \
   --account-binding-id <binding-id> --playlist-id <owned-playlist-id>
 PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev sync \
   --account-binding-id <binding-id>
+PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev drain --max 5
 PKM_ENVIRONMENT=dev python -m app.cli youtube-inbox-dev status \
   --account-binding-id <binding-id>
 ```
 
 `connect` prints the provider's device-consent URL and user code, waits for approval, and returns
 the non-secret binding id. `select` resolves the stable id against playlists owned by that OAuth
-account and refuses a different second Inbox. `sync` performs exactly one synchronous V1 poll;
-`status` emits only the sanitized account and Inbox views. This route uses OAuth with the minimal
-`youtube.readonly` scope for both consent and YouTube Data API access. It has no public API-key
+account and refuses a different second Inbox. `sync` performs exactly one synchronous V1 poll and
+enqueues what it discovers; `drain` then runs up to `--max` already-enqueued requests through the
+acquisition pipeline in that one invocation, claiming one row at a time and refusing before the
+first claim when no vault is selected. `status` emits only the sanitized account and Inbox views.
+This route uses OAuth with the minimal `youtube.readonly` scope for both consent and YouTube Data
+API access. It has no public API-key
 authentication surface and exposes no scheduler, backfill, or multi-playlist operations.
 
 ## One-time local OAuth setup
@@ -82,8 +86,9 @@ reason. The manual sync receipt contains only status, discovery/enqueue/dedup co
 
 ## Candidate outcome
 
-New Inbox videos enter the existing durable acquisition queue. When available material drains
-successfully, the result is a `youtube_source_note` candidate with:
+New Inbox videos enter the existing durable acquisition queue. `sync` fills that queue; nothing
+empties it on its own, so an operator runs `drain` to acquire the queued rows. When available
+material drains successfully, the result is a `youtube_source_note` candidate with:
 
 - `authority.requires_review: true`
 - `review_state: draft`
@@ -91,6 +96,10 @@ successfully, the result is a `youtube_source_note` candidate with:
 
 The Inbox route never calls knowledge promotion. Human review remains the only path to higher
 knowledge standing.
+
+Each `drain` invocation is one bounded pass and nothing more: it holds no lease, keeps no schedule,
+and leaves no process running. Unattended continuous sync remains deferred to YSS-06 (#3921), so a
+queue only advances when an operator runs the command.
 
 ## Troubleshooting
 

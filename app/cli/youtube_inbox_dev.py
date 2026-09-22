@@ -2,7 +2,12 @@
 
 This is deliberately a composition boundary, not the broad YSS-10 command
 family.  It exposes only device connect, one owned Inbox selection, one manual
-sync, and sanitized status.
+sync, one bounded manual drain, and sanitized status.
+
+``drain`` is the operator-invoked half of the queue: discovery enqueues
+requests, and this command runs already-enqueued rows through the existing
+``drain_one`` adapter one at a time.  It is not a scheduler — no lease, no tick
+host, no long-running process.  Continuous operation remains YSS-06 (#3921).
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ import click
 import httpx
 
 from app.config.environment import ENV_DEV, active_environment
-from app.knowledge_acquisition.acquisition_requests import AcquisitionRequests
+from app.knowledge_acquisition.acquisition_requests import AcquisitionRequests, drain_one
 from app.knowledge_acquisition.playlist_discovery import (
     V1InboxConfigurationError,
     YouTubeInboxSyncV1,
@@ -46,6 +51,7 @@ from app.knowledge_acquisition.youtube_token_store import (
     YouTubeTokenStore,
     resolve_token_store_key,
 )
+from app.vault.manager import get_vault_manager
 
 
 @dataclass(frozen=True)
@@ -172,7 +178,7 @@ def _safe_cli_failure(exc: BaseException) -> click.ClickException:
     name="youtube-inbox-dev",
     help=(
         "Dev-only route for one OAuth account, one owned Inbox, one manual sync, "
-        "and sanitized status."
+        "one bounded manual drain, and sanitized status."
     ),
 )
 def youtube_inbox_dev() -> None:
@@ -262,6 +268,55 @@ def status(account_binding_id: str) -> None:
         raise
     except Exception as exc:
         raise _safe_cli_failure(exc) from None
+
+
+@youtube_inbox_dev.command(
+    name="drain",
+    help="Run up to --max already-enqueued acquisition requests once, in this process.",
+)
+@click.option(
+    "--max",
+    "max_requests",
+    type=click.IntRange(1, 50),
+    default=5,
+    show_default=True,
+    help="Upper bound on requests drained in this pass.",
+)
+def drain(max_requests: int) -> None:
+    """Drain already-enqueued requests through the existing KA pipeline.
+
+    Rows are claimed **one at a time** rather than as one batch: ``drain_one``
+    deliberately lets an unexpected failure propagate loud, and a batch claim
+    would leave every other claimed row stranded ``in_progress`` until the
+    stale reset. Claiming singly bounds that exposure to the row that failed.
+
+    The vault is resolved before the first claim for the same reason — a row
+    claimed without a writable target could not be drained and would block the
+    next pass.
+    """
+    vault_context = get_vault_manager().context()
+    if not vault_context.is_selected:
+        raise click.ClickException(
+            "no vault is selected; drain writes candidate notes and requires a selected vault"
+        )
+
+    queue = AcquisitionRequests.for_runtime()
+    outcomes: dict[str, int] = {}
+    claimed = 0
+    try:
+        for _ in range(max_requests):
+            batch = queue.claim_batch(1)
+            if not batch:
+                break
+            claimed += 1
+            result = drain_one(batch[0], vault_context=vault_context, queue=queue)
+            outcomes[result.status] = outcomes.get(result.status, 0) + 1
+    except click.ClickException:
+        raise
+    except Exception as exc:
+        raise _safe_cli_failure(exc) from None
+
+    _emit({"status": "drained", "claimed": claimed, "outcomes": outcomes})
 
 
 __all__ = [
