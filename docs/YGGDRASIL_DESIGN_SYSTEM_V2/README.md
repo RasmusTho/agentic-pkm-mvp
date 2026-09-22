@@ -20,7 +20,8 @@ from: the Companion product UI, the Builder System UIs, and the Bifrost native c
 
 Owner decisions recorded 2026-09-22:
 
-- **Themes:** keep *Yggdrasil Dark* (today's look) as the default and add *Yggdrasil Light*.
+- **Theme:** Yggdrasil stays **dark-only**. A proposed Yggdrasil Light was reviewed and rejected
+  the same day: it lost the Tron / cyberpunk / Old Norse identity. No light theme is planned.
 - **App feel:** one shared core (colour, type, meaning) with per-surface **density profiles**;
   glow and grid effects become opt-in and state-only.
 - **Scope:** Companion UI, all Builder System UIs, and Bifrost (separate repo, same system).
@@ -35,7 +36,7 @@ Observed on `origin/main` 22a8928e8 and `RasmusTho/bifrost` `main`:
 | Live README contradicts the token sheet | `BUILDEROPS_COCKPIT/DESIGN_DECISIONS.md :: DS-1` (background warmth, radii, focus ring, UI typeface, glow). |
 | No exported components, only previews | `BUILDEROPS_COCKPIT/DESIGN_DECISIONS.md :: DS-2`. |
 | Token sheet is copied, not consumed | Byte-identical copies in `companion-ui/companion-app/`, `app/web/static/` (CI-enforced by `tests/api/test_cockpit_api.py`), and every `companion-ui/design_handoff/*/` package. |
-| Dark-only | No light palette exists; surfaces needing one hardcode their own. |
+| Surfaces drift off the palette | Some surfaces hardcode off-palette colours (for example `#fecaca`, `#f87171`, `#e5e7eb` in `signboard.css` and `index.html`) instead of Yggdrasil tokens. v2 brings them back to the system. |
 | Surfaces bypass the tokens | Hex literals at time of writing: `serve_dev_page.py` 143 (with an inlined token subset), `settings_drawer.py` 27, `system_map_overlay.py` 24, `memory_review_drawer.py` 24, `receipts_history.py` 16, `app/web/static/signboard.css` 19, `devui_candidate/devui.css` 18, `app/web/static/index.html` 17. |
 | Internal inconsistencies | Heading comment says "DM Sans" while `--font-ui` is Space Grotesk; JetBrains Mono loads from `fonts.bunny.net`, outside the Google Fonts host most sandboxes (including Claude artifacts) admit. |
 | Glow is a default, not a signal | `.glow-*`, `.text-glow-*`, `.border-cyan`, and the `:focus-visible` glow ship as general utilities, while the converse handoff says glow is only for state. |
@@ -52,8 +53,7 @@ The canonical source becomes a platform-neutral token file in
 design-system/yggdrasil/
   tokens/primitives.json      # raw ramps, type scale, spacing, radius, motion
   tokens/semantic.json        # roles that reference primitives
-  tokens/themes/dark.json     # role -> primitive bindings, default
-  tokens/themes/light.json
+  tokens/theme.json           # role -> primitive bindings (Yggdrasil Dark)
   tokens/density/comfortable.json
   tokens/density/compact.json
   VERSION                     # semver of the system
@@ -83,7 +83,7 @@ CI proves every generated file is fresh (regenerate, then diff). Hand edits to o
      `amber` (staged / uncommitted), `destructive`. Each has `-dim` and `-muted`.
    - Status: `success`, `warning`, `danger`, `info`, which alias the domain roles, so builder
      dashboards do not invent a fourth colour language.
-3. **Themes:** bind every role for Dark and Light.
+3. **Theme:** binds every role to its Yggdrasil Dark value. Only one theme exists.
 4. **Density:** comfortable or compact.
 5. **Effects:** glow, grid background, and neon borders. Opt-in only.
 
@@ -91,38 +91,19 @@ CI proves every generated file is fresh (regenerate, then diff). Hand edits to o
 `--vault-glow`, `--space-4`, `--text-base`, and the rest) keeps its name and Dark value in v2.
 Existing consumers change nothing to stay correct. Renames, if any, are a later major version.
 
-### Theme and density selection (web)
+### Density selection (web)
 
-- Theme: `data-theme="dark" | "light"` on the root element. With no attribute, the surface's
-  declared default applies (Dark for all current surfaces). Surfaces may follow
-  `prefers-color-scheme` only when they opt in with `data-theme="system"`.
-- Density: `data-density="comfortable" | "compact"`, with comfortable as the default.
-- Both are pure token swaps. No component CSS may branch on theme or density.
+- Density: `data-density="comfortable" | "compact"` on the root or a surface container, with
+  comfortable as the default. It is a pure token swap: no component CSS may branch on density.
+- There is no theme switch. Surfaces must not follow `prefers-color-scheme` into a light
+  rendering. A surface embedded in a light host still paints its own `bg-base`.
 
-### Yggdrasil Light (proposed values)
+### Contrast rule
 
-Contrast ratios below were computed against WCAG 2.x relative luminance for this spec. S1 turns
-them into a CI check.
-
-| Role | Dark (unchanged) | Light | Light contrast on `bg-base` / `bg-raised` |
-|---|---|---|---|
-| `bg-base` | `#070b12` | `#eef2f6` | — |
-| `bg-surface` | `#0c1220` | `#f7f9fb` | — |
-| `bg-raised` | `#111a2e` | `#ffffff` | — |
-| `bg-overlay` | `#162038` | `#e4eaf1` | — |
-| `fg-1` | `#dce8f0` | `#0d1726` | 15.99 / 17.98 |
-| `fg-2` | `#7a9ab8` | `#4a6280` | 5.57 / 6.27 |
-| `fg-3` | `#3d5570` | `#7d90a6` | 2.91 / 3.28 (disabled/decorative only) |
-| `accent` | `#d4a843` | `#8a6512` | 4.72 / 5.32 |
-| `cyan` | `#00d4e8` | `#00707c` | 5.17 / 5.82 |
-| `vault` | `#39e87d` | `#137a46` | 4.79 / 5.38 |
-| `agent` | `#4a9eff` | `#1f5fbf` | 5.41 / 6.09 |
-| `amber` | `#f09030` | `#9a4f08` | 5.34 / 6.01 |
-| `destructive` | `#ff3d3d` | `#c02626` | 5.26 / 5.92 |
-
-In both themes `fg-3` is below 4.5:1 (Dark: 2.56 on `bg-base`), so v2 documents it as
-disabled/decorative only. It must never carry readable content. Light-theme `-dim` and `-muted`
-tints, borders, and shadows are derived in S1 and ship under the same contrast check.
+Contrast measured on `bg-base` `#070b12` (WCAG 2.x relative luminance): `fg-1` 15.81, `fg-2` 6.70,
+`accent` 8.90, `cyan` 10.87, `vault` 12.21, `agent` 7.16, `amber` 8.20, `destructive` 5.62, all
+at least 4.5:1. `fg-3` is 2.56, so v2 documents it as disabled/decorative only: it must never
+carry readable content. S1 adds a CI contrast check over role/surface pairs.
 
 ### Density profiles
 
@@ -140,7 +121,7 @@ Other type steps and spacing are unchanged between profiles.
 
 - Correct the "DM Sans" comment. Space Grotesk stays the UI face.
 - Load JetBrains Mono from Google Fonts, dropping `fonts.bunny.net`.
-- Focus ring: a 2px solid `--border-focus` outline in both themes, with no glow by default.
+- Focus ring: a 2px solid `--border-focus` (cyan) outline, with no glow by default.
 - Move `.glow-*`, `.text-glow-*`, `.grid-bg`, `.border-cyan`, and `.border-gold` into an opt-in
   effects layer (`[data-effects="on"]` or explicit `.fx-*` classes), documented as state-only.
 - Honour `prefers-reduced-motion` by zeroing `--duration-*`.
@@ -161,8 +142,8 @@ Other type steps and spacing are unchanged between profiles.
 ### Bifrost
 
 Bifrost stays native. It adopts Yggdrasil **colours, spacing, and radius** through the generated
-`YggdrasilTokens.swift`. Colours become asset-catalog-style dynamic `Color`s that resolve Dark and
-Light from the system appearance. Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
+`YggdrasilTokens.swift`. Colours are fixed Yggdrasil Dark values, and the app sets
+`.preferredColorScheme(.dark)` so system controls match. Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
 roles (`display` → New York serif as the closest native analogue to EB Garamond unless the font
 is bundled; UI → SF Pro). Bifrost vendors a pinned token version and records it. A Bifrost CI check
 compares its vendored file against the tagged release here. The cross-repo contract lives under
@@ -172,9 +153,9 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 
 | Slice | Outcome | Depends on | Notes |
 |---|---|---|---|
-| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, Light theme, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Existing consumers render identically in Dark/comfortable. |
+| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Existing consumers render identically in Dark/comfortable. |
 | **S2** Live system reconciliation | Claude Design system republished from S1 output, no longer Legacy; README matches tokens (closes DS-1); component previews promoted to exports (DS-2); gate records new SHA-256 | S1 | **Owner-assisted:** needs a working Claude Design login. Until S2 lands, the byte-parity gate fails closed and new design generation waits. |
-| **S3** Companion migration | Workspace modules use tokens only; inlined subset replaced by the served sheet; Light theme selectable | S1 | Hex-literal ceiling test per module. |
+| **S3** Companion migration | Workspace modules use tokens only; inlined subset replaced by the served sheet; off-palette colours removed | S1 | Hex-literal ceiling test per module. |
 | **S4** Builder UI migration | Signboard, legacy dashboard, and DevUI candidate on tokens with compact density; Cockpit verified | S1 | Can run in parallel with S3. |
 | **S5** Bifrost adoption | `YggTheme` backed by generated Swift tokens; version pin and parity check | S1 | Filed in `RasmusTho/bifrost`. |
 | **S6** Governance promotion | DP-11, `DESIGN_HANDOFF_GOVERNANCE.md`, and `yggdrasil-design-handoff` skill point at the token source, version, and effects rule; this doc becomes the owner doc | S1, S2 | Via `post-merge-owner-doc`. |
@@ -190,3 +171,4 @@ active.
 - Rewriting historical `design_handoff/*` packages. They keep their recorded token copies under
   the gate's adoption boundary.
 - Bundling custom fonts into Bifrost (a Bifrost-local decision).
+- A light theme (rejected by the owner, 2026-09-22).
