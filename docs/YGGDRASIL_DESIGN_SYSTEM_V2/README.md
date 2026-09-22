@@ -20,8 +20,13 @@ from: the Companion product UI, the Builder System UIs, and the Bifrost native c
 
 Owner decisions recorded 2026-09-22:
 
-- **Theme:** Yggdrasil stays **dark-only**. A proposed Yggdrasil Light was reviewed and rejected
-  the same day: it lost the Tron / cyberpunk / Old Norse identity. No light theme is planned.
+- **Themes:** *Yggdrasil Dark* (today's look) stays the default. *Yggdrasil Light "Shell"* is
+  approved **for trial**. It is inspired by the Ghost in the Shell (2017) posters: porcelain work
+  surfaces floating on a glitching neon city. Four earlier light directions were reviewed and
+  rejected the same day because they felt generic, "90s", or "too My Little Pony": a plain cool
+  light, Niflheim / Grid Daylight / Neon Paper, a prismatic Bifröst, and a muted porcelain Shell.
+  The review page is kept at [`exploration/2026-09-22-shell-light-theme.html`](exploration/2026-09-22-shell-light-theme.html).
+  Shell graduates from trial only after the owner uses it in the Companion (S3).
 - **App feel:** one shared core (colour, type, meaning) with per-surface **density profiles**;
   glow and grid effects become opt-in and state-only.
 - **Scope:** Companion UI, all Builder System UIs, and Bifrost (separate repo, same system).
@@ -53,7 +58,9 @@ The canonical source becomes a platform-neutral token file in
 design-system/yggdrasil/
   tokens/primitives.json      # raw ramps, type scale, spacing, radius, motion
   tokens/semantic.json        # roles that reference primitives
-  tokens/theme.json           # role -> primitive bindings (Yggdrasil Dark)
+  tokens/themes/dark.json     # role -> primitive bindings (Yggdrasil Dark, default)
+  tokens/themes/shell.json    # role -> primitive bindings (Yggdrasil Light "Shell", trial)
+  tokens/materials/*.json     # per-theme backdrop, glass, surface finish, light, motion
   tokens/density/comfortable.json
   tokens/density/compact.json
   VERSION                     # semver of the system
@@ -83,27 +90,87 @@ CI proves every generated file is fresh (regenerate, then diff). Hand edits to o
      `amber` (staged / uncommitted), `destructive`. Each has `-dim` and `-muted`.
    - Status: `success`, `warning`, `danger`, `info`, which alias the domain roles, so builder
      dashboards do not invent a fourth colour language.
-3. **Theme:** binds every role to its Yggdrasil Dark value. Only one theme exists.
+3. **Theme:** binds every role for Dark and for Shell.
 4. **Density:** comfortable or compact.
-5. **Effects:** glow, grid background, and neon borders. Opt-in only.
+5. **Material:** what gives a theme its identity beyond colour: backdrop, glass, surface
+   finish, rim light, chromatic split, and ambient motion. Dark's material is today's faint cyan
+   grid. Shell's is described below.
+6. **Effects:** Dark's glow utilities, grid background, and neon borders. Opt-in and state-only.
 
 **Compatibility:** every token name in today's sheet (`--bg-base`, `--fg-1`, `--accent`,
 `--vault-glow`, `--space-4`, `--text-base`, and the rest) keeps its name and Dark value in v2.
 Existing consumers change nothing to stay correct. Renames, if any, are a later major version.
 
-### Density selection (web)
+### Theme and density selection (web)
 
-- Density: `data-density="comfortable" | "compact"` on the root or a surface container, with
-  comfortable as the default. It is a pure token swap: no component CSS may branch on density.
-- There is no theme switch. Surfaces must not follow `prefers-color-scheme` into a light
-  rendering. A surface embedded in a light host still paints its own `bg-base`.
+- Theme: `data-theme="dark" | "light"` on the root element. With no attribute, Dark applies.
+  A surface may follow `prefers-color-scheme` only when it opts in with `data-theme="system"`.
+  During the trial, Light is a per-user choice in the Companion and is not a surface default.
+- Density: `data-density="comfortable" | "compact"`, with comfortable as the default.
+- Both are pure token and material swaps. No component CSS may branch on theme or density.
 
-### Contrast rule
+### Yggdrasil Dark contrast
 
 Contrast measured on `bg-base` `#070b12` (WCAG 2.x relative luminance): `fg-1` 15.81, `fg-2` 6.70,
 `accent` 8.90, `cyan` 10.87, `vault` 12.21, `agent` 7.16, `amber` 8.20, `destructive` 5.62, all
 at least 4.5:1. `fg-3` is 2.56, so v2 documents it as disabled/decorative only: it must never
-carry readable content. S1 adds a CI contrast check over role/surface pairs.
+carry readable content. S1 adds a CI contrast check over role/surface pairs for both themes.
+
+### Yggdrasil Light "Shell" (trial)
+
+The suit against the city. The surfaces people read and write on are calm porcelain. The frame
+around them is a saturated neon city that the porcelain catches as rim light.
+
+**Structure**
+
+- **City backdrop** (the app frame, visible around panels): radial fields of red `#ff1f4b`,
+  cyan `#00e5ff`, magenta `#ff2aa0`, and electric blue `#2850ff` over violet `#6a2bff` →
+  `#1a0a2e`. On top sit vertical glitch streaks (1–2px lines in cyan, white, and red at
+  irregular periods) and faint horizontal scanlines.
+- **Porcelain sheet** (content surfaces): a `#ffffff` → `#f1f2f5` → `#e4e6eb` gradient with a
+  faint suit panel-seam line drawing in one corner. Rim light: cyan from the left, red from the
+  right.
+- **Dark glass chrome** (top bar, sidebar, anything sitting directly on the city):
+  `rgba(10,8,24,0.74)` with white text.
+- **Emblem:** the ᛉ rune inside a thin triangle (after the poster's triangle, and the valknut).
+  Wordmark in light, very widely tracked capitals.
+
+**Roles.** Every role has an *ink* tone for text and a *mark* tone for the markers next to it.
+Neon colours are decorative only: never text.
+
+| Role | Ink (text) | Mark | Ink contrast on darkest porcelain `#e4e6eb` |
+|---|---|---|---|
+| `fg-1` | `#0f1014` | — | ≥ 15 |
+| `fg-2` | `#50545e` | — | 5.48 (lowest) |
+| `fg-3` | `#a0a4ad` | — | disabled/decorative only |
+| `accent` | `#6b4d00` | `#e8b440` | ≥ 5.48 |
+| `cyan` | `#006470` | `#00d4e8` | ≥ 5.48 |
+| `vault` | `#0b6334` | `#16c95e` | ≥ 5.48 |
+| `agent` | `#1f45b8` | `#2f6bff` | ≥ 5.48 |
+| `amber` | `#8a4300` | `#ff8a1a` | ≥ 5.48 |
+| `destructive` | `#b3162c` | `#ff1f4b` | ≥ 5.48 |
+
+On dark glass, white text measures at least 8.94:1 and 80 % white at least 6.44:1. Both were
+measured over the brightest point the city can put behind the glass (a white glitch streak).
+
+**Component grammar**
+
+- Status: small square markers in the mark tone, with uppercase tracked mono labels in the ink
+  tone. No pills.
+- Primary button: solid graphite with a cyan/red chromatic split on its edges. Secondary
+  buttons: 1px graphite outline.
+- Display headings: light, tracked capitals with a subtle cyan/red split. EB Garamond italic is
+  kept for secondary display lines.
+- Agent voice: a blue/violet scanline band with an agent-blue edge.
+- Staged: an amber edge with a warm fade.
+- Inputs: underline only. Focus is a cyan underline with a red offset.
+- Selection: a red and cyan double edge.
+
+**Motion:** the city's streak layer jumps a few pixels briefly every 7s (a "glitch tick"). It is
+disabled under `prefers-reduced-motion`. Content surfaces never move.
+
+**Scope boundary:** Shell's material (city, rim light, chromatic split, glitch) belongs to the
+theme. It is not an effects utility that Dark surfaces may borrow.
 
 ### Density profiles
 
@@ -121,7 +188,7 @@ Other type steps and spacing are unchanged between profiles.
 
 - Correct the "DM Sans" comment. Space Grotesk stays the UI face.
 - Load JetBrains Mono from Google Fonts, dropping `fonts.bunny.net`.
-- Focus ring: a 2px solid `--border-focus` (cyan) outline, with no glow by default.
+- Dark focus ring: a 2px solid `--border-focus` (cyan) outline, with no glow by default.
 - Move `.glow-*`, `.text-glow-*`, `.grid-bg`, `.border-cyan`, and `.border-gold` into an opt-in
   effects layer (`[data-effects="on"]` or explicit `.fx-*` classes), documented as state-only.
 - Honour `prefers-reduced-motion` by zeroing `--duration-*`.
@@ -142,8 +209,9 @@ Other type steps and spacing are unchanged between profiles.
 ### Bifrost
 
 Bifrost stays native. It adopts Yggdrasil **colours, spacing, and radius** through the generated
-`YggdrasilTokens.swift`. Colours are fixed Yggdrasil Dark values, and the app sets
-`.preferredColorScheme(.dark)` so system controls match. Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
+`YggdrasilTokens.swift`. Bifrost ships Dark first, with `.preferredColorScheme(.dark)`. Shell
+follows on iOS only after the web trial graduates (city backdrop and rim light map to SwiftUI
+gradients and shadows). Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
 roles (`display` → New York serif as the closest native analogue to EB Garamond unless the font
 is bundled; UI → SF Pro). Bifrost vendors a pinned token version and records it. A Bifrost CI check
 compares its vendored file against the tagged release here. The cross-repo contract lives under
@@ -153,9 +221,9 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 
 | Slice | Outcome | Depends on | Notes |
 |---|---|---|---|
-| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Existing consumers render identically in Dark/comfortable. |
-| **S2** Live system reconciliation | Claude Design system republished from S1 output, no longer Legacy; README matches tokens (closes DS-1); component previews promoted to exports (DS-2); gate records new SHA-256 | S1 | **Owner-assisted:** needs a working Claude Design login. Until S2 lands, the byte-parity gate fails closed and new design generation waits. |
-| **S3** Companion migration | Workspace modules use tokens only; inlined subset replaced by the served sheet; off-palette colours removed | S1 | Hex-literal ceiling test per module. |
+| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, Shell theme and material, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Existing consumers render identically in Dark/comfortable. |
+| **S2** Live system reconciliation | Claude Design system republished from S1 output (Dark and Shell), no longer Legacy; README matches tokens (closes DS-1); component previews promoted to exports (DS-2); gate records new SHA-256 | S1 | **Owner-assisted:** needs a working Claude Design login. Until S2 lands, the byte-parity gate fails closed and new design generation waits. |
+| **S3** Companion migration | Workspace modules use tokens only; inlined subset replaced by the served sheet; off-palette colours removed; per-user Light (Shell) toggle for the trial | S1 | Hex-literal ceiling test per module. **Trial gate:** the owner uses Shell in the Companion and then decides whether it graduates, needs changes, or is dropped. |
 | **S4** Builder UI migration | Signboard, legacy dashboard, and DevUI candidate on tokens with compact density; Cockpit verified | S1 | Can run in parallel with S3. |
 | **S5** Bifrost adoption | `YggTheme` backed by generated Swift tokens; version pin and parity check | S1 | Filed in `RasmusTho/bifrost`. |
 | **S6** Governance promotion | DP-11, `DESIGN_HANDOFF_GOVERNANCE.md`, and `yggdrasil-design-handoff` skill point at the token source, version, and effects rule; this doc becomes the owner doc | S1, S2 | Via `post-merge-owner-doc`. |
@@ -171,4 +239,4 @@ active.
 - Rewriting historical `design_handoff/*` packages. They keep their recorded token copies under
   the gate's adoption boundary.
 - Bundling custom fonts into Bifrost (a Bifrost-local decision).
-- A light theme (rejected by the owner, 2026-09-22).
+- Shell as a default for any surface, or on Bifrost, before the trial graduates.
