@@ -17,11 +17,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from app.knowledge_acquisition.sync_scheduler import (
-    DEFAULT_MAX_CONCURRENT_ACQUISITIONS,
-    SyncScheduler,
-    TickOutcome,
-)
+from app.knowledge_acquisition.sync_scheduler import SyncScheduler, TickOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +30,6 @@ _RECONCILED = False
 
 ENABLED_KEY = "youtubeSync.enabled"
 RUNNER_ENABLED_KEY = "youtubeSync.runnerEnabled"
-MAX_CONCURRENT_KEY = "youtubeSync.maxConcurrentAcquisitions"
 
 
 def _setting(effective: dict[str, Any], key: str, default: Any) -> Any:
@@ -103,11 +98,9 @@ def run_scheduled_sync_tick(
     # resolver: `resolve_accepted_runtime_gating` fails closed to the
     # registered safe default for first-seen, denied, cross-file, or otherwise
     # unreceipted disk input, so an unreviewed settings edit cannot switch a
-    # runner on. `effective_settings` is the operator-facing view and is used
-    # only for the non-gating tuning value below.
+    # runner on.
     if not _both_gates_open(service.resolve_accepted_runtime_gating(vault_context)):
         return TickOutcome(reason="disabled")
-    effective = service.effective_settings(vault_context)
 
     owns_process_marker = scheduler is None
     if scheduler is None:
@@ -126,10 +119,8 @@ def run_scheduled_sync_tick(
             vault_context=vault_context,
             api_client=api_client,
             clock=(lambda: now) if now is not None else None,
-            max_concurrent=int(
-                _setting(effective, MAX_CONCURRENT_KEY, DEFAULT_MAX_CONCURRENT_ACQUISITIONS)
-            ),
-            holder="watcher",
+            # No holder is passed: `default_holder()` derives one per process,
+            # because a shared constant here silently voids the lease.
             reconciled=_RECONCILED,
         )
 
@@ -143,7 +134,6 @@ def run_scheduled_sync_tick(
 
 __all__ = [
     "ENABLED_KEY",
-    "MAX_CONCURRENT_KEY",
     "RUNNER_ENABLED_KEY",
     "run_scheduled_sync_tick",
 ]

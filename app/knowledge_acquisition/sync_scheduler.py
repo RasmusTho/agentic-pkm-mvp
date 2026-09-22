@@ -13,9 +13,15 @@ be callable synchronously from that loop and must never raise into it.
 
 Two facts shape the design:
 
-- **The tick host is shared.** A slow acquisition cannot be allowed to stall
-  vault watching, so discovery and drain both run inside a per-tick time budget
-  and the drain executor is bounded by ``maxConcurrentAcquisitions``.
+- **The tick host is shared, so this tick does discovery only.** The watcher
+  cycle holds a shared ingress flock while it runs, so anything slow inside it
+  stalls vault watching and blocks a foreground vault rebind. Discovery is
+  bounded HTTP against one API; acquisition is a media download that can take
+  minutes. An earlier revision drained the queue here too, and an independent
+  review reproduced a 3.01s tick against a 0.5s budget — the budget gated only
+  the *start* of work, never the waiting. Acquisition therefore stays on the
+  operator-invoked ``youtube-inbox-dev drain`` command (#5613); a bounded
+  background drain is its own future slice.
 - **Missed time is not lost work.** Cursors and queue rows are durable, so a
   node that was off simply finds every enabled source due on its first tick and
   catches up. There is no separate reconciliation machinery, and none is needed.
@@ -28,8 +34,10 @@ scheduler bookkeeping has no business widening it.
 from __future__ import annotations
 
 import logging
+import os
+import socket
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol
@@ -74,10 +82,21 @@ DEFAULT_TICK_BUDGET_SECONDS = 30.0
 LEASE_KEY = "lease:youtube_sync"
 LEASE_TTL_SECONDS = 600
 
+
+def default_holder() -> str:
+    """A lease identity unique to this runner.
+
+    Both store backends grant an unexpired lease when the requester's holder
+    matches the current one — that is what makes a heartbeat and a retry work.
+    It also means a *shared constant* holder silently voids the exclusion: an
+    independent review reproduced two runners both acquiring the lease because
+    every production call site passed the same literal. Identity therefore has
+    to be derived, never defaulted to a name.
+    """
+    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+
 #: Rows stuck ``in_progress`` longer than this are reset on the first tick.
 STALE_IN_PROGRESS_SECONDS = 3600
-
-DEFAULT_MAX_CONCURRENT_ACQUISITIONS = 2
 
 _BACKOFF_KEY_PREFIX = "backoff:"
 LAST_TICK_KEY = "last_tick"
@@ -106,8 +125,6 @@ class TickOutcome:
     discovered: int = 0
     enqueued: int = 0
     deduped: int = 0
-    drained: int = 0
-    drain_outcomes: Mapping[str, int] = field(default_factory=dict)
     skipped: Mapping[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -117,8 +134,6 @@ class TickOutcome:
             "discovered": self.discovered,
             "enqueued": self.enqueued,
             "deduped": self.deduped,
-            "drained": self.drained,
-            "drain_outcomes": dict(self.drain_outcomes),
             "skipped": dict(self.skipped),
         }
 
@@ -186,9 +201,7 @@ class SyncScheduler:
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         poll_fn: Callable[..., Any] | None = None,
-        drain_fn: Callable[..., Any] | None = None,
-        holder: str = "watcher",
-        max_concurrent: int = DEFAULT_MAX_CONCURRENT_ACQUISITIONS,
+        holder: str | None = None,
         tick_budget_seconds: float = DEFAULT_TICK_BUDGET_SECONDS,
         paused: Callable[[], bool] = lambda: False,
         reconciled: bool = False,
@@ -201,27 +214,18 @@ class SyncScheduler:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._monotonic = monotonic
         self._poll_fn = poll_fn
-        self._drain_fn = drain_fn
-        self._holder = holder
-        self._max_concurrent = max(1, int(max_concurrent))
+        self._holder = holder if holder is not None else default_holder()
         self._tick_budget_seconds = float(tick_budget_seconds)
         self._paused = paused
         # Whether this *process* has already caught up after start. A caller
         # that builds a scheduler per tick must pass the previous value in, or
         # every tick re-runs the catch-up pass and cadence never applies.
         self._reconciled = reconciled
-        self._stopping = False
 
     @property
     def reconciled(self) -> bool:
         """True once the catch-up pass has run, for a per-tick caller to carry."""
         return self._reconciled
-
-    # -- lifecycle ------------------------------------------------------------
-
-    def request_stop(self) -> None:
-        """Safe shutdown: claim no new work; let in-flight drains land durably."""
-        self._stopping = True
 
     # -- public entrypoints ---------------------------------------------------
 
@@ -283,9 +287,6 @@ class SyncScheduler:
         discovered = enqueued = deduped = 0
 
         for binding in self._enabled_sources(only_binding_id):
-            if self._stopping:
-                skipped[binding.binding_id] = "stopping"
-                continue
             if self._monotonic() - started >= self._tick_budget_seconds:
                 skipped[binding.binding_id] = "tick_budget_exhausted"
                 continue
@@ -293,15 +294,13 @@ class SyncScheduler:
                 skipped[binding.binding_id] = "not_due"
                 continue
 
-            result = self._poll_one(binding)
+            result = self._poll_one(binding, now=now)
             polled.append(binding.binding_id)
             if result is None:
                 continue
             discovered += int(getattr(result, "discovered", 0) or 0)
             enqueued += int(getattr(result, "enqueued", 0) or 0)
             deduped += int(getattr(result, "deduped", 0) or 0)
-
-        drained, drain_outcomes = self._drain(started=started)
 
         self._state.set(
             LAST_TICK_KEY,
@@ -311,8 +310,6 @@ class SyncScheduler:
                 "discovered": discovered,
                 "enqueued": enqueued,
                 "deduped": deduped,
-                "drained": drained,
-                "outcomes": dict(drain_outcomes),
             },
         )
 
@@ -322,8 +319,6 @@ class SyncScheduler:
             discovered=discovered,
             enqueued=enqueued,
             deduped=deduped,
-            drained=drained,
-            drain_outcomes=drain_outcomes,
             skipped=skipped,
         )
 
@@ -339,26 +334,36 @@ class SyncScheduler:
             yield row
 
     def _is_due(self, binding: Any, *, now: datetime) -> bool:
+        failures = self._consecutive_failures(binding.binding_id)
         last_attempt = _parse_iso(getattr(binding, "last_attempt_at", None))
         if last_attempt is None:
-            return True
+            # `poll_source` writes `last_attempt_at` only on its non-raising
+            # paths, so a source whose poll *raises* leaves it NULL forever.
+            # Reading NULL as unconditionally due therefore re-polls a broken
+            # source every tick and never lets its backoff apply. Fall back to
+            # the attempt this scheduler itself recorded.
+            last_attempt = _parse_iso((self._backoff_row(binding.binding_id)).get("last_attempt_at"))
+            if last_attempt is None:
+                return True
         interval = resolve_cadence_seconds(binding)
-        failures = self._consecutive_failures(binding.binding_id)
         delay = interval + backoff_delay_seconds(failures)
         return now >= last_attempt + timedelta(seconds=delay)
 
+    def _backoff_row(self, binding_id: str) -> dict[str, Any]:
+        return self._state.get(f"{_BACKOFF_KEY_PREFIX}{binding_id}") or {}
+
     def _consecutive_failures(self, binding_id: str) -> int:
-        row = self._state.get(f"{_BACKOFF_KEY_PREFIX}{binding_id}") or {}
-        value = row.get("consecutive_failures")
+        value = self._backoff_row(binding_id).get("consecutive_failures")
         return value if isinstance(value, int) and value > 0 else 0
 
-    def _record_poll_result(self, binding_id: str, *, failed: bool) -> None:
+    def _record_poll_result(self, binding_id: str, *, failed: bool, now: datetime) -> None:
+        # The attempt time is recorded here as well as by `poll_source`, because
+        # the provider path does not record one when it raises.
         key = f"{_BACKOFF_KEY_PREFIX}{binding_id}"
-        if not failed:
-            self._state.set(key, {"consecutive_failures": 0})
-            return
+        failures = 0 if not failed else self._consecutive_failures(binding_id) + 1
         self._state.set(
-            key, {"consecutive_failures": self._consecutive_failures(binding_id) + 1}
+            key,
+            {"consecutive_failures": failures, "last_attempt_at": now.isoformat()},
         )
 
     def _resolve_poll_fn(self) -> Callable[..., Any]:
@@ -368,14 +373,7 @@ class SyncScheduler:
 
         return poll_source
 
-    def _resolve_drain_fn(self) -> Callable[..., Any]:
-        if self._drain_fn is not None:
-            return self._drain_fn
-        from app.knowledge_acquisition.acquisition_requests import drain_one
-
-        return drain_one
-
-    def _poll_one(self, binding: Any) -> Any:
+    def _poll_one(self, binding: Any, *, now: datetime) -> Any:
         poll_fn = self._resolve_poll_fn()
         try:
             result = poll_fn(
@@ -387,89 +385,24 @@ class SyncScheduler:
         except Exception:
             # One unreachable source must never end the tick for the others.
             logger.exception("source poll failed for %s", binding.binding_id)
-            self._record_poll_result(binding.binding_id, failed=True)
+            self._record_poll_result(binding.binding_id, failed=True, now=now)
             return None
         reason_code = getattr(result, "reason_code", None)
         self._record_poll_result(
             binding.binding_id,
             failed=bool(reason_code) and reason_code not in NON_FAILURE_REASON_CODES,
+            now=now,
         )
         return result
-
-    def _drain(self, *, started: float) -> tuple[int, dict[str, int]]:
-        """Run queued acquisitions, bounded by concurrency and the tick budget."""
-        drain_fn = self._resolve_drain_fn()
-
-        outcomes: dict[str, int] = {}
-        drained = 0
-        if self._stopping:
-            return drained, outcomes
-
-        with ThreadPoolExecutor(max_workers=self._max_concurrent) as pool:
-            pending: set[Future[Any]] = set()
-            while True:
-                if self._stopping:
-                    break
-                if self._monotonic() - started >= self._tick_budget_seconds:
-                    break
-                if len(pending) >= self._max_concurrent:
-                    pending = self._reap(pending, outcomes, block=True)
-                    drained = sum(outcomes.values())
-                    continue
-                claimed = self._claim_one()
-                if not claimed:
-                    break
-                pending.add(pool.submit(self._drain_one_row, drain_fn, claimed))
-
-            # Let whatever is already running finish: abandoning it would leave
-            # rows `in_progress` with no owner until the stale reset.
-            while pending:
-                pending = self._reap(pending, outcomes, block=True)
-            drained = sum(outcomes.values())
-        return drained, outcomes
-
-    def _claim_one(self) -> Any:
-        try:
-            batch = self._requests.claim_batch(1)
-        except Exception:
-            logger.exception("claiming an acquisition request failed")
-            return None
-        return batch[0] if batch else None
-
-    def _drain_one_row(self, drain_fn: Callable[..., Any], row: Any) -> str:
-        try:
-            result = drain_fn(
-                row,
-                vault_context=self._vault_context,
-                queue=self._requests,
-            )
-        except Exception:
-            logger.exception("drain failed for request %s", getattr(row, "request_id", "?"))
-            return "error"
-        return str(getattr(result, "status", "unknown"))
-
-    @staticmethod
-    def _reap(
-        pending: set[Future[Any]], outcomes: dict[str, int], *, block: bool
-    ) -> set[Future[Any]]:
-        still: set[Future[Any]] = set()
-        for future in pending:
-            if not block and not future.done():
-                still.add(future)
-                continue
-            status = future.result()
-            outcomes[status] = outcomes.get(status, 0) + 1
-        return still
-
 
 __all__ = [
     "BACKOFF_CAP_SECONDS",
     "DEFAULT_CADENCE_SECONDS",
-    "DEFAULT_MAX_CONCURRENT_ACQUISITIONS",
     "LEASE_KEY",
     "LEASE_TTL_SECONDS",
     "STALE_IN_PROGRESS_SECONDS",
     "SyncScheduler",
+    "default_holder",
     "SyncStateStore",
     "TickOutcome",
     "backoff_delay_seconds",

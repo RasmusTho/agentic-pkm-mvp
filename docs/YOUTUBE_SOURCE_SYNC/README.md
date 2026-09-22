@@ -100,8 +100,11 @@ Out of scope (owned elsewhere or explicitly deferred):
 - **Reuse over new infrastructure:** V1 reuses the existing acquisition queue, shared
   outbox/idempotency helpers, and durable cursor discipline; WriteGuard remains the only
   vault-write gate. No parallel outbox or receipt substrate is introduced. YSS-06 (#3921) since
-  added scheduling on the *existing* watcher registry loop plus one durable single-runner lease
-  row — still no new long-running process, and still no second write path.
+  added **discovery** scheduling on the *existing* watcher registry loop plus one durable
+  single-runner lease row — still no new long-running process, and still no second write path.
+  Acquisition deliberately stays out of that loop: the watcher cycle holds a shared ingress flock,
+  so a multi-minute media download there would stall vault watching and block a foreground vault
+  rebind. Draining the queue remains the operator-invoked `youtube-inbox-dev drain` command.
 
 ## Normative shared contract
 
@@ -201,8 +204,9 @@ tests`, `mypy app`, and the focused subsystem suite are the publication baseline
 
 The parent feature issue is the V1 validation hub. Repository acceptance names the exact manual
 routes and tests; no rich UI or real-account operator drill is implied by this V1. Continuous
-scheduling was outside V1's acceptance set and arrived separately through YSS-06 (#3921) after the
-owner lifted that slice's deferral on 2026-09-22.
+scheduling was outside V1's acceptance set. Continuous *discovery* arrived separately through
+YSS-06 (#3921) after the owner lifted that slice's deferral on 2026-09-22; continuous *acquisition*
+remains deferred to a future bounded-background-drain slice.
 
 ## Relationship to GitHub issues
 

@@ -22,6 +22,7 @@ from app.knowledge_acquisition.sync_scheduler import (
     LEASE_TTL_SECONDS,
     SyncScheduler,
     backoff_delay_seconds,
+    default_holder,
     resolve_cadence_seconds,
 )
 from app.knowledge_acquisition.sync_state import MemorySyncStateStore
@@ -107,8 +108,6 @@ def _make(
     state: MemorySyncStateStore | None = None,
     clock: _Clock | None = None,
     poll_fn: Any = None,
-    drain_fn: Any = None,
-    holder: str = "watcher",
     **kwargs: Any,
 ) -> tuple[SyncScheduler, _Clock, MemorySyncStateStore, _Queue]:
     clock = clock or _Clock()
@@ -121,8 +120,6 @@ def _make(
         vault_context=object(),
         clock=clock,
         poll_fn=poll_fn or (lambda binding, **kw: _PollResult()),
-        drain_fn=drain_fn or (lambda row, **kw: replace(row, status="completed")),
-        holder=holder,
         **kwargs,
     )
     return sched, clock, state, queue
@@ -211,16 +208,19 @@ def test_overlapping_runs_excluded_by_lease_at_call_site() -> None:
         polls.append(binding.binding_id)
         return _PollResult()
 
-    first, _c, _s, _q = _make(
-        registry=registry, state=state, clock=clock, poll_fn=poll, holder="watcher"
-    )
-    second, _c2, _s2, _q2 = _make(
-        registry=registry, state=state, clock=clock, poll_fn=poll, holder="cli"
-    )
+    # Both runners derive identity exactly as production does. An earlier
+    # revision of this test hand-picked two distinct strings, which is the one
+    # configuration that works: every production site passed the same constant,
+    # so two runners both acquired the lease.
+    first, _c, _s, _q = _make(registry=registry, state=state, clock=clock, poll_fn=poll)
+    second, _c2, _s2, _q2 = _make(registry=registry, state=state, clock=clock, poll_fn=poll)
 
-    # Hold the lease as a third party so neither runner can claim it.
+    # A third runner, also with a derived identity, holds the lease first.
     assert state.acquire_lease(
-        key=LEASE_KEY, holder="other-runner", ttl_seconds=LEASE_TTL_SECONDS, now=clock.now
+        key=LEASE_KEY,
+        holder=default_holder(),
+        ttl_seconds=LEASE_TTL_SECONDS,
+        now=clock.now,
     )
     assert first.tick().reason == "lease_held"
     assert second.sync_now().reason == "lease_held"
@@ -231,6 +231,18 @@ def test_overlapping_runs_excluded_by_lease_at_call_site() -> None:
     clock.advance(LEASE_TTL_SECONDS + 1)
     assert first.tick().reason == "ran"
     assert polls == ["inbox"]
+
+    # Two independently constructed schedulers must never both hold it, which
+    # is only true when their identities actually differ.
+    assert default_holder() != default_holder()
+    held_by_first = state.acquire_lease(
+        key=LEASE_KEY, holder=first._holder, ttl_seconds=LEASE_TTL_SECONDS, now=clock.now
+    )
+    also_held_by_second = state.acquire_lease(
+        key=LEASE_KEY, holder=second._holder, ttl_seconds=LEASE_TTL_SECONDS, now=clock.now
+    )
+    assert held_by_first is True
+    assert also_held_by_second is False, "a second runner must not be granted a live lease"
 
 
 def test_offline_then_online_reconciles_without_duplicates() -> None:
@@ -305,7 +317,7 @@ def test_backoff_and_manual_sync_now() -> None:
     assert backoff["consecutive_failures"] >= 2
 
 
-def test_pause_and_safe_shutdown_semantics() -> None:
+def test_pause_semantics() -> None:
     registry = _Registry([_Binding("inbox"), _Binding("paused-source", enabled=False)])
     polls: list[str] = []
 
@@ -315,7 +327,7 @@ def test_pause_and_safe_shutdown_semantics() -> None:
 
     paused = {"value": True}
     state = MemorySyncStateStore()
-    sched, clock, _state, queue = _make(
+    sched, _clock, _state, _queue = _make(
         registry=registry,
         state=state,
         poll_fn=poll,
@@ -335,65 +347,61 @@ def test_pause_and_safe_shutdown_semantics() -> None:
     assert polls == ["inbox"]
     assert "paused-source" not in outcome.skipped
 
-    # Safe shutdown: no new work is claimed after stop is requested.
-    polls.clear()
-    queue.pending.append(_Row("req-1"))
-    sched.request_stop()
-    clock.advance(10_000)
-    stopped = sched.tick()
-    assert polls == []
-    assert stopped.drained == 0
-    assert queue.pending == [_Row("req-1")], "stopped tick must leave work durable"
 
-
-def test_bounded_concurrency_and_tick_budget() -> None:
+def test_tick_never_performs_acquisition() -> None:
+    # The watcher cycle holds a shared ingress flock while this tick runs, so a
+    # multi-minute media download here stalls vault watching and blocks a
+    # foreground rebind. An earlier revision drained the queue inside the tick
+    # and an independent review reproduced a 3.01s tick against a 0.5s budget.
+    # Discovery only: the queue must be left entirely alone.
+    queue = _Queue([_Row(f"req-{index}") for index in range(5)])
     registry = _Registry([_Binding("inbox")])
-    queue = _Queue([_Row(f"req-{index}") for index in range(8)])
-
-    live = 0
-    peak = 0
-    guard = threading.Lock()
-    release = threading.Event()
-
-    def slow_drain(row: _Row, **kwargs: Any) -> _Row:
-        nonlocal live, peak
-        with guard:
-            live += 1
-            peak = max(peak, live)
-        release.wait(timeout=2)
-        with guard:
-            live -= 1
-        return replace(row, status="completed")
-
-    sched, _clock, _state, _queue = _make(
+    sched, _clock, _state, _q = _make(
         registry=registry,
         queue=queue,
-        drain_fn=slow_drain,
-        max_concurrent=2,
+        poll_fn=lambda binding, **kw: _PollResult(discovered=3, enqueued=3),
     )
 
-    release.set()
     outcome = sched.tick()
 
-    assert peak <= 2, "drain concurrency must never exceed maxConcurrentAcquisitions"
-    assert outcome.drained == 8
-    assert outcome.drain_outcomes == {"completed": 8}
+    assert outcome.reason == "ran"
+    assert outcome.enqueued == 3
+    assert queue.claims == 0, "the tick must not claim acquisition work"
+    assert len(queue.pending) == 5, "queued rows stay for the operator-invoked drain"
+    assert not hasattr(outcome, "drained"), "a discovery-only tick reports no drain counters"
 
-    # A slow drain must not let one tick run unbounded: the budget stops it
-    # starting new work, and the already-claimed row still lands durably.
-    monotonic = {"value": 0.0}
-    budgeted, _c, _s, budget_queue = _make(
-        registry=_Registry([]),
-        queue=_Queue([_Row(f"slow-{index}") for index in range(5)]),
-        drain_fn=lambda row, **kw: replace(row, status="completed"),
-        max_concurrent=1,
-        tick_budget_seconds=1.0,
-        monotonic=lambda: monotonic.__setitem__("value", monotonic["value"] + 0.6)
-        or monotonic["value"],
+    # The scheduler must carry no drain collaborator at all, so a future edit
+    # cannot quietly reintroduce acquisition into the watcher cycle.
+    assert not hasattr(sched, "_drain_fn")
+    assert not hasattr(sched, "_drain")
+
+
+def test_raising_poll_still_backs_off() -> None:
+    # `poll_source` writes `last_attempt_at` only on its non-raising paths, so a
+    # source whose poll raises leaves the registry field NULL. Reading NULL as
+    # unconditionally due re-polls a broken source every tick forever and never
+    # lets its backoff apply -- reproduced at 6 polls over 6 minutes against a
+    # 3600s cadence before this was fixed.
+    registry = _Registry(
+        [_Binding("playlist-1", collection_kind="playlist", poll_interval_seconds=3600)]
     )
-    result = budgeted.tick()
-    assert result.drained < 5, "the tick budget must stop a long drain from running forever"
-    assert budget_queue.pending, "unclaimed work stays in the queue for the next tick"
+    attempts: list[str] = []
+
+    def raising_poll(binding: _Binding, **kwargs: Any) -> _PollResult:
+        attempts.append("poll")
+        raise RuntimeError("provider unreachable")
+
+    sched, clock, state, _queue = _make(registry=registry, poll_fn=raising_poll)
+
+    sched.tick()  # catch-up pass; the poll raises and records its own attempt
+    assert len(attempts) == 1
+
+    for _ in range(5):
+        clock.advance(60)
+        sched.tick()
+
+    assert len(attempts) == 1, f"a raising poll must back off, not retry every tick: {attempts}"
+    assert (state.get("backoff:playlist-1") or {}).get("consecutive_failures") == 1
 
 
 def test_benign_reason_codes_do_not_accumulate_backoff() -> None:
@@ -441,7 +449,6 @@ def test_reconciled_marker_survives_per_tick_construction() -> None:
             vault_context=object(),
             clock=clock,
             poll_fn=poll,
-            drain_fn=lambda row, **kw: row,
             reconciled=reconciled,
         )
         sched.tick()
