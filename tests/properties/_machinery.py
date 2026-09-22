@@ -503,9 +503,11 @@ WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
         "SETTINGS-05C added the activation seam above the manager."
     ),
-    ("app/vault/settings_service.py", 696): (
+    ("app/vault/settings_service.py", 711): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
-        "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call."
+        "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call. "
+        "Line drifted 696 -> 711 (site unchanged) when YSS-06 (#3921) added the "
+        "youtubeSync.maxConcurrentAcquisitions SettingDefinition earlier in the file."
     ),
 }
 
