@@ -155,8 +155,10 @@ def _validate_capability_intent(
             validate_inline_schema(request.output_schema)
         except ValueError as exc:
             raise _RequestFailure(422, "output_schema_invalid") from exc
+    mapping = descriptor.trusted_instruction_mapping
+    if mapping is None:
+        raise _RequestFailure(422, "trusted_instruction_mapping_unavailable")
     if intent.literal_system_role_required:
-        mapping = descriptor.trusted_instruction_mapping
         if mapping.trusted_channel != "system":
             raise _RequestFailure(422, "literal_system_role_unavailable")
 

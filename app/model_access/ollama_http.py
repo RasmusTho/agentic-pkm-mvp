@@ -25,8 +25,10 @@ def _require_loopback_base_url(base_url: str) -> str:
     try:
         parsed = urlsplit(base_url)
         host = parsed.hostname
+        if host is None:
+            raise ValueError("unsupported Ollama endpoint")
         loopback = host == "localhost"
-        if host is not None and not loopback:
+        if not loopback:
             loopback = ipaddress.ip_address(host).is_loopback
         if (
             parsed.scheme != "http"

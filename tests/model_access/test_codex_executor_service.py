@@ -214,6 +214,43 @@ def test_codex_complete_preserves_channels_and_rejects_tools() -> None:
     assert len(codex.calls) == 1
 
 
+def test_complete_rejects_missing_instruction_mapping_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = _factory()
+    original_describe = factory.describe
+
+    def describe_without_mapping(
+        adapter_id: str, *, provider: str, model: str
+    ):
+        return original_describe(
+            adapter_id, provider=provider, model=model
+        ).model_copy(update={"trusted_instruction_mapping": None})
+
+    monkeypatch.setattr(factory, "describe", describe_without_mapping)
+    codex = FakeCodexExecutor()
+    ollama = FakeOllamaAdapter()
+    app = create_codex_executor_app(
+        codex_executor=codex,  # type: ignore[arg-type]
+        ollama_adapter=ollama,  # type: ignore[arg-type]
+        adapter_factory=factory,
+        serve_capability_name=CAPABILITY_NAME,
+    )
+    payload = _payload()
+
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post(
+            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": {"code": "trusted_instruction_mapping_unavailable"}
+    }
+    assert codex.calls == []
+    assert ollama.calls == []
+
+
 def test_codex_structured_output_accepts_an_empty_json_schema() -> None:
     app, codex, _ollama = _app()
     payload = _payload()
