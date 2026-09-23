@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Generate every Yggdrasil token output from the DTCG token source.
 
+``tokens/*.json`` (except ``css-values.json``) are W3C Design Tokens (DTCG) files:
+dimensions and durations are ``{"value", "unit"}``, cubic-beziers are arrays,
+font families are arrays, and aliases use ``{token-name}``. ``css-values.json``
+holds the CSS-native values DTCG cannot express exactly; they are emitted verbatim.
+
 Usage:
     python3 design-system/yggdrasil/build.py          # write all outputs
     python3 design-system/yggdrasil/build.py --check  # exit 1 if any output is stale
@@ -41,32 +46,71 @@ def _tokens(relative: str) -> dict[str, dict[str, str]]:
 
 
 def load() -> dict[str, object]:
+    css_values = json.loads((HERE / "tokens" / "css-values.json").read_text(encoding="utf-8"))
     return {
         "version": (HERE / "VERSION").read_text(encoding="utf-8").strip(),
         "primitives": _tokens("primitives.json"),
         "dark": _tokens("themes/dark.json"),
         "shell": _tokens("themes/shell.json"),
         "semantic": _tokens("semantic.json"),
-        "material_dark": _tokens("materials/dark.json"),
-        "material_shell": _tokens("materials/shell.json"),
+        "css_dark": css_values["root"],
+        "css_shell": css_values["shell"],
         "comfortable": _tokens("density/comfortable.json"),
         "compact": _tokens("density/compact.json"),
     }
 
 
-def _block(selector: str, tokens: dict[str, dict[str, str]], indent: str = "") -> str:
+_ALIAS = re.compile(r"^\{([a-z0-9-]+)\}$")
+
+
+def _num(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else repr(value)
+
+
+def css_value(entry: dict[str, object]) -> str:
+    """Render one token value as CSS. DTCG aliases become var() references."""
+    value, kind = entry["$value"], entry.get("$type")
+    if isinstance(value, str):
+        alias = _ALIAS.match(value)
+        return f"var(--{alias.group(1)})" if alias else value
+    if kind in ("dimension", "duration"):
+        return f"{_num(value['value'])}{value['unit']}"
+    if kind == "cubicBezier":
+        return "cubic-bezier(" + ", ".join(_num(v) for v in value) + ")"
+    if kind == "number":
+        return _num(value)
+    if kind == "fontFamily":
+        return ", ".join(f"'{name}'" if " " in name else name for name in value)
+    raise ValueError(f"cannot render {kind} value {value!r}")
+
+
+def _block(selector: str, tokens: dict[str, dict[str, object]], indent: str = "") -> str:
     lines = [f"{indent}{selector} {{"]
     for name, entry in tokens.items():
         note = f"   /* {entry['$description']} */" if entry.get("$description") else ""
-        lines.append(f"{indent}  --{name}: {entry['$value']};{note}")
+        lines.append(f"{indent}  --{name}: {css_value(entry)};{note}")
     lines.append(f"{indent}}}")
     return "\n".join(lines)
 
 
+def root_tokens(src: dict[str, object]) -> dict[str, dict[str, object]]:
+    return {**src["dark"], **src["primitives"], **src["semantic"], **src["css_dark"], **src["comfortable"]}
+
+
+def shell_overrides(src: dict[str, object]) -> dict[str, dict[str, object]]:
+    return {**src["shell"], **src["css_shell"]}
+
+
+REDUCED_MOTION = (
+    "/* ============================================================\n   ACCESSIBILITY — reduced motion (always on)\n   ============================================================ */\n"
+    "@media (prefers-reduced-motion: reduce) {\n"
+    "  :root {\n    --duration-fast: 0ms;\n    --duration-base: 0ms;\n    --duration-slow: 0ms;\n  }\n}"
+)
+
+
 def render_css(src: dict[str, object]) -> str:
     version = src["version"]
-    root_tokens = {**src["dark"], **src["primitives"], **src["semantic"], **src["material_dark"], **src["comfortable"]}
-    shell_tokens = {**src["shell"], **src["material_shell"]}
+    shell_tokens = shell_overrides(src)
     header = (
         "/* ============================================================\n"
         f"   Yggdrasil Design System v{version} — Colors & Type\n"
@@ -82,7 +126,7 @@ def render_css(src: dict[str, object]) -> str:
         FONT_IMPORT,
         "",
         "/* ============================================================\n   BASE TOKENS — Yggdrasil Dark (default)\n   ============================================================ */",
-        _block(":root", root_tokens),
+        _block(":root", root_tokens(src)),
         "",
         (HERE / "css" / "base.css").read_text(encoding="utf-8").rstrip("\n"),
         "",
@@ -95,24 +139,29 @@ def render_css(src: dict[str, object]) -> str:
         _block('[data-density="compact"]', src["compact"]),
         "",
         (HERE / "css" / "optin.css").read_text(encoding="utf-8").rstrip("\n"),
+        "",
+        REDUCED_MOTION,
     ]
     return "\n".join(parts) + "\n"
 
 
 _HEX = re.compile(r"^#([0-9a-fA-F]{6})$")
 _RGBA = re.compile(r"^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)$")
-_VAR = re.compile(r"^var\(--([a-z0-9-]+)\)$")
+def resolve(tokens: dict[str, dict[str, object]], name: str, depth: int = 0) -> dict[str, object] | None:
+    """Follow DTCG aliases to the entry that holds a concrete value."""
+    entry = tokens.get(name)
+    if entry is None or depth > 8:
+        return None
+    alias = _ALIAS.match(entry["$value"]) if isinstance(entry["$value"], str) else None
+    return resolve(tokens, alias.group(1), depth + 1) if alias else entry
 
 
-def resolve_colors(theme: dict[str, dict[str, str]]) -> dict[str, tuple[int, float]]:
-    """Resolve colour roles to (rgb, opacity), following var() references."""
+def resolve_colors(theme: dict[str, dict[str, object]]) -> dict[str, tuple[int, float]]:
+    """Resolve colour roles to (rgb, opacity), following DTCG aliases."""
 
-    def value(name: str, depth: int = 0) -> str | None:
-        entry = theme.get(name)
-        if entry is None or depth > 8:
-            return None
-        match = _VAR.match(entry["$value"])
-        return value(match.group(1), depth + 1) if match else entry["$value"]
+    def value(name: str) -> str | None:
+        entry = resolve(theme, name)
+        return entry["$value"] if entry and isinstance(entry["$value"], str) else None
 
     out: dict[str, tuple[int, float]] = {}
     for name, entry in theme.items():
@@ -158,8 +207,9 @@ def render_swift(src: dict[str, object]) -> str:
     for enum, prefix in (("Spacing", "space-"), ("Radius", "radius-")):
         lines.append(f"    public enum {enum} {{")
         for name, entry in src["primitives"].items():
-            if name.startswith(prefix) and entry["$value"].endswith("px"):
-                lines.append(f"        public static let {_camel(name)}: CGFloat = {entry['$value'][:-2]}")
+            value = entry["$value"]
+            if name.startswith(prefix) and entry.get("$type") == "dimension" and value["unit"] == "px":
+                lines.append(f"        public static let {_camel(name)}: CGFloat = {_num(value['value'])}")
         lines.append("    }")
     lines += [
         "}",
@@ -175,15 +225,17 @@ def render_swift(src: dict[str, object]) -> str:
 
 
 def flatten(src: dict[str, object]) -> dict[str, object]:
-    plain = lambda tokens: {name: entry["$value"] for name, entry in tokens.items()}  # noqa: E731
+    """Every token per theme with aliases resolved to concrete CSS values."""
+
+    def resolved(tokens: dict[str, dict[str, object]]) -> dict[str, str]:
+        return {name: css_value(resolve(tokens, name)) for name in tokens}
+
+    dark = root_tokens(src)
+    shell = {**dark, **shell_overrides(src)}
     return {
         "version": src["version"],
-        "primitives": plain(src["primitives"]),
-        "themes": {
-            "dark": plain({**src["dark"], **src["semantic"], **src["material_dark"]}),
-            "shell": plain({**theme_roles(src, "shell"), **src["material_shell"]}),
-        },
-        "density": {"comfortable": plain(src["comfortable"]), "compact": plain(src["compact"])},
+        "themes": {"dark": resolved(dark), "shell": resolved(shell)},
+        "density": {"comfortable": resolved(src["comfortable"]), "compact": resolved(src["compact"])},
     }
 
 

@@ -2,44 +2,44 @@
   "$description": "Additive semantic aliases. Status roles alias the domain roles; mark tones default to the role colour.",
   "tokens": {
     "status-success": {
-      "$value": "var(--vault)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{vault}"
     },
     "status-warning": {
-      "$value": "var(--amber)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{amber}"
     },
     "status-danger": {
-      "$value": "var(--destructive)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{destructive}"
     },
     "status-info": {
-      "$value": "var(--agent)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{agent}"
     },
     "accent-mark": {
-      "$value": "var(--accent)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{accent}"
     },
     "cyan-mark": {
-      "$value": "var(--cyan)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{cyan}"
     },
     "vault-mark": {
-      "$value": "var(--vault)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{vault}"
     },
     "agent-mark": {
-      "$value": "var(--agent)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{agent}"
     },
     "amber-mark": {
-      "$value": "var(--amber)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{amber}"
     },
     "destructive-mark": {
-      "$value": "var(--destructive)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{destructive}"
     }
   }
 }

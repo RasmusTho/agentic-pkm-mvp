@@ -2,189 +2,177 @@
   "$description": "Yggdrasil Dark: the default theme. Every name and value is the v1 sheet, unchanged.",
   "tokens": {
     "bg-base": {
-      "$value": "#070b12",
       "$type": "color",
-      "$description": "deepest — page root, near black with blue cast"
+      "$description": "deepest — page root, near black with blue cast",
+      "$value": "#070b12"
     },
     "bg-surface": {
-      "$value": "#0c1220",
       "$type": "color",
-      "$description": "panels, sidebars"
+      "$description": "panels, sidebars",
+      "$value": "#0c1220"
     },
     "bg-raised": {
-      "$value": "#111a2e",
       "$type": "color",
-      "$description": "cards, inputs, raised surfaces"
+      "$description": "cards, inputs, raised surfaces",
+      "$value": "#111a2e"
     },
     "bg-overlay": {
-      "$value": "#162038",
       "$type": "color",
-      "$description": "hover states, popovers"
+      "$description": "hover states, popovers",
+      "$value": "#162038"
     },
     "bg-modal": {
-      "$value": "#0e1828",
       "$type": "color",
-      "$description": "modal / dialog backdrop content"
+      "$description": "modal / dialog backdrop content",
+      "$value": "#0e1828"
     },
     "fg-1": {
-      "$value": "#dce8f0",
       "$type": "color",
-      "$description": "primary — cool blue-white"
+      "$description": "primary — cool blue-white",
+      "$value": "#dce8f0"
     },
     "fg-2": {
-      "$value": "#7a9ab8",
       "$type": "color",
-      "$description": "secondary / muted"
+      "$description": "secondary / muted",
+      "$value": "#7a9ab8"
     },
     "fg-3": {
-      "$value": "#3d5570",
       "$type": "color",
-      "$description": "tertiary / disabled / dim"
+      "$description": "tertiary / disabled / dim",
+      "$value": "#3d5570"
     },
     "fg-inverse": {
-      "$value": "#070b12",
       "$type": "color",
-      "$description": "text on light/accent backgrounds"
+      "$description": "text on light/accent backgrounds",
+      "$value": "#070b12"
     },
     "border": {
-      "$value": "#152030",
       "$type": "color",
-      "$description": "default — subtle grid line"
+      "$description": "default — subtle grid line",
+      "$value": "#152030"
     },
     "border-strong": {
-      "$value": "#1e3050",
       "$type": "color",
-      "$description": "emphasis — dividers, active edges"
+      "$description": "emphasis — dividers, active edges",
+      "$value": "#1e3050"
     },
     "border-focus": {
-      "$value": "#00d4e8",
       "$type": "color",
-      "$description": "focus ring — electric cyan"
+      "$description": "focus ring — electric cyan",
+      "$value": "#00d4e8"
     },
     "accent": {
-      "$value": "#d4a843",
       "$type": "color",
-      "$description": "primary accent — active, focus, key affordances"
+      "$description": "primary accent — active, focus, key affordances",
+      "$value": "#d4a843"
     },
     "accent-dim": {
-      "$value": "#80621a",
       "$type": "color",
-      "$description": "dimmed gold"
+      "$description": "dimmed gold",
+      "$value": "#80621a"
     },
     "accent-muted": {
-      "$value": "#2a1e06",
       "$type": "color",
-      "$description": "gold at low opacity"
+      "$description": "gold at low opacity",
+      "$value": "#2a1e06"
     },
     "cyan": {
-      "$value": "#00d4e8",
       "$type": "color",
-      "$description": "electric cyan — Tron primary glow"
+      "$description": "electric cyan — Tron primary glow",
+      "$value": "#00d4e8"
     },
     "cyan-dim": {
-      "$value": "#007a8a",
       "$type": "color",
-      "$description": "dimmed cyan"
+      "$description": "dimmed cyan",
+      "$value": "#007a8a"
     },
     "cyan-muted": {
-      "$value": "#001e28",
       "$type": "color",
-      "$description": "cyan tint background"
-    },
-    "cyan-glow": {
-      "$value": "0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5)",
-      "$type": "shadow"
+      "$description": "cyan tint background",
+      "$value": "#001e28"
     },
     "vault": {
-      "$value": "#39e87d",
       "$type": "color",
-      "$description": "vault-connected — electric green"
+      "$description": "vault-connected — electric green",
+      "$value": "#39e87d"
     },
     "vault-dim": {
-      "$value": "#1a7840",
       "$type": "color",
-      "$description": "vault hover"
+      "$description": "vault hover",
+      "$value": "#1a7840"
     },
     "vault-muted": {
-      "$value": "#041a10",
       "$type": "color",
-      "$description": "vault background tint"
-    },
-    "vault-glow": {
-      "$value": "0 0 8px rgba(57,232,125,0.3)",
-      "$type": "shadow"
+      "$description": "vault background tint",
+      "$value": "#041a10"
     },
     "agent": {
-      "$value": "#4a9eff",
       "$type": "color",
-      "$description": "agent-contributed UI and content"
+      "$description": "agent-contributed UI and content",
+      "$value": "#4a9eff"
     },
     "agent-dim": {
-      "$value": "#1e5a9a",
       "$type": "color",
-      "$description": "agent hover"
+      "$description": "agent hover",
+      "$value": "#1e5a9a"
     },
     "agent-muted": {
-      "$value": "#051228",
       "$type": "color",
-      "$description": "agent background tint"
-    },
-    "agent-glow": {
-      "$value": "0 0 8px rgba(74,158,255,0.3)",
-      "$type": "shadow"
+      "$description": "agent background tint",
+      "$value": "#051228"
     },
     "amber": {
-      "$value": "#f09030",
       "$type": "color",
-      "$description": "warnings, uncommitted/staged state"
+      "$description": "warnings, uncommitted/staged state",
+      "$value": "#f09030"
     },
     "amber-dim": {
-      "$value": "#805010",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#805010"
     },
     "amber-muted": {
-      "$value": "#1a0e02",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#1a0e02"
     },
     "destructive": {
-      "$value": "#ff3d3d",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ff3d3d"
     },
     "destructive-dim": {
-      "$value": "#8a1a1a",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#8a1a1a"
     },
     "destructive-muted": {
-      "$value": "#160404",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#160404"
     },
     "color-bg": {
-      "$value": "var(--bg-base)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{bg-base}"
     },
     "color-surface": {
-      "$value": "var(--bg-surface)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{bg-surface}"
     },
     "color-text": {
-      "$value": "var(--fg-1)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{fg-1}"
     },
     "color-muted": {
-      "$value": "var(--fg-2)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{fg-2}"
     },
     "color-dim": {
-      "$value": "var(--fg-3)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{fg-3}"
     },
     "color-border": {
-      "$value": "var(--border)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{border}"
     },
     "color-accent": {
-      "$value": "var(--accent)",
-      "$type": "color"
+      "$type": "color",
+      "$value": "{accent}"
     }
   }
 }

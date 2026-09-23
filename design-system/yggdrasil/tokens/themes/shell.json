@@ -2,160 +2,148 @@
   "$description": "Yggdrasil Light \"Shell\" (trial): porcelain work surfaces. Role values are ink tones for text; -mark tones are decorative only.",
   "tokens": {
     "bg-base": {
-      "$value": "#e4e6eb",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#e4e6eb"
     },
     "bg-surface": {
-      "$value": "#f1f2f5",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#f1f2f5"
     },
     "bg-raised": {
-      "$value": "#ffffff",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ffffff"
     },
     "bg-overlay": {
-      "$value": "#e9ebef",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#e9ebef"
     },
     "bg-modal": {
-      "$value": "#ffffff",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ffffff"
     },
     "fg-1": {
-      "$value": "#0f1014",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#0f1014"
     },
     "fg-2": {
-      "$value": "#50545e",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#50545e"
     },
     "fg-3": {
-      "$value": "#a0a4ad",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#a0a4ad"
     },
     "fg-inverse": {
-      "$value": "#ffffff",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ffffff"
     },
     "border": {
-      "$value": "#d3d6dc",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#d3d6dc"
     },
     "border-strong": {
-      "$value": "#0f1014",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#0f1014"
     },
     "border-focus": {
-      "$value": "#007f8c",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#007f8c"
     },
     "accent": {
-      "$value": "#6b4d00",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#6b4d00"
     },
     "accent-dim": {
-      "$value": "#e8b440",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#e8b440"
     },
     "accent-muted": {
-      "$value": "#fbf3df",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#fbf3df"
     },
     "cyan": {
-      "$value": "#006470",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#006470"
     },
     "cyan-dim": {
-      "$value": "#00d4e8",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#00d4e8"
     },
     "cyan-muted": {
-      "$value": "#dff8fb",
-      "$type": "color"
-    },
-    "cyan-glow": {
-      "$value": "0 0 12px rgba(0,229,255,0.45)",
-      "$type": "shadow"
+      "$type": "color",
+      "$value": "#dff8fb"
     },
     "vault": {
-      "$value": "#0b6334",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#0b6334"
     },
     "vault-dim": {
-      "$value": "#16c95e",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#16c95e"
     },
     "vault-muted": {
-      "$value": "#e0f7e9",
-      "$type": "color"
-    },
-    "vault-glow": {
-      "$value": "0 0 8px rgba(22,201,94,0.45)",
-      "$type": "shadow"
+      "$type": "color",
+      "$value": "#e0f7e9"
     },
     "agent": {
-      "$value": "#1f45b8",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#1f45b8"
     },
     "agent-dim": {
-      "$value": "#2f6bff",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#2f6bff"
     },
     "agent-muted": {
-      "$value": "#e3ebff",
-      "$type": "color"
-    },
-    "agent-glow": {
-      "$value": "0 0 8px rgba(47,107,255,0.4)",
-      "$type": "shadow"
+      "$type": "color",
+      "$value": "#e3ebff"
     },
     "amber": {
-      "$value": "#8a4300",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#8a4300"
     },
     "amber-dim": {
-      "$value": "#ff8a1a",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ff8a1a"
     },
     "amber-muted": {
-      "$value": "#fff0e0",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#fff0e0"
     },
     "destructive": {
-      "$value": "#b3162c",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#b3162c"
     },
     "destructive-dim": {
-      "$value": "#ff1f4b",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ff1f4b"
     },
     "destructive-muted": {
-      "$value": "#ffe3e8",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ffe3e8"
     },
     "accent-mark": {
-      "$value": "#e8b440",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#e8b440"
     },
     "cyan-mark": {
-      "$value": "#00d4e8",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#00d4e8"
     },
     "vault-mark": {
-      "$value": "#16c95e",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#16c95e"
     },
     "agent-mark": {
-      "$value": "#2f6bff",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#2f6bff"
     },
     "amber-mark": {
-      "$value": "#ff8a1a",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ff8a1a"
     },
     "destructive-mark": {
-      "$value": "#ff1f4b",
-      "$type": "color"
+      "$type": "color",
+      "$value": "#ff1f4b"
     }
   }
 }

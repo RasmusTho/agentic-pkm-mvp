@@ -18,6 +18,9 @@ BINDING = REPO_ROOT / "companion-ui" / "companion-app" / "colors_and_type.css"
 V1 = Path(__file__).resolve().parent / "fixtures" / "colors_and_type.v1.css"
 
 OPT_IN_MARKERS = ('[data-theme="light"]', '[data-theme="system"]', '[data-density="compact"]', '[data-focus="v2"]', ".fx-")
+# Always-on accessibility rules are the only non-opt-in additions v2 may make.
+ACCESSIBILITY_MARKERS = ("prefers-reduced-motion: reduce",)
+DTCG_FILES = ("primitives.json", "semantic.json", "themes/dark.json", "themes/shell.json", "density/comfortable.json", "density/compact.json")
 
 
 def _build():
@@ -84,7 +87,7 @@ def test_new_rules_are_opt_in_and_legacy_rules_unchanged() -> None:
     not_opt_in = [
         selector
         for selector, body in added
-        if not any(marker in selector or marker in body for marker in OPT_IN_MARKERS)
+        if not any(marker in selector or marker in body for marker in OPT_IN_MARKERS + ACCESSIBILITY_MARKERS)
     ]
     assert not_opt_in == []
 
@@ -132,6 +135,15 @@ def test_swift_and_json_outputs_match_token_source() -> None:
     assert f'version = "{source["version"]}"' in swift
     flattened = json.loads((REPO_ROOT / build.JSON_OUTPUT).read_text(encoding="utf-8"))
     assert flattened == build.flatten(source)
+    unresolved = [
+        (theme, name, value)
+        for theme, tokens in flattened["themes"].items()
+        for name, value in tokens.items()
+        if "var(--" in value or re.fullmatch(r"\{[a-z0-9-]+\}", value)
+    ]
+    assert unresolved == []
+    assert flattened["themes"]["dark"]["status-success"] == "#39e87d"
+    assert flattened["themes"]["shell"]["color-bg"] == "#e4e6eb"
     assert flattened["themes"]["dark"]["accent"] == "#d4a843"
     assert flattened["themes"]["shell"]["accent"] == "#6b4d00"
 
@@ -143,3 +155,35 @@ def test_font_imports_use_google_fonts_only() -> None:
     assert all(url.startswith("https://fonts.googleapis.com/") for url in imports)
     assert "JetBrains+Mono" in imports[0]
     assert "bunny.net" not in css
+
+
+def test_token_source_is_valid_dtcg() -> None:
+    """Every value in the DTCG files has the structure its $type requires."""
+    unit = {"dimension": {"px", "rem"}, "duration": {"ms", "s"}}
+    invalid = []
+    for relative in DTCG_FILES:
+        tokens = json.loads((DS / "tokens" / relative).read_text(encoding="utf-8"))["tokens"]
+        for name, entry in tokens.items():
+            kind, value = entry.get("$type"), entry.get("$value")
+            if kind in unit:
+                ok = isinstance(value, dict) and set(value) == {"value", "unit"} and isinstance(value["value"], (int, float)) and value["unit"] in unit[kind]
+            elif kind == "cubicBezier":
+                ok = isinstance(value, list) and len(value) == 4 and all(isinstance(v, (int, float)) for v in value)
+            elif kind == "number":
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+            elif kind == "fontFamily":
+                ok = isinstance(value, list) and value and all(isinstance(v, str) for v in value)
+            elif kind == "color":
+                ok = isinstance(value, str) and bool(re.fullmatch(r"#[0-9a-fA-F]{6}|\{[a-z0-9-]+\}", value))
+            else:
+                ok = False
+            if not ok:
+                invalid.append((relative, name, kind, value))
+    assert invalid == []
+
+
+def test_reduced_motion_zeroes_durations() -> None:
+    css = BINDING.read_text(encoding="utf-8")
+    block = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("\n}", 1)[0]
+    for name in ("duration-fast", "duration-base", "duration-slow"):
+        assert f"--{name}: 0ms;" in block
