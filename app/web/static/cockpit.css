@@ -14,7 +14,7 @@ body{background:var(--bg-base);min-height:100vh}
 .sw-row label:hover{background:var(--bg-overlay);color:var(--fg-1)}
 .sw-row input[type=radio]{accent-color:var(--cyan);margin:0 -2px 0 0;cursor:pointer}
 .sw-row input:checked+label{background:var(--bg-overlay);color:var(--fg-1);border-color:var(--cyan);box-shadow:var(--cyan-glow)}
-.radios input:focus-visible+label,.sw-row label:focus-visible,.sw-row input:focus-visible{outline:1px solid var(--cyan);outline-offset:2px;box-shadow:var(--cyan-glow)}
+.radios input:focus-visible+label,.sw-row label:focus-visible,.sw-row input:focus-visible{outline:2px solid var(--border-focus);outline-offset:2px;box-shadow:none}
 .doc-note{font-family:var(--font-ui);font-size:var(--text-sm);color:var(--fg-2);max-width:56ch;margin-left:auto}
 .pane{display:none}
 
@@ -104,7 +104,7 @@ body:has(#fq4:checked) #f4{display:flex}
 .card>summary{list-style:none;cursor:pointer;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}
 .card>summary::-webkit-details-marker{display:none}
 .card>summary:hover{background:var(--bg-overlay)}
-.card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}
+.card>summary:focus-visible{outline:2px solid var(--border-focus);outline-offset:-2px;box-shadow:none}
 .card .meta{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2)}
 .card h3{font-size:var(--text-base);font-weight:var(--weight-medium);line-height:var(--leading-snug);color:var(--fg-1)}
 .card .why{font-size:var(--text-sm);color:var(--fg-2);line-height:var(--leading-snug)}

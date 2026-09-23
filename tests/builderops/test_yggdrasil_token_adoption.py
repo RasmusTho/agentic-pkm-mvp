@@ -97,3 +97,15 @@ def test_ckm_overview_embeds_the_generated_tokens(overview_store) -> None:  # no
     assert "@import" not in rendered
     assert "--healthy:var(--vault); --unknown:var(--fg-2);" in rendered
     assert '<html lang="en" data-density="compact" data-focus="v2">' in rendered
+
+
+def test_focus_rules_keep_the_v2_ring() -> None:
+    """Pages opt in to data-focus="v2"; no local focus rule may suppress it or restore the 1px glow ring."""
+    offenders = []
+    for path in BUILDER_SURFACES:
+        text = path.read_text(encoding="utf-8")
+        for selector, body in re.findall(r"([^{}]*:focus[^{}]*)\{+([^{}]*)\}", text):
+            flat = " ".join(body.split())
+            if re.search(r"outline:\s*(none|0\b|1px)", flat) or "cyan-glow" in flat:
+                offenders.append(f"{path.name}: {selector.strip()[-60:]}")
+    assert offenders == []
