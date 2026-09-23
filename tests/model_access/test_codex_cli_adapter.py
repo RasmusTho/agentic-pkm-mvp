@@ -647,6 +647,40 @@ def test_preflight_classifies_cli_auth_and_version_failures(tmp_path: Path) -> N
     assert error.value.failure_code == "cli_version_unsupported"
 
 
+@pytest.mark.parametrize(
+    "config_bytes",
+    (b"cli_auth_credentials_store = [\n", b"x" * 1_000_001),
+    ids=("malformed-toml", "oversized-config"),
+)
+def test_credential_store_config_fails_closed_before_cli(
+    tmp_path: Path, config_bytes: bytes
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_bytes(config_bytes)
+    trace = tmp_path / "config-failure-trace.json"
+    binary = _fake_cli(tmp_path / "codex-config-failure", trace_path=trace)
+    executor = CodexCliExecutor(
+        safe_profile_path=_profile_file(tmp_path / "config-failure-profile.json"),
+        executable_name=binary.name,
+        environment={
+            "PATH": f"{binary.parent}:{os.environ.get('PATH', '')}",
+            "HOME": str(home),
+            "CODEX_HOME": str(codex_home),
+        },
+        preflight_timeout_seconds=2,
+    )
+
+    with pytest.raises(CodexCliError) as error:
+        executor.preflight(model="gpt-5.6-luna")
+
+    assert error.value.failure_code == "authentication_unavailable"
+    assert not trace.exists()
+    assert not trace.with_suffix(".auth.json").exists()
+
+
 def test_repeated_preflight_closes_status_pipe_descriptors(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
