@@ -1,0 +1,54 @@
+{
+  "$description": "Compact density for Builder surfaces.",
+  "tokens": {
+    "text-base": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.8125,
+        "unit": "rem"
+      }
+    },
+    "text-sm": {
+      "$type": "dimension",
+      "$value": {
+        "value": 0.75,
+        "unit": "rem"
+      }
+    },
+    "space-3": {
+      "$type": "dimension",
+      "$value": {
+        "value": 8,
+        "unit": "px"
+      }
+    },
+    "space-4": {
+      "$type": "dimension",
+      "$value": {
+        "value": 12,
+        "unit": "px"
+      }
+    },
+    "space-6": {
+      "$type": "dimension",
+      "$value": {
+        "value": 16,
+        "unit": "px"
+      }
+    },
+    "control-height": {
+      "$type": "dimension",
+      "$value": {
+        "value": 28,
+        "unit": "px"
+      }
+    },
+    "row-height": {
+      "$type": "dimension",
+      "$value": {
+        "value": 28,
+        "unit": "px"
+      }
+    }
+  }
+}

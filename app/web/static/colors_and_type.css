@@ -1,165 +1,132 @@
 /* ============================================================
-   Yggdrasil Design System — Colors & Type
+   Yggdrasil Design System v2.0.0 — Colors & Type
    ============================================================
-   Import this file in any HTML artifact or UI kit.
-   Google Fonts are imported below; JetBrains Mono via bunny.net.
+   GENERATED from design-system/yggdrasil/ by build.py. Do not edit;
+   change the token source and run: python3 design-system/yggdrasil/build.py
+   Themes: Yggdrasil Dark (default) and Yggdrasil Light "Shell" (trial,
+   data-theme="light" or "system"). Density: data-density="compact".
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&display=swap');
-@import url('https://fonts.bunny.net/css?family=jetbrains-mono:400,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* ============================================================
-   BASE COLOR TOKENS
+   BASE TOKENS — Yggdrasil Dark (default)
    ============================================================ */
 :root {
-  /* --- Backgrounds (cool blue-black — Tron grid) --- */
-  --bg-base:       #070b12;   /* deepest — page root, near black with blue cast */
-  --bg-surface:    #0c1220;   /* panels, sidebars */
-  --bg-raised:     #111a2e;   /* cards, inputs, raised surfaces */
-  --bg-overlay:    #162038;   /* hover states, popovers */
-  --bg-modal:      #0e1828;   /* modal / dialog backdrop content */
-
-  /* --- Foreground / Text --- */
-  --fg-1:          #dce8f0;   /* primary — cool blue-white */
-  --fg-2:          #7a9ab8;   /* secondary / muted */
-  --fg-3:          #3d5570;   /* tertiary / disabled / dim */
-  --fg-inverse:    #070b12;   /* text on light/accent backgrounds */
-
-  /* --- Borders (thin, slightly glowing) --- */
-  --border:        #152030;   /* default — subtle grid line */
+  --bg-base: #070b12;   /* deepest — page root, near black with blue cast */
+  --bg-surface: #0c1220;   /* panels, sidebars */
+  --bg-raised: #111a2e;   /* cards, inputs, raised surfaces */
+  --bg-overlay: #162038;   /* hover states, popovers */
+  --bg-modal: #0e1828;   /* modal / dialog backdrop content */
+  --fg-1: #dce8f0;   /* primary — cool blue-white */
+  --fg-2: #7a9ab8;   /* secondary / muted */
+  --fg-3: #3d5570;   /* tertiary / disabled / dim */
+  --fg-inverse: #070b12;   /* text on light/accent backgrounds */
+  --border: #152030;   /* default — subtle grid line */
   --border-strong: #1e3050;   /* emphasis — dividers, active edges */
-  --border-focus:  #00d4e8;   /* focus ring — electric cyan */
-
-  /* --- Accent 1: Norse Gold (slightly electrified) --- */
-  --accent:        #d4a843;   /* primary accent — active, focus, key affordances */
-  --accent-dim:    #80621a;   /* dimmed gold */
-  --accent-muted:  #2a1e06;   /* gold at low opacity */
-
-  /* --- Accent 2: Tron Cyan (neon electric) --- */
-  --cyan:          #00d4e8;   /* electric cyan — Tron primary glow */
-  --cyan-dim:      #007a8a;   /* dimmed cyan */
-  --cyan-muted:    #001e28;   /* cyan tint background */
-  --cyan-glow:     0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);
-
-  /* --- Vault: Neon green (digital growth) --- */
-  --vault:         #39e87d;   /* vault-connected — electric green */
-  --vault-dim:     #1a7840;   /* vault hover */
-  --vault-muted:   #041a10;   /* vault background tint */
-  --vault-glow:    0 0 8px rgba(57,232,125,0.3);
-
-  /* --- Agent: Electric blue (machine voice) --- */
-  --agent:         #4a9eff;   /* agent-contributed UI and content */
-  --agent-dim:     #1e5a9a;   /* agent hover */
-  --agent-muted:   #051228;   /* agent background tint */
-  --agent-glow:    0 0 8px rgba(74,158,255,0.3);
-
-  /* --- Amber (staged / uncommitted) --- */
-  --amber:         #f09030;   /* warnings, uncommitted/staged state */
-  --amber-dim:     #805010;
-  --amber-muted:   #1a0e02;
-
-  /* --- Destructive --- */
-  --destructive:      #ff3d3d;
-  --destructive-dim:  #8a1a1a;
-  --destructive-muted:#160404;
-
-  /* --- Semantic UI colors --- */
-  --color-bg:        var(--bg-base);
-  --color-surface:   var(--bg-surface);
-  --color-text:      var(--fg-1);
-  --color-muted:     var(--fg-2);
-  --color-dim:       var(--fg-3);
-  --color-border:    var(--border);
-  --color-accent:    var(--accent);
-
-  /* ============================================================
-     TYPOGRAPHY
-     ============================================================ */
-
-  /* --- Font families --- */
-  --font-display:  'EB Garamond', Georgia, serif;
-  --font-ui:       'Space Grotesk', system-ui, sans-serif;
-  --font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-
-  /* --- Type scale (rem, base 16px) --- */
-  --text-xs:    0.6875rem;   /* 11px — metadata, timestamps */
-  --text-sm:    0.8125rem;   /* 13px — secondary labels, captions */
-  --text-base:  0.9375rem;   /* 15px — body / default UI */
-  --text-md:    1.0625rem;   /* 17px — slightly emphasized body */
-  --text-lg:    1.1875rem;   /* 19px — section headers */
-  --text-xl:    1.5rem;      /* 24px — page titles */
-  --text-2xl:   2rem;        /* 32px — display moments */
-  --text-3xl:   2.75rem;     /* 44px — wordmark / hero */
-  --text-4xl:   3.75rem;     /* 60px — large display */
-
-  /* --- Line heights --- */
-  --leading-tight:  1.25;
-  --leading-snug:   1.4;
+  --border-focus: #00d4e8;   /* focus ring — electric cyan */
+  --accent: #d4a843;   /* primary accent — active, focus, key affordances */
+  --accent-dim: #80621a;   /* dimmed gold */
+  --accent-muted: #2a1e06;   /* gold at low opacity */
+  --cyan: #00d4e8;   /* electric cyan — Tron primary glow */
+  --cyan-dim: #007a8a;   /* dimmed cyan */
+  --cyan-muted: #001e28;   /* cyan tint background */
+  --vault: #39e87d;   /* vault-connected — electric green */
+  --vault-dim: #1a7840;   /* vault hover */
+  --vault-muted: #041a10;   /* vault background tint */
+  --agent: #4a9eff;   /* agent-contributed UI and content */
+  --agent-dim: #1e5a9a;   /* agent hover */
+  --agent-muted: #051228;   /* agent background tint */
+  --amber: #f09030;   /* warnings, uncommitted/staged state */
+  --amber-dim: #805010;
+  --amber-muted: #1a0e02;
+  --destructive: #ff3d3d;
+  --destructive-dim: #8a1a1a;
+  --destructive-muted: #160404;
+  --color-bg: var(--bg-base);
+  --color-surface: var(--bg-surface);
+  --color-text: var(--fg-1);
+  --color-muted: var(--fg-2);
+  --color-dim: var(--fg-3);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --font-display: 'EB Garamond', Georgia, serif;
+  --font-ui: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --text-xs: 0.6875rem;   /* 11px — metadata, timestamps */
+  --text-sm: 0.8125rem;   /* 13px — secondary labels, captions */
+  --text-base: 0.9375rem;   /* 15px — body / default UI */
+  --text-md: 1.0625rem;   /* 17px — slightly emphasized body */
+  --text-lg: 1.1875rem;   /* 19px — section headers */
+  --text-xl: 1.5rem;   /* 24px — page titles */
+  --text-2xl: 2rem;   /* 32px — display moments */
+  --text-3xl: 2.75rem;   /* 44px — wordmark / hero */
+  --text-4xl: 3.75rem;   /* 60px — large display */
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
   --leading-normal: 1.55;
-  --leading-loose:  1.75;
-
-  /* --- Font weights --- */
-  --weight-light:   300;
+  --leading-loose: 1.75;
+  --weight-light: 300;
   --weight-regular: 400;
-  --weight-medium:  500;
-  --weight-semibold:600;
-
-  /* --- Letter spacing --- */
-  --tracking-tight: -0.02em;
-  --tracking-normal: 0em;
-  --tracking-wide:   0.04em;
-  --tracking-wider:  0.08em;
-
-  /* ============================================================
-     SPACING
-     ============================================================ */
-  --space-1:   4px;
-  --space-2:   8px;
-  --space-3:  12px;
-  --space-4:  16px;
-  --space-5:  20px;
-  --space-6:  24px;
-  --space-8:  32px;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
   --space-16: 64px;
-
-  /* ============================================================
-     BORDER RADIUS — sharper for cyberpunk aesthetic
-     ============================================================ */
-  --radius-sm:   2px;
-  --radius-md:   4px;
-  --radius-lg:   6px;
-  --radius-xl:  10px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 10px;
   --radius-full: 9999px;
-
-  /* ============================================================
-     SHADOWS / ELEVATION
-     ============================================================ */
-  --shadow-sm:  0 1px 3px rgba(0,0,0,0.3);
-  --shadow-md:  0 4px 12px rgba(0,0,0,0.4);
-  --shadow-lg:  0 8px 32px rgba(0,0,0,0.5);
-  --shadow-float: 0 4px 24px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.3);
-  --shadow-inset: inset 0 1px 3px rgba(0,0,0,0.35);
-
-  /* ============================================================
-     ANIMATION
-     ============================================================ */
-  --ease:        cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-linear: linear;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --duration-fast: 100ms;
   --duration-base: 150ms;
   --duration-slow: 250ms;
-
-  /* ============================================================
-     Z-INDEX SCALE
-     ============================================================ */
-  --z-base:    1;
-  --z-raised:  10;
-  --z-sticky:  100;
+  --z-base: 1;
+  --z-raised: 10;
+  --z-sticky: 100;
   --z-overlay: 200;
-  --z-modal:   300;
-  --z-toast:   400;
+  --z-modal: 300;
+  --z-toast: 400;
+  --status-success: var(--vault);
+  --status-warning: var(--amber);
+  --status-danger: var(--destructive);
+  --status-info: var(--agent);
+  --accent-mark: var(--accent);
+  --cyan-mark: var(--cyan);
+  --vault-mark: var(--vault);
+  --agent-mark: var(--agent);
+  --amber-mark: var(--amber);
+  --destructive-mark: var(--destructive);
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.04em;
+  --tracking-wider: 0.08em;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+  --shadow-float: 0 4px 24px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.3);
+  --shadow-inset: inset 0 1px 3px rgba(0,0,0,0.35);
+  --ease-linear: linear;
+  --cyan-glow: 0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);
+  --vault-glow: 0 0 8px rgba(57,232,125,0.3);
+  --agent-glow: 0 0 8px rgba(74,158,255,0.3);
+  --material-backdrop: linear-gradient(rgba(0,212,232,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0,212,232,0.04) 1px, transparent 1px);
+  --material-backdrop-size: 32px 32px;
+  --material-glass: rgba(12,18,32,0.85);
+  --material-on-glass: #dce8f0;
+  --material-on-glass-2: #7a9ab8;
+  --material-rim-light: none;
+  --material-chroma-split: none;
+  --control-height: 36px;
+  --row-height: 40px;
 }
 
 /* ============================================================
@@ -207,7 +174,7 @@ h2, .h2 {
   color: var(--fg-1);
 }
 
-/* --- UI headings (DM Sans) --- */
+/* --- UI headings (Space Grotesk) --- */
 h3, .h3 {
   font-family: var(--font-ui);
   font-size: var(--text-lg);
@@ -343,4 +310,153 @@ hr {
   outline: 1px solid var(--cyan);
   outline-offset: 2px;
   box-shadow: var(--cyan-glow);
+}
+
+/* ============================================================
+   THEME — Yggdrasil Light "Shell" (trial, opt-in)
+   ============================================================ */
+:root[data-theme="light"] {
+  --bg-base: #e4e6eb;
+  --bg-surface: #f1f2f5;
+  --bg-raised: #ffffff;
+  --bg-overlay: #e9ebef;
+  --bg-modal: #ffffff;
+  --fg-1: #0f1014;
+  --fg-2: #50545e;
+  --fg-3: #a0a4ad;
+  --fg-inverse: #ffffff;
+  --border: #d3d6dc;
+  --border-strong: #0f1014;
+  --border-focus: #007f8c;
+  --accent: #6b4d00;
+  --accent-dim: #e8b440;
+  --accent-muted: #fbf3df;
+  --cyan: #006470;
+  --cyan-dim: #00d4e8;
+  --cyan-muted: #dff8fb;
+  --vault: #0b6334;
+  --vault-dim: #16c95e;
+  --vault-muted: #e0f7e9;
+  --agent: #1f45b8;
+  --agent-dim: #2f6bff;
+  --agent-muted: #e3ebff;
+  --amber: #8a4300;
+  --amber-dim: #ff8a1a;
+  --amber-muted: #fff0e0;
+  --destructive: #b3162c;
+  --destructive-dim: #ff1f4b;
+  --destructive-muted: #ffe3e8;
+  --accent-mark: #e8b440;
+  --cyan-mark: #00d4e8;
+  --vault-mark: #16c95e;
+  --agent-mark: #2f6bff;
+  --amber-mark: #ff8a1a;
+  --destructive-mark: #ff1f4b;
+  --cyan-glow: 0 0 12px rgba(0,229,255,0.45);
+  --vault-glow: 0 0 8px rgba(22,201,94,0.45);
+  --agent-glow: 0 0 8px rgba(47,107,255,0.4);
+  --material-backdrop: repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px), radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%), radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%), radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%), radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%), linear-gradient(120deg, #6a2bff, #1a0a2e 60%);
+  --material-backdrop-size: auto;
+  --material-glass: rgba(10,8,24,0.74);
+  --material-on-glass: #ffffff;
+  --material-on-glass-2: rgba(255,255,255,0.8);
+  --material-sheet: linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
+  --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
+  --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg-base: #e4e6eb;
+    --bg-surface: #f1f2f5;
+    --bg-raised: #ffffff;
+    --bg-overlay: #e9ebef;
+    --bg-modal: #ffffff;
+    --fg-1: #0f1014;
+    --fg-2: #50545e;
+    --fg-3: #a0a4ad;
+    --fg-inverse: #ffffff;
+    --border: #d3d6dc;
+    --border-strong: #0f1014;
+    --border-focus: #007f8c;
+    --accent: #6b4d00;
+    --accent-dim: #e8b440;
+    --accent-muted: #fbf3df;
+    --cyan: #006470;
+    --cyan-dim: #00d4e8;
+    --cyan-muted: #dff8fb;
+    --vault: #0b6334;
+    --vault-dim: #16c95e;
+    --vault-muted: #e0f7e9;
+    --agent: #1f45b8;
+    --agent-dim: #2f6bff;
+    --agent-muted: #e3ebff;
+    --amber: #8a4300;
+    --amber-dim: #ff8a1a;
+    --amber-muted: #fff0e0;
+    --destructive: #b3162c;
+    --destructive-dim: #ff1f4b;
+    --destructive-muted: #ffe3e8;
+    --accent-mark: #e8b440;
+    --cyan-mark: #00d4e8;
+    --vault-mark: #16c95e;
+    --agent-mark: #2f6bff;
+    --amber-mark: #ff8a1a;
+    --destructive-mark: #ff1f4b;
+    --cyan-glow: 0 0 12px rgba(0,229,255,0.45);
+    --vault-glow: 0 0 8px rgba(22,201,94,0.45);
+    --agent-glow: 0 0 8px rgba(47,107,255,0.4);
+    --material-backdrop: repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px), radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%), radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%), radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%), radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%), linear-gradient(120deg, #6a2bff, #1a0a2e 60%);
+    --material-backdrop-size: auto;
+    --material-glass: rgba(10,8,24,0.74);
+    --material-on-glass: #ffffff;
+    --material-on-glass-2: rgba(255,255,255,0.8);
+    --material-sheet: linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
+    --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
+    --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
+  }
+}
+
+/* ============================================================
+   DENSITY — compact (opt-in)
+   ============================================================ */
+[data-density="compact"] {
+  --text-base: 0.8125rem;
+  --text-sm: 0.75rem;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-6: 16px;
+  --control-height: 28px;
+  --row-height: 28px;
+}
+
+/* ============================================================
+   OPT-IN RULES (v2)
+   Nothing here applies unless a surface opts in:
+   data-focus="v2", data-effects="on", or an .fx-* class.
+   ============================================================ */
+
+/* v2 focus ring: 2px solid, no glow. Opt in with data-focus="v2". */
+[data-focus="v2"] :focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Effects layer: state-only glow. Opt in per element with .fx-* */
+.fx-glow-cyan  { box-shadow: var(--cyan-glow); }
+.fx-glow-vault { box-shadow: var(--vault-glow); }
+.fx-glow-agent { box-shadow: var(--agent-glow); }
+.fx-grid       { background-image: var(--material-backdrop); background-size: var(--material-backdrop-size); }
+.fx-chroma     { text-shadow: var(--material-chroma-split); }
+
+/* ============================================================
+   ACCESSIBILITY — reduced motion (always on)
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
 }

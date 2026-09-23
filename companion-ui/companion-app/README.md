@@ -35,7 +35,7 @@ The following files are **staging/prototype artifacts** and remain non-productio
 
 - `converse_layout.html` / `.css` / `_state.py` — original converse layout shell.
 - `canvas_suggestion_flow.html` / `.css` — **Canvas Suggestion Flow staging prototype** (2026-05-11). Implements the 8-state UI model from the design spec at `design_handoff/2026-05-11-canvas-suggestion-flow/`. Open in a browser; use the lane-switcher tabs to walk the body-edit, governance, blocked, and idle states.  **This is bounded-suggestion staging only — it is not Canvas Core.**
-- `colors_and_type.css` — Yggdrasil design token sheet (shared with design_handoff).
+- `colors_and_type.css` — Yggdrasil design token sheet, generated from `design-system/yggdrasil/` (do not edit by hand; run `python3 design-system/yggdrasil/build.py`).
 
 ## Prototype scope (canvas_suggestion_flow.html)
 

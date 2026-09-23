@@ -1,0 +1,412 @@
+<title>Yggdrasil Light Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;1,400&family=Space+Grotesk:wght@300;400;500&family=JetBrains+Mono:wght@300;400;500&family=Noto+Sans+Runic&display=swap">
+<style>
+/* ---------- Page chrome (follows the viewer's theme) ---------- */
+:root {
+  --page-bg: #e6e7ea; --page-fg: #0f1014; --page-muted: #545863; --page-line: #c9ccd3; --page-red: #b3162c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark;
+    --page-bg: #050507; --page-fg: #e4e5ea; --page-muted: #8d91a0; --page-line: #1d1e26; --page-red: #ff4d63; }
+}
+:root[data-theme="dark"] { color-scheme: dark;
+  --page-bg: #050507; --page-fg: #e4e5ea; --page-muted: #8d91a0; --page-line: #1d1e26; --page-red: #ff4d63; }
+
+body { background: var(--page-bg); color: var(--page-fg); font-family: 'Space Grotesk', system-ui, sans-serif; }
+.wrap { max-width: 1340px; margin: 0 auto; padding-inline: 20px; padding-block: 36px 64px; display: grid; gap: 36px; }
+header.top { display: grid; gap: 16px; max-width: 84ch; }
+.lbl { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.68rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--page-muted); }
+header.top h1 { font-weight: 300; font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1; letter-spacing: 0.42em; text-transform: uppercase; margin: 0;
+  text-shadow: -2px 0 0 rgba(0,229,255,0.7), 2px 0 0 rgba(255,31,75,0.7); }
+header.top p { margin: 0; color: var(--page-muted); line-height: 1.6; }
+.ideas { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 32px; margin: 6px 0 0; padding: 0; list-style: none; }
+.ideas li { font-size: 0.86rem; line-height: 1.5; color: var(--page-muted); border-top: 1px solid var(--page-line); padding-top: 10px; }
+.ideas b { color: var(--page-fg); font-weight: 500; display: block; }
+.controls { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--page-fg); }
+.seg button { font: inherit; font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; padding: 7px 14px; background: none; border: 0; color: var(--page-fg); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--page-fg); color: var(--page-bg); }
+.seg button:focus-visible { outline: 2px solid var(--page-red); outline-offset: 2px; }
+section.row h2 { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--page-muted); font-weight: 400; margin: 0 0 12px; }
+.pair { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr); gap: 20px; align-items: start; }
+@media (max-width: 980px) { .pair { grid-template-columns: 1fr; } }
+.tag { font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; letter-spacing: 0.08em; color: var(--page-muted); margin-bottom: 8px; display: block; }
+.note { font-size: 0.85rem; color: var(--page-muted); line-height: 1.55; max-width: 84ch; margin: 14px 0 0; }
+
+/* ---------- Shared Yggdrasil scale ---------- */
+.ygg {
+  --font-display: 'EB Garamond', Georgia, serif;
+  --font-ui: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-rune: 'Noto Sans Runic', 'Segoe UI Historic', serif;
+  --text-xs: 0.6875rem; --text-sm: 0.8125rem; --text-base: 0.9375rem; --text-lg: 1.1875rem; --text-2xl: 2rem;
+  --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px;
+  --control-height: 36px; --row-height: 40px;
+  position: relative; isolation: isolate; overflow: hidden;
+  color: var(--fg-1); font-family: var(--font-ui); font-size: var(--text-base);
+}
+.ygg.compact { --text-base: 0.8125rem; --text-sm: 0.75rem; --space-3: 8px; --space-4: 12px; --space-6: 16px; --control-height: 28px; --row-height: 30px; }
+
+/* ================= Yggdrasil Dark (current, reference) ================= */
+.ygg.dark {
+  --fg-1:#dce8f0; --fg-2:#7a9ab8; --fg-3:#3d5570;
+  --accent:#d4a843; --cyan:#00d4e8; --vault:#39e87d; --agent:#4a9eff; --amber:#f09030; --destructive:#ff3d3d;
+  background: #070b12;
+  background-image: linear-gradient(rgba(0,212,232,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0,212,232,0.04) 1px, transparent 1px);
+  background-size: 32px 32px; border: 1px solid #1e3050; border-radius: 8px;
+}
+.dark .bar { background: #0c1220; border-bottom: 1px solid #152030; }
+.dark .mark em, .dark .rune { color: var(--accent); }
+.dark .tri { display: none; }
+.dark .vaultdot i { background: var(--vault); box-shadow: 0 0 8px rgba(57,232,125,0.5); border-radius: 50%; }
+.dark .side { background: #0c1220; border-right: 1px solid #152030; }
+.dark .side a.on { background: #162038; color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
+.dark .chip { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 999px; padding: 3px 8px; }
+.dark .chip::before { background: currentColor; border-radius: 50%; }
+.dark .c-vault { color: var(--vault); background: #041a10; } .dark .c-amber { color: var(--amber); background: #1a0e02; }
+.dark .c-agent { color: var(--agent); background: #051228; } .dark .c-cyan { color: var(--cyan); background: #001e28; }
+.dark .c-danger { color: var(--destructive); background: #160404; }
+.dark .suggest { background: #051228; border: 1px solid color-mix(in srgb, var(--agent) 35%, transparent); border-radius: 6px; }
+.dark .suggest .who { color: var(--agent); }
+.dark .staged { border: 1px dashed var(--amber); background: #1a0e02; border-radius: 6px; }
+.dark .staged b { color: var(--amber); }
+.dark .field input { background: #111a2e; color: var(--fg-1); border: 1px solid #1e3050; border-radius: 4px; }
+.dark .field input.focus { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.dark .btn { background: #111a2e; color: var(--fg-1); border: 1px solid #1e3050; border-radius: 4px; }
+.dark .btn.primary { background: var(--accent); border-color: var(--accent); color: #070b12; }
+.dark .btn.danger { background: transparent; color: var(--destructive); border-color: color-mix(in srgb, var(--destructive) 45%, transparent); }
+.dark .btn:disabled { color: var(--fg-3); }
+.dark .kpi, .dark .tbl { background: #111a2e; border: 1px solid #152030; border-radius: 4px; }
+.dark th { background: #0c1220; color: var(--fg-2); border-bottom: 1px solid #152030; }
+.dark td { border-bottom: 1px solid #152030; }
+.dark tr.sel td { background: #162038; }
+.dark .kpi.alert strong { color: var(--destructive); }
+.dark .hud { display: none; }
+.dark .main h3 i::before { content: ", "; }
+
+/* ================= Yggdrasil Light · "Shell" (proposed) ================= */
+.ygg.shell {
+  /* porcelain surface (the suit) */
+  --fg-1:#0f1014; --fg-2:#50545e; --fg-3:#a0a4ad;
+  --seam: rgba(15,16,20,0.10); --seam-strong:#0f1014;
+  --accent:#6b4d00; --cyan:#006470; --vault:#0b6334; --agent:#1f45b8; --amber:#8a4300; --destructive:#b3162c;
+  /* the city: decorative neon, never text */
+  --neon-red:#ff1f4b; --neon-magenta:#ff2aa0; --neon-violet:#6a2bff; --neon-blue:#2850ff; --neon-cyan:#00e5ff;
+  --vault-mark:#16c95e; --agent-mark:#2f6bff; --amber-mark:#ff8a1a; --cyan-mark:#00d4e8; --destructive-mark:#ff1f4b;
+  /* chrome on the city: dark glass */
+  --glass: rgba(10,8,24,0.74); --on-glass:#ffffff; --on-glass-2: rgba(255,255,255,0.8);
+  background-color: #1a0a2e;
+  background-image:
+    /* vertical glitch streaks: irregular periods read as random */
+    repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px),
+    repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px),
+    repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px),
+    repeating-linear-gradient(90deg, transparent 0 17px, rgba(255,255,255,0.08) 17px 18px, transparent 18px 29px),
+    /* horizontal scanlines */
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px),
+    /* the city light */
+    radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%),
+    radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%),
+    radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%),
+    radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%),
+    linear-gradient(120deg, #6a2bff, #1a0a2e 60%);
+  border: 1px solid #000;
+  animation: glitch 7s steps(1) infinite;
+}
+@keyframes glitch {
+  0%, 91%, 100% { background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0; }
+  92% { background-position: 11px 0, -7px 0, 19px 0, 3px 0, 0 1px, 0 0, 0 0, 0 0, 0 0, 0 0; }
+  94% { background-position: -5px 0, 13px 0, -9px 0, -2px 0, 0 2px, 0 0, 0 0, 0 0, 0 0, 0 0; }
+}
+@media (prefers-reduced-motion: reduce) { .ygg.shell { animation: none; } }
+
+.shell .bar { background: var(--glass); color: var(--on-glass); border-bottom: 1px solid rgba(255,255,255,0.12); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.shell .mark { font-family: var(--font-ui); font-weight: 300; font-size: 0.9rem; letter-spacing: 0.5em; text-transform: uppercase; color: var(--on-glass);
+  text-shadow: -1.5px 0 0 rgba(0,229,255,0.8), 1.5px 0 0 rgba(255,31,75,0.8); }
+.shell .mark em { font-style: normal; }
+.shell .emblem { position: relative; width: 26px; height: 24px; display: inline-grid; place-items: center; }
+.shell .tri { position: absolute; inset: 0; color: #fff; }
+.shell .rune { color: #fff; font-size: 0.72rem; margin-top: 7px; text-shadow: none; }
+.shell .bar .eyebrow { color: var(--on-glass-2); letter-spacing: 0.24em; text-transform: uppercase; }
+.shell .vaultdot { color: var(--on-glass-2); letter-spacing: 0.16em; text-transform: uppercase; }
+.shell .vaultdot i { background: var(--vault-mark); box-shadow: 0 0 10px var(--vault-mark); width: 6px; height: 6px; }
+.shell .body { padding: var(--space-4); gap: var(--space-4); }
+.shell .side { background: var(--glass); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); align-self: start; }
+.shell .side .h { color: var(--on-glass-2); letter-spacing: 0.22em; font-family: var(--font-mono); }
+.shell .side a { color: var(--on-glass-2); letter-spacing: 0.02em; position: relative; border-radius: 0; }
+.shell .side a.on { color: #fff; background: rgba(255,255,255,0.08); box-shadow: inset 2px 0 0 var(--neon-red), inset 4px 0 0 var(--neon-cyan); }
+
+/* the suit: porcelain sheet with panel seams and city rim-light */
+.shell .sheet { position: relative;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='180' fill='none' stroke='%23c2c5cd' stroke-width='1'%3E%3Cpath d='M220 34H132l-22 22H40M110 56v58l26 26h84M136 140l-18 40'/%3E%3C/svg%3E") top right / 220px 180px no-repeat,
+    linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
+  box-shadow: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95), 0 30px 60px -30px rgba(0,0,0,0.6); }
+.shell .eyebrow { letter-spacing: 0.2em; text-transform: uppercase; }
+.shell .main h3 { font-family: var(--font-ui); font-weight: 300; text-transform: uppercase; letter-spacing: 0.22em; font-size: clamp(1.25rem, 2.3vw, 1.9rem); line-height: 1.1;
+  text-shadow: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55); overflow-wrap: normal; }
+.shell .main h3 i { display: block; font-family: var(--font-display); font-style: italic; text-transform: none; letter-spacing: 0; font-size: 0.66em; color: var(--fg-2); margin-top: 8px; text-shadow: none; }
+.shell .chip { padding: 0; background: none; font-size: 0.64rem; letter-spacing: 0.16em; text-transform: uppercase; }
+.shell .chips { gap: 6px 20px; }
+.shell .chip::before { width: 7px; height: 7px; }
+.shell .c-vault { color: var(--vault); } .shell .c-vault::before { background: var(--vault-mark); }
+.shell .c-amber { color: var(--amber); } .shell .c-amber::before { background: var(--amber-mark); }
+.shell .c-agent { color: var(--agent); } .shell .c-agent::before { background: var(--agent-mark); }
+.shell .c-cyan { color: var(--cyan); } .shell .c-cyan::before { background: var(--cyan-mark); }
+.shell .c-danger { color: var(--destructive); } .shell .c-danger::before { background: var(--destructive-mark); }
+/* agent voice: a scanline band, like the chest of poster 3 */
+.shell .suggest { background:
+    repeating-linear-gradient(0deg, rgba(47,107,255,0.10) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, rgba(106,43,255,0.14), rgba(0,229,255,0.10) 60%, rgba(255,255,255,0) 100%);
+  border-left: 2px solid var(--agent-mark); box-shadow: -3px 0 0 -1px var(--neon-cyan); }
+.shell .suggest .who { color: var(--agent); letter-spacing: 0.2em; }
+.shell .hud { font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.14em; color: var(--fg-2); position: absolute; top: 8px; right: 12px; }
+.shell .staged { border-left: 2px solid var(--amber-mark); background: linear-gradient(90deg, rgba(255,138,26,0.14), transparent 70%); }
+.shell .staged b { color: var(--amber); letter-spacing: 0.2em; }
+.shell .field label { font-family: var(--font-mono); letter-spacing: 0.2em; }
+.shell .field input { background: transparent; border: 0; border-bottom: 1px solid var(--seam-strong); border-radius: 0; padding-left: 0; color: var(--fg-1); }
+.shell .field input.focus { outline: none; border-bottom: 2px solid var(--neon-cyan); box-shadow: 0 2px 0 0 rgba(255,31,75,0.7); }
+.shell .btn { border-radius: 0; background: transparent; color: var(--fg-1); border: 1px solid var(--seam-strong); font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 400; }
+.shell .btn.primary { background: #0f1014; color: #fff; box-shadow: -2px 0 0 var(--neon-cyan), 2px 0 0 var(--neon-red); }
+.shell .btn.danger { color: var(--destructive); border-color: var(--destructive-mark); }
+.shell .btn:disabled { color: var(--fg-3); border-color: var(--seam); }
+.shell .btn:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; }
+.shell .kpis { gap: 0; border-top: 1px solid var(--seam-strong); border-bottom: 1px solid var(--seam); }
+.shell .kpi { padding: var(--space-3) var(--space-3) var(--space-3) 0; }
+.shell .kpi + .kpi { padding-left: var(--space-3); border-left: 1px solid var(--seam); }
+.shell .kpi span { font-family: var(--font-mono); letter-spacing: 0.18em; text-transform: uppercase; font-size: 0.58rem; }
+.shell .kpi strong { font-family: var(--font-ui); font-weight: 300; font-size: 2.3rem; line-height: 1.05; }
+.shell .kpi.alert strong { color: var(--destructive); text-shadow: -1.5px 0 0 rgba(0,229,255,0.6), 1.5px 0 0 rgba(255,31,75,0.6); }
+.shell th { font-family: var(--font-mono); letter-spacing: 0.18em; font-size: 0.58rem; color: var(--fg-2); border-bottom: 1px solid var(--seam-strong); }
+.shell td { border-bottom: 1px solid var(--seam); }
+.shell tr.sel td { background: rgba(255,255,255,0.8); }
+.shell tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--neon-red), inset 4px 0 0 var(--neon-cyan); }
+.shell.cockpit .sheet { margin: var(--space-4); }
+
+/* ---------- Structure (shared) ---------- */
+.bar { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.mark { font-family: var(--font-display); font-size: var(--text-lg); letter-spacing: -0.01em; display: inline-flex; align-items: center; gap: 12px; }
+.mark em { font-style: italic; }
+.rune { font-family: var(--font-rune); font-size: 1.05em; }
+.eyebrow { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); letter-spacing: 0.04em; }
+.vaultdot { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-xs); font-family: var(--font-mono); color: var(--fg-2); }
+.vaultdot i { width: 7px; height: 7px; display: inline-block; }
+.body { display: grid; grid-template-columns: 170px minmax(0,1fr); }
+@media (max-width: 560px) { .body { grid-template-columns: 1fr; } .side { display: none; } }
+.side { padding: var(--space-3); display: grid; gap: 2px; align-content: start; font-size: var(--text-sm); }
+.side a { color: var(--fg-2); text-decoration: none; padding: 7px var(--space-3); border-radius: 4px; }
+.side .h { font-size: var(--text-xs); letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-3); padding: var(--space-3) var(--space-3) 4px; }
+.main { padding: var(--space-6); display: grid; gap: var(--space-4); align-content: start; }
+.main h3 { font-family: var(--font-display); font-weight: 400; font-size: var(--text-2xl); line-height: 1.1; margin: 4px 0 0; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.main p { margin: 0; line-height: 1.6; color: var(--fg-1); max-width: 60ch; }
+.chips { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.chip { font-size: var(--text-xs); font-family: var(--font-mono); display: inline-flex; align-items: center; gap: 7px; }
+.chip::before { content: ""; width: 6px; height: 6px; }
+.suggest { padding: var(--space-3) var(--space-4); display: grid; gap: var(--space-2); position: relative; }
+.suggest .who { font-size: var(--text-xs); font-family: var(--font-mono); letter-spacing: 0.06em; font-weight: 500; }
+.suggest p { font-size: var(--text-sm); }
+.staged { padding: var(--space-3) var(--space-4); font-size: var(--text-sm); display: grid; gap: 4px; }
+.staged b { font-weight: 500; font-size: var(--text-xs); font-family: var(--font-mono); letter-spacing: 0.06em; }
+.field { display: grid; gap: 6px; }
+.field label { font-size: var(--text-xs); color: var(--fg-2); letter-spacing: 0.06em; text-transform: uppercase; }
+.field input { font: inherit; font-size: var(--text-sm); height: var(--control-height); padding: 0 var(--space-3); }
+.actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.btn { font: inherit; font-size: var(--text-sm); height: var(--control-height); padding: 0 calc(var(--space-4) + 2px); cursor: pointer; font-weight: 500; }
+.btn:disabled { cursor: not-allowed; }
+.cockpit .main { padding: var(--space-4) var(--space-6) var(--space-6); gap: var(--space-4); }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: var(--space-2); }
+@media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+.kpi { padding: var(--space-2) var(--space-3); }
+.kpi span { display: block; font-size: var(--text-xs); color: var(--fg-2); }
+.kpi strong { font-family: var(--font-mono); font-weight: 500; font-size: var(--text-lg); font-variant-numeric: tabular-nums; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--text-sm); min-width: 440px; }
+th { text-align: left; font-weight: 400; font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase; padding: 0 var(--space-3); height: var(--row-height); }
+td { padding: 0 var(--space-3); height: var(--row-height); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.mono { font-family: var(--font-mono); color: var(--fg-2); font-variant-numeric: tabular-nums; }
+
+/* Swatches */
+.sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding: 16px; }
+.s { padding: 10px 12px; display: grid; gap: 3px; }
+.dark .s { background: #111a2e; border: 1px solid #152030; border-radius: 4px; }
+.shell .sw { margin: 16px; background: linear-gradient(160deg, #ffffff, #e8eaee); box-shadow: -10px 0 30px -12px rgba(0,229,255,0.9), 10px 0 30px -12px rgba(255,31,75,0.9); }
+.shell .s { border-top: 1px solid var(--seam-strong); padding-left: 0; }
+.s .n { font-family: var(--font-mono); font-size: 0.72rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+.s .v, .s .r { font-family: var(--font-mono); font-size: 0.66rem; color: var(--fg-2); }
+.s .dot { width: 10px; height: 10px; margin-bottom: 4px; }
+.dark .s .dot { border-radius: 50%; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="lbl">Yggdrasil Design System v2 · PR #5617 · ljust tema, runda 5</span>
+    <h1>Shell</h1>
+    <p>Dräkten mot staden. Som på affischerna: det du läser och skriver på är porslinsvitt och lugnt, med fina paneldelningar. Runt omkring lyser staden i rött, magenta, violett, elblått och cyan, sönderriven av lodräta glitchstreck och scanlines. De vita ytorna fångar stadens ljus i kanterna, röd från ena sidan och cyan från den andra. Mörka Yggdrasil till vänster som referens.</p>
+    <ul class="ideas">
+      <li><b>Porslin i mitten</b>Läs- och skrivytor är vita med dräktens paneldelningar i hörnet. Lugnt att arbeta i.</li>
+      <li><b>Neonstad runt om</b>Ramen är mättat stadsljus med lodräta glitchstreck. Var sjunde sekund hackar bilden till (avstängt vid reducerad rörelse).</li>
+      <li><b>Kromatisk delning</b>Rubriker och huvudknapp delas i rött och cyan, som affischernas typografi.</li>
+      <li><b>Triangeln och runan</b>Affischens triangel blir Yggdrasils emblem med ᛉ inuti. Brett spärrade versaler.</li>
+    </ul>
+    <div class="controls">
+      <span class="lbl">Täthet</span>
+      <div class="seg" role="group" aria-label="Täthet">
+        <button type="button" id="d-comfortable" aria-pressed="true">Luftig</button>
+        <button type="button" id="d-compact" aria-pressed="false">Kompakt</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="row">
+    <h2>Companion · anteckning med agentförslag och staged ändring</h2>
+    <div class="pair" id="companion"></div>
+  </section>
+
+  <section class="row">
+    <h2>Builder · Cockpit</h2>
+    <div class="pair" id="cockpit"></div>
+  </section>
+
+  <section class="row">
+    <h2>Rollfärger</h2>
+    <div class="pair" id="swatches"></div>
+    <p class="note">På porslinet är all text minst 5,4:1, även i den mörkaste delen av arket. Text på det mörka glaset över neonstaden är vit (minst 8,9:1) eller 80 % vit (minst 6,4:1), mätt mot det ljusaste stället där ett vitt glitchstreck passerar. Neonfärgerna är aldrig text.</p>
+  </section>
+</div>
+
+<template id="t-companion">
+  <div>
+    <span class="tag"></span>
+    <div class="ygg">
+      <div class="bar"><span class="mark"><span class="emblem"><svg class="tri" viewBox="0 0 26 24" aria-hidden="true"><path d="M13 1.5 L24.5 22.5 L1.5 22.5 Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span class="rune">ᛉ</span></span><span>Ygg<em>drasil</em></span></span><span class="eyebrow">Companion</span><span class="vaultdot"><i></i>vault ansluten</span></div>
+      <div class="body">
+        <nav class="side" aria-label="Arbetsyta">
+          <span class="h">Arbetsyta</span>
+          <a href="#" class="on">Veckogenomgång</a>
+          <a href="#">Inkorg · 12</a>
+          <a href="#">Projekt</a>
+          <a href="#">Minneskandidater</a>
+          <span class="h">Områden</span>
+          <a href="#">Hälsa</a>
+          <a href="#">Hushåll</a>
+        </nav>
+        <div class="sheet">
+          <div class="main">
+            <div>
+              <div class="eyebrow">Journal ᛫ 2026 ᛫ V39 · ändrad 09:42</div>
+              <h3>Veckogenomgång<i>vecka 39</i></h3>
+            </div>
+            <div class="chips">
+              <span class="chip c-vault">sparad i vault</span>
+              <span class="chip c-amber">1 staged ändring</span>
+              <span class="chip c-agent">agentförslag</span>
+              <span class="chip c-cyan">länkad: 4</span>
+            </div>
+            <p>Avslutade Karakeep-migreringen och flyttade designsystemet in i planering. Energin sjönk mitt i veckan. Två kvällar gick till Bifrosts fångstflöde.</p>
+            <div class="suggest">
+              <span class="hud" aria-hidden="true">AGT-07 · 0.92</span>
+              <span class="who">AGENT · FÖRSLAG</span>
+              <p>Länka den här genomgången till <strong>Yggdrasil Design System v2</strong> och ta med "välj ljust tema" till nästa veckas fokus?</p>
+              <div class="actions"><button class="btn primary" type="button">Godkänn</button><button class="btn" type="button">Avfärda</button></div>
+            </div>
+            <div class="staged"><b>STAGED · INTE I VAULT ÄN</b>Lägg till taggen <code>area/household</code> på 3 länkade anteckningar</div>
+            <div class="field"><label>Nästa veckas fokus</label><input class="focus" type="text" value="Välj ljust tema; skapa S1–S6-issues"></div>
+            <div class="actions">
+              <button class="btn primary" type="button">Spara till vault</button>
+              <button class="btn" type="button">Visa diff</button>
+              <button class="btn danger" type="button">Kasta staged</button>
+              <button class="btn" type="button" disabled>Arkivera</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="t-cockpit">
+  <div>
+    <span class="tag"></span>
+    <div class="ygg cockpit compact">
+      <div class="bar"><span class="mark"><span class="emblem"><svg class="tri" viewBox="0 0 26 24" aria-hidden="true"><path d="M13 1.5 L24.5 22.5 L1.5 22.5 Z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span class="rune">ᛉ</span></span><span>Ygg<em>drasil</em></span></span><span class="eyebrow">BuilderOps Cockpit</span><span class="vaultdot">läst 14:02:11</span></div>
+      <div class="sheet">
+        <div class="main">
+          <div class="kpis">
+            <div class="kpi"><span>Öppna PR</span><strong>7</strong></div>
+            <div class="kpi"><span>Redo</span><strong>12</strong></div>
+            <div class="kpi"><span>Blockerade</span><strong>3</strong></div>
+            <div class="kpi alert"><span>CI rött</span><strong>1</strong></div>
+          </div>
+          <div class="tbl">
+            <table>
+              <thead><tr><th>Ärende</th><th>Läge</th><th>Spår</th><th>Uppdaterad</th></tr></thead>
+              <tbody>
+                <tr><td>#5617 Design System v2</td><td><span class="chip c-agent">granskning</span></td><td class="mono">docs-authoring</td><td class="mono">14:01</td></tr>
+                <tr class="sel"><td>#5615 yt-dlp pin</td><td><span class="chip c-vault">mergad</span></td><td class="mono">implementation</td><td class="mono">12:48</td></tr>
+                <tr><td>#5339 Companion operations</td><td><span class="chip c-amber">blockerad</span></td><td class="mono">implementation</td><td class="mono">09:15</td></tr>
+                <tr><td>#5331 Execution kernel</td><td><span class="chip c-danger">CI fallerar</span></td><td class="mono">implementation</td><td class="mono">08:02</td></tr>
+                <tr><td>#5330 Operation contracts</td><td><span class="chip c-cyan">redo</span></td><td class="mono">implementation</td><td class="mono">21 sep</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+(function () {
+  var NAMES = { dark: 'YGGDRASIL DARK · NUVARANDE', shell: 'YGGDRASIL LIGHT · SHELL · FÖRSLAG' };
+  var ROLES = ['accent', 'cyan', 'vault', 'agent', 'amber', 'destructive'];
+  var SURF = { dark: '#111a2e', shell: '#e4e6eb' };
+  var compact = false;
+  try { compact = localStorage.getItem('ygg-density') === 'compact'; } catch (e) {}
+
+  function lum(h) {
+    var c = [1, 3, 5].map(function (i) { var x = parseInt(h.substr(i, 2), 16) / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+  function ratio(a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+
+  function render() {
+    [['t-companion', 'companion'], ['t-cockpit', 'cockpit']].forEach(function (p) {
+      var host = document.getElementById(p[1]); host.innerHTML = '';
+      ['dark', 'shell'].forEach(function (theme) {
+        var node = document.getElementById(p[0]).content.firstElementChild.cloneNode(true);
+        node.querySelector('.tag').textContent = NAMES[theme];
+        var y = node.querySelector('.ygg'); y.classList.add(theme);
+        if (p[1] === 'companion') y.classList.toggle('compact', compact);
+        host.appendChild(node);
+      });
+    });
+    var sw = document.getElementById('swatches'); sw.innerHTML = '';
+    ['dark', 'shell'].forEach(function (theme) {
+      var wrap = document.createElement('div');
+      var tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = NAMES[theme];
+      var box = document.createElement('div'); box.className = 'ygg ' + theme;
+      var grid = document.createElement('div'); grid.className = 'sw';
+      box.appendChild(grid); wrap.appendChild(tag); wrap.appendChild(box); sw.appendChild(wrap);
+      var cs = getComputedStyle(box);
+      ROLES.forEach(function (r) {
+        var ink = cs.getPropertyValue('--' + r).trim();
+        var mark = cs.getPropertyValue('--' + r + '-mark').trim() || ink;
+        var d = document.createElement('div'); d.className = 's';
+        d.innerHTML = '<span class="dot" style="background:' + mark + '"></span>' +
+          '<span class="n" style="color:' + ink + '">' + r + '</span>' +
+          '<span class="v">' + (mark !== ink ? 'text ' + ink + ' · mark ' + mark : ink) + '</span>' +
+          '<span class="r">' + ratio(ink, SURF[theme]).toFixed(2) + ':1</span>';
+        grid.appendChild(d);
+      });
+    });
+    document.getElementById('d-comfortable').setAttribute('aria-pressed', String(!compact));
+    document.getElementById('d-compact').setAttribute('aria-pressed', String(compact));
+  }
+  function set(v) { compact = v; try { localStorage.setItem('ygg-density', v ? 'compact' : 'comfortable'); } catch (e) {} render(); }
+  document.getElementById('d-comfortable').addEventListener('click', function () { set(false); });
+  document.getElementById('d-compact').addEventListener('click', function () { set(true); });
+  render();
+})();
+</script>
