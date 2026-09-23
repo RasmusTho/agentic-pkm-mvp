@@ -383,7 +383,7 @@ def test_route_provenance_rejects_secret_bearing_fields() -> None:
             selected_effective_identity="openai/gpt-5.6-sol",
         )
     with pytest.raises(ValidationError):
-        _route(model="CODEX_HOME:/Users/rasmus/private/session")
+        _route(model="CODEX_HOME:/tmp/session")
     with pytest.raises(ValidationError):
         _route(provider="mac-mini.tailnet.ts.net")
     with pytest.raises(ValidationError):

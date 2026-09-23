@@ -279,6 +279,19 @@ def test_model_access_kernel_change_selects_contract_and_boundary_coverage() -> 
     assert "tests/architecture/test_import_boundary.py" in selection.targets
 
 
+def test_model_access_router_facade_selects_model_access_coverage() -> None:
+    selection = select_tests(["app/model_access/router.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("model_access",)
+    assert selection.unowned_paths == ()
+    assert "tests/model_access" in selection.targets
+    assert "tests/builderops/test_model_inquiry_adapters.py" in selection.targets
+    assert "tests/builderops/test_model_inquiry_runner.py" in selection.targets
+    assert "tests/architecture/test_llm_contract_kernel.py" in selection.targets
+    assert "tests/architecture/test_import_boundary.py" in selection.targets
+
+
 def test_builder_model_access_resolver_selects_model_access_coverage() -> None:
     selection = select_tests(["app/builderops/model_access_resolver.py"])
 

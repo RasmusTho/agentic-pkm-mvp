@@ -498,13 +498,13 @@ class ModelAccessRoute(ResolvedModelAccess):
         ):
             if _contains_sensitive_route_value(getattr(self, field_name)):
                 raise ValueError(f"{field_name} must be a logical reference, not sensitive data")
-        request_identifiers = (
+        request_identifiers = [
             self.request.role_profile,
             self.request.resolution_group_id,
             self.request.intent.side_effect_class,
-        )
+        ]
         if self.request.intent.output_schema_ref is not None:
-            request_identifiers += (self.request.intent.output_schema_ref,)
+            request_identifiers.append(self.request.intent.output_schema_ref)
         for value in request_identifiers:
             if (
                 not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}", value)
