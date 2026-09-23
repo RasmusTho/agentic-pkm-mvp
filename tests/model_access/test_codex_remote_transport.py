@@ -143,6 +143,37 @@ def test_remote_complete_rejects_a_different_returned_route() -> None:
     assert calls == 1
 
 
+def test_remote_complete_rejects_oversized_response_without_retry() -> None:
+    request = _request()
+    calls = 0
+    response_body = json.dumps(
+        CompletionResponse(route=request.route, content="hello").model_dump(
+            mode="json"
+        ),
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    def oversized(_http_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=response_body)
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        max_response_bytes=len(response_body) - 1,
+        transport=httpx.MockTransport(oversized),
+    )
+    try:
+        with pytest.raises(RemoteCompletionError) as error:
+            transport.complete(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "executor_response_too_large"
+    assert error.value.indeterminate is True
+    assert calls == 1
+
+
 def test_remote_complete_sanitizes_unpaired_surrogate_response() -> None:
     request = _request()
     calls = 0

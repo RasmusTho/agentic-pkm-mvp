@@ -28,12 +28,13 @@ CAPABILITY_HEADER = {
 
 
 class FakeCodexExecutor:
-    def __init__(self) -> None:
+    def __init__(self, response_text: str = "codex result") -> None:
         self.calls: list[dict[str, Any]] = []
+        self.response_text = response_text
 
     def execute(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(response_text="codex result")
+        return SimpleNamespace(response_text=self.response_text)
 
 
 class FakeOllamaAdapter:
@@ -58,6 +59,7 @@ def _app(
     ollama: FakeOllamaAdapter | None = None,
     *,
     max_request_bytes: int = 256_000,
+    max_output_bytes: int = 512_000,
 ):
     codex = codex or FakeCodexExecutor()
     ollama = ollama or FakeOllamaAdapter()
@@ -67,6 +69,7 @@ def _app(
         adapter_factory=_factory(),
         serve_capability_name=CAPABILITY_NAME,
         max_request_bytes=max_request_bytes,
+        max_output_bytes=max_output_bytes,
     )
     return app, codex, ollama
 
@@ -201,6 +204,21 @@ def test_complete_rejects_request_control_fields_and_oversized_body() -> None:
     assert unknown.json() == {"error": {"code": "invalid_request"}}
     assert oversized.status_code == 413
     assert len(codex.calls) == 0
+
+
+def test_complete_rejects_oversized_adapter_output_after_one_dispatch() -> None:
+    app, codex, ollama = _app(
+        FakeCodexExecutor(response_text="four"), max_output_bytes=3
+    )
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post(
+            "/v1/complete", json=_payload(), headers=CAPABILITY_HEADER
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"error": {"code": "completion_too_large"}}
+    assert len(codex.calls) == 1
+    assert len(ollama.calls) == 0
 
 
 def test_executor_exposes_only_one_bounded_operation() -> None:
