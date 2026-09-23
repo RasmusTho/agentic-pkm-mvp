@@ -1,6 +1,6 @@
 ---
 name: Add Tailscale Codex Executor Transport
-description: Connect Product's Linux router to the macOS Codex executor over a private Tailscale Serve endpoint with app-capability authorization and a bounded request protocol.
+description: Add one bounded Product completion API/client over a private Tailscale Serve endpoint, dispatching an exact declared Codex CLI or Ollama route.
 task_id: MARR-08
 github_issue: 5635
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D2
@@ -14,45 +14,49 @@ can_parallelize_with: []
 
 ## Purpose
 
-Provide the missing cross-host path between Product on Linux and the host-local Codex CLI session
-on macOS without moving Product runtime, credentials, policy authority, or unrestricted execution
-to the macOS host.
+Provide a thin cross-host completion path from Product on Linux to the host-local Codex CLI or
+Ollama on macOS. Product continues to select the exact target; the API hides the harness protocol
+and does not move Product policy, Product runtime, credentials, or general-purpose execution to the
+Mac.
 
 ## What This Task Does
 
-Add a narrow Product-side remote adapter and a host-side executor API around the MARR-02 local
-Codex adapter. The only operations are sanitized read-only catalog retrieval, model preflight, and a
-single bounded inference request. The request schema accepts a resolved provider/model/effort,
-declared capability intent, output schema, trusted instructions, and user input as distinct fields;
-it does not accept shell commands, argv, paths, arbitrary environment variables, files, MCP
-servers, or caller-selected credentials.
+Add one `POST /v1/complete` operation and a Product-side client. Product supplies an already
+resolved provider/model/transport identity, optional Codex reasoning effort and output schema,
+capability intent, trusted instructions, and user input as separate fields. The request does not
+accept shell commands, argv, paths, arbitrary environment variables, files, tools, MCP servers,
+provider endpoints, or credentials. Unknown fields fail closed. The executor checks the route
+against the declared provider census and adapter capabilities, then dispatches exactly once to the
+declared `codex_cli` or `ollama_http` adapter.
 
-Expose the host service only through Tailscale Serve HTTPS. Serve forwards one narrowly scoped app
-capability for authorized Product workload identities. The upstream service binds exclusively to
-loopback and rejects absent, malformed, unrecognized, or wrong-channel
-`Tailscale-App-Capabilities`; it does not authorize from user-supplied body fields or ordinary
-identity headers. No Funnel/public endpoint, direct LAN listener, shared bearer token, or
-unencrypted fallback is allowed. The grant and exact Serve endpoint remain operator-owned
-host/tailnet configuration, not repository policy.
+Codex uses the existing bounded no-tools `CodexCliExecutor`; trusted instructions map to its
+separate `developer_instructions` channel and user content stays in the prompt. Requests requiring
+native tools or a literal system role are rejected on Codex. Ollama uses one local `/api/chat`
+request with separate `system` and `user` messages. No provider is selected implicitly.
 
-Use separate `/v1/catalog`, `/v1/preflight`, and `/v1/execute` operations. Catalog and preflight
-never send an inference request. Product may choose Ollama only after the remote preflight fails
-before `/v1/execute` is sent. Once an execute request may have reached the executor, any lost
-response or timeout is terminal/indeterminate and must not retry or call Ollama. Bound request and
-response sizes, concurrency, and timeouts; redact prompts, capability claims, Tailscale identity,
-endpoint, and raw CLI output from logs and receipts.
+The host service exposes only `/v1/complete`; docs, OpenAPI, health, catalog, and preflight routes
+are disabled. It binds only to loopback and requires the configured Serve-forwarded
+`Tailscale-App-Capabilities` claim for `channel=product` and `actions=["complete"]`. It does not
+authorize from request-body claims or ordinary identity headers. Tailscale Serve 1.92 or later is
+required to forward app capabilities. The Uvicorn runner disables proxy-header rewriting so the
+loopback guard sees the local Serve connection rather than the remote peer in `X-Forwarded-For`.
+No Funnel/public endpoint, direct LAN listener, shared bearer token, or unencrypted fallback is
+allowed. The grant, endpoint, Codex safe-profile path, CLI environment, and Ollama endpoint remain
+operator-owned host configuration, not Git policy.
 
-The backend may trust forwarded app-capability headers only while bound to loopback behind Serve.
-Record the supported Tailscale/Serve minimum and verified auth scheme as non-secret profile
-metadata. If Serve cannot forward app capabilities, no substitute authentication method is
-implicitly accepted.
+Bound request/response bytes, adapter concurrency, and execution time. Do not log prompts, output,
+capability claims, endpoint identity, or raw adapter output. The Product client uses verified HTTPS,
+performs one POST, validates that the response route matches the request, and never retries or
+switches provider after an ambiguous result. This slice adds no automatic Codex-to-Ollama fallback,
+model discovery, latest-model promotion, catalog endpoint, or live host/Tailscale activation.
 
 ## Concretely
 
-The Product adapter calls the configured private service address using verified TLS. A fake Serve
-boundary injects the authorized app-capability claim into the loopback request. Tests prove the
-caller cannot authorize itself, choose a different Product channel, supply arbitrary process
-configuration, or cause a second provider execution after an ambiguous timeout.
+The Product client calls a configured private Tailscale Serve HTTPS origin. Serve injects the
+authorized app-capability claim into the loopback request; the Product client does not create or
+send that header itself. Tests use fake Codex CLI and Ollama adapters and fake HTTP/Tailscale
+boundaries to prove exact routing, channel separation, loopback/auth enforcement, and no retry after
+an ambiguous completion.
 
 ## Why This Matters
 
@@ -63,31 +67,28 @@ reusing its local user identity as a shared credential.
 
 ## Acceptance Criteria
 
-- [ ] The host executor exposes only schema-validated catalog, preflight, and single-execution operations; no arbitrary command, path, environment, file, or tool surface is reachable.
-  - Verify: `tests/model_access/test_codex_executor_service.py::test_executor_exposes_only_bounded_model_operations`
-- [ ] The backend binds to loopback only, and requests fail closed without the expected Serve-forwarded app capability and authorized Product channel.
-  - Verify: `tests/model_access/test_codex_executor_service.py::test_executor_requires_loopback_and_channel_scoped_app_capability`
-- [ ] The Product remote adapter uses verified TLS to the private configured executor endpoint and does not emit endpoint or identity secrets in provenance.
-  - Verify: `tests/model_access/test_codex_remote_transport.py::test_transport_uses_private_tls_and_secret_free_provenance`
-- [ ] Catalog/preflight operations make no model call; Ollama fallback remains eligible only before an execute request can reach the host.
-  - Verify: `tests/model_access/test_codex_remote_transport.py::test_preflight_failure_allows_only_pre_send_fallback`
-- [ ] An ambiguous timeout after execute is sent is terminal and does not retry Codex or invoke Ollama.
-  - Verify: `tests/model_access/test_codex_remote_transport.py::test_execute_timeout_is_indeterminate_and_never_falls_back`
-- [ ] Payload limits, output limits, concurrency bounds, strict message-channel separation, and prompt/output redaction are enforced.
-  - Verify: `tests/model_access/test_codex_executor_service.py::test_executor_bounds_and_redacts_remote_requests`
-- [ ] The app-capability wire contract uses Tailscale Serve's forwarded capability header only when the installed version supports it; unsupported Serve versions fail closed.
-  - Verify: `tests/model_access/test_codex_executor_service.py::test_unsupported_serve_profile_fails_closed`
+- [ ] The API accepts only a bounded resolved route and dispatches one declared Codex CLI or Ollama completion.
+  - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_dispatches_one_declared_transport`
+- [ ] The executor is loopback-only and refuses requests without the configured Product Serve capability; request data cannot self-authorize or widen the operation surface.
+  - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_requires_loopback_and_served_app_capability`
+- [ ] Codex uses the exact requested model, preserves trusted/user channels, and rejects tool intent.
+  - Verify: `tests/model_access/test_codex_executor_service.py::test_codex_complete_preserves_channels_and_rejects_tools`
+- [ ] The Product client uses verified HTTPS, returns the exact resolved route identity, and sends no retry or provider switch after an ambiguous execution result.
+  - Verify: `tests/model_access/test_codex_remote_transport.py::test_remote_complete_is_route_bound_and_never_retries`
+- [ ] This specification identifies catalog discovery, automatic fallback, caller migration, host activation, and staged rollout as separate follow-ups, not API prerequisites.
+  - Verify: `docs/MODEL_ACCESS_ROUTER/README.md :: Implementation Tasks and Parent Capability Acceptance`
 
 ## How to Verify (Pre-Merge)
 
 - Run `pytest -q tests/model_access/test_codex_executor_service.py tests/model_access/test_codex_remote_transport.py`.
-- Use fake HTTP/Tailscale identity middleware and the fake Codex executor; do not alter a live tailnet, start a host service, access credentials, or invoke a live model.
-- Test absent/forged/wrong-channel app-capability claims, non-loopback bind refusal, request schema abuse, stale catalog, TLS failure, body limits, timeout ambiguity, redaction, and single-execution behavior.
+- Use fake HTTP/Tailscale capability headers, fake Codex CLI, and fake Ollama HTTP; do not alter a live tailnet, start a host service, read host credentials, or invoke a live model.
+- Test absent/malformed/wrong-channel capability claims, non-loopback peer/bind refusal, request schema abuse, TLS endpoint validation, bounded bodies, timeout ambiguity, and single execution.
 
 ## Out of Scope
 
 - Editing tailnet grants, applying tags, enabling HTTPS/Serve, installing or starting a host service, provisioning credentials, or changing release channels.
 - Moving Product API/gateway/runtime services to the macOS host.
+- Product caller migration, dynamic model discovery/latest promotion, and automatic provider fallback; these have separate task contracts.
 - Arbitrary shell/tool execution or model/provider fallback after execution may have started.
 
 ## Related Docs
