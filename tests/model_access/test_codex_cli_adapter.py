@@ -700,10 +700,17 @@ def test_guardian_caller_loss_before_setsid_cannot_release_cli(
     child_pid: int | None = None
     try:
         deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and not gate.exists():
+        while time.monotonic() < deadline:
+            try:
+                candidate_pid = int(gate.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                time.sleep(0.01)
+                continue
+            if candidate_pid > 0:
+                child_pid = candidate_pid
+                break
             time.sleep(0.01)
-        assert gate.exists(), "forked CLI child never reached the pre-setsid gate"
-        child_pid = int(gate.read_text(encoding="utf-8"))
+        assert child_pid is not None, "forked CLI child never reached the pre-setsid gate"
         os.close(caller_writer)
         caller_writer = -1
 
