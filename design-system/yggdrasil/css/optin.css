@@ -1,0 +1,19 @@
+/* ============================================================
+   OPT-IN RULES (v2)
+   Nothing here applies unless a surface opts in:
+   data-focus="v2", data-effects="on", or an .fx-* class.
+   ============================================================ */
+
+/* v2 focus ring: 2px solid, no glow. Opt in with data-focus="v2". */
+[data-focus="v2"] :focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+/* Effects layer: state-only glow. Opt in per element with .fx-* */
+.fx-glow-cyan  { box-shadow: var(--cyan-glow); }
+.fx-glow-vault { box-shadow: var(--vault-glow); }
+.fx-glow-agent { box-shadow: var(--agent-glow); }
+.fx-grid       { background-image: var(--material-backdrop); background-size: var(--material-backdrop-size); }
+.fx-chroma     { text-shadow: var(--material-chroma-split); }

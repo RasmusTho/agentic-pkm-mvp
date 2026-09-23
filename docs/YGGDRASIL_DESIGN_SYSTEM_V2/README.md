@@ -1,4 +1,4 @@
-State: Target-state capability specification. Nothing in this document is shipped. Current binding
+State: Target-state capability specification, filed as parent #5626 with children #5627–#5631 (YDS-01 ready). Nothing in this document is shipped. Current binding
 token truth remains `companion-ui/companion-app/colors_and_type.css` under `docs/DESIGN_PRINCIPLES.md
 :: 11. Shared Visual Language` until a slice below is delivered and its owner doc is promoted.
 Doc role: Capability specification directory README for the Yggdrasil Design System v2 refinement.
@@ -60,7 +60,8 @@ design-system/yggdrasil/
   tokens/semantic.json        # roles that reference primitives
   tokens/themes/dark.json     # role -> primitive bindings (Yggdrasil Dark, default)
   tokens/themes/shell.json    # role -> primitive bindings (Yggdrasil Light "Shell", trial)
-  tokens/materials/*.json     # per-theme backdrop, glass, surface finish, light, motion
+  tokens/css-values.json      # CSS-native values DTCG cannot express (shadow stacks,
+                              # gradients/materials, em letter-spacing, keyword easing)
   tokens/density/comfortable.json
   tokens/density/compact.json
   VERSION                     # semver of the system
@@ -226,15 +227,16 @@ Bifrost stays native. It adopts Yggdrasil **colours, spacing, and radius** throu
 follows on iOS only after the web trial graduates (city backdrop and rim light map to SwiftUI
 gradients and shadows). Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
 roles (`display` → New York serif as the closest native analogue to EB Garamond unless the font
-is bundled; UI → SF Pro). Bifrost vendors a pinned token version and records it. A Bifrost CI check
-compares its vendored file against the tagged release here. The cross-repo contract lives under
+is bundled; UI → SF Pro). Bifrost vendors the generated Swift file from a named hub commit and
+records the token `VERSION` and commit SHA. A Bifrost CI check compares its vendored file against
+that commit. No release or tag is required. The cross-repo contract lives under
 the ecosystem authority Bifrost already declares (ADR-0050). This spec does not override it.
 
 ## Rollout
 
 | Slice | Outcome | Depends on | Notes |
 |---|---|---|---|
-| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, Shell theme and material, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Dark token values, the global `:focus-visible` rule, and the existing utility classes are unchanged, so existing consumers render identically in Dark/comfortable. New rules (focus ring, effects layer, Shell, density) are opt-in. |
+| **S1** Token source and generator | **Delivered (#5627).** `design-system/yggdrasil/` holds the DTCG source (primitives, semantic aliases, Dark and Shell themes, density; structured values and `{alias}` syntax, checked by `test_token_source_is_valid_dtcg`), `css-values.json` for CSS-native values DTCG cannot express (shadows, materials, em tracking, keyword easing), the contrast pairs, `VERSION` 2.0.0, and the stdlib `build.py` (`--check` for freshness). It generates both CSS copies, `dist/YggdrasilTokens.swift`, and `dist/tokens.json`. Every v1 token and rule is unchanged (checked against `tests/design_system/fixtures/colors_and_type.v1.css`). Shell, compact density, the v2 focus ring (`data-focus="v2"`), and `.fx-*` effects are opt-in only. JetBrains Mono now loads from Google Fonts. `prefers-reduced-motion` zeroes the duration tokens. `dist/tokens.json` resolves every alias to a concrete value. | — | The live Claude Design gate fails closed until S2 re-syncs the new sheet bytes. |
 | **S2** Live system reconciliation | Claude Design system republished from S1 output (Dark and Shell), no longer Legacy; README matches tokens (closes DS-1); component previews promoted to exports (DS-2); gate records new SHA-256 | S1 | **Owner-assisted:** needs a working Claude Design login. Until S2 lands, the byte-parity gate fails closed and new design generation waits. |
 | **S3** Companion migration | Workspace modules, renderer modules, and the canvas/converse/panel pages use tokens only; inlined subset replaced by the served sheet; off-palette colours removed; readable `fg-3` moved to `fg-2`; opt in to the new focus ring; per-user Light (Shell) toggle for the trial | S1 | Hex-literal ceiling test per module. **Trial gate:** the owner uses Shell in the Companion and then decides whether it graduates, needs changes, or is dropped. |
 | **S4** Builder UI migration | Cockpit, Signboard, legacy dashboard, CKM overview (`app/builderops/ckm/overview_html.py`), the DevUI candidate, and the **served managed DevUI stylesheet** `app/builderops/devui_managed.css` on tokens with compact density. Includes updating `ASSET_SHA256` in `app/builderops/devui_assets.py` and its provenance tests. Readable `fg-3` moved to `fg-2`; opt in to the new focus ring. | S1 | Can run in parallel with S3. |
@@ -244,6 +246,47 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 Sequencing risk: S1 changes the bytes of the binding sheet, so the live gate fails closed until S2
 lands. Schedule S1 and S2 back to back. Otherwise S1 must be held while design generation is
 active.
+
+## Implementation Tasks
+
+| Task | Slice | Issue |
+|---|---|---|
+| [Establish the Token Source and Generator](ESTABLISH_TOKEN_SOURCE_AND_GENERATOR.md) | S1 · YDS-01 | #5627 |
+| [Reconcile the Live Design System](RECONCILE_LIVE_DESIGN_SYSTEM.md) | S2 · YDS-02 | #5628 |
+| [Migrate the Companion Surfaces](MIGRATE_COMPANION_SURFACES.md) | S3 · YDS-03 | #5629 |
+| [Migrate the Builder Surfaces](MIGRATE_BUILDER_SURFACES.md) | S4 · YDS-04 | #5630 |
+| [Adopt the Tokens in Bifrost](ADOPT_TOKENS_IN_BIFROST.md) | S5 · YDS-05 | filed in `RasmusTho/bifrost` after YDS-01 |
+| [Promote the Design System Governance](PROMOTE_DESIGN_SYSTEM_GOVERNANCE.md) | S6 · YDS-06 | #5631 |
+
+The parent validation hub is #5626, described in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
+
+## Cross-Task Invariants / Interaction Safety
+
+These invariants hold across the tasks, which all read or write the same token outputs.
+
+1. **Live parity window.** The binding sheet's bytes equal the live Claude Design sheet, except
+   between the YDS-01 merge and the YDS-02 reconciliation. In that window the gate fails closed
+   and no design generation runs. *Partial failure:* if YDS-02 cannot run after YDS-01 merges (for
+   example, the Claude Design login fails), the window stays closed. Recovery is to finish YDS-02,
+   not to hand-edit the live sheet or relax the gate. YDS-01 therefore merges only when YDS-02 can
+   run right after.
+2. **Generated outputs only.** Consumers read generated outputs, and nobody hand-edits them.
+   YDS-01's freshness test fails any drift, so later tasks change values only through the source.
+3. **Dark compatibility.** No task changes a Dark token name or value. YDS-03 and YDS-04 can land in
+   either order, because a surface that is not yet migrated still renders correctly from the
+   unchanged sheet.
+4. **Pinned asset hashes move together.** A change to `app/builderops/devui_managed.css` and its
+   `ASSET_SHA256` entry ship in the same YDS-04 change. A stylesheet change without the hash
+   update fails the DevUI provenance tests.
+5. **Shell stays opt-in.** No surface defaults to Shell before YDS-06 records the owner's trial
+   decision. Bifrost ships Dark only until then.
+
+## Relationship to GitHub Issues
+
+The parent feature issue is the live validation hub. Child Issues are filed from the task files
+above: YDS-01 as ready, and the others as blocked on their prerequisites. YDS-05 is filed in the
+Bifrost repository once a token version exists to pin. Issue numbers are written back into each
+task file's `github_issue:` frontmatter and into the table above when filed.
 
 ## Out of scope
 

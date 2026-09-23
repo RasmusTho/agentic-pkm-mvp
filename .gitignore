@@ -19,6 +19,8 @@ env/
 .obsidian/
 vault/.obsidian/
 dist/
+# Yggdrasil token outputs are committed generated artifacts (design-system/yggdrasil/build.py --check).
+!design-system/yggdrasil/dist/
 build/
 .eggs/
 *.egg-info/

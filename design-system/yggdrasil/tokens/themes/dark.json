@@ -1,0 +1,178 @@
+{
+  "$description": "Yggdrasil Dark: the default theme. Every name and value is the v1 sheet, unchanged.",
+  "tokens": {
+    "bg-base": {
+      "$type": "color",
+      "$description": "deepest — page root, near black with blue cast",
+      "$value": "#070b12"
+    },
+    "bg-surface": {
+      "$type": "color",
+      "$description": "panels, sidebars",
+      "$value": "#0c1220"
+    },
+    "bg-raised": {
+      "$type": "color",
+      "$description": "cards, inputs, raised surfaces",
+      "$value": "#111a2e"
+    },
+    "bg-overlay": {
+      "$type": "color",
+      "$description": "hover states, popovers",
+      "$value": "#162038"
+    },
+    "bg-modal": {
+      "$type": "color",
+      "$description": "modal / dialog backdrop content",
+      "$value": "#0e1828"
+    },
+    "fg-1": {
+      "$type": "color",
+      "$description": "primary — cool blue-white",
+      "$value": "#dce8f0"
+    },
+    "fg-2": {
+      "$type": "color",
+      "$description": "secondary / muted",
+      "$value": "#7a9ab8"
+    },
+    "fg-3": {
+      "$type": "color",
+      "$description": "tertiary / disabled / dim",
+      "$value": "#3d5570"
+    },
+    "fg-inverse": {
+      "$type": "color",
+      "$description": "text on light/accent backgrounds",
+      "$value": "#070b12"
+    },
+    "border": {
+      "$type": "color",
+      "$description": "default — subtle grid line",
+      "$value": "#152030"
+    },
+    "border-strong": {
+      "$type": "color",
+      "$description": "emphasis — dividers, active edges",
+      "$value": "#1e3050"
+    },
+    "border-focus": {
+      "$type": "color",
+      "$description": "focus ring — electric cyan",
+      "$value": "#00d4e8"
+    },
+    "accent": {
+      "$type": "color",
+      "$description": "primary accent — active, focus, key affordances",
+      "$value": "#d4a843"
+    },
+    "accent-dim": {
+      "$type": "color",
+      "$description": "dimmed gold",
+      "$value": "#80621a"
+    },
+    "accent-muted": {
+      "$type": "color",
+      "$description": "gold at low opacity",
+      "$value": "#2a1e06"
+    },
+    "cyan": {
+      "$type": "color",
+      "$description": "electric cyan — Tron primary glow",
+      "$value": "#00d4e8"
+    },
+    "cyan-dim": {
+      "$type": "color",
+      "$description": "dimmed cyan",
+      "$value": "#007a8a"
+    },
+    "cyan-muted": {
+      "$type": "color",
+      "$description": "cyan tint background",
+      "$value": "#001e28"
+    },
+    "vault": {
+      "$type": "color",
+      "$description": "vault-connected — electric green",
+      "$value": "#39e87d"
+    },
+    "vault-dim": {
+      "$type": "color",
+      "$description": "vault hover",
+      "$value": "#1a7840"
+    },
+    "vault-muted": {
+      "$type": "color",
+      "$description": "vault background tint",
+      "$value": "#041a10"
+    },
+    "agent": {
+      "$type": "color",
+      "$description": "agent-contributed UI and content",
+      "$value": "#4a9eff"
+    },
+    "agent-dim": {
+      "$type": "color",
+      "$description": "agent hover",
+      "$value": "#1e5a9a"
+    },
+    "agent-muted": {
+      "$type": "color",
+      "$description": "agent background tint",
+      "$value": "#051228"
+    },
+    "amber": {
+      "$type": "color",
+      "$description": "warnings, uncommitted/staged state",
+      "$value": "#f09030"
+    },
+    "amber-dim": {
+      "$type": "color",
+      "$value": "#805010"
+    },
+    "amber-muted": {
+      "$type": "color",
+      "$value": "#1a0e02"
+    },
+    "destructive": {
+      "$type": "color",
+      "$value": "#ff3d3d"
+    },
+    "destructive-dim": {
+      "$type": "color",
+      "$value": "#8a1a1a"
+    },
+    "destructive-muted": {
+      "$type": "color",
+      "$value": "#160404"
+    },
+    "color-bg": {
+      "$type": "color",
+      "$value": "{bg-base}"
+    },
+    "color-surface": {
+      "$type": "color",
+      "$value": "{bg-surface}"
+    },
+    "color-text": {
+      "$type": "color",
+      "$value": "{fg-1}"
+    },
+    "color-muted": {
+      "$type": "color",
+      "$value": "{fg-2}"
+    },
+    "color-dim": {
+      "$type": "color",
+      "$value": "{fg-3}"
+    },
+    "color-border": {
+      "$type": "color",
+      "$value": "{border}"
+    },
+    "color-accent": {
+      "$type": "color",
+      "$value": "{accent}"
+    }
+  }
+}

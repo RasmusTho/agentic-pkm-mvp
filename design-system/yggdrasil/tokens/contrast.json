@@ -1,0 +1,43 @@
+{
+  "$description": "Declared text-role/surface pairs that must meet WCAG AA (4.5:1). fg-3 is decorative-only and is excluded by declaration.",
+  "minimum": 4.5,
+  "decorative_only": [
+    "fg-3"
+  ],
+  "themes": {
+    "dark": {
+      "text": [
+        "fg-1",
+        "fg-2",
+        "accent",
+        "cyan",
+        "vault",
+        "agent",
+        "amber",
+        "destructive"
+      ],
+      "surfaces": [
+        "bg-base",
+        "bg-surface",
+        "bg-raised"
+      ]
+    },
+    "shell": {
+      "text": [
+        "fg-1",
+        "fg-2",
+        "accent",
+        "cyan",
+        "vault",
+        "agent",
+        "amber",
+        "destructive"
+      ],
+      "surfaces": [
+        "bg-base",
+        "bg-surface",
+        "bg-raised"
+      ]
+    }
+  }
+}
