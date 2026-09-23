@@ -9291,7 +9291,6 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
-  <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
       /* #2562: vault-green identity colour, matching the shell's vault
@@ -10786,11 +10785,16 @@ def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
                     cache[route] = (content_type, fh.read())
             except OSError:
                 continue
+        # Required: the pages carry no inline token copies, so a missing sheet
+        # must stop startup instead of serving unstyled pages.
         try:
             with open(_YGGDRASIL_TOKENS_PATH, "rb") as fh:
                 cache[YGGDRASIL_TOKENS_URL] = ("text/css; charset=utf-8", fh.read())
-        except OSError:
-            pass
+        except OSError as exc:
+            raise RuntimeError(
+                f"Yggdrasil tokens sheet missing at {_YGGDRASIL_TOKENS_PATH}; "
+                "run python3 design-system/yggdrasil/build.py"
+            ) from exc
         _VENDOR_STATIC_CACHE = cache
     return _VENDOR_STATIC_CACHE
 
@@ -11369,7 +11373,7 @@ def render_index_html(
     [hidden] {{ display: none !important; }}
     html {{ font-size: 16px; -webkit-font-smoothing: antialiased; }}
     body {{
-      background: var(--bg-base);
+      background: var(--surface-page);
       color: var(--fg-1);
       font-family: var(--font-ui);
       font-size: var(--text-base);
@@ -11536,7 +11540,7 @@ def render_index_html(
       font-size: var(--text-xs);
       font-family: var(--font-mono);
       color: var(--fg-2);
-      background: var(--surface-2);
+      background: var(--bg-raised);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 1px 6px;
@@ -11674,8 +11678,10 @@ def render_index_html(
       background: var(--agent-muted);
     }}
     .vault-browser-left-pane {{
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
+      background: var(--surface-panel);
+      border-right: 1px solid var(--surface-panel-border);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
       display: flex;
       flex-direction: column;
       min-height: 0;
@@ -11779,27 +11785,19 @@ def render_index_html(
       flex-direction: column;
       overflow: hidden;
     }}
-    /* YDS-03 (#5629): Yggdrasil Light "Shell" structure (per-user trial) —
-       porcelain sheets floating on the city backdrop, with rim light. Only
-       applies when the display preference sets data-theme="light". */
-    :root[data-theme="light"] body {{
-      background: var(--material-backdrop);
-      background-attachment: fixed;
+    /* YDS-03 (#5629): layout material comes from the theme's surface-*
+       tokens (Dark: unchanged; Shell: porcelain sheets on the city backdrop). */
+    .workspace-layout {{
+      gap: var(--surface-frame-gap);
+      padding: var(--surface-frame-gap);
     }}
-    :root[data-theme="light"] .workspace-layout {{
-      gap: 10px;
-      padding: 10px;
+    .workspace-main {{
+      background: var(--surface-main);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
     }}
-    :root[data-theme="light"] .vault-browser-left-pane,
-    :root[data-theme="light"] .workspace-main,
-    :root[data-theme="light"] .agent-rail {{
-      background: var(--material-sheet);
-      border: none;
-      border-radius: 2px;
-      box-shadow: var(--material-rim-light);
-    }}
-    :root[data-theme="light"] .active-note-header h1 {{
-      text-shadow: var(--material-chroma-split);
+    .active-note-header h1 {{
+      text-shadow: var(--surface-title-shadow);
     }}
     .workspace-header-strip {{
       background: var(--bg-surface);
@@ -12428,7 +12426,7 @@ def render_index_html(
       border: 1px solid var(--border);
       border-radius: 999px;
       padding: 1px 7px;
-      background: var(--bg);
+      background: var(--bg-base);
       color: var(--fg-1);
     }}
     .vault-properties-invalid {{
@@ -13321,8 +13319,10 @@ def render_index_html(
     .agent-rail {{
       width: 280px;
       flex-shrink: 0;
-      background: var(--bg-surface);
-      border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+      background: var(--surface-panel);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
+      border-left: 1px solid color-mix(in srgb, var(--surface-panel-border) 72%, transparent);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -15163,7 +15163,7 @@ def render_index_html(
       font-size: var(--text-xs, 11px);
       margin: 2px 0 0;
     }}
-    .vault-picker-select-error {{ color: var(--danger); margin-top: 6px; }}
+    .vault-picker-select-error {{ color: var(--destructive); margin-top: 6px; }}
     .vault-picker-fs-empty {{ color: var(--fg-2); font-family: var(--font-ui); font-size: var(--text-sm); margin: 0; }}
     .vault-picker-fs-footer {{ color: var(--fg-2); font-family: var(--font-ui); font-size: var(--text-sm); }}
   </style>

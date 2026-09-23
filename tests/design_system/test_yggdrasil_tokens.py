@@ -202,3 +202,12 @@ def test_tokens_only_sheet_has_no_element_defaults() -> None:
         if not any(marker in selector or marker in body for marker in OPT_IN_MARKERS + ACCESSIBILITY_MARKERS)
     ]
     assert not_opt_in == []
+
+
+def test_shell_sets_light_color_scheme() -> None:
+    """Native controls follow Shell; a production :root{color-scheme:dark} is overridden by specificity."""
+    css = BINDING.read_text(encoding="utf-8")
+    light = css.split(':root[data-theme="light"] {', 1)[1].split("\n}", 1)[0]
+    system = css.split(':root[data-theme="system"] {', 1)[1].split("\n  }", 1)[0]
+    assert "color-scheme: light;" in light
+    assert "color-scheme: light;" in system

@@ -108,3 +108,47 @@ def test_light_theme_is_per_user_opt_in() -> None:
     assert (
         "if(p.theme==='light')document.documentElement.setAttribute('data-theme','light');" in html
     )
+
+
+def test_every_token_reference_resolves() -> None:
+    """Removing hex fallbacks must not leave a var(--x) that nothing defines (e.g. --danger)."""
+    sheet = vendor_static_assets()[YGGDRASIL_TOKENS_URL][1].decode("utf-8")
+    defined = set(re.findall(r"--([a-z0-9-]+)\s*:", sheet))
+    sources = [path.read_text(encoding="utf-8") for path in FG3_CONSUMERS if path.suffix == ".py"]
+    for text in sources:
+        defined |= set(re.findall(r"--([a-z0-9-]+)\s*:", text))
+        defined |= set(re.findall(r"setProperty\(\s*'--([a-z0-9-]+)'", text))
+    used = {name for text in sources for name in re.findall(r"var\(--([a-z0-9-]+)\)", text)}
+    assert sorted(used - defined) == []
+
+
+def test_components_never_branch_on_theme() -> None:
+    """Theme is a pure token/material swap: no consumer CSS selects on data-theme."""
+    branching = [
+        str(path.relative_to(REPO_ROOT))
+        for path in FG3_CONSUMERS
+        if re.search(r"\[data-theme[=\]]", path.read_text(encoding="utf-8"))
+    ]
+    assert branching == []
+
+
+def test_orientation_pages_do_not_apply_the_stored_theme() -> None:
+    """Orientation pages have no settings drawer, so they stay on the canonical Dark render."""
+    from tests.companion_ui.test_reentry_orientation_treatment import _render_no_vault_orientation
+
+    html = _render_no_vault_orientation()
+    assert f'<link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">' in html
+    assert "document.documentElement.setAttribute('data-theme'" not in html
+
+
+def test_missing_tokens_sheet_fails_startup(tmp_path, monkeypatch) -> None:
+    import companion_ui.workspace.serve_dev_page as page
+
+    monkeypatch.setattr(page, "_VENDOR_STATIC_CACHE", None)
+    monkeypatch.setattr(page, "_YGGDRASIL_TOKENS_PATH", tmp_path / "missing.css")
+    try:
+        page.vendor_static_assets()
+    except RuntimeError as exc:
+        assert "yggdrasil" in str(exc).lower()
+    else:
+        raise AssertionError("a missing tokens sheet must stop startup")

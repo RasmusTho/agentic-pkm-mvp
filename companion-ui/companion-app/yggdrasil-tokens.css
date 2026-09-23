@@ -125,6 +125,14 @@
   --material-on-glass-2: #7a9ab8;
   --material-rim-light: none;
   --material-chroma-split: none;
+  --surface-page: var(--bg-base);   /* app frame behind the panels */
+  --surface-panel: var(--bg-surface);   /* side panels and rails */
+  --surface-main: transparent;   /* main reading column */
+  --surface-panel-border: var(--border);
+  --surface-panel-shadow: none;
+  --surface-panel-radius: 0px;
+  --surface-frame-gap: 0px;   /* gap between panels; the page shows through */
+  --surface-title-shadow: none;
   --control-height: 36px;
   --row-height: 40px;
 }
@@ -133,6 +141,7 @@
    THEME — Yggdrasil Light "Shell" (trial, opt-in)
    ============================================================ */
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg-base: #e4e6eb;
   --bg-surface: #f1f2f5;
   --bg-raised: #ffffff;
@@ -180,10 +189,19 @@
   --material-sheet: linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
   --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
   --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
+  --surface-page: var(--material-backdrop);
+  --surface-panel: var(--material-sheet);
+  --surface-main: var(--material-sheet);
+  --surface-panel-border: transparent;
+  --surface-panel-shadow: var(--material-rim-light);
+  --surface-panel-radius: 2px;
+  --surface-frame-gap: 10px;
+  --surface-title-shadow: var(--material-chroma-split);
 }
 
 @media (prefers-color-scheme: light) {
   :root[data-theme="system"] {
+    color-scheme: light;
     --bg-base: #e4e6eb;
     --bg-surface: #f1f2f5;
     --bg-raised: #ffffff;
@@ -231,6 +249,14 @@
     --material-sheet: linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
     --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
     --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
+    --surface-page: var(--material-backdrop);
+    --surface-panel: var(--material-sheet);
+    --surface-main: var(--material-sheet);
+    --surface-panel-border: transparent;
+    --surface-panel-shadow: var(--material-rim-light);
+    --surface-panel-radius: 2px;
+    --surface-frame-gap: 10px;
+    --surface-title-shadow: var(--material-chroma-split);
   }
 }
 
