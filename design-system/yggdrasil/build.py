@@ -29,6 +29,11 @@ CSS_OUTPUTS = (
     "companion-ui/companion-app/colors_and_type.css",
     "app/web/static/colors_and_type.css",
 )
+# Tokens only (no element defaults or v1 utility classes), for surfaces that
+# own their base styles, such as the Companion workspace pages.
+# Written inside companion-ui/companion-app/ so the Companion image (which copies
+# only that directory) serves it.
+TOKENS_CSS_OUTPUT = "companion-ui/companion-app/yggdrasil-tokens.css"
 SWIFT_OUTPUT = "design-system/yggdrasil/dist/YggdrasilTokens.swift"
 JSON_OUTPUT = "design-system/yggdrasil/dist/tokens.json"
 
@@ -84,8 +89,11 @@ def css_value(entry: dict[str, object]) -> str:
     raise ValueError(f"cannot render {kind} value {value!r}")
 
 
-def _block(selector: str, tokens: dict[str, dict[str, object]], indent: str = "") -> str:
+def _block(
+    selector: str, tokens: dict[str, dict[str, object]], indent: str = "", properties: tuple[str, ...] = ()
+) -> str:
     lines = [f"{indent}{selector} {{"]
+    lines += [f"{indent}  {prop};" for prop in properties]
     for name, entry in tokens.items():
         note = f"   /* {entry['$description']} */" if entry.get("$description") else ""
         lines.append(f"{indent}  --{name}: {css_value(entry)};{note}")
@@ -108,7 +116,7 @@ REDUCED_MOTION = (
 )
 
 
-def render_css(src: dict[str, object]) -> str:
+def render_css(src: dict[str, object], *, include_base: bool = True) -> str:
     version = src["version"]
     shell_tokens = shell_overrides(src)
     header = (
@@ -128,12 +136,17 @@ def render_css(src: dict[str, object]) -> str:
         "/* ============================================================\n   BASE TOKENS — Yggdrasil Dark (default)\n   ============================================================ */",
         _block(":root", root_tokens(src)),
         "",
-        (HERE / "css" / "base.css").read_text(encoding="utf-8").rstrip("\n"),
-        "",
+        *(
+            [(HERE / "css" / "base.css").read_text(encoding="utf-8").rstrip("\n"), ""]
+            if include_base
+            else []
+        ),
         "/* ============================================================\n   THEME — Yggdrasil Light \"Shell\" (trial, opt-in)\n   ============================================================ */",
-        _block(':root[data-theme="light"]', shell_tokens),
+        _block(':root[data-theme="light"]', shell_tokens, properties=("color-scheme: light",)),
         "",
-        "@media (prefers-color-scheme: light) {\n" + _block(':root[data-theme="system"]', shell_tokens, "  ") + "\n}",
+        "@media (prefers-color-scheme: light) {\n"
+        + _block(':root[data-theme="system"]', shell_tokens, "  ", properties=("color-scheme: light",))
+        + "\n}",
         "",
         "/* ============================================================\n   DENSITY — compact (opt-in)\n   ============================================================ */",
         _block('[data-density="compact"]', src["compact"]),
@@ -228,7 +241,12 @@ def flatten(src: dict[str, object]) -> dict[str, object]:
     """Every token per theme with aliases resolved to concrete CSS values."""
 
     def resolved(tokens: dict[str, dict[str, object]]) -> dict[str, str]:
-        return {name: css_value(resolve(tokens, name)) for name in tokens}
+        def one(name: str, depth: int = 0) -> str:
+            value = css_value(resolve(tokens, name))
+            ref = re.fullmatch(r"var\(--([a-z0-9-]+)\)", value)
+            return one(ref.group(1), depth + 1) if ref and ref.group(1) in tokens and depth < 8 else value
+
+        return {name: one(name) for name in tokens}
 
     dark = root_tokens(src)
     shell = {**dark, **shell_overrides(src)}
@@ -243,6 +261,9 @@ def render_all(src: dict[str, object] | None = None) -> dict[str, str]:
     src = src or load()
     css = render_css(src)
     outputs = {path: css for path in CSS_OUTPUTS}
+    outputs[TOKENS_CSS_OUTPUT] = render_css(src, include_base=False).replace(
+        "— Colors & Type", "— Tokens only (no element defaults)", 1
+    )
     outputs[SWIFT_OUTPUT] = render_swift(src)
     outputs[JSON_OUTPUT] = json.dumps(flatten(src), indent=2, ensure_ascii=False) + "\n"
     return outputs

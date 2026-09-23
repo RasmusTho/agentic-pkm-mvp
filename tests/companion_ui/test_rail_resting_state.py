@@ -286,9 +286,10 @@ def test_rail_resting_styles_present() -> None:
     assert ".rail-resting-label {" in html
     assert ".rail-resting-state {" in html
     assert ".rail-resting-note {" in html
-    # The state word is the dim mono token from the mockup.
+    # The state word is the quiet mono token from the mockup. It is readable
+    # text, so it uses --fg-2 (YDS-03 #5629: --fg-3 is decorative-only).
     line_rule = html.split(".rail-resting-state {", 1)[1].split("}", 1)[0]
-    assert "var(--fg-3)" in line_rule
+    assert "var(--fg-2)" in line_rule
     assert "var(--font-mono)" in line_rule
     # The dead pre-#3362 disclosure styles are gone.
     assert ".rail-idle-details" not in html

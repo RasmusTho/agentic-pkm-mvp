@@ -192,7 +192,7 @@ def link_preview_css() -> str:
       display: block;
     }
     .link-preview-title {
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.08em;
