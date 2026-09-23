@@ -347,6 +347,80 @@ def test_facade_preserves_and_binds_resolver_fallback_provenance() -> None:
     assert route.preflight_status == "not_run"
 
 
+@pytest.mark.parametrize(
+    ("mismatch", "expected_error"),
+    [
+        ("identity", "fallback selected identity"),
+        ("transport", "fallback selected transport"),
+        ("policy", "fallback policy authority"),
+        ("degradation", "visibly degraded"),
+    ],
+)
+def test_facade_rejects_fallback_provenance_that_mismatches_selected_route(
+    mismatch: str,
+    expected_error: str,
+) -> None:
+    profile = _profile(
+        profile_id="profile.product_general",
+        runtime="product",
+        channel="product.chat",
+        consumer="product.agent",
+        caller_profile="profile.product_runtime",
+    )
+    provenance_values = {
+        "used": True,
+        "phase": "preflight",
+        "reason_code": "executor_unreachable",
+        "source_transport_id": "codex_cli",
+        "selected_transport_id": "openai_api",
+        "policy_authority": profile.profile_id,
+        "source_effective_identity": "codex/gpt-5.6-sol",
+        "selected_effective_identity": "openai/gpt-5.6-sol",
+    }
+    if mismatch == "identity":
+        provenance_values["selected_effective_identity"] = "anthropic/claude-fable"
+    elif mismatch == "transport":
+        provenance_values["selected_transport_id"] = "anthropic_api"
+    elif mismatch == "policy":
+        provenance_values["policy_authority"] = "profile.other_policy"
+    provenance = FallbackProvenance(**provenance_values)
+    resolver = _Resolver(
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="selected-adapter",
+        degraded=mismatch != "degradation",
+        degradation_reason=(
+            "preflight_fallback" if mismatch != "degradation" else None
+        ),
+        fallback_provenance=provenance,
+    )
+    registry = _Registry(
+        {
+            "selected-adapter": _descriptor(
+                adapter_id="selected-adapter",
+                provider="openai",
+                model="gpt-5.6-sol",
+                transport_id="openai_api",
+                execution_host_profile="profile.provider_openai",
+                execution_boundary="provider_https",
+                authentication_scheme="provider_credential_ref",
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        ModelAccessRouter(adapter_registry=registry).resolve(
+            _request(fallback_requirement="fallback_policy_selected"),
+            resolver=resolver,
+            profile=profile,
+        )
+
+    if mismatch in {"identity", "degradation"}:
+        assert registry.lookups == []
+    else:
+        assert registry.lookups == ["selected-adapter"]
+
+
 def test_facade_rejects_capabilities_not_attested_by_adapter() -> None:
     profile = _profile(
         profile_id="profile.product_general",

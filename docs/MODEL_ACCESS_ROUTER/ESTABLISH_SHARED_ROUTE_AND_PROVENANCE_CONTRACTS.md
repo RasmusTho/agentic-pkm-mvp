@@ -48,6 +48,8 @@ Without one neutral contract, each transport can invent incompatible route/prove
   - Verify: `tests/model_access/test_contracts.py::test_route_contract_carries_transport_catalog_preflight_host_and_fallback_provenance`
 - [ ] Resolver-selected fallback provenance reaches the route and is rejected if its policy, selected transport/identity, or degradation does not match the final target.
   - Verify: `tests/model_access/test_router_facade.py::test_facade_preserves_and_binds_resolver_fallback_provenance`
+- [ ] The facade rejects fallback provenance when selected identity, transport, policy authority, or degradation differs from the resolved route.
+  - Verify: `tests/model_access/test_router_facade.py::test_facade_rejects_fallback_provenance_that_mismatches_selected_route`
 - [ ] The neutral contract preserves declared fallback-requirement and effective-identity semantics without taking owner policy authority.
   - Verify: `tests/model_access/test_contracts.py::test_resolved_fallback_obeys_declared_requirement_and_identity`
 - [ ] Source-preflight fallback cause remains distinct from the selected target's preflight status.
