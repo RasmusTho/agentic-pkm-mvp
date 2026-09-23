@@ -3,33 +3,24 @@
   This is intentionally simple; a richer UI can replace it later without changing the APIs.
 -->
 <!doctype html>
-<html lang="en">
+<html lang="en" data-density="compact" data-focus="v2">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agentic PKM – Reality-MVP Dashboard</title>
+  <link rel="stylesheet" href="/static/yggdrasil-tokens.css">
   <style>
-    :root {
-      --bg: #0f172a;
-      --panel: #111827;
-      --accent: #22d3ee;
-      --text: #e5e7eb;
-      --muted: #9ca3af;
-      --border: #1f2937;
-      --danger: #f87171;
-      --success: #34d399;
-    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       padding: 0;
       font-family: "Helvetica Neue", Arial, sans-serif;
-      background: radial-gradient(circle at 20% 20%, #0b1224, #0c142a 45%, #0b1326 80%);
-      color: var(--text);
+      background: radial-gradient(circle at 20% 20%, var(--bg-surface), var(--bg-base) 45%, var(--bg-base) 80%);
+      color: var(--fg-1);
     }
     .page { max-width: 1100px; margin: 0 auto; padding: 32px 20px 48px; }
     header h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: 0.4px; }
-    header p { margin: 0 0 20px; color: var(--muted); }
+    header p { margin: 0 0 20px; color: var(--fg-2); }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
     section { margin-top: 20px; }
     h2 { margin: 0 0 12px; font-size: 18px; letter-spacing: 0.3px; }
@@ -40,26 +31,26 @@
       padding: 16px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.35);
     }
-    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--fg-2); font-size: 13px; }
     .stat-row { display: flex; justify-content: space-between; gap: 10px; margin: 6px 0; font-size: 14px; }
-    .stat-row span:first-child { color: var(--muted); }
+    .stat-row span:first-child { color: var(--fg-2); }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
-    th { color: var(--muted); font-weight: 600; }
+    th { color: var(--fg-2); font-weight: 600; }
     tr:last-child td { border-bottom: none; }
-    .pill { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; color: #0b1224; background: var(--muted); }
-    .pill.ok { background: var(--success); }
-    .pill.warn { background: var(--danger); }
-    .muted { color: var(--muted); }
+    .pill { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; color: var(--fg-inverse); background: var(--fg-2); }
+    .pill.ok { background: var(--vault); }
+    .pill.warn { background: var(--destructive); }
+    .muted { color: var(--fg-2); }
     .banner { margin: 10px 0; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
-    .banner.error { background: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.4); color: #fecaca; }
-    .banner.info { background: rgba(34, 211, 238, 0.12); border: 1px solid rgba(34, 211, 238, 0.4); color: #a5f3fc; }
+    .banner.error { background: color-mix(in srgb, var(--destructive) 12%, transparent); border: 1px solid color-mix(in srgb, var(--destructive) 40%, transparent); color: var(--destructive); }
+    .banner.info { background: color-mix(in srgb, var(--cyan) 12%, transparent); border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent); color: var(--cyan); }
     .hidden { display: none; }
     textarea, input[type="text"] {
       width: 100%;
-      background: #0b1224;
+      background: var(--bg-raised);
       border: 1px solid var(--border);
-      color: var(--text);
+      color: var(--fg-1);
       border-radius: 8px;
       padding: 10px 12px;
       font-size: 14px;
@@ -68,7 +59,7 @@
     }
     button {
       background: var(--accent);
-      color: #0b1224;
+      color: var(--fg-inverse);
       border: none;
       border-radius: 8px;
       padding: 10px 16px;
@@ -78,10 +69,10 @@
       transition: transform 0.05s ease, box-shadow 0.1s ease;
     }
     button:disabled { cursor: not-allowed; opacity: 0.7; }
-    button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(34, 211, 238, 0.28); }
+    button:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 28%, transparent); }
     .ask-actions { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
-    .answer-box { background: #0b1224; border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-height: 60px; white-space: pre-wrap; font-size: 14px; }
-    .label { color: var(--muted); font-size: 13px; }
+    .answer-box { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-height: 60px; white-space: pre-wrap; font-size: 14px; }
+    .label { color: var(--fg-2); font-size: 13px; }
     @media (max-width: 640px) { .ask-actions { flex-direction: column; align-items: flex-start; } }
   </style>
 </head>
