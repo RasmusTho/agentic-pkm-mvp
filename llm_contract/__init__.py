@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import ipaddress
 import re
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
@@ -138,11 +139,26 @@ _SENSITIVE_ROUTE_VALUE = re.compile(
     re.IGNORECASE,
 )
 _ENVIRONMENT_ASSIGNMENT = re.compile(r"\b[A-Z][A-Z0-9_]{1,63}\s*[:=]")
+_IPV6_ADDRESS_CANDIDATE = re.compile(r"(?<![\w:])([0-9a-f:]+)(?![\w:])", re.IGNORECASE)
+
+
+def _contains_ipv6_address(value: str) -> bool:
+    for candidate in _IPV6_ADDRESS_CANDIDATE.findall(value):
+        if candidate.count(":") < 2:
+            continue
+        try:
+            ipaddress.IPv6Address(candidate)
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def _contains_sensitive_route_value(value: str) -> bool:
     return bool(
-        _SENSITIVE_ROUTE_VALUE.search(value) or _ENVIRONMENT_ASSIGNMENT.search(value)
+        _SENSITIVE_ROUTE_VALUE.search(value)
+        or _ENVIRONMENT_ASSIGNMENT.search(value)
+        or _contains_ipv6_address(value)
     )
 
 

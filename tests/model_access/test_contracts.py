@@ -480,6 +480,22 @@ def test_route_provenance_rejects_secret_bearing_fields() -> None:
     for field in ("provider", "model", "adapter_id", "effective_identity"):
         with pytest.raises(ValidationError):
             _route(**{field: "sk-ant-api03-abc123"})
+    ipv6_identity = "fd7a:115c:a1e0::1234"
+    with pytest.raises(ValidationError):
+        _route(effective_identity=ipv6_identity)
+    fallback_values = {
+        "used": True,
+        "phase": "preflight",
+        "reason_code": "cli_missing",
+        "source_transport_id": "codex_cli",
+        "selected_transport_id": "openai_api",
+        "policy_authority": "profile.product_general",
+        "source_effective_identity": "codex/gpt-5.6-sol",
+        "selected_effective_identity": "openai/gpt-5.6-sol",
+    }
+    for identity_field in ("source_effective_identity", "selected_effective_identity"):
+        with pytest.raises(ValidationError):
+            FallbackProvenance(**{**fallback_values, identity_field: ipv6_identity})
     with pytest.raises(ValidationError):
         FallbackProvenance(
             used=True,
