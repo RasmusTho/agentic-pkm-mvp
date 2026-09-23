@@ -292,3 +292,8 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The plan used a pre-write task read to preserve claims, but a claim could commit before the sync upsert and have its lease reference overwritten.
 **Upstream artifact:** `docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` — keep refresh task writes serialized with claims before applying snapshots.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent and no connected BuilderOps writer is available. No store write was attempted.
+
+## 2026-09-23 — #5619 (neutral route and provenance contracts)
+**Source:** capture-learning after independent convergence review
+**Diverged:** The route contract rejected an owner-authorized selection of a different model over the same transport, although ADR-0066 assigns fallback selection to owner resolvers and does not require a transport switch.
+**Upstream artifact:** `docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D1` and `docs/MODEL_ACCESS_ROUTER/ESTABLISH_SHARED_ROUTE_AND_PROVENANCE_CONTRACTS.md :: What This Task Does`

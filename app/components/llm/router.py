@@ -9,6 +9,7 @@ from app.components.embeddings import EmbeddingIdentity, resolve_embedding_ident
 from app.components.settings.models_loader import load_models
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.runtime import get_settings_bundle
+from llm_contract import ModelAccessRoute
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,34 @@ class LLMRoute:
     embedding_identity: EmbeddingIdentity | None = None
     timeout_seconds: float | None = None
     temperature: float | None = None
+
+    @classmethod
+    def from_model_access_route(
+        cls,
+        route: ModelAccessRoute,
+        *,
+        mode: str,
+        reason: str,
+        embedding_identity: EmbeddingIdentity | None = None,
+        timeout_seconds: float | None = None,
+        temperature: float | None = None,
+    ) -> "LLMRoute":
+        """Project a neutral route into the legacy Product route shape.
+
+        Product-only explanation and tuning fields remain caller-owned during
+        migration; target identity and degradation come from the neutral route.
+        """
+
+        return cls(
+            provider=route.provider,
+            model=route.model,
+            mode=mode,
+            reason=reason,
+            degraded=route.degraded,
+            embedding_identity=embedding_identity,
+            timeout_seconds=timeout_seconds,
+            temperature=temperature,
+        )
 
 
 def _normalize(value: str | None) -> str:

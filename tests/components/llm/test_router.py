@@ -5,9 +5,19 @@ import os
 import pytest
 
 from app.components.llm.fabric import get_embeddings_client
-from app.components.llm.router import LLMRouter, LLMTaskIntent
+from app.components.embeddings.legacy import EmbeddingIdentity
+from app.components.llm.router import LLMRoute, LLMRouter, LLMTaskIntent
 from app.config import llm as llm_config
 from app.settings.models import EmbeddingProfiles, LLMRoutingSettings, SettingsBundle
+from llm_contract import (
+    CapabilityProvenance,
+    ModelAccessRoute,
+    ModelResolutionRequest,
+    ModelAccessIntent,
+    ModelCapabilities,
+    ModelCapabilityRequirements,
+    TrustedInstructionMapping,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +54,72 @@ def test_router_respects_env_defaults(clean_llm_env, provider: str, expected: st
 
 def test_router_fixture_clears_host_embedding_profile(clean_llm_env) -> None:
     assert "EMBED_PROFILE" not in os.environ
+
+
+def test_legacy_llmroute_projects_from_neutral_route() -> None:
+    request = ModelResolutionRequest(
+        intent=ModelAccessIntent(
+            capability_tier="standard",
+            reasoning_effort="medium",
+            determinism_required=False,
+            output_schema_ref=None,
+            independence="none",
+            fallback_requirement="fallback_forbidden",
+            side_effect_class="none",
+        ),
+        role_profile="product.chat",
+        resolution_group_id="legacy-projection",
+        requirements=ModelCapabilityRequirements(),
+    )
+    neutral = ModelAccessRoute(
+        request=request,
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="openai-chat",
+        effective_identity="openai/gpt-5.6-sol",
+        capabilities=ModelCapabilities(system_prompt_channel=True),
+        credential_identity_ref="openai.api-key",
+        degraded=True,
+        degradation_reason="policy_selected_compatible_route",
+        policy_profile="profile.product_general",
+        transport_id="openai_api",
+        execution_host_profile="profile.provider_openai",
+        execution_boundary="provider_https",
+        authentication_scheme="provider_credential_ref",
+        caller_profile="profile.product_runtime",
+        capability_provenance=CapabilityProvenance(
+            source="policy_registry",
+            source_ref="profile.product_general",
+        ),
+        trusted_instruction_mapping=TrustedInstructionMapping(
+            mapping_ref="profile.instructions_openai_v1",
+            trusted_channel="system",
+            untrusted_channel="user",
+        ),
+    )
+    embedding_identity = EmbeddingIdentity(
+        provider="ollama", model="nomic-embed-text", dim=768
+    )
+
+    legacy = LLMRoute.from_model_access_route(
+        neutral,
+        mode="chat",
+        reason="legacy-policy-reason",
+        embedding_identity=embedding_identity,
+        timeout_seconds=17.5,
+        temperature=0.25,
+    )
+
+    assert legacy == LLMRoute(
+        provider="openai",
+        model="gpt-5.6-sol",
+        mode="chat",
+        reason="legacy-policy-reason",
+        degraded=True,
+        embedding_identity=embedding_identity,
+        timeout_seconds=17.5,
+        temperature=0.25,
+    )
 
 
 def test_router_respects_model_env_defaults(clean_llm_env) -> None:

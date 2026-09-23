@@ -1,4 +1,4 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-23 for the selected Tailscale-only macOS executor. Parent validation Issue #5618 is open and blocked. No router, Product migration, remote executor, new provider auth, designated-host profile, or rollout is claimed as shipped.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-23 for the selected Tailscale-only macOS executor. MARR-01 delivers the neutral route/provenance contract and policy-agnostic composition seam; the complete runtime router, Product/Builder caller migration, remote executor, new provider auth, designated-host profile, and rollout remain unshipped. Parent validation Issue #5618 is open and blocked.
 Doc role: Capability specification
 Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
@@ -15,6 +15,7 @@ Deliver one provider-neutral model-access facade that can be used by Product and
 - Product routes chat/completion calls through app/components/llm/router.py, app/components/llm/fabric.py, and app/services/llm.py.
 - Builder model access resolves independently through app/builderops/model_access_resolver.py and app/builderops/model_inquiry_adapters.py.
 - llm_contract is the neutral, side-effect-free kernel. Builder may not import the Product router or fabric.
+- MARR-01 adds neutral route/receipt provenance contracts and `app.model_access.router.ModelAccessRouter`, which composes a caller-supplied owner resolver/profile with a read-only adapter descriptor lookup. Product and Builder runtime callers are not migrated by this seam.
 - Model Inquiry's codex_subscription is a compatibility alias only; its current single_target and no-fallback semantics do not change.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
 - Product currently runs on Linux/Tailscale hosts. The current-state environment and host owner docs still describe the macOS host as Ollama/model-serving only; the selected remote Codex executor is a future, unshipped exception that requires separate host and tailnet acceptance.
@@ -25,7 +26,7 @@ Deliver one provider-neutral model-access facade that can be used by Product and
 
 - Issue #5177 remains the Builder System authority for execution-routing work: TCD capability tiers, Luna/Terra/Sol/Spark policy, scheduling, escalation, canary evidence, and its parent acceptance are not re-opened or replaced here.
 - Its delivered Builder slices #5203 (Model Inquiry capability-resolution transport) and #5205 (Codex-only active worker carrier) remain delivered. MARR reuses the existing Model Inquiry bridge and compatibility alias; it does not create a parallel Builder route or duplicate those Issues.
-- MARR adds the neutral facade/profile seam and Product runtime integration that #5177 explicitly excludes. Any Builder adoption is limited to an explicit Builder profile/conformance path; the existing Builder execution policy and scheduler continue to own their decisions.
+- MARR adds the neutral facade/profile seam and later Product runtime integration that #5177 explicitly excludes. Any Builder adoption is limited to an explicit Builder profile/conformance path; the existing Builder execution policy and scheduler continue to own their decisions.
 - The independent Builder owner-platform parent #5399 remains outside this capability.
 
 ## Capability Contract
@@ -37,7 +38,7 @@ Product on Linux → Product policy → authorized catalog snapshot → exact ro
 Builder continues through its own resolver/profile and adapters. The shared facade does not make
 Product and Builder share policy or credentials.
 
-The shared facade accepts an owner profile and cannot select or merge that profile's policy. A route binds exact provider, model, transport, requested/resolved capabilities, catalog snapshot hash/reference, preflight status, execution host, and any pre-inference fallback cause.
+The shared facade accepts an owner profile and cannot select or merge that profile's policy. A route binds exact provider, model, transport, requested/resolved capabilities, catalog snapshot hash/reference, preflight status, execution host, and any pre-inference fallback cause. Used fallback provenance is returned by the owner resolver with its selected target, not invented by profile metadata; it carries source and selected effective identities, both transports, preflight reason, and the authorizing owner profile. The selected values must match the route, which is visibly degraded with a closed reason code. Source and selected transports may be the same when the owner resolver chooses another target over that transport. The neutral contract rejects used fallback for `fallback_forbidden` and `human_decision_required`, and requires source/selected identity equality for `fallback_same_identity`; compatible-identity and policy-selected choices remain owner-resolver decisions. Route `preflight_status` describes the selected target, while the reason for a source preflight fallback stays in `fallback_provenance` until selected-target preflight. The adapter descriptor declares its supported capability envelope, and the facade rejects target claims outside it; `adapter_attestation` provenance names that exact descriptor ID.
 
 Codex CLI/Luna is Product's primary target for configured general agent/text routes, executed by a
 single-purpose service on the designated macOS host. The service is not a Product API/gateway and
@@ -60,6 +61,11 @@ trusted-versus-user boundary but does not claim literal system-role equivalence.
 policy requires a literal system role is not eligible for the Codex route. The exact mapping is
 versioned, recorded without prompt contents, and tested; Ollama fallback must satisfy the same
 channel requirement.
+
+Neutral requests distinguish `system_prompt_channel` (trusted instructions remain separate from
+user content) from `literal_system_role_required` (the transport must preserve an actual system
+role). A `developer_instructions` mapping can satisfy only the former; a literal-role requirement
+fails closed unless the adapter declares a `system` mapping.
 
 ## Catalog and Freshness Policy
 
