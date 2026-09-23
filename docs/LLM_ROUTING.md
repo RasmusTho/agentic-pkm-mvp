@@ -61,7 +61,7 @@ model gains `:latest`, while an invalid forced provider degrades coherently to
 `mock/mock-embedding`. The fabric consumes the attached identity without resolving it again.
 
 Current state:
-- The neutral route/provenance contract and policy-agnostic `ModelAccessRouter` seam are available, but this Product router and fabric remain the current execution path. No Product caller has migrated and this seam does not change route selection here.
+- The neutral route/provenance contract and policy-agnostic `ModelAccessRouter` seam are available, but this Product router and fabric remain the current execution path. The facade carries owner-resolver fallback lineage and rejects resolved capability claims outside the selected adapter descriptor's declared support. No Product caller has migrated and this seam does not change route selection here.
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
 - Embedding fallback is blocked unless the fallback is **dimension-matched** and its mixed-identity write is bound to reconcile discipline. The sanctioned fallback is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` (L2-renormalized) auto-fallback on primary failure; the write is **MIXED-IDENTITY / reconcilable** (carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers), and the query path always uses the primary identity — per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`, `docs/EMBEDDINGS.md :: Fallback rule`, and `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3. Generic fallback that changes dimension/normalization, or switches identity without that discipline, remains blocked.
 - Endpoint repair is operational and separate from provider substitution.

@@ -43,6 +43,30 @@ class ModelAccessRouter:
             raise ValueError("adapter registry descriptor does not match resolved adapter")
         if (descriptor.provider, descriptor.model) != (resolved.provider, resolved.model):
             raise ValueError("adapter registry identity does not match resolved target")
+        resolved_capabilities = resolved.capabilities
+        supported_capabilities = descriptor.supported_capabilities
+        unsupported = [
+            name
+            for name in (
+                "structured_output",
+                "native_tools",
+                "system_prompt_channel",
+                "deterministic_execution",
+            )
+            if getattr(resolved_capabilities, name)
+            and not getattr(supported_capabilities, name)
+        ]
+        if (
+            resolved_capabilities.embedding_dimension is not None
+            and resolved_capabilities.embedding_dimension
+            != supported_capabilities.embedding_dimension
+        ):
+            unsupported.append("embedding_dimension")
+        if unsupported:
+            raise ValueError(
+                "adapter descriptor does not attest resolved capabilities: "
+                + ", ".join(unsupported)
+            )
 
         return ModelAccessRoute(
             **resolved.model_dump(),
@@ -56,5 +80,4 @@ class ModelAccessRouter:
             caller_profile=profile.caller_profile,
             capability_provenance=profile.capability_provenance,
             trusted_instruction_mapping=descriptor.trusted_instruction_mapping,
-            fallback_provenance=profile.fallback_provenance,
         )

@@ -294,7 +294,6 @@ def test_route_contract_carries_transport_catalog_preflight_host_and_fallback_pr
                 selected_effective_identity="openai/gpt-5.6-sol",
             ),
         )
-
     with pytest.raises(ValidationError, match="policy authority"):
         _route(
             request=_request(
@@ -334,6 +333,24 @@ def test_route_contract_carries_transport_catalog_preflight_host_and_fallback_pr
                 source_effective_identity="openai/gpt-5.6-sol",
                 selected_effective_identity="ollama/llama3.1:8b",
             ),
+        )
+
+
+def test_adapter_attestation_capability_provenance_uses_adapter_identifier() -> None:
+    route = _route(
+        capability_provenance=CapabilityProvenance(
+            source="adapter_attestation",
+            source_ref="openai-adapter",
+        )
+    )
+    assert route.capability_provenance.source_ref == route.adapter_id
+
+    with pytest.raises(ValidationError, match="selected adapter"):
+        _route(
+            capability_provenance=CapabilityProvenance(
+                source="adapter_attestation",
+                source_ref="another-adapter",
+            )
         )
 
 

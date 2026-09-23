@@ -225,7 +225,7 @@ class CapabilityProvenance(_StrictFrozenModel):
         "adapter_attestation",
         "policy_registry",
     ]
-    source_ref: LogicalProfileRef | CatalogSnapshotRef
+    source_ref: LogicalProfileRef | CatalogSnapshotRef | AdapterId
 
 
 class TrustedInstructionMapping(_StrictFrozenModel):
@@ -288,7 +288,6 @@ class ModelAccessProfile(_StrictFrozenModel):
     catalog_snapshot_ref: CatalogSnapshotRef | None = None
     catalog_snapshot_hash: Sha256Digest | None = None
     capability_provenance: CapabilityProvenance
-    fallback_provenance: FallbackProvenance = Field(default_factory=FallbackProvenance)
 
     @model_validator(mode="after")
     def _validate_profile_provenance(self) -> "ModelAccessProfile":
@@ -299,15 +298,11 @@ class ModelAccessProfile(_StrictFrozenModel):
                 raise ValueError(
                     "catalog capability provenance must match the selected snapshot"
                 )
-        if self.capability_provenance.source == "policy_registry":
+        if self.capability_provenance.source in {"owner_resolver", "policy_registry"}:
             if self.capability_provenance.source_ref != self.profile_id:
                 raise ValueError(
-                    "policy capability provenance must match the selected profile"
+                    "resolver capability provenance must match the selected profile"
                 )
-        if self.fallback_provenance.used and (
-            self.fallback_provenance.policy_authority != self.profile_id
-        ):
-            raise ValueError("fallback policy authority must match the selected profile")
         return self
 
 
@@ -318,6 +313,7 @@ class ModelAccessAdapterDescriptor(_StrictFrozenModel):
     provider: ProviderId
     model: NonEmptyString
     transport_id: TransportId
+    supported_capabilities: ModelCapabilities
     execution_host_profile: LogicalProfileRef
     execution_boundary: ExecutionBoundary
     authentication_scheme: AuthenticationScheme
@@ -354,6 +350,7 @@ class ResolvedModelAccess(_StrictFrozenModel):
     credential_identity_ref: NonEmptyString
     degraded: bool = False
     degradation_reason: NonEmptyString | None = None
+    fallback_provenance: FallbackProvenance = Field(default_factory=FallbackProvenance)
 
     @model_validator(mode="after")
     def _validate_capabilities_and_degradation(self) -> "ResolvedModelAccess":
@@ -394,6 +391,18 @@ class ResolvedModelAccess(_StrictFrozenModel):
             raise ValueError("degradation_reason is required when degraded is true")
         if not self.degraded and self.degradation_reason is not None:
             raise ValueError("degradation_reason is forbidden when degraded is false")
+        if self.fallback_provenance.used:
+            if self.request.intent.fallback_requirement == "fallback_forbidden":
+                raise ValueError("fallback_forbidden intent cannot carry fallback provenance")
+            if (
+                self.fallback_provenance.selected_effective_identity
+                != self.effective_identity
+            ):
+                raise ValueError(
+                    "fallback selected identity must match the resolved effective identity"
+                )
+            if not self.degraded:
+                raise ValueError("a selected fallback route must be visibly degraded")
         return self
 
 
@@ -418,7 +427,6 @@ class ModelAccessRoute(ResolvedModelAccess):
     caller_profile: LogicalProfileRef
     capability_provenance: CapabilityProvenance
     trusted_instruction_mapping: TrustedInstructionMapping | None = None
-    fallback_provenance: FallbackProvenance = Field(default_factory=FallbackProvenance)
 
     @property
     def requested_capabilities(self) -> ModelCapabilityRequirements:
@@ -446,10 +454,15 @@ class ModelAccessRoute(ResolvedModelAccess):
                 raise ValueError(
                     "catalog capability provenance must match the selected snapshot"
                 )
-        if self.capability_provenance.source == "policy_registry":
+        if self.capability_provenance.source in {"owner_resolver", "policy_registry"}:
             if self.capability_provenance.source_ref != self.policy_profile:
                 raise ValueError(
-                    "policy capability provenance must match the selected profile"
+                    "resolver capability provenance must match the selected profile"
+                )
+        if self.capability_provenance.source == "adapter_attestation":
+            if self.capability_provenance.source_ref != self.adapter_id:
+                raise ValueError(
+                    "adapter capability provenance must match the selected adapter"
                 )
         if self.capabilities.system_prompt_channel and (
             self.trusted_instruction_mapping is None

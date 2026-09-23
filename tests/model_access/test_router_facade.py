@@ -9,6 +9,7 @@ import pytest
 from app.model_access import ModelAccessRouter
 from llm_contract import (
     CapabilityProvenance,
+    FallbackProvenance,
     ModelAccessAdapterDescriptor,
     ModelAccessIntent,
     ModelAccessProfile,
@@ -24,10 +25,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _Resolver:
-    def __init__(self, *, provider: str, model: str, adapter_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        adapter_id: str,
+        capabilities: ModelCapabilities | None = None,
+        degraded: bool = False,
+        degradation_reason: str | None = None,
+        fallback_provenance: FallbackProvenance | None = None,
+    ) -> None:
         self.provider = provider
         self.model = model
         self.adapter_id = adapter_id
+        self.capabilities = capabilities or ModelCapabilities(
+            structured_output=True,
+            system_prompt_channel=True,
+        )
+        self.degraded = degraded
+        self.degradation_reason = degradation_reason
+        self.fallback_provenance = fallback_provenance or FallbackProvenance()
         self.calls: list[tuple[str, str, str]] = []
 
     def resolve(
@@ -45,11 +63,11 @@ class _Resolver:
             model=self.model,
             adapter_id=self.adapter_id,
             effective_identity=f"{self.provider}/{self.model}",
-            capabilities=ModelCapabilities(
-                structured_output=True,
-                system_prompt_channel=True,
-            ),
+            capabilities=self.capabilities,
             credential_identity_ref=f"{self.provider}.api-key",
+            degraded=self.degraded,
+            degradation_reason=self.degradation_reason,
+            fallback_provenance=self.fallback_provenance,
         )
 
     def resolve_group(
@@ -88,6 +106,7 @@ def _profile(
     channel: str,
     consumer: str,
     caller_profile: str,
+    capability_provenance: CapabilityProvenance | None = None,
 ) -> ModelAccessProfile:
     return ModelAccessProfile(
         profile_id=profile_id,
@@ -97,10 +116,8 @@ def _profile(
         caller_profile=caller_profile,
         catalog_snapshot_ref="catalog.openai_public",
         catalog_snapshot_hash="sha256:" + "c" * 64,
-        capability_provenance=CapabilityProvenance(
-            source="policy_registry",
-            source_ref=profile_id,
-        ),
+        capability_provenance=capability_provenance
+        or CapabilityProvenance(source="policy_registry", source_ref=profile_id),
     )
 
 
@@ -113,12 +130,15 @@ def _descriptor(
     execution_host_profile: str,
     execution_boundary: str,
     authentication_scheme: str,
+    supported_capabilities: ModelCapabilities | None = None,
 ) -> ModelAccessAdapterDescriptor:
     return ModelAccessAdapterDescriptor(
         adapter_id=adapter_id,
         provider=provider,
         model=model,
         transport_id=transport_id,
+        supported_capabilities=supported_capabilities
+        or ModelCapabilities(structured_output=True, system_prompt_channel=True),
         execution_host_profile=execution_host_profile,
         execution_boundary=execution_boundary,
         authentication_scheme=authentication_scheme,
@@ -130,7 +150,9 @@ def _descriptor(
     )
 
 
-def _request() -> ModelResolutionRequest:
+def _request(
+    *, fallback_requirement: str = "fallback_forbidden"
+) -> ModelResolutionRequest:
     return ModelResolutionRequest(
         intent=ModelAccessIntent(
             capability_tier="standard",
@@ -138,7 +160,7 @@ def _request() -> ModelResolutionRequest:
             determinism_required=False,
             output_schema_ref="agent-response.v1",
             independence="none",
-            fallback_requirement="fallback_forbidden",
+            fallback_requirement=fallback_requirement,
             side_effect_class="none",
         ),
         role_profile="general-agent",
@@ -267,6 +289,133 @@ def test_facade_rejects_registry_identity_drift_before_execution() -> None:
     )
 
     with pytest.raises(ValueError, match="does not match resolved target"):
+        ModelAccessRouter(adapter_registry=registry).resolve(
+            _request(), resolver=resolver, profile=profile
+        )
+
+
+def test_facade_preserves_and_binds_resolver_fallback_provenance() -> None:
+    profile = _profile(
+        profile_id="profile.product_general",
+        runtime="product",
+        channel="product.chat",
+        consumer="product.agent",
+        caller_profile="profile.product_runtime",
+    )
+    request = _request(fallback_requirement="fallback_policy_selected")
+    provenance = FallbackProvenance(
+        used=True,
+        phase="preflight",
+        reason_code="executor_unreachable",
+        source_transport_id="codex_cli",
+        selected_transport_id="openai_api",
+        policy_authority=profile.profile_id,
+        source_effective_identity="codex/gpt-5.6-sol",
+        selected_effective_identity="openai/gpt-5.6-sol",
+    )
+    resolver = _Resolver(
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="selected-adapter",
+        degraded=True,
+        degradation_reason="preflight_fallback",
+        fallback_provenance=provenance,
+    )
+    registry = _Registry(
+        {
+            "selected-adapter": _descriptor(
+                adapter_id="selected-adapter",
+                provider="openai",
+                model="gpt-5.6-sol",
+                transport_id="openai_api",
+                execution_host_profile="profile.provider_openai",
+                execution_boundary="provider_https",
+                authentication_scheme="provider_credential_ref",
+            )
+        }
+    )
+
+    route = ModelAccessRouter(adapter_registry=registry).resolve(
+        request, resolver=resolver, profile=profile
+    )
+
+    assert route.fallback_provenance == provenance
+    assert route.fallback_provenance.policy_authority == profile.profile_id
+    assert route.fallback_provenance.selected_transport_id == route.transport_id
+    assert route.fallback_provenance.selected_effective_identity == route.effective_identity
+    assert route.degraded is True
+
+
+def test_facade_rejects_capabilities_not_attested_by_adapter() -> None:
+    profile = _profile(
+        profile_id="profile.product_general",
+        runtime="product",
+        channel="product.chat",
+        consumer="product.agent",
+        caller_profile="profile.product_runtime",
+    )
+    resolver = _Resolver(
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="selected-adapter",
+        capabilities=ModelCapabilities(
+            structured_output=True,
+            system_prompt_channel=True,
+            native_tools=True,
+        ),
+    )
+    registry = _Registry(
+        {
+            "selected-adapter": _descriptor(
+                adapter_id="selected-adapter",
+                provider="openai",
+                model="gpt-5.6-sol",
+                transport_id="openai_api",
+                execution_host_profile="profile.provider_openai",
+                execution_boundary="provider_https",
+                authentication_scheme="provider_credential_ref",
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="native_tools"):
+        ModelAccessRouter(adapter_registry=registry).resolve(
+            _request(), resolver=resolver, profile=profile
+        )
+
+
+def test_adapter_attestation_provenance_must_match_selected_adapter() -> None:
+    profile = _profile(
+        profile_id="profile.product_general",
+        runtime="product",
+        channel="product.chat",
+        consumer="product.agent",
+        caller_profile="profile.product_runtime",
+        capability_provenance=CapabilityProvenance(
+            source="adapter_attestation",
+            source_ref="different-adapter",
+        ),
+    )
+    resolver = _Resolver(
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="selected-adapter",
+    )
+    registry = _Registry(
+        {
+            "selected-adapter": _descriptor(
+                adapter_id="selected-adapter",
+                provider="openai",
+                model="gpt-5.6-sol",
+                transport_id="openai_api",
+                execution_host_profile="profile.provider_openai",
+                execution_boundary="provider_https",
+                authentication_scheme="provider_credential_ref",
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="selected adapter"):
         ModelAccessRouter(adapter_registry=registry).resolve(
             _request(), resolver=resolver, profile=profile
         )
