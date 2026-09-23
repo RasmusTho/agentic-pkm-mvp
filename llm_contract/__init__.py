@@ -277,6 +277,33 @@ class FallbackProvenance(_StrictFrozenModel):
         return self
 
 
+def _validate_fallback_requirement_semantics(
+    requirement: FallbackRequirement,
+    provenance: FallbackProvenance,
+    effective_identity: str,
+) -> None:
+    """Enforce neutral fallback limits; compatible selection stays owner-owned."""
+    if not provenance.used:
+        return
+    if requirement == "fallback_forbidden":
+        raise ValueError("fallback_forbidden intent cannot carry fallback provenance")
+    if requirement == "human_decision_required":
+        raise ValueError(
+            "human_decision_required intent cannot select a fallback without decision provenance"
+        )
+    if requirement == "fallback_same_identity" and (
+        provenance.source_effective_identity
+        != provenance.selected_effective_identity
+    ):
+        raise ValueError(
+            "fallback_same_identity requires matching source and selected effective identities"
+        )
+    if provenance.selected_effective_identity != effective_identity:
+        raise ValueError(
+            "fallback selected identity must match the resolved effective identity"
+        )
+
+
 class ModelAccessProfile(_StrictFrozenModel):
     """Caller-supplied owner context; it names policy but does not implement it."""
 
@@ -392,15 +419,11 @@ class ResolvedModelAccess(_StrictFrozenModel):
         if not self.degraded and self.degradation_reason is not None:
             raise ValueError("degradation_reason is forbidden when degraded is false")
         if self.fallback_provenance.used:
-            if self.request.intent.fallback_requirement == "fallback_forbidden":
-                raise ValueError("fallback_forbidden intent cannot carry fallback provenance")
-            if (
-                self.fallback_provenance.selected_effective_identity
-                != self.effective_identity
-            ):
-                raise ValueError(
-                    "fallback selected identity must match the resolved effective identity"
-                )
+            _validate_fallback_requirement_semantics(
+                self.request.intent.fallback_requirement,
+                self.fallback_provenance,
+                self.effective_identity,
+            )
             if not self.degraded:
                 raise ValueError("a selected fallback route must be visibly degraded")
         return self
@@ -477,28 +500,18 @@ class ModelAccessRoute(ResolvedModelAccess):
             raise ValueError(
                 "literal system role requirement needs a literal system-channel mapping"
             )
-        if (
-            self.fallback_provenance.used
-            and self.request.intent.fallback_requirement == "fallback_forbidden"
-        ):
-            raise ValueError("fallback_forbidden intent cannot carry fallback provenance")
-        if (
-            self.fallback_provenance.used
-            and self.fallback_provenance.selected_transport_id != self.transport_id
-        ):
-            raise ValueError("fallback selected transport must match the resolved route")
-        if self.fallback_provenance.used and (
-            self.fallback_provenance.policy_authority != self.policy_profile
-        ):
-            raise ValueError("fallback policy authority must match the resolved policy profile")
-        if self.fallback_provenance.used and (
-            self.fallback_provenance.selected_effective_identity != self.effective_identity
-        ):
-            raise ValueError(
-                "fallback selected identity must match the resolved effective identity"
+        if self.fallback_provenance.used:
+            _validate_fallback_requirement_semantics(
+                self.request.intent.fallback_requirement,
+                self.fallback_provenance,
+                self.effective_identity,
             )
-        if self.fallback_provenance.used and not self.degraded:
-            raise ValueError("a selected fallback route must be visibly degraded")
+            if self.fallback_provenance.selected_transport_id != self.transport_id:
+                raise ValueError("fallback selected transport must match the resolved route")
+            if self.fallback_provenance.policy_authority != self.policy_profile:
+                raise ValueError("fallback policy authority must match the resolved policy profile")
+            if not self.degraded:
+                raise ValueError("a selected fallback route must be visibly degraded")
 
         # Target identifiers are routing metadata, never an alternate channel
         # for endpoints, prompt text, host identity, credentials, or raw grants.

@@ -97,6 +97,7 @@ def _resolved(
     capabilities: ModelCapabilities | None = None,
     degraded: bool = False,
     degradation_reason: str | None = None,
+    fallback_provenance: FallbackProvenance | None = None,
 ) -> ResolvedModelAccess:
     return ResolvedModelAccess(
         request=request,
@@ -112,6 +113,7 @@ def _resolved(
         credential_identity_ref=f"{provider}.api-key",
         degraded=degraded,
         degradation_reason=degradation_reason,
+        fallback_provenance=fallback_provenance or FallbackProvenance(),
     )
 
 
@@ -183,6 +185,96 @@ def test_resolved_access_validates_capabilities_and_visible_degradation() -> Non
             **degraded.model_dump(),
             credential_value="must-not-enter-neutral-provenance",
         )
+
+
+def test_resolved_fallback_obeys_declared_requirement_and_identity() -> None:
+    fallback = FallbackProvenance(
+        used=True,
+        phase="preflight",
+        reason_code="executor_unreachable",
+        source_transport_id="codex_cli",
+        selected_transport_id="openai_api",
+        policy_authority="profile.product_general",
+        source_effective_identity="codex/gpt-5.6-sol",
+        selected_effective_identity="openai/gpt-5.6-sol",
+    )
+    target = {
+        "provider": "openai",
+        "model": "gpt-5.6-sol",
+        "effective_identity": "openai/gpt-5.6-sol",
+        "degraded": True,
+        "degradation_reason": "preflight_fallback",
+        "fallback_provenance": fallback,
+    }
+
+    with pytest.raises(ValidationError, match="human_decision_required"):
+        _resolved(
+            _request(
+                "product.chat",
+                independence="none",
+                fallback_requirement="human_decision_required",
+            ),
+            **target,
+        )
+    with pytest.raises(ValidationError, match="human_decision_required"):
+        _route(
+            request=_request(
+                "product.chat",
+                independence="none",
+                fallback_requirement="human_decision_required",
+            ),
+            degraded=True,
+            degradation_reason="preflight_fallback",
+            fallback_provenance=fallback,
+        )
+
+    with pytest.raises(ValidationError, match="fallback_same_identity"):
+        _resolved(
+            _request(
+                "product.chat",
+                independence="none",
+                fallback_requirement="fallback_same_identity",
+            ),
+            **target,
+        )
+    with pytest.raises(ValidationError, match="fallback_same_identity"):
+        _route(
+            request=_request(
+                "product.chat",
+                independence="none",
+                fallback_requirement="fallback_same_identity",
+            ),
+            degraded=True,
+            degradation_reason="preflight_fallback",
+            fallback_provenance=fallback,
+        )
+
+    same_identity = fallback.model_copy(
+        update={
+            "source_effective_identity": "openai/gpt-5.6-sol",
+        }
+    )
+    same_identity_result = _resolved(
+        _request(
+            "product.chat",
+            independence="none",
+            fallback_requirement="fallback_same_identity",
+        ),
+        **{**target, "fallback_provenance": same_identity},
+    )
+    assert same_identity_result.fallback_provenance.source_effective_identity == (
+        same_identity_result.fallback_provenance.selected_effective_identity
+    )
+
+    compatible_result = _resolved(
+        _request(
+            "product.chat",
+            independence="none",
+            fallback_requirement="fallback_compatible_identity",
+        ),
+        **target,
+    )
+    assert compatible_result.fallback_provenance == fallback
 
 
 def test_group_resolution_enforces_distinct_effective_targets() -> None:

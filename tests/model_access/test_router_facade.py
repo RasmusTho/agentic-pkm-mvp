@@ -344,6 +344,7 @@ def test_facade_preserves_and_binds_resolver_fallback_provenance() -> None:
     assert route.fallback_provenance.selected_transport_id == route.transport_id
     assert route.fallback_provenance.selected_effective_identity == route.effective_identity
     assert route.degraded is True
+    assert route.preflight_status == "not_run"
 
 
 def test_facade_rejects_capabilities_not_attested_by_adapter() -> None:

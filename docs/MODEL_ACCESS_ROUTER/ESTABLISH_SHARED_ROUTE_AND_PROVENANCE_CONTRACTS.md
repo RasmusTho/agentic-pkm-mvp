@@ -22,6 +22,8 @@ Extend llm_contract with provider-neutral route provenance: exact transport_id, 
 
 Used fallback provenance identifies the original and selected effective targets, both transports, the preflight reason, and the owner policy profile; the selected target must match the route, which must carry visible degradation and a closed reason code. This preserves ADR-0063's fallback lineage without granting the facade fallback authority.
 
+The neutral contract also preserves ADR-0063's requirement semantics: a used fallback is rejected for `fallback_forbidden` and `human_decision_required`; `fallback_same_identity` requires equal source and selected effective identities. `fallback_compatible_identity` and `fallback_policy_selected` remain owner-resolver decisions; the facade validates their provenance but does not invent a compatibility predicate or select a target. `ModelAccessRoute.preflight_status` describes preflight of the selected target. If the owner resolver selected a fallback because the source preflight failed, that cause remains in `fallback_provenance` until the selected target is preflighted.
+
 The owner resolver returns per-request fallback provenance with the selected target; caller profile metadata cannot invent or replace that outcome. Adapter descriptors declare their supported capability envelope, and the facade rejects any resolved capability outside it. When capability provenance uses `adapter_attestation`, its logical source reference must be the selected adapter ID.
 
 The request distinguishes a trusted channel separate from user content from an intent that requires the literal system role. A `developer_instructions` mapping may satisfy only the former; it must not be projected as a literal system channel.
@@ -45,6 +47,10 @@ Without one neutral contract, each transport can invent incompatible route/prove
 - [ ] Route and receipt contracts carry transport, snapshot reference/hash, preflight status, logical execution host/boundary/caller profile, requested/resolved capabilities, trusted-instruction mapping, and fallback provenance without raw host or Tailscale identity.
   - Verify: `tests/model_access/test_contracts.py::test_route_contract_carries_transport_catalog_preflight_host_and_fallback_provenance`
 - [ ] Resolver-selected fallback provenance reaches the route and is rejected if its policy, selected transport/identity, or degradation does not match the final target.
+  - Verify: `tests/model_access/test_router_facade.py::test_facade_preserves_and_binds_resolver_fallback_provenance`
+- [ ] The neutral contract preserves declared fallback-requirement and effective-identity semantics without taking owner policy authority.
+  - Verify: `tests/model_access/test_contracts.py::test_resolved_fallback_obeys_declared_requirement_and_identity`
+- [ ] Source-preflight fallback cause remains distinct from the selected target's preflight status.
   - Verify: `tests/model_access/test_router_facade.py::test_facade_preserves_and_binds_resolver_fallback_provenance`
 - [ ] The facade rejects resolved capability claims outside the selected adapter descriptor's supported capability envelope.
   - Verify: `tests/model_access/test_router_facade.py::test_facade_rejects_capabilities_not_attested_by_adapter`
