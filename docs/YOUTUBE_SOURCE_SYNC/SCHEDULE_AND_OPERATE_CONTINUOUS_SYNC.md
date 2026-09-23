@@ -1,6 +1,6 @@
 ---
 name: Schedule and Operate Continuous Sync
-description: Per-source due-time scheduling inside the existing watcher registry loop (sparse-cadence sub-tick), DB lease with TTL+heartbeat, bounded drain, pause/resume, backoff, offline/restart reconciliation, safe shutdown.
+description: Per-source due-time scheduling inside the existing watcher registry loop (sparse-cadence sub-tick), DB lease with TTL, pause/resume, backoff, offline/restart reconciliation. Draining, and with it the heartbeat and safe-shutdown machinery, is deliberately not in the tick.
 task_id: YSS-06
 source_anchor: "docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Retry and backoff"
 parent_capability: YouTube Source Sync
@@ -36,8 +36,9 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
      `youtube-inbox-dev drain` command (#5613); a bounded background drain is its own slice;
    - global pause and per-source pause (registry `enabled=false`) short-circuit with
      `paused_global`/`paused_source` reasons;
-   - **safe shutdown:** in-flight drains finish or are abandoned to durable retryable state; no
-     new work is claimed after stop is requested.
+   - **safe shutdown: not delivered, and no longer needed here.** It existed to land in-flight
+     drains durably; with draining out of the tick there is no in-flight work to land. A bounded
+     background drain will have to reintroduce it on its own terms.
 3. **Single-run lease (INV-YSS-6):** a durable lease row (key `lease:youtube_sync`, TTL 10 min;
    no heartbeat is needed now that the tick holds it only for bounded, timeout-capped polling) in a generic sync-state table (the `episode_engine_state` key/value
    pattern; forward-only migration). The watcher sub-tick and any CLI-invoked run claim the same
@@ -56,7 +57,7 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
 
 ```python
 sched = SyncScheduler(registry=reg, requests=q, clock=fake_clock, lease=lease_store)
-sched.tick()                       # inbox due -> poll + enqueue; drains ≤2 acquisitions
+sched.tick()                       # inbox due -> poll + enqueue (no acquisition here)
 fake_clock.advance(120); sched.tick()   # inbox not due (180s) -> no poll
 fake_clock.advance(60);  sched.tick()   # due again
 ```
