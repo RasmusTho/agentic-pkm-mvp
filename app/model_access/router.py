@@ -8,6 +8,7 @@ from llm_contract import (
     ModelAccessResolver,
     ModelAccessRoute,
     ModelResolutionRequest,
+    ResolvedModelAccess,
     validate_resolved_group,
 )
 
@@ -30,12 +31,17 @@ class ModelAccessRouter:
         resolver: ModelAccessResolver,
         profile: ModelAccessProfile,
     ) -> ModelAccessRoute:
-        resolved = resolver.resolve(
+        resolver_result = resolver.resolve(
             request,
             runtime=profile.runtime,
             channel=profile.channel,
             consumer=profile.consumer,
         )
+        if not isinstance(resolver_result, ResolvedModelAccess):
+            raise TypeError("model access resolver must return ResolvedModelAccess")
+        # `BaseModel.model_copy(update=...)` does not validate update values;
+        # reconstruct at the facade boundary before even looking up an adapter.
+        resolved = ResolvedModelAccess(**resolver_result.model_dump())
         validate_resolved_group((request,), (resolved,))
 
         descriptor = self._adapter_registry.describe(resolved.adapter_id)

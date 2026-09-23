@@ -300,6 +300,61 @@ def test_facade_accepts_model_specific_adapter_id_from_builder_resolver() -> Non
     assert route.model == "llama3.1:8b"
 
 
+def test_facade_revalidates_resolver_result_before_adapter_lookup() -> None:
+    profile = _profile(
+        profile_id="profile.product_general",
+        runtime="product",
+        channel="product.chat",
+        consumer="product.agent",
+        caller_profile="profile.product_runtime",
+    )
+
+    class ResolverUsingUncheckedCopy(_Resolver):
+        def resolve(
+            self,
+            request: ModelResolutionRequest,
+            *,
+            runtime: str,
+            channel: str,
+            consumer: str,
+        ) -> ResolvedModelAccess:
+            result = super().resolve(
+                request,
+                runtime=runtime,
+                channel=channel,
+                consumer=consumer,
+            )
+            return result.model_copy(
+                update={"credential_identity_ref": "sk-proj-1234567890abcdefgh"}
+            )
+
+    resolver = ResolverUsingUncheckedCopy(
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="selected-adapter",
+    )
+    registry = _Registry(
+        {
+            "selected-adapter": _descriptor(
+                adapter_id="selected-adapter",
+                provider="openai",
+                model="gpt-5.6-sol",
+                transport_id="openai_api",
+                execution_host_profile="profile.provider_openai",
+                execution_boundary="provider_https",
+                authentication_scheme="provider_credential_ref",
+            )
+        }
+    )
+
+    with pytest.raises(ValidationError, match="credential_identity_ref"):
+        ModelAccessRouter(adapter_registry=registry).resolve(
+            _request(), resolver=resolver, profile=profile
+        )
+
+    assert registry.lookups == []
+
+
 def test_facade_rejects_registry_identity_drift_before_execution() -> None:
     profile = _profile(
         profile_id="profile.product_general",

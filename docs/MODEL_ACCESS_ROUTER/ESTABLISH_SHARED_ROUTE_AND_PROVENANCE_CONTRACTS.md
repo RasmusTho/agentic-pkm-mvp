@@ -24,7 +24,7 @@ Used fallback provenance identifies the original and selected effective targets,
 
 The neutral contract also preserves ADR-0063's requirement semantics: a used fallback is rejected for `fallback_forbidden` and `human_decision_required`; `fallback_same_identity` requires equal source and selected effective identities. `fallback_compatible_identity` and `fallback_policy_selected` remain owner-resolver decisions; the facade validates their provenance but does not invent a compatibility predicate or select a target. `ModelAccessRoute.preflight_status` describes preflight of the selected target. If the owner resolver selected a fallback because the source preflight failed, that cause remains in `fallback_provenance` until the selected target is preflighted.
 
-Resolved target identifiers and credential references are validated before adapter lookup, not only when the final route is assembled. Credential identity fields accept logical credential-reference labels only; route degradation uses a closed code vocabulary. A request that requires a literal system role is accepted only when the selected adapter descriptor maps trusted instructions to `system`; a separate `developer_instructions` mapping satisfies only the non-literal trusted/user separation requirement.
+The facade reconstructs and revalidates the owner resolver's result before adapter lookup, because Pydantic's `model_copy(update=...)` does not validate update values. Resolved target identifiers and credential references are checked before the adapter registry can observe them. Credential identity fields accept logical credential-reference labels only; route degradation uses a closed code vocabulary. A request that requires a literal system role is accepted only when the selected adapter descriptor maps trusted instructions to `system`; a separate `developer_instructions` mapping satisfies only the non-literal trusted/user separation requirement.
 
 The owner resolver returns per-request fallback provenance with the selected target; caller profile metadata cannot invent or replace that outcome. Adapter descriptors declare their supported capability envelope, and the facade rejects any resolved capability outside it. When capability provenance uses `adapter_attestation`, its logical source reference must be the selected adapter ID.
 
@@ -70,8 +70,8 @@ Without one neutral contract, each transport can invent incompatible route/prove
   - Verify: `tests/components/llm/test_router.py::test_legacy_llmroute_projects_from_neutral_route`
 - [ ] Serialization and validation reject credential values, endpoint secrets, prompts, raw network identity/capability claims, and CLI environment content.
   - Verify: `tests/model_access/test_contracts.py::test_route_provenance_rejects_secret_bearing_fields`
-- [ ] Resolved target identifiers reject secret-bearing values before the facade performs adapter lookup.
-  - Verify: `tests/model_access/test_contracts.py::test_resolved_access_rejects_sensitive_route_values_before_facade_binding`
+- [ ] The facade revalidates resolver output before adapter lookup, including values introduced through unchecked model copies.
+  - Verify: `tests/model_access/test_router_facade.py::test_facade_revalidates_resolver_result_before_adapter_lookup`
 - [ ] A literal system-role requirement is rejected unless the selected adapter declares an actual system-channel mapping.
   - Verify: `tests/model_access/test_router_facade.py::test_facade_enforces_literal_system_role_mapping`
 - [ ] The decision remains explicitly target-state and does not claim shipped Product routing.
