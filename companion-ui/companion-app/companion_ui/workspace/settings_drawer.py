@@ -91,6 +91,8 @@ DISPLAY_PREF_CANONICAL: dict[str, object] = {
     "lineHeight": "1.65",
     "readingWidth": "68ch",
     "focusMode": False,
+    # YDS-03 (#5629): Yggdrasil Dark is canonical; "light" is the Shell trial.
+    "theme": "dark",
 }
 
 # Drawer-owned Local UI preference storage (browser-local; §Resolved Q19).
@@ -286,6 +288,15 @@ def _display_section_form() -> str:
                 <option value="78ch">78ch</option>
               </select>
             </label>
+            <label class="display-preference-control">
+              <span>Theme</span>
+              <select data-testid="display-pref-theme"
+                name="theme"
+                aria-label="Theme">
+                <option value="dark">Dark</option>
+                <option value="light">Light — Shell (trial)</option>
+              </select>
+            </label>
             <label class="display-preference-toggle">
               <input type="checkbox"
                 data-testid="display-pref-focus-mode"
@@ -444,8 +455,8 @@ def settings_drawer_markup(fields: dict) -> str:
        to Markdown). Authority is declared per section, not frame-wide (#2590). -->
   <style>
     .settings-drawer {{
-      background: var(--bg-surface, #0c1220);
-      border-left: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-strong);
       bottom: 0;
       box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
       display: flex;
@@ -468,33 +479,33 @@ def settings_drawer_markup(fields: dict) -> str:
       justify-content: space-between;
     }}
     .settings-kicker {{
-      color: var(--fg-3, #3d5570); font-size: 11px; letter-spacing: 0.08em;
+      color: var(--fg-2); font-size: 11px; letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
-    .settings-title {{ color: var(--fg-1, #dce8f0); font-size: 17px; margin: 2px 0 0; }}
+    .settings-title {{ color: var(--fg-1); font-size: 17px; margin: 2px 0 0; }}
     .settings-close {{
-      background: none; border: 1px solid var(--border, #152030);
-      border-radius: 4px; color: var(--fg-2, #7a9ab8); cursor: pointer;
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--fg-2); cursor: pointer;
       font-size: 16px; line-height: 1; padding: 4px 9px;
     }}
     .settings-authority-note, .settings-section-note {{
-      color: var(--fg-3, #3d5570); font-size: 12px; margin: 0;
+      color: var(--fg-2); font-size: 12px; margin: 0;
     }}
     .settings-section {{
-      border-top: 1px solid var(--border, #152030);
+      border-top: 1px solid var(--border);
       display: flex; flex-direction: column; gap: 8px; padding-top: 12px;
     }}
     .settings-section-title {{
-      color: var(--fg-2, #7a9ab8); font-size: 11px; letter-spacing: 0.08em;
+      color: var(--fg-2); font-size: 11px; letter-spacing: 0.08em;
       margin: 0; text-transform: uppercase;
     }}
     .settings-control {{
-      align-items: center; color: var(--fg-2, #7a9ab8); display: flex;
+      align-items: center; color: var(--fg-2); display: flex;
       font-size: 13px; gap: 8px; justify-content: space-between;
     }}
     .settings-control select, .settings-control input {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); font-size: 12px;
+      background: var(--bg-raised); border: 1px solid var(--border-strong);
+      border-radius: 4px; color: var(--fg-1); font-size: 12px;
       padding: 4px 8px;
     }}
     /* Quiet-hours time inputs onto the dark palette (#2448, D4): the native
@@ -502,42 +513,42 @@ def settings_drawer_markup(fields: dict) -> str:
        the design-system tokens and invert the indicator so no input stands out
        against the dark theme. */
     .settings-time-input {{
-      background: var(--bg-raised, #111a2e);
-      color: var(--fg-1, #dce8f0);
+      background: var(--bg-raised);
+      color: var(--fg-1);
       color-scheme: dark;
     }}
     .settings-time-input::-webkit-calendar-picker-indicator {{
       filter: invert(0.8);
     }}
     .settings-toggle {{
-      align-items: center; color: var(--fg-2, #7a9ab8); display: flex;
+      align-items: center; color: var(--fg-2); display: flex;
       font-size: 13px; gap: 8px;
     }}
     .settings-quiet-hours-window {{ display: flex; gap: 12px; }}
     .settings-connection-rows {{ display: flex; flex-direction: column; gap: 4px; }}
     .settings-connection-row {{
-      color: var(--fg-3, #3d5570); display: flex; font-size: 12px; gap: 8px;
+      color: var(--fg-2); display: flex; font-size: 12px; gap: 8px;
     }}
-    .settings-connection-row code {{ color: var(--fg-2, #7a9ab8); word-break: break-all; }}
+    .settings-connection-row code {{ color: var(--fg-2); word-break: break-all; }}
     .settings-connection-key {{
       flex: 0 0 110px; font-size: 10px; letter-spacing: 0.05em;
       line-height: 1.8; text-transform: uppercase;
     }}
     .settings-foot {{
-      align-items: center; border-top: 1px solid var(--border, #152030);
+      align-items: center; border-top: 1px solid var(--border);
       display: flex; gap: 10px; padding-top: 12px;
     }}
     .settings-reset {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer;
+      background: var(--bg-raised); border: 1px solid var(--border-strong);
+      border-radius: 4px; color: var(--fg-1); cursor: pointer;
       font-size: 12px; padding: 6px 12px;
     }}
-    .settings-reset-note {{ color: var(--fg-3, #3d5570); font-size: 11px; }}
+    .settings-reset-note {{ color: var(--fg-2); font-size: 11px; }}
     .settings-local-only-badge {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--amber-dim, #805010);
-      border-left: 3px solid var(--amber, #f09030);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); font-size: 11px;
+      background: var(--bg-raised);
+      border: 1px solid var(--amber-dim);
+      border-left: 3px solid var(--amber);
+      border-radius: 4px; color: var(--fg-1); font-size: 11px;
       letter-spacing: 0.04em; padding: 4px 10px; position: fixed;
       right: 16px; top: 54px; z-index: 955;
     }}
@@ -564,6 +575,7 @@ def settings_drawer_markup(fields: dict) -> str:
     data-canonical-line-height="{_e(DISPLAY_PREF_CANONICAL["lineHeight"])}"
     data-canonical-reading-width="{_e(DISPLAY_PREF_CANONICAL["readingWidth"])}"
     data-canonical-focus-mode="false"
+    data-canonical-theme="{_e(DISPLAY_PREF_CANONICAL["theme"])}"
     {_frame_root}
     role="dialog" aria-modal="false" aria-hidden="true"
     inert
@@ -629,7 +641,8 @@ def settings_drawer_script() -> str:
       fontSize: drawer.getAttribute('data-canonical-font-size'),
       lineHeight: drawer.getAttribute('data-canonical-line-height'),
       readingWidth: drawer.getAttribute('data-canonical-reading-width'),
-      focusMode: drawer.getAttribute('data-canonical-focus-mode') === 'true'
+      focusMode: drawer.getAttribute('data-canonical-focus-mode') === 'true',
+      theme: drawer.getAttribute('data-canonical-theme')
     }};
     function el(testid) {{
       return drawer.querySelector('[data-testid="' + testid + '"]');
@@ -675,11 +688,13 @@ def settings_drawer_script() -> str:
       var lineHeight = displayControl('line-height');
       var readingWidth = displayControl('reading-width');
       var focusMode = displayControl('focus-mode');
+      var theme = displayControl('theme');
       return {{
         fontSize: fontSize ? fontSize.value : DISPLAY_CANONICAL.fontSize,
         lineHeight: lineHeight ? lineHeight.value : DISPLAY_CANONICAL.lineHeight,
         readingWidth: readingWidth ? readingWidth.value : DISPLAY_CANONICAL.readingWidth,
-        focusMode: focusMode ? Boolean(focusMode.checked) : DISPLAY_CANONICAL.focusMode
+        focusMode: focusMode ? Boolean(focusMode.checked) : DISPLAY_CANONICAL.focusMode,
+        theme: theme ? theme.value : DISPLAY_CANONICAL.theme
       }};
     }}
     // Mirrors settings_drawer.preferences_diverge.
@@ -779,6 +794,8 @@ def settings_drawer_script() -> str:
       if (lineHeight) {{ lineHeight.value = DISPLAY_CANONICAL.lineHeight; }}
       if (readingWidth) {{ readingWidth.value = DISPLAY_CANONICAL.readingWidth; }}
       if (focusMode) {{ focusMode.checked = DISPLAY_CANONICAL.focusMode; }}
+      var theme = displayControl('theme');
+      if (theme) {{ theme.value = DISPLAY_CANONICAL.theme; }}
       var form = document.querySelector('[data-testid="display-preferences"]');
       if (form) {{ form.dispatchEvent(new Event('change', {{ bubbles: true }})); }}
       prefs = Object.assign({{}}, CANONICAL);

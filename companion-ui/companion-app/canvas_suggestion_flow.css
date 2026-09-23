@@ -41,7 +41,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   letter-spacing: var(--tracking-wide);
@@ -76,7 +76,7 @@
 .document-pane .doc-note-path {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--fg-3);
+  color: var(--fg-2);
   letter-spacing: var(--tracking-wide);
   margin-bottom: var(--space-5);
 }
@@ -186,7 +186,7 @@
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   letter-spacing: var(--tracking-wider);
-  color: var(--fg-3);
+  color: var(--fg-2);
   text-transform: uppercase;
 }
 
@@ -227,7 +227,7 @@
 .collapsed-count {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   writing-mode: vertical-rl;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -267,7 +267,7 @@
 .message .ctx-label {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--fg-3);
+  color: var(--fg-2);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   margin-bottom: 4px;
@@ -308,7 +308,7 @@
 .thinking-cancel {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--fg-3);
+  color: var(--fg-2);
   background: none;
   border: none;
   cursor: pointer;
@@ -340,7 +340,7 @@
 .suggestion-card .diff-hint {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 
 .suggestion-card .card-classification {
@@ -437,7 +437,7 @@
 .btn .kbd {
   font-family: var(--font-mono);
   font-size: 0.85em;
-  color: var(--fg-3);
+  color: var(--fg-2);
   margin-left: 6px;
 }
 
@@ -497,7 +497,7 @@
 .receipts-strip .strip-label {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--fg-3);
+  color: var(--fg-2);
   letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
 }
@@ -505,7 +505,7 @@
 .receipts-strip .strip-empty {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--fg-3);
+  color: var(--fg-2);
   font-style: italic;
 }
 
@@ -544,7 +544,7 @@
   background: var(--bg-surface);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--fg-3);
+  color: var(--fg-2);
   letter-spacing: var(--tracking-wide);
 }
 
@@ -565,7 +565,7 @@
 
 .provenance-footer .prov-state {
   margin-left: auto;
-  color: var(--fg-3);
+  color: var(--fg-2);
 }
 .provenance-footer .prov-state strong { color: var(--cyan); }
 

@@ -149,9 +149,11 @@ def test_status_tone_calm_unless_true_error() -> None:
     assert EDITING_PAUSED in calm_markup
 
     calm_tone_rule = re.search(
-        r'\.workspace-status-slot\{[^}]*color:\s*var\(--fg-3\)', calm_html
+        r'\.workspace-status-slot\{[^}]*color:\s*var\(--fg-2\)', calm_html
     )
-    assert calm_tone_rule, "the default (calm) tone must use --fg-3"
+    # YDS-03 (#5629): the calm tone is readable text, so it uses --fg-2;
+    # --fg-3 is decorative-only in Yggdrasil v2.
+    assert calm_tone_rule, "the default (calm) tone must use --fg-2"
 
     # Canvas-off idiom is unified: the slot and the operator drawer's runtime
     # pill both read calm_degraded.CANVAS_OFF for the same server-declared

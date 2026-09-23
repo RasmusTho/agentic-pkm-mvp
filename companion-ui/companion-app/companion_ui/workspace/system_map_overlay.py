@@ -559,8 +559,8 @@ def system_map_overlay_markup(
        document anchor — no route reset, no data loss. -->
   <style>
     .system-map-overlay {{
-      background: var(--bg-surface, #0c1220);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
       border-radius: 8px;
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
       display: none;
@@ -580,25 +580,25 @@ def system_map_overlay_markup(
       justify-content: space-between;
     }}
     .system-map-kicker {{
-      color: var(--fg-3, #3d5570); font-size: 11px; letter-spacing: 0.08em;
+      color: var(--fg-2); font-size: 11px; letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
-    .system-map-title {{ color: var(--fg-1, #dce8f0); font-size: 17px; margin: 2px 0 0; }}
+    .system-map-title {{ color: var(--fg-1); font-size: 17px; margin: 2px 0 0; }}
     .system-map-close {{
-      background: none; border: 1px solid var(--border, #152030);
-      border-radius: 4px; color: var(--fg-2, #7a9ab8); cursor: pointer;
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--fg-2); cursor: pointer;
       font-size: 16px; line-height: 1; padding: 4px 9px;
     }}
-    .system-map-note {{ color: var(--fg-2, #7a9ab8); font-size: 12px; margin: 10px 0 14px; }}
+    .system-map-note {{ color: var(--fg-2); font-size: 12px; margin: 10px 0 14px; }}
     .map-center {{
       background: rgba(212, 168, 67, 0.07);
-      border: 1px dashed var(--accent, #d4a843); border-radius: 6px;
+      border: 1px dashed var(--accent); border-radius: 6px;
       margin: 0 0 14px; padding: 12px; text-align: center;
     }}
-    .map-center-name {{ color: var(--accent, #d4a843); font-size: 15px; }}
-    .map-center-sub {{ color: var(--fg-2, #7a9ab8); font-size: 12px; margin-top: 4px; }}
+    .map-center-name {{ color: var(--accent); font-size: 15px; }}
+    .map-center-sub {{ color: var(--fg-2); font-size: 12px; margin-top: 4px; }}
     .map-center-meta {{
-      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      color: var(--fg-2); font-family: var(--font-mono, monospace);
       font-size: 10px; margin-top: 6px; display: flex; gap: 8px;
       justify-content: center; flex-wrap: wrap;
     }}
@@ -612,37 +612,37 @@ def system_map_overlay_markup(
     }}
     @media (max-width: 720px) {{ .system-map-grid {{ grid-template-columns: 1fr; }} }}
     .map-node {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border, #152030); border-radius: 6px;
-      color: var(--fg-1, #dce8f0); display: block; font: inherit;
+      background: var(--bg-raised);
+      border: 1px solid var(--border); border-radius: 6px;
+      color: var(--fg-1); display: block; font: inherit;
       padding: 10px 12px; text-align: left; width: 100%;
     }}
     button.map-node {{ cursor: pointer; }}
-    button.map-node:hover {{ border-color: var(--accent, #d4a843); }}
+    button.map-node:hover {{ border-color: var(--accent); }}
     .map-node--inert {{ opacity: 0.72; }}
     .map-node-head {{ display: flex; gap: 8px; justify-content: space-between; }}
-    .map-node-name {{ color: var(--fg-1, #dce8f0); font-size: 13px; }}
+    .map-node-name {{ color: var(--fg-1); font-size: 13px; }}
     .map-node-mode {{
-      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      color: var(--fg-2); font-family: var(--font-mono, monospace);
       font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
       white-space: nowrap;
     }}
-    .map-node-reach {{ color: var(--fg-2, #7a9ab8); font-size: 11px; margin: 6px 0 0; }}
+    .map-node-reach {{ color: var(--fg-2); font-size: 11px; margin: 6px 0 0; }}
     .map-node-status {{
-      color: var(--fg-3, #3d5570); font-family: var(--font-mono, monospace);
+      color: var(--fg-2); font-family: var(--font-mono, monospace);
       font-size: 10px; margin: 4px 0 0;
     }}
-    .map-node-status[data-status="shipped"] {{ color: var(--cyan, #00d4e8); }}
+    .map-node-status[data-status="shipped"] {{ color: var(--cyan); }}
     .map-node-unavailable {{
-      color: var(--amber, #f09030); font-size: 10px; margin: 4px 0 0;
+      color: var(--amber); font-size: 10px; margin: 4px 0 0;
     }}
     .map-node-open-loops-count {{
-      color: var(--cyan, #00d4e8); font-family: var(--font-mono, monospace);
+      color: var(--cyan); font-family: var(--font-mono, monospace);
       font-size: 10px; margin: 4px 0 0;
     }}
     .system-map-parked {{
-      border-top: 1px dashed var(--border, #152030);
-      color: var(--fg-3, #3d5570); font-size: 11px; margin: 14px 0 0;
+      border-top: 1px dashed var(--border);
+      color: var(--fg-2); font-size: 11px; margin: 14px 0 0;
       padding-top: 10px;
     }}
   </style>

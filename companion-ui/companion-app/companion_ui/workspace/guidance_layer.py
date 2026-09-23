@@ -271,40 +271,40 @@ def guidance_layer_style() -> str:
       gap: 4px;
       margin: 8px 0;
       padding: 8px 10px;
-      border: 1px solid var(--border, #152030);
-      border-left: 3px solid var(--accent-dim, #1b5e6e);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-dim);
       border-radius: 8px;
-      background: var(--bg-raised, #0e1626);
-      color: var(--fg-2, #7a9ab8);
+      background: var(--bg-raised);
+      color: var(--fg-2);
       font-family: var(--font-ui, sans-serif);
       font-size: var(--text-sm, 13px);
     }
     .guidance-callout-kicker {
-      color: var(--fg-3, #3d5570);
+      color: var(--fg-2);
       font-family: var(--font-mono, monospace);
       font-size: var(--text-xs, 11px);
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    .guidance-callout-title { color: var(--fg-1, #dce8f0); }
+    .guidance-callout-title { color: var(--fg-1); }
     .guidance-callout-help-link {
       align-self: flex-start;
-      color: var(--accent, #35c8e8);
+      color: var(--accent);
       font-size: var(--text-xs, 11px);
     }
     .guidance-toggle {
       background: transparent;
       border: none;
       border-radius: 6px;
-      color: var(--fg-3, #3d5570);
+      color: var(--fg-2);
       cursor: pointer;
       font-size: 0.95rem;
       line-height: 1;
       padding: 2px 5px;
     }
-    .guidance-toggle:hover { color: var(--fg-1, #dce8f0); }
+    .guidance-toggle:hover { color: var(--fg-1); }
     body[data-guidance="on"] .guidance-toggle {
-      color: var(--accent, #35c8e8);
+      color: var(--accent);
     }
   </style>"""
 
