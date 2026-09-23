@@ -170,7 +170,11 @@ def _codex_complete(
         reasoning_effort=request.reasoning_effort or "",
         developer_instructions=request.trusted_instructions,
         user_prompt=request.user_input,
-        output_schema_ref=("model-access.complete.inline.v1" if request.output_schema else None),
+        output_schema_ref=(
+            "model-access.complete.inline.v1"
+            if request.output_schema is not None
+            else None
+        ),
         output_schema=request.output_schema,
         literal_system_role_required=request.capability_intent.literal_system_role_required,
     )

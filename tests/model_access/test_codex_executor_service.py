@@ -168,6 +168,22 @@ def test_codex_complete_preserves_channels_and_rejects_tools() -> None:
     assert len(codex.calls) == 1
 
 
+def test_codex_structured_output_accepts_an_empty_json_schema() -> None:
+    app, codex, _ollama = _app()
+    payload = _payload()
+    payload["capability_intent"]["structured_output"] = True
+    payload["output_schema"] = {}
+
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post(
+            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+        )
+
+    assert response.status_code == 200
+    assert codex.calls[0]["output_schema_ref"] == "model-access.complete.inline.v1"
+    assert codex.calls[0]["output_schema"] == {}
+
+
 def test_complete_rejects_request_control_fields_and_oversized_body() -> None:
     app, codex, _ollama = _app(max_request_bytes=1_024)
     payload = _payload()

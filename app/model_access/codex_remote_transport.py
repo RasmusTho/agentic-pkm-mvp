@@ -114,6 +114,9 @@ class CodexRemoteTransport:
                 headers={"Content-Type": "application/json"},
             ) as response:
                 if response.status_code != 200:
+                    # An HTTP 422 can report output-schema validation after inference.
+                    # Without a trusted dispatch-phase receipt, classify every non-200
+                    # conservatively and never let it authorize a retry or provider switch.
                     raise RemoteCompletionError(
                         f"executor_http_{response.status_code}", indeterminate=True
                     )
@@ -142,7 +145,13 @@ class CodexRemoteTransport:
 
         if result.route != request.route:
             raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
-        if not result.content or len(result.content.encode("utf-8")) > self._max_response_bytes:
+        try:
+            content_bytes = result.content.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise RemoteCompletionError(
+                "executor_response_invalid", indeterminate=True
+            ) from None
+        if not content_bytes or len(content_bytes) > self._max_response_bytes:
             raise RemoteCompletionError("executor_response_invalid", indeterminate=True)
         return result
 

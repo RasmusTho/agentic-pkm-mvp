@@ -92,6 +92,32 @@ def test_remote_complete_timeout_is_indeterminate_and_never_retries() -> None:
     assert calls == 1
 
 
+def test_remote_complete_treats_non_200_as_terminal_and_conservatively_indeterminate() -> None:
+    request = _request()
+    calls = 0
+
+    def reject(_http_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            422, json={"error": {"code": "ollama_schema_violation"}}
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(reject),
+    )
+    try:
+        with pytest.raises(RemoteCompletionError) as error:
+            transport.complete(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "executor_http_422"
+    assert error.value.indeterminate is True
+    assert calls == 1
+
+
 def test_remote_complete_rejects_a_different_returned_route() -> None:
     request = _request()
     calls = 0
@@ -114,6 +140,32 @@ def test_remote_complete_rejects_a_different_returned_route() -> None:
             transport.complete(request)
     finally:
         transport.close()
+    assert calls == 1
+
+
+def test_remote_complete_sanitizes_unpaired_surrogate_response() -> None:
+    request = _request()
+    calls = 0
+
+    def malformed(_http_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = json.dumps(
+            {"route": request.route.model_dump(mode="json"), "content": "\ud800"}
+        ).encode("ascii")
+        return httpx.Response(200, content=payload)
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(malformed),
+    )
+    try:
+        with pytest.raises(RemoteCompletionError, match="executor_response_invalid") as error:
+            transport.complete(request)
+    finally:
+        transport.close()
+
+    assert error.value.indeterminate is True
     assert calls == 1
 
 
