@@ -57,12 +57,23 @@ _OPERATIONAL_TRANSPORT_PROVIDERS = {
     "codex_subscription": frozenset({"openai"}),
 }
 
-# Conventional exit codes the still-permitted interactive command path uses to
-# report the real cause. Without them an expired session and a genuine command
-# failure collapse into one indistinguishable class.
+# Conventional exit codes used by the shared Codex CLI compatibility bridge so
+# typed preflight, timeout, output, and schema failures survive the subprocess
+# boundary without carrying raw CLI output.
 _LOCAL_COMMAND_FAILURE_CLASSES = {
     SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE: "command_timeout",
     SUBSCRIPTION_ADAPTER_SESSION_EXPIRED_EXIT_CODE: "session_expired",
+    126: "cli_missing",
+    127: "authentication_unavailable",
+    128: "unsupported_profile",
+    129: "cli_version_unsupported",
+    130: "tool_surface_unknown",
+    131: "command_exit_nonzero",
+    132: "stdout_oversize",
+    133: "stdout_empty",
+    134: "schema_violation",
+    135: "input_oversize",
+    136: "model_unavailable",
 }
 
 # The intent surface is provider-free by construction: any key that could carry
@@ -179,6 +190,8 @@ class LocalCommandAdapter:
     environment: Mapping[str, str] | None = None
     reasoning_effort: str | None = None
     output_schema_ref: str | None = None
+    # Used only by the subscription bridge to bind nested execution to its caller.
+    propagate_caller_liveness: bool = False
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -192,27 +205,63 @@ class LocalCommandAdapter:
         env = {"PATH": os.environ.get("PATH", "")}
         if self.environment:
             env.update({str(key): str(value) for key, value in self.environment.items()})
+        command = list(self.argv)
+        caller_liveness_read_fd = -1
+        caller_liveness_write_fd = -1
+        pass_fds: tuple[int, ...] = ()
+        if self.propagate_caller_liveness:
+            if os.name != "posix":
+                raise AdapterUnavailableError(
+                    f"local caller-liveness monitoring unavailable: {self.adapter_id}"
+                )
+            try:
+                caller_liveness_read_fd, caller_liveness_write_fd = os.pipe()
+            except OSError as exc:
+                raise AdapterUnavailableError(
+                    f"local caller-liveness monitoring unavailable: {self.adapter_id}"
+                ) from exc
+            command.extend(
+                ("--caller-liveness-fd", str(caller_liveness_read_fd))
+            )
+            pass_fds = (caller_liveness_read_fd,)
         try:
             with tempfile.TemporaryFile() as request_file:
                 request_file.write(canonical_json(request).encode("utf-8"))
                 request_file.seek(0)
                 process = subprocess.Popen(
-                    list(self.argv),
+                    command,
                     stdin=request_file,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     shell=False,
                     env=env,
                     start_new_session=True,
+                    pass_fds=pass_fds,
                 )
+                if caller_liveness_read_fd >= 0:
+                    os.close(caller_liveness_read_fd)
+                    caller_liveness_read_fd = -1
                 stdout = _read_bounded_process_output(
                     process,
                     timeout_seconds=self.timeout_seconds,
                     max_output_bytes=self.max_output_bytes,
                     adapter_id=self.adapter_id,
                 )
+                cleanup_denied = _kill_process_group(process)
+                if cleanup_denied:
+                    raise AdapterExecutionError(
+                        f"local command child cleanup denied: {self.adapter_id}",
+                        failure_class="command_exit_nonzero",
+                    )
         except FileNotFoundError as exc:
             raise AdapterUnavailableError(f"local command unavailable: {self.adapter_id}") from exc
+        finally:
+            for fd in (caller_liveness_read_fd, caller_liveness_write_fd):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
         if process.returncode != 0:
             raise AdapterExecutionError(
                 f"local command failed with exit {process.returncode}: {self.adapter_id}",
@@ -632,6 +681,11 @@ def load_operational_subscription_adapters(
         raise ModelAccessResolutionError(
             "subscription bridge does not support the declared response schema"
         )
+    host_local_environment = {
+        name: source[name]
+        for name in ("CODEX_HOME", "CODEX_CLI_SAFE_PROFILE_PATH")
+        if source.get(name)
+    }
     return {
         perspective: LocalCommandAdapter(
             adapter_id=f"{resolution.adapter_id}-subscription",
@@ -650,9 +704,10 @@ def load_operational_subscription_adapters(
                     target_intent.output_schema_ref,
                 ),
             timeout_seconds=MODEL_INQUIRY_SUBSCRIPTION_TIMEOUT_SECONDS,
-            environment={"HOME": home},
+            environment={"HOME": home, **host_local_environment},
             reasoning_effort=target_intent.reasoning_effort,
             output_schema_ref=target_intent.output_schema_ref,
+            propagate_caller_liveness=True,
         )
         for perspective in config.perspectives
     }
@@ -796,8 +851,6 @@ def _raise_local_command_failure(
 
 def _kill_process_group(process: subprocess.Popen[bytes]) -> bool:
     """Boundedly terminate a command tree; return whether group signaling was denied."""
-    if process.poll() is not None:
-        return False
     deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
     try:
         os.killpg(process.pid, signal.SIGKILL)
@@ -823,7 +876,8 @@ def _kill_process_group(process: subprocess.Popen[bytes]) -> bool:
             pass
         _bounded_wait(process, deadline=deadline)
         return True
-    _bounded_wait(process, deadline=deadline)
+    if process.poll() is None:
+        _bounded_wait(process, deadline=deadline)
     return False
 
 

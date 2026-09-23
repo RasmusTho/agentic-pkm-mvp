@@ -191,6 +191,14 @@ ADAPTER_FAILURE_CLASSES = frozenset(
         "unexpected_adapter_error",
         "credential_unavailable",
         "session_expired",
+        "cli_missing",
+        "authentication_unavailable",
+        "cli_version_unsupported",
+        "tool_surface_unknown",
+        "unsupported_profile",
+        "model_unavailable",
+        "schema_violation",
+        "input_oversize",
     }
 )
 
@@ -365,7 +373,13 @@ class ModelAccessAdapterDescriptor(_StrictFrozenModel):
 class ModelAccessAdapterRegistry(Protocol):
     """Lookup-only adapter registry port; it does not execute a model turn."""
 
-    def describe(self, adapter_id: str) -> ModelAccessAdapterDescriptor: ...
+    def describe(
+        self,
+        adapter_id: str,
+        *,
+        provider: str,
+        model: str,
+    ) -> ModelAccessAdapterDescriptor: ...
 
 
 class ModelResolutionRequest(_StrictFrozenModel):
