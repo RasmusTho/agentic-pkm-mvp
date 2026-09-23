@@ -91,9 +91,6 @@ _PHASE_POSTURES = {
     "no_lifecycle": "no_lifecycle",
     "cancelled": "watcher",
 }
-# A cancelled first selection keeps ``dormant`` posture so an env-root watcher
-# can tell "never bound" from a cleared default, which also has no binding (#5644).
-_EXTRA_PHASE_POSTURES = {"cancelled": frozenset({"dormant"})}
 
 
 def _checksum(payload: Mapping[str, object]) -> str:
@@ -176,10 +173,7 @@ class SettingsRebindRecord:
         posture = value.get("lifecyclePosture")
         if not isinstance(phase, str) or phase not in _PHASE_POSTURES:
             raise RegistryError("settings rebind record has an invalid phase")
-        if not isinstance(posture, str) or (
-            posture != _PHASE_POSTURES[phase]
-            and posture not in _EXTRA_PHASE_POSTURES.get(phase, ())
-        ):
+        if posture != _PHASE_POSTURES[phase]:
             raise RegistryError("settings rebind phase and lifecycle posture disagree")
         if phase == "dormant" and (desired != 0 or applied != 0):
             raise RegistryError("dormant settings rebind revisions must be zero")
@@ -620,15 +614,20 @@ class SettingsRebindActivation:
                 or current.candidate_binding_id != expected_candidate_binding_id
             ):
                 return
-            never_bound = prior.phase == "dormant" or (
-                prior.phase == "cancelled" and prior.lifecycle_posture == "dormant"
+            # A restored no-target posture keeps the cleared binding as prior,
+            # so ``cancelled`` with neither binding means only "never bound"
+            # to the watcher (#5644).
+            restored_prior = (
+                prior.candidate_binding_id
+                if prior.candidate_binding_id is not None
+                else prior.prior_binding_id
             )
             cancelled = replace(
                 current,
                 applied_revision=current.desired_revision,
                 phase="cancelled",
-                lifecycle_posture="dormant" if never_bound else "watcher",
-                prior_binding_id=prior.candidate_binding_id,
+                lifecycle_posture="watcher",
+                prior_binding_id=restored_prior,
                 candidate_binding_id=prior.candidate_binding_id,
                 reload_revision=current.desired_revision,
                 scalar_drain_revision=current.desired_revision,
@@ -757,7 +756,10 @@ class SettingsRebindActivation:
             if default_change is None:
                 if snapshot.last_active_vault_ref == selection.ref:
                     return current
-            elif snapshot.default_vault_binding_id == default_change[0]:
+            elif (
+                snapshot.default_vault_binding_id,
+                snapshot.default_vault_provenance,
+            ) == default_change:
                 return current
             return self.store.commit_selection(
                 desired_revision=current.desired_revision,

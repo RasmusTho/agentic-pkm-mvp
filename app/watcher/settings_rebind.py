@@ -375,7 +375,7 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind record is not installed")
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
         if record.phase == "cancelled":
-            if record.lifecycle_posture == "dormant":
+            if record.candidate_binding_id is None and record.prior_binding_id is None:
                 # A cancelled first selection restores the never-bound
                 # posture. Like ``dormant``, it must not disable an env-root
                 # watcher that was scanning before the attempt (#5644).

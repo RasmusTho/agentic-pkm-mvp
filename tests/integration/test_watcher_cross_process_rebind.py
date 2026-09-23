@@ -1379,7 +1379,8 @@ def test_enabled_static_root_watcher_refuses_first_selection_of_foreign_root(
 
     record = runtime.open_settings_rebind_store().read()
     assert record.phase == "cancelled"
-    assert record.lifecycle_posture == "dormant"
+    assert record.lifecycle_posture == "watcher"
+    assert record.prior_binding_id is None
     assert record.candidate_binding_id is None
     assert runtime.registry.load().last_active_vault_ref is None
     assert not _revision_receipt_path(tmp_path, record.desired_revision).exists()
@@ -1512,6 +1513,10 @@ def test_cancelled_selection_after_cleared_default_keeps_watcher_disabled(
     record = runtime.open_settings_rebind_store().read()
     assert record.phase == "cancelled"
     assert record.lifecycle_posture == "watcher"
+    assert record.prior_binding_id == "binding-a"
+    assert record.candidate_binding_id is None
+    # Older runtimes must still parse the cancelled record (rollback safety).
+    SettingsRebindRecord.from_payload(record.as_payload())
     reconciler = DormantSettingsRebindReconciler(
         registry_path=runtime.registry.path,
         state_dir=tmp_path / "watcher-state",
