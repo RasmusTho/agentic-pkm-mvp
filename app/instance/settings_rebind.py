@@ -622,6 +622,16 @@ class SettingsRebindActivation:
                 if prior.candidate_binding_id is not None
                 else prior.prior_binding_id
             )
+            if (
+                prior.candidate_binding_id is None
+                and restored_prior is not None
+                and restored_prior not in snapshot.registrations
+                and restored_prior not in snapshot.removal_tombstones
+            ):
+                # The cleared binding was removed during the wait. Falling
+                # back to "never bound" is safer than failing the cancel and
+                # stranding the prepared revision.
+                restored_prior = None
             cancelled = replace(
                 current,
                 applied_revision=current.desired_revision,

@@ -1517,6 +1517,13 @@ def test_cancelled_selection_after_cleared_default_keeps_watcher_disabled(
     assert record.candidate_binding_id is None
     # Older runtimes must still parse the cancelled record (rollback safety).
     SettingsRebindRecord.from_payload(record.as_payload())
+    # A repeated cancel keeps the cleared binding as the restored prior.
+    activation.store.prepare(candidate_binding_id="binding-b")
+    activation._cancel_before_commit(record, expected_candidate_binding_id="binding-b")
+    repeated = runtime.open_settings_rebind_store().read()
+    assert repeated.phase == "cancelled"
+    assert repeated.prior_binding_id == "binding-a"
+    assert repeated.candidate_binding_id is None
     reconciler = DormantSettingsRebindReconciler(
         registry_path=runtime.registry.path,
         state_dir=tmp_path / "watcher-state",
