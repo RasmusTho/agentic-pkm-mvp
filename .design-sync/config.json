@@ -1,0 +1,23 @@
+{
+  "projectId": "f2b13410-af14-4875-8029-445352123f57",
+  "projectName": "Yggdrasil Design System",
+  "shape": "hand-authored",
+  "tokenSheet": {
+    "local": "companion-ui/companion-app/colors_and_type.css",
+    "remote": "colors_and_type.css"
+  },
+  "authoredSources": "design-system/yggdrasil/claude-design/",
+  "fileMap": {
+    "colors_and_type.css": "companion-ui/companion-app/colors_and_type.css",
+    "README.md": "design-system/yggdrasil/claude-design/README.md",
+    "SKILL.md": "design-system/yggdrasil/claude-design/SKILL.md",
+    "preview/shell-material.html": "design-system/yggdrasil/claude-design/preview/shell-material.html",
+    "preview/shell-colors.html": "design-system/yggdrasil/claude-design/preview/shell-colors.html",
+    "preview/shell-components.html": "design-system/yggdrasil/claude-design/preview/shell-components.html",
+    "preview/density.html": "design-system/yggdrasil/claude-design/preview/density.html",
+    "preview/effects-focus.html": "design-system/yggdrasil/claude-design/preview/effects-focus.html",
+    "preview/type-ui-scale.html": "design-system/yggdrasil/claude-design/preview/type-ui-scale.html",
+    "preview/colors-foreground.html": "design-system/yggdrasil/claude-design/preview/colors-foreground.html",
+    "ui_kits/builderops-cockpit/existing-surfaces/signboard.css": "app/web/static/signboard.css"
+  }
+}

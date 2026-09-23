@@ -2485,6 +2485,20 @@
       "why_load_bearing": "The final task spec names the public Bifrost constituent repository as a prerequisite delivery before parent promotion, not personal vault data.",
       "disposition": "stay",
       "issue": "#5626"
+    },
+    {
+      "artifact": "design-system/yggdrasil/claude-design/README.md",
+      "category": "iv",
+      "why_load_bearing": "The Claude Design README names the public Bifrost constituent as a consumer of the generated Swift tokens, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5628"
+    },
+    {
+      "artifact": "design-system/yggdrasil/claude-design/SKILL.md",
+      "category": "iv",
+      "why_load_bearing": "The Claude Design skill description names the public Bifrost constituent among the surfaces the design system serves, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5628"
     }
   ]
 }

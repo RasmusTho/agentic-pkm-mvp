@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Theme — Shell (trial)" name="Shell material" subtitle="City backdrop · dark glass chrome · porcelain sheets with rim light · emblem" viewport="700x340" -->
+<html lang="en" data-theme="light">
+<head><meta charset="UTF-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+body { background: var(--surface-page); background-size: var(--material-backdrop-size); min-height: 340px; padding: var(--surface-frame-gap); display: grid; grid-template-rows: auto 1fr; gap: var(--surface-frame-gap); }
+.bar { background: var(--material-glass); backdrop-filter: blur(10px); color: var(--material-on-glass); display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-radius: var(--surface-panel-radius); }
+.word { font-family: var(--font-ui); font-weight: var(--weight-light); font-size: 15px; letter-spacing: 0.42em; text-transform: uppercase; }
+.bar .meta { margin-left: auto; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--material-on-glass-2); }
+.frame { display: grid; grid-template-columns: 190px 1fr; gap: var(--surface-frame-gap); }
+.panel, .main { background: var(--surface-panel); box-shadow: var(--surface-panel-shadow); border: 1px solid var(--surface-panel-border); border-radius: var(--surface-panel-radius); padding: 16px 18px; position: relative; }
+.main { background: var(--surface-main); }
+.main::after { content: ""; position: absolute; top: 14px; right: 14px; width: 26px; height: 26px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); }
+.eyebrow { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--fg-2); margin-bottom: 10px; }
+.item { font-size: 13px; color: var(--fg-1); padding: 6px 0; border-bottom: 1px solid var(--border); }
+.item.dim { color: var(--fg-2); }
+h1 { font-family: var(--font-ui); font-weight: var(--weight-light); font-size: 26px; letter-spacing: 0.3em; text-transform: uppercase; text-shadow: var(--surface-title-shadow); margin-bottom: 6px; }
+.sub { font-family: var(--font-display); font-style: italic; font-size: 17px; color: var(--fg-2); margin-bottom: 12px; }
+p { font-size: 14px; color: var(--fg-1); max-width: 46ch; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <svg width="22" height="20" viewBox="0 0 22 20" fill="none" aria-hidden="true"><path d="M11 1 L21 19 L1 19 Z" stroke="currentColor" stroke-width="1"/><path d="M11 17 V7 M11 11 L7 7 M11 11 L15 7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+    <span class="word">Yggdrasil</span>
+    <span class="meta">dark glass · material-glass</span>
+  </div>
+  <div class="frame">
+    <div class="panel">
+      <div class="eyebrow">Sessions</div>
+      <div class="item">Q3 planning thread</div>
+      <div class="item">Vault restructure</div>
+      <div class="item dim">Reading notes · 2d</div>
+    </div>
+    <div class="main">
+      <h1>Converse</h1>
+      <div class="sub">A thinking session, backed by the vault</div>
+      <p>Porcelain sheets carry all reading and writing. The city stays in the frame and reaches the sheet only as rim light: cyan from the left, red from the right.</p>
+    </div>
+  </div>
+</body>
+</html>
