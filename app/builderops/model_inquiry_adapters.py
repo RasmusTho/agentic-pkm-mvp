@@ -190,6 +190,8 @@ class LocalCommandAdapter:
     environment: Mapping[str, str] | None = None
     reasoning_effort: str | None = None
     output_schema_ref: str | None = None
+    # Used only by the subscription bridge to bind nested execution to its caller.
+    propagate_caller_liveness: bool = False
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -203,19 +205,42 @@ class LocalCommandAdapter:
         env = {"PATH": os.environ.get("PATH", "")}
         if self.environment:
             env.update({str(key): str(value) for key, value in self.environment.items()})
+        command = list(self.argv)
+        caller_liveness_read_fd = -1
+        caller_liveness_write_fd = -1
+        pass_fds: tuple[int, ...] = ()
+        if self.propagate_caller_liveness:
+            if os.name != "posix":
+                raise AdapterUnavailableError(
+                    f"local caller-liveness monitoring unavailable: {self.adapter_id}"
+                )
+            try:
+                caller_liveness_read_fd, caller_liveness_write_fd = os.pipe()
+            except OSError as exc:
+                raise AdapterUnavailableError(
+                    f"local caller-liveness monitoring unavailable: {self.adapter_id}"
+                ) from exc
+            command.extend(
+                ("--caller-liveness-fd", str(caller_liveness_read_fd))
+            )
+            pass_fds = (caller_liveness_read_fd,)
         try:
             with tempfile.TemporaryFile() as request_file:
                 request_file.write(canonical_json(request).encode("utf-8"))
                 request_file.seek(0)
                 process = subprocess.Popen(
-                    list(self.argv),
+                    command,
                     stdin=request_file,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     shell=False,
                     env=env,
                     start_new_session=True,
+                    pass_fds=pass_fds,
                 )
+                if caller_liveness_read_fd >= 0:
+                    os.close(caller_liveness_read_fd)
+                    caller_liveness_read_fd = -1
                 stdout = _read_bounded_process_output(
                     process,
                     timeout_seconds=self.timeout_seconds,
@@ -230,6 +255,13 @@ class LocalCommandAdapter:
                     )
         except FileNotFoundError as exc:
             raise AdapterUnavailableError(f"local command unavailable: {self.adapter_id}") from exc
+        finally:
+            for fd in (caller_liveness_read_fd, caller_liveness_write_fd):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
         if process.returncode != 0:
             raise AdapterExecutionError(
                 f"local command failed with exit {process.returncode}: {self.adapter_id}",
@@ -675,6 +707,7 @@ def load_operational_subscription_adapters(
             environment={"HOME": home, **host_local_environment},
             reasoning_effort=target_intent.reasoning_effort,
             output_schema_ref=target_intent.output_schema_ref,
+            propagate_caller_liveness=True,
         )
         for perspective in config.perspectives
     }

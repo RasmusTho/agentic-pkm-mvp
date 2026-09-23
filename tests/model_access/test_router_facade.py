@@ -7,6 +7,7 @@ from typing import Sequence
 from pydantic import ValidationError
 import pytest
 
+from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access import ModelAccessRouter
 from llm_contract import (
     CapabilityProvenance,
@@ -160,7 +161,9 @@ def _descriptor(
 
 
 def _request(
-    *, fallback_requirement: str = "fallback_forbidden"
+    *,
+    fallback_requirement: str = "fallback_forbidden",
+    literal_system_role_required: bool = False,
 ) -> ModelResolutionRequest:
     return ModelResolutionRequest(
         intent=ModelAccessIntent(
@@ -177,8 +180,33 @@ def _request(
         requirements=ModelCapabilityRequirements(
             structured_output=True,
             system_prompt_channel=True,
+            literal_system_role_required=literal_system_role_required,
         ),
     )
+
+
+def test_declared_provider_api_keeps_literal_system_role_through_router() -> None:
+    router = ModelAccessRouter(
+        adapter_registry=ModelAccessAdapterFactory.from_declared_sources()
+    )
+    route = router.resolve(
+        _request(literal_system_role_required=True),
+        resolver=_Resolver(
+            provider="openai",
+            model="gpt-5.6-sol",
+            adapter_id="openai_api",
+        ),
+        profile=_profile(
+            profile_id="profile.product_openai",
+            runtime="product",
+            channel="product.chat",
+            consumer="product.agent",
+            caller_profile="profile.product_runtime",
+        ),
+    )
+
+    assert route.trusted_instruction_mapping is not None
+    assert route.trusted_instruction_mapping.trusted_channel == "system"
 
 
 def test_product_and_builder_profiles_resolve_without_policy_leakage() -> None:

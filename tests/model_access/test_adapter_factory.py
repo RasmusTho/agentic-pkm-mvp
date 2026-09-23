@@ -35,6 +35,10 @@ def test_factory_resolves_only_declared_adapter_ids(
         assert descriptor.adapter_id == adapter_id
         assert (descriptor.provider, descriptor.model) == (provider, model)
         assert descriptor.transport_id == adapter_id
+        assert descriptor.trusted_instruction_mapping is not None
+        assert descriptor.trusted_instruction_mapping.trusted_channel == (
+            "developer_instructions" if adapter_id == "codex_cli" else "system"
+        )
 
     with pytest.raises(AdapterRegistryError, match="not declared"):
         factory.describe("undeclared", provider="openai", model="gpt-5.6-sol")

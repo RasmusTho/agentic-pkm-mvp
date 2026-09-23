@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import select
 import subprocess
 import sys
 import time
@@ -261,6 +262,151 @@ def _assert_pids_exit(*pids: int) -> None:
     pytest.fail(f"processes survived bounded cleanup: {alive}")
 
 
+def _start_direct_guardian(
+    *,
+    binary: Path,
+    home: Path,
+    output_path: Path,
+    catalog_path: Path,
+    timeout_ms: int,
+    pre_setsid_gate: Path | None = None,
+) -> tuple[subprocess.Popen[bytes], int, int, int, Path]:
+    """Launch the production guardian with test-owned liveness pipes."""
+    supervisor_path = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "model_access"
+        / "process_supervisor.py"
+    )
+    parent_read_fd, parent_write_fd = os.pipe()
+    caller_read_fd, caller_write_fd = os.pipe()
+    status_read_fd, status_write_fd = os.pipe()
+    snapshot_path = binary.parent / f".{binary.name}.model-access-test-snapshot"
+    identity = binary.stat()
+    expected_identity = (
+        identity.st_dev,
+        identity.st_ino,
+        identity.st_size,
+        identity.st_mtime_ns,
+        identity.st_ctime_ns,
+    )
+    command = [
+        str(binary),
+        "exec",
+        "-c",
+        f"model_catalog_json={json.dumps(str(catalog_path))}",
+        "--output-last-message",
+        str(output_path),
+    ]
+    driver = f"""
+import importlib.util
+import os
+from pathlib import Path
+import sys
+import time
+
+source = Path({str(supervisor_path)!r})
+spec = importlib.util.spec_from_file_location("test_process_supervisor", source)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+gate = {str(pre_setsid_gate) if pre_setsid_gate is not None else None!r}
+if gate is not None:
+    original_setsid = module.os.setsid
+    def delayed_setsid():
+        Path(gate).write_text(str(os.getpid()), encoding="utf-8")
+        time.sleep(30)
+        original_setsid()
+    module.os.setsid = delayed_setsid
+raise SystemExit(module.main([
+    "--parent-fd", {str(parent_read_fd)!r},
+    "--caller-liveness-fd", {str(caller_read_fd)!r},
+    "--status-fd", {str(status_write_fd)!r},
+    "--timeout-ms", {str(timeout_ms)!r},
+    "--staging-path", {str(snapshot_path)!r},
+    "--expected-identity", {json.dumps(expected_identity)!r},
+    "--", *{command!r},
+]))
+"""
+    environment = dict(os.environ)
+    environment["HOME"] = str(home)
+    process = subprocess.Popen(
+        [sys.executable, "-c", driver],
+        cwd=home,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        pass_fds=(parent_read_fd, caller_read_fd, status_write_fd),
+        start_new_session=True,
+    )
+    os.close(parent_read_fd)
+    os.close(caller_read_fd)
+    os.close(status_write_fd)
+    return process, parent_write_fd, caller_write_fd, status_read_fd, snapshot_path
+
+
+def _read_guardian_status(
+    status_read_fd: int, *, timeout_seconds: float = 2.0
+) -> list[dict[str, object]]:
+    chunks = bytearray()
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            pytest.fail("guardian status pipe remained open beyond its cleanup bound")
+        readable, _, _ = select.select([status_read_fd], [], [], remaining)
+        if not readable:
+            pytest.fail("guardian status pipe remained open beyond its cleanup bound")
+        chunk = os.read(status_read_fd, 4096)
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    return [json.loads(line) for line in chunks.splitlines()]
+
+
+def _cleanup_direct_guardian(
+    process: subprocess.Popen[bytes],
+    trace_path: Path,
+    *,
+    pre_setsid_gate: Path | None = None,
+) -> None:
+    cleanup_needed = process.poll() is None or sys.exc_info()[0] is not None
+    if not cleanup_needed:
+        return
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, 9)
+        except ProcessLookupError:
+            pass
+    pids: set[int] = set()
+    if pre_setsid_gate is not None and pre_setsid_gate.exists():
+        try:
+            pids.add(int(pre_setsid_gate.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    if trace_path.exists():
+        try:
+            recorded = json.loads(trace_path.read_text(encoding="utf-8"))
+            for key in ("pid", "child_pid"):
+                pid = recorded.get(key)
+                if isinstance(pid, int):
+                    pids.add(pid)
+        except (OSError, ValueError):
+            pass
+    for pid in pids:
+        try:
+            os.killpg(pid, 9)
+        except ProcessLookupError:
+            pass
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        process.wait(timeout=2)
+
+
 def _subscription_bridge_adapter(
     *,
     binary: Path,
@@ -292,6 +438,7 @@ def _subscription_bridge_adapter(
             "PATH": f"{binary.parent}:{os.environ.get('PATH', '')}",
             "CODEX_CLI_SAFE_PROFILE_PATH": str(profile),
         },
+        propagate_caller_liveness=True,
     )
 
 
@@ -412,6 +559,27 @@ def test_preflight_classifies_cli_auth_and_version_failures(tmp_path: Path) -> N
     assert error.value.failure_code == "cli_version_unsupported"
 
 
+def test_repeated_preflight_closes_status_pipe_descriptors(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    binary = _fake_cli(tmp_path / "codex", trace_path=tmp_path / "trace.json")
+    executor = _executor(binary, home=home)
+    fd_directory = (
+        Path("/dev/fd")
+        if Path("/dev/fd").is_dir()
+        else Path("/proc/self/fd")
+    )
+    if not fd_directory.is_dir():
+        pytest.skip("open descriptor inventory is unavailable on this platform")
+
+    before = len(os.listdir(fd_directory))
+    for _ in range(3):
+        executor.preflight(model="gpt-5.6-luna")
+    after = len(os.listdir(fd_directory))
+
+    assert after <= before
+
+
 def test_execution_timeout_and_cli_failure_are_terminal_and_redacted(
     tmp_path: Path,
 ) -> None:
@@ -477,7 +645,10 @@ def test_execution_timeout_and_cli_failure_are_terminal_and_redacted(
     assert (tmp_path / "chatty-trace.json.count").read_text() == "1"
 
 
-def test_exit_cleanup_kills_descendant_with_redirected_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize("redirect_child_stdio", [False, True])
+def test_exit_cleanup_kills_descendant_with_redirected_output(
+    tmp_path: Path, redirect_child_stdio: bool
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     trace = tmp_path / "success-with-child.json"
@@ -485,6 +656,7 @@ def test_exit_cleanup_kills_descendant_with_redirected_output(tmp_path: Path) ->
         tmp_path / "codex",
         trace_path=trace,
         spawn_child=True,
+        redirect_child_stdio=redirect_child_stdio,
     )
 
     started = time.monotonic()
@@ -499,6 +671,94 @@ def test_exit_cleanup_kills_descendant_with_redirected_output(tmp_path: Path) ->
     assert time.monotonic() - started < 2
     invocation = json.loads(trace.read_text(encoding="utf-8"))
     _assert_pids_exit(invocation["pid"], invocation["child_pid"])
+
+
+def test_guardian_caller_loss_before_setsid_cannot_release_cli(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "must-not-start-inference.json"
+    gate = tmp_path / "child-before-setsid.pid"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        spawn_child=True,
+        execution_delay_seconds=30,
+    )
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"models": []}), encoding="utf-8")
+    guardian, parent_writer, caller_writer, status_reader, snapshot = _start_direct_guardian(
+        binary=binary,
+        home=home,
+        output_path=tmp_path / "response.json",
+        catalog_path=catalog,
+        timeout_ms=10_000,
+        pre_setsid_gate=gate,
+    )
+
+    child_pid: int | None = None
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not gate.exists():
+            time.sleep(0.01)
+        assert gate.exists(), "forked CLI child never reached the pre-setsid gate"
+        child_pid = int(gate.read_text(encoding="utf-8"))
+        os.close(caller_writer)
+        caller_writer = -1
+
+        guardian.wait(timeout=3)
+        statuses = _read_guardian_status(status_reader)
+
+        assert guardian.returncode == 0
+        assert statuses == [{"kind": "parent_lost"}]
+        assert not trace.exists(), "inference started after caller loss was observed"
+        assert not snapshot.exists(), "cancelled guardian left its executable snapshot"
+        assert child_pid is not None
+        _assert_pids_exit(child_pid)
+    finally:
+        _cleanup_direct_guardian(guardian, trace, pre_setsid_gate=gate)
+        for fd in (parent_writer, caller_writer, status_reader):
+            if fd >= 0:
+                os.close(fd)
+
+
+def test_guardian_deadline_alone_kills_cli_process_group(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "guardian-deadline.json"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        execution_delay_seconds=30,
+        spawn_child=True,
+    )
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"models": []}), encoding="utf-8")
+    guardian, parent_writer, caller_writer, status_reader, snapshot = _start_direct_guardian(
+        binary=binary,
+        home=home,
+        output_path=tmp_path / "response.json",
+        catalog_path=catalog,
+        timeout_ms=500,
+    )
+
+    try:
+        guardian.wait(timeout=3)
+        statuses = _read_guardian_status(status_reader)
+        invocation = json.loads(trace.read_text(encoding="utf-8"))
+
+        assert guardian.returncode == 0
+        assert statuses[0]["kind"] == "started"
+        assert statuses[-1]["kind"] == "timeout"
+        assert len(statuses) == 2
+        assert not snapshot.exists(), "guardian deadline left its executable snapshot"
+        _assert_pids_exit(invocation["pid"], invocation["child_pid"])
+    finally:
+        _cleanup_direct_guardian(guardian, trace)
+        for fd in (parent_writer, caller_writer, status_reader):
+            if fd >= 0:
+                os.close(fd)
 
 
 def test_parent_loss_terminates_codex_process_tree(tmp_path: Path) -> None:
@@ -564,6 +824,95 @@ CodexCliExecutor(
     parent.kill()
     parent.wait(timeout=2)
     _assert_pids_exit(invocation["pid"], invocation["child_pid"])
+
+
+def test_model_inquiry_caller_loss_terminates_codex_process_tree(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "inquiry-caller-loss-trace.json"
+    bridge_pid_path = tmp_path / "bridge.pid"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        execution_delay_seconds=10,
+        spawn_child=True,
+    )
+    profile = _profile_file(tmp_path / "inquiry-caller-loss-profile.json")
+    repository_root = Path(__file__).resolve().parents[2]
+    bridge = repository_root / "scripts" / "model_inquiry_subscription_adapter.py"
+    driver = f"""
+import subprocess
+import sys
+from pathlib import Path
+from app.builderops.model_inquiry_adapters import LocalCommandAdapter
+
+bridge = {str(bridge)!r}
+bridge_pid_path = Path({str(bridge_pid_path)!r})
+real_popen = subprocess.Popen
+def record_bridge_pid(*args, **kwargs):
+    process = real_popen(*args, **kwargs)
+    command = args[0] if args else kwargs.get("args", ())
+    if isinstance(command, (list, tuple)) and len(command) > 1 and command[1] == bridge:
+        bridge_pid_path.write_text(str(process.pid), encoding="utf-8")
+    return process
+subprocess.Popen = record_bridge_pid
+
+LocalCommandAdapter(
+    adapter_id="codex_subscription-subscription",
+    provider="openai",
+    model="gpt-5.6-luna",
+    argv=(
+        sys.executable, bridge, "--perspective", "synthesis",
+        "--model", "gpt-5.6-luna", "--reasoning-effort", "low",
+        "--output-schema-ref", "builderops.model-turn-response.v1",
+    ),
+    timeout_seconds=30,
+    environment={{
+        "HOME": {str(home)!r},
+        "PATH": {str(binary.parent)!r},
+        "CODEX_CLI_SAFE_PROFILE_PATH": {str(profile)!r},
+    }},
+    propagate_caller_liveness=True,
+).execute({{"system_prompt": "trusted", "question": "untrusted", "reviewed_artifact_refs": []}})
+"""
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(repository_root), environment.get("PYTHONPATH", "")]
+    )
+    caller = subprocess.Popen(
+        [sys.executable, "-c", driver],
+        cwd=repository_root,
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.monotonic() + 7
+    invocation: dict[str, int] | None = None
+    while time.monotonic() < deadline:
+        if caller.poll() is not None:
+            pytest.fail("Model Inquiry caller exited before fake CLI reached execution")
+        try:
+            value = json.loads(trace.read_text(encoding="utf-8"))
+            bridge_pid = int(bridge_pid_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, ValueError):
+            time.sleep(0.02)
+            continue
+        if "child_pid" in value:
+            invocation = value
+            break
+        time.sleep(0.02)
+    if invocation is None:
+        caller.kill()
+        caller.wait(timeout=2)
+        pytest.fail("Model Inquiry bridge did not reach Codex CLI execution")
+
+    caller.kill()
+    caller.wait(timeout=2)
+    _assert_pids_exit(bridge_pid, invocation["pid"], invocation["child_pid"])
 
 
 def test_execution_is_ephemeral_pinned_bounded_and_single_target(
@@ -979,6 +1328,27 @@ def test_requested_reasoning_effort_must_be_declared_by_selected_model(
 
     assert error.value.failure_code == "model_unavailable"
     assert not trace.exists()
+
+
+def test_deeply_nested_profile_and_catalog_fail_with_typed_errors(
+    tmp_path: Path,
+) -> None:
+    nested_json = "[" * 1200 + "0" + "]" * 1200
+    profile_path = tmp_path / "deep-profile.json"
+    profile_path.write_text(nested_json, encoding="utf-8")
+
+    with pytest.raises(CodexCliError) as profile_error:
+        CodexCliSafeProfile.load(profile_path)
+    assert profile_error.value.failure_code == "unsupported_profile"
+
+    nested_catalog = (
+        b'{"models":' + b"[" * 1200 + b"0" + b"]" * 1200 + b"}"
+    )
+    with pytest.raises(CodexCliError) as catalog_error:
+        CodexCliExecutor._sanitize_model_catalog(
+            nested_catalog, model="gpt-5.6-luna"
+        )
+    assert catalog_error.value.failure_code == "tool_surface_unknown"
 
 
 def test_cli_self_replacement_is_confined_to_staged_snapshot(

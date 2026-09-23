@@ -1,8 +1,8 @@
 """Small stdlib-only guardian for one bounded Codex CLI process tree.
 
 This module is launched as an isolated Python script by ``codex_cli``. It stays
-alive if the request-owning process dies, and uses a parent-liveness pipe plus
-its own deadline to terminate the CLI process group.
+alive if the request-owning process dies, and uses parent/caller-liveness pipes
+plus its own deadline to terminate the CLI process group.
 """
 
 from __future__ import annotations
@@ -24,15 +24,17 @@ from typing import Any
 
 _MAX_STAGED_EXECUTABLE_BYTES = 256 * 1024 * 1024
 _MAX_COPY_FALLBACK_BYTES = 16 * 1024 * 1024
+_CHILD_REAP_GRACE_SECONDS = 1.0
 _FICLONE = 0x40049409
 
 
-def _write_status(fd: int, status: dict[str, Any]) -> None:
+def _write_status(fd: int, status: dict[str, Any]) -> bool:
     try:
         payload = json.dumps(status, separators=(",", ":")).encode("utf-8") + b"\n"
-        os.write(fd, payload[:4096])
+        bounded_payload = payload[:4096]
+        return os.write(fd, bounded_payload) == len(bounded_payload)
     except OSError:
-        pass
+        return False
 
 
 def _kill_group(pgid: int) -> None:
@@ -41,6 +43,15 @@ def _kill_group(pgid: int) -> None:
     except ProcessLookupError:
         pass
     except PermissionError:
+        pass
+
+
+def _kill_child_and_group(pid: int) -> None:
+    """Kill the owned group and its leader, including before setsid succeeds."""
+    _kill_group(pid)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -56,6 +67,26 @@ def _reap(pid: int) -> int | None:
     if os.WIFSIGNALED(status):
         return -os.WTERMSIG(status)
     return 1
+
+
+def _reap_bounded(pid: int, timeout_seconds: float = _CHILD_REAP_GRACE_SECONDS) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _reap(pid) is not None:
+            return
+        time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+
+
+def _liveness_fds(args: argparse.Namespace) -> list[int]:
+    fds = [args.parent_fd]
+    if args.caller_liveness_fd >= 0:
+        fds.append(args.caller_liveness_fd)
+    return fds
+
+
+def _liveness_lost(fds: list[int]) -> bool:
+    readable, _, _ = select.select(fds, [], [], 0)
+    return bool(readable)
 
 
 def _identity_from_stat(value: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -181,6 +212,21 @@ def _run(args: argparse.Namespace) -> int:
     if not command or os.name != "posix" or not hasattr(os, "fork"):
         _write_status(args.status_fd, {"kind": "unsupported"})
         return 0
+    if args.caller_liveness_fd < -1 or args.caller_liveness_fd in {
+        args.parent_fd,
+        args.status_fd,
+    }:
+        _write_status(args.status_fd, {"kind": "unsupported"})
+        return 0
+    if args.caller_liveness_fd >= 0:
+        try:
+            caller_pipe = os.fstat(args.caller_liveness_fd)
+        except OSError:
+            _write_status(args.status_fd, {"kind": "unsupported"})
+            return 0
+        if not stat.S_ISFIFO(caller_pipe.st_mode):
+            _write_status(args.status_fd, {"kind": "unsupported"})
+            return 0
 
     try:
         expected = tuple(json.loads(args.expected_identity))
@@ -240,12 +286,23 @@ def _run(args: argparse.Namespace) -> int:
             _write_status(args.status_fd, {"kind": "limit_unavailable"})
             return 0
 
+    deadline = time.monotonic() + max(1, args.timeout_ms) / 1000
     start_read_fd, start_write_fd = os.pipe()
+    try:
+        ready_read_fd, ready_write_fd = os.pipe()
+    except OSError:
+        os.close(start_read_fd)
+        os.close(start_write_fd)
+        _remove_staged_executable(staged_executable)
+        _write_status(args.status_fd, {"kind": "unsupported"})
+        return 0
     try:
         child_pid = os.fork()
     except OSError:
         os.close(start_read_fd)
         os.close(start_write_fd)
+        os.close(ready_read_fd)
+        os.close(ready_write_fd)
         _remove_staged_executable(staged_executable)
         _write_status(args.status_fd, {"kind": "unsupported"})
         return 0
@@ -253,11 +310,21 @@ def _run(args: argparse.Namespace) -> int:
     if child_pid == 0:
         try:
             os.close(start_write_fd)
+            os.close(ready_read_fd)
             os.setsid()
+            if os.write(ready_write_fd, b"\x01") != 1:
+                os._exit(127)
+            os.close(ready_write_fd)
             if os.read(start_read_fd, 1) != b"\x01":
                 os._exit(127)
             os.close(start_read_fd)
-            for fd in (args.parent_fd, args.status_fd):
+            for fd in (
+                args.parent_fd,
+                args.caller_liveness_fd,
+                args.status_fd,
+            ):
+                if fd < 0:
+                    continue
                 try:
                     os.close(fd)
                 except OSError:
@@ -267,19 +334,75 @@ def _run(args: argparse.Namespace) -> int:
             os._exit(127)
 
     os.close(start_read_fd)
-    _write_status(
-        args.status_fd,
-        {"kind": "started", "process_group": child_pid},
-    )
+    start_read_fd = -1
+    os.close(ready_write_fd)
+    ready_write_fd = -1
+    liveness_fds = _liveness_fds(args)
     try:
-        os.write(start_write_fd, b"\x01")
-    except OSError:
-        _kill_group(child_pid)
-    finally:
-        os.close(start_write_fd)
+        # Do not announce or release the CLI until the child has successfully
+        # created its session/process group. Watch both cancellation channels
+        # during this handshake so cancellation cannot be lost in the fork to
+        # setsid window.
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill_child_and_group(child_pid)
+                _reap_bounded(child_pid)
+                _write_status(args.status_fd, {"kind": "timeout"})
+                return 0
+            if _liveness_lost(liveness_fds):
+                _kill_child_and_group(child_pid)
+                _reap_bounded(child_pid)
+                _write_status(args.status_fd, {"kind": "parent_lost"})
+                return 0
+            readable, _, _ = select.select(
+                [ready_read_fd, *liveness_fds], [], [], min(remaining, 0.05)
+            )
+            if any(fd in liveness_fds for fd in readable):
+                _kill_child_and_group(child_pid)
+                _reap_bounded(child_pid)
+                _write_status(args.status_fd, {"kind": "parent_lost"})
+                return 0
+            if ready_read_fd in readable:
+                ready = os.read(ready_read_fd, 1)
+                if ready != b"\x01":
+                    _kill_child_and_group(child_pid)
+                    _reap_bounded(child_pid)
+                    _write_status(args.status_fd, {"kind": "unsupported"})
+                    return 0
+                break
+        os.close(ready_read_fd)
+        ready_read_fd = -1
 
-    deadline = time.monotonic() + args.timeout_ms / 1000
-    try:
+        # Check cancellation again at the release boundary. Once released, the
+        # group is known to exist; later cancellation kills both its group and
+        # leader, so a missed group signal cannot strand the pre-exec child.
+        if _liveness_lost(liveness_fds):
+            _kill_child_and_group(child_pid)
+            _reap_bounded(child_pid)
+            _write_status(args.status_fd, {"kind": "parent_lost"})
+            return 0
+        if not _write_status(
+            args.status_fd,
+            {"kind": "started", "process_group": child_pid},
+        ):
+            _kill_child_and_group(child_pid)
+            _reap_bounded(child_pid)
+            return 0
+        if _liveness_lost(liveness_fds):
+            _kill_child_and_group(child_pid)
+            _reap_bounded(child_pid)
+            _write_status(args.status_fd, {"kind": "parent_lost"})
+            return 0
+        try:
+            os.write(start_write_fd, b"\x01")
+        except OSError:
+            _kill_child_and_group(child_pid)
+            _reap_bounded(child_pid)
+            return 0
+        os.close(start_write_fd)
+        start_write_fd = -1
+
         while True:
             returncode = _reap(child_pid)
             if returncode is not None:
@@ -294,27 +417,39 @@ def _run(args: argparse.Namespace) -> int:
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _kill_group(child_pid)
-                try:
-                    os.waitpid(child_pid, 0)
-                except ChildProcessError:
-                    pass
+                _kill_child_and_group(child_pid)
+                _reap_bounded(child_pid)
                 _write_status(args.status_fd, {"kind": "timeout"})
                 return 0
 
             readable, _, _ = select.select(
-                [args.parent_fd], [], [], min(remaining, 0.05)
+                liveness_fds, [], [], min(remaining, 0.05)
             )
-            if readable and os.read(args.parent_fd, 1) == b"":
-                _kill_group(child_pid)
-                try:
-                    os.waitpid(child_pid, 0)
-                except ChildProcessError:
-                    pass
+            if readable:
+                _kill_child_and_group(child_pid)
+                _reap_bounded(child_pid)
                 _write_status(args.status_fd, {"kind": "parent_lost"})
                 return 0
     finally:
-        for fd in (executable_fd, args.parent_fd, args.status_fd):
+        for fd in (
+            start_read_fd,
+            start_write_fd,
+            ready_read_fd,
+            ready_write_fd,
+        ):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        for fd in (
+            executable_fd,
+            args.parent_fd,
+            args.caller_liveness_fd,
+            args.status_fd,
+        ):
+            if fd < 0:
+                continue
             try:
                 os.close(fd)
             except OSError:
@@ -325,6 +460,7 @@ def _run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent-fd", type=int, required=True)
+    parser.add_argument("--caller-liveness-fd", type=int, default=-1)
     parser.add_argument("--status-fd", type=int, required=True)
     parser.add_argument("--timeout-ms", type=int, required=True)
     parser.add_argument("--file-limit", type=int, default=0)

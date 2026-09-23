@@ -56,6 +56,7 @@ def run_perspective(
     output_schema_ref: str,
     *,
     environment: Mapping[str, str] | None = None,
+    caller_liveness_fd: int | None = None,
 ) -> dict[str, Any]:
     if output_schema_ref != OUTPUT_SCHEMA_REF:
         raise SystemExit(CODEX_FAILURE_EXIT_CODES["schema_violation"])
@@ -111,6 +112,7 @@ def run_perspective(
             process_group_mode="inherited",
             environment=source,
             execution_timeout_seconds=COMMAND_TIMEOUT_SECONDS,
+            caller_liveness_fd=caller_liveness_fd,
         ).execute(
             model=model,
             reasoning_effort=reasoning_effort,
@@ -143,6 +145,7 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--reasoning-effort", required=True, choices=REASONING_EFFORTS)
     parser.add_argument("--output-schema-ref", required=True)
+    parser.add_argument("--caller-liveness-fd", type=int)
     args = parser.parse_args()
     if args.output_schema_ref != OUTPUT_SCHEMA_REF:
         parser.error(f"unsupported output schema reference: {args.output_schema_ref}")
@@ -155,6 +158,7 @@ def main() -> int:
                 args.model,
                 args.reasoning_effort,
                 args.output_schema_ref,
+                caller_liveness_fd=args.caller_liveness_fd,
             ),
             ensure_ascii=False,
             sort_keys=True,

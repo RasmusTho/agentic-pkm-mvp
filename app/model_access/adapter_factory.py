@@ -39,6 +39,12 @@ _CODEX_CLI_CAPABILITY_CEILING = {
     "system_prompt_channel": True,
     "deterministic_execution": False,
 }
+_TRUSTED_INSTRUCTION_CHANNELS: dict[
+    str, Literal["system", "developer_instructions"]
+] = {
+    "profile.codex_developer_prompt_v1": "developer_instructions",
+    "profile.instructions_separate_v1": "system",
+}
 
 
 class _StrictConfig(BaseModel):
@@ -162,6 +168,11 @@ class ModelAccessAdapterFactory:
         census_model = next((item for item in census_provider.models if item.id == model), None)
         if census_model is None or "chat" not in census_provider.kinds:
             raise AdapterRegistryError("resolved chat model is not declared for this provider")
+        trusted_channel = _TRUSTED_INSTRUCTION_CHANNELS.get(
+            declaration.instruction_mapping_ref
+        )
+        if trusted_channel is None:
+            raise AdapterRegistryError("adapter instruction-channel mapping is unsupported")
 
         declared = {
             name: bool(
@@ -193,7 +204,7 @@ class ModelAccessAdapterFactory:
             authentication_scheme=declaration.authentication_scheme,
             trusted_instruction_mapping=TrustedInstructionMapping(
                 mapping_ref=declaration.instruction_mapping_ref,
-                trusted_channel="developer_instructions",
+                trusted_channel=trusted_channel,
                 untrusted_channel="user",
             ),
         )

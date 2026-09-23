@@ -104,7 +104,11 @@ subscription session and is never copied into intent or receipts. Fixture tests 
 catalog and CLI arguments are neutralized. The last-message file is limited by an OS file-size
 ceiling during execution, process-group cleanup also runs when the CLI leader exits before a
 redirected descendant, and an independent supervisor cancels the CLI process group when its caller
-dies or its own deadline expires. The executable is opened and identity-checked, cloned into a
+dies or its own deadline expires. Model Inquiry's local-command adapter passes a one-way
+caller-liveness pipe through the compatibility bridge to the guardian, so killing the original
+Inquiry runner also stops inference instead of leaving the bridge alive until its inner deadline.
+Status-pipe descriptors are closed on EOF; deeply nested safe-profile/catalog JSON maps to typed
+preflight failures. The executable is opened and identity-checked, cloned into a
 short-lived sibling snapshot in its resolved installation `bin` directory (copy-on-write on APFS),
 and executed from that snapshot to preserve `current_exe()` resource discovery. The path snapshot
 prevents a source-path replacement from substituting another binary. Requested reasoning effort must be

@@ -105,6 +105,7 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
             descriptor["provider"],
             descriptor["model"],
         )
+        assert adapter.propagate_caller_liveness is True
         argv = list(adapter.argv)
         assert argv[argv.index("--model") + 1] == descriptor["model"]
         assert argv[argv.index("--perspective") + 1] == perspective

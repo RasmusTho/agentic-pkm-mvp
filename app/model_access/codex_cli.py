@@ -549,7 +549,7 @@ class CodexCliSafeProfile:
                 path.read_text(encoding="utf-8"),
                 object_pairs_hook=_unique_json_object,
             )
-        except (OSError, ValueError, UnicodeError) as exc:
+        except (OSError, ValueError, UnicodeError, RecursionError) as exc:
             raise CodexCliError("unsupported_profile") from exc
         if not isinstance(raw, dict):
             raise CodexCliError("unsupported_profile")
@@ -585,6 +585,7 @@ class CodexCliExecutor:
         execution_timeout_seconds: float = 1200.0,
         max_output_bytes: int = 1_000_000,
         max_input_bytes: int = 2_000_000,
+        caller_liveness_fd: int | None = None,
     ) -> None:
         self._safe_profile_path = (
             Path(safe_profile_path) if safe_profile_path is not None else None
@@ -598,6 +599,11 @@ class CodexCliExecutor:
         self._execution_timeout_seconds = execution_timeout_seconds
         self._max_output_bytes = max_output_bytes
         self._max_input_bytes = max_input_bytes
+        if caller_liveness_fd is not None and (
+            type(caller_liveness_fd) is not int or caller_liveness_fd < 0
+        ):
+            raise ValueError("Codex CLI caller-liveness descriptor is invalid")
+        self._caller_liveness_fd = caller_liveness_fd
         if min(
             preflight_timeout_seconds,
             execution_timeout_seconds,
@@ -724,7 +730,12 @@ class CodexCliExecutor:
                 object_pairs_hook=_unique_json_object,
                 parse_constant=_reject_json_constant,
             )
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+            RecursionError,
+        ) as exc:
             raise CodexCliError("tool_surface_unknown") from exc
         if not isinstance(catalog, dict) or set(catalog) != {"models"}:
             raise CodexCliError("tool_surface_unknown")
@@ -994,6 +1005,11 @@ class CodexCliExecutor:
             raise CodexCliError("unsupported_profile")
         if max_file_bytes is not None and max_file_bytes <= 0:
             raise CodexCliError("unsupported_profile")
+        if self._caller_liveness_fd is not None:
+            try:
+                os.fstat(self._caller_liveness_fd)
+            except OSError as exc:
+                raise CodexCliError("unsupported_profile") from exc
         stdin_context = tempfile.TemporaryFile()
         process: subprocess.Popen[bytes] | None = None
         selector = selectors.DefaultSelector()
@@ -1034,6 +1050,12 @@ class CodexCliExecutor:
                     str(_PROCESS_SUPERVISOR_PATH),
                     "--parent-fd",
                     str(parent_read_fd),
+                    "--caller-liveness-fd",
+                    str(
+                        self._caller_liveness_fd
+                        if self._caller_liveness_fd is not None
+                        else -1
+                    ),
                     "--status-fd",
                     str(status_write_fd),
                     "--timeout-ms",
@@ -1058,7 +1080,15 @@ class CodexCliExecutor:
                     ),
                     shell=False,
                     start_new_session=True,
-                    pass_fds=(parent_read_fd, status_write_fd),
+                    pass_fds=(
+                        (parent_read_fd, status_write_fd)
+                        if self._caller_liveness_fd is None
+                        else (
+                            parent_read_fd,
+                            status_write_fd,
+                            self._caller_liveness_fd,
+                        )
+                    ),
                 )
             except FileNotFoundError as exc:
                 raise CodexCliError("cli_missing") from exc
@@ -1082,6 +1112,8 @@ class CodexCliExecutor:
                         chunk = os.read(status_read_fd, 4096)
                         if not chunk:
                             selector.unregister(key.fileobj)
+                            os.close(status_read_fd)
+                            status_read_fd = -1
                             status_read_open = False
                             if terminal_status is None:
                                 self._kill_process_group(cli_process_group)
