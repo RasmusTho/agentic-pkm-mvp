@@ -155,6 +155,26 @@ _UNRESOLVED = "\x00unresolved\x00"
 #: exemption is not currently hiding one.
 SEPARATE_SCHEMA_PLANES = ("app/builderops", "app/dispatcher")
 
+# One precisely shaped model-executor invocation is not SQL. Keep this
+# exception narrower than a module/subtree exemption: the inventory below
+# binds it to the Product Codex completion helper, its receiver, and its full
+# keyword-only adapter signature. The companion architecture test asserts the
+# observed count stays at one.
+_CODEX_MODEL_EXECUTE_PATH = "app/model_access/codex_executor_service.py"
+_CODEX_MODEL_EXECUTE_FUNCTION = "_codex_complete"
+_CODEX_MODEL_EXECUTE_RECEIVER = "executor"
+_CODEX_MODEL_EXECUTE_KEYWORDS = frozenset(
+    {
+        "model",
+        "reasoning_effort",
+        "developer_instructions",
+        "user_prompt",
+        "output_schema_ref",
+        "output_schema",
+        "literal_system_role_required",
+    }
+)
+
 #: The one environment variable that turns create-on-demand on. Every
 #: autocreate gate in this repository reads it, and a "gate" that does not
 #: is not one.
@@ -1538,6 +1558,8 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
             if name not in {"execute", "executemany", "_exec", "execute_values"}:
                 continue
             func = resolver.enclosing_function(node)
+            if _is_bounded_codex_model_execute(relative, func, node):
+                continue
             if _reaches_durable_database(relative, resolver, func) is not durable_source:
                 continue
             resolved = False
@@ -1561,6 +1583,42 @@ def _statement_sites(*, durable_source: bool) -> tuple[str, ...]:
                 ) or "<no arguments>"
                 sites.append(f"{relative}:{node.lineno} {name}({rendered})")
     return tuple(sites)
+
+
+def _is_bounded_codex_model_execute(
+    relative_path: str,
+    func: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    node: ast.Call,
+) -> bool:
+    """Whether this is the single declared non-SQL Codex model operation."""
+    called = node.func
+    return (
+        relative_path == _CODEX_MODEL_EXECUTE_PATH
+        and func is not None
+        and func.name == _CODEX_MODEL_EXECUTE_FUNCTION
+        and isinstance(called, ast.Attribute)
+        and called.attr == "execute"
+        and isinstance(called.value, ast.Name)
+        and called.value.id == _CODEX_MODEL_EXECUTE_RECEIVER
+        and not node.args
+        and {keyword.arg for keyword in node.keywords} == _CODEX_MODEL_EXECUTE_KEYWORDS
+    )
+
+
+def codex_model_execute_call_count() -> int:
+    """Observed count of the exact, bounded non-SQL Codex execution call."""
+    path = REPO_ROOT / _CODEX_MODEL_EXECUTE_PATH
+    resolver = _resolver(path)
+    return sum(
+        1
+        for node in ast.walk(resolver.tree)
+        if isinstance(node, ast.Call)
+        and _is_bounded_codex_model_execute(
+            _CODEX_MODEL_EXECUTE_PATH,
+            resolver.enclosing_function(node),
+            node,
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
