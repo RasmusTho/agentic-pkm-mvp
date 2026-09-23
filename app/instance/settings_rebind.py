@@ -642,6 +642,8 @@ class SettingsRebindActivation:
         if current.candidate_binding_id == candidate_binding_id:
             if current.phase in {"dormant", "no_lifecycle", "cancelled"}:
                 if current.phase == "no_lifecycle":
+                    if default_change is None:
+                        current = self._commit_uncommitted_selection(current, selection)
                     return self._reload_if_needed(current, candidate_root)
                 return current
             if current.phase == "committed":
@@ -715,6 +717,29 @@ class SettingsRebindActivation:
         self._wait_for_completed_if_enabled(committed)
         committed = self._reload_if_needed(committed, candidate_root)
         return committed
+
+    def _commit_uncommitted_selection(
+        self,
+        record: SettingsRebindRecord,
+        selection: KnownVaultRef | None,
+    ) -> SettingsRebindRecord:
+        """Commit a no_lifecycle candidate whose selection never became durable.
+
+        A revision can reach ``no_lifecycle`` without its foreground selection
+        commit when the requesting call timed out before a late acknowledgement
+        (#5644). Re-selecting that candidate must finish the commit rather than
+        report success while the picker history still names no vault.
+        """
+
+        if selection is None or record.candidate_binding_id is None:
+            return record
+        if self.store._registry.load().last_active_vault_ref == selection.ref:
+            return record
+        with compatibility_ingress_window(self.store._registry, transition=True):
+            return self.store.commit_selection(
+                desired_revision=record.desired_revision,
+                selection=selection,
+            )
 
     def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
         if self.watcher_enabled:

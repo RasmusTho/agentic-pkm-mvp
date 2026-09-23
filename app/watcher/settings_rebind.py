@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from app.instance.errors import RegistryError
 from app.instance.filesystem_identity import (
+    FilesystemIdentityError,
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
@@ -181,7 +182,9 @@ class RebindScanReceipt:
 @dataclass(frozen=True)
 class SettingsRebindWatcherReceipt:
     desired_revision: int
-    prior_binding_id: str
+    # ``None`` only for a first adoption: the env-root watcher already scans
+    # the candidate root, which then serves as its own old root (#5644).
+    prior_binding_id: str | None
     candidate_binding_id: str | None
     stage: str
     buffer: tuple[BufferedObservation, ...]
@@ -265,7 +268,7 @@ class SettingsRebindWatcherReceipt:
                 raise RegistryError("settings rebind watcher receipt revisions disagree")
         return cls(
             desired_revision=desired_revision,
-            prior_binding_id=_required_text(
+            prior_binding_id=_optional_text(
                 value["priorBindingId"], name="prior binding"
             ),
             candidate_binding_id=_required_text(
@@ -369,6 +372,11 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind record is not installed")
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
         if record.phase == "cancelled":
+            if record.candidate_binding_id is None and record.prior_binding_id is None:
+                # A cancelled first selection restores the never-bound
+                # posture. Like ``dormant``, it must not disable an env-root
+                # watcher that was scanning before the attempt (#5644).
+                return RebindCycle(record=record, mode="dormant", receipt=None)
             return RebindCycle(record=record, mode="stable", receipt=None)
         if record.phase == "dormant":
             return RebindCycle(record=record, mode="dormant", receipt=None)
@@ -387,6 +395,15 @@ class DormantSettingsRebindReconciler:
                 mode="no_lifecycle",
                 receipt=None,
             )
+        if record.prior_binding_id is None and not self._is_first_adoption_of_configured_root(
+            snapshot, record, cfg
+        ):
+            if record.phase == "prepared":
+                # No old root to bracket and the candidate is not the root this
+                # watcher scans. Refuse without acknowledging; the API times
+                # out and cancels, and the watcher keeps its current root.
+                return RebindCycle(record=record, mode="refused", receipt=None)
+            raise RegistryError("settings rebind watcher prior binding is missing")
         self._validate_record_bindings(record)
         if record.phase == "prepared":
             self._validate_old_root(snapshot, record, cfg)
@@ -444,9 +461,7 @@ class DormantSettingsRebindReconciler:
             _rebind_fault_point("acknowledge")
             receipt = SettingsRebindWatcherReceipt(
                 desired_revision=cycle.record.desired_revision,
-                prior_binding_id=self._required_binding(
-                    cycle.record.prior_binding_id, name="prior"
-                ),
+                prior_binding_id=cycle.record.prior_binding_id,
                 candidate_binding_id=self._required_binding(
                     cycle.record.candidate_binding_id, name="candidate"
                 ),
@@ -533,7 +548,7 @@ class DormantSettingsRebindReconciler:
         if not receipt_path.exists():
             return None
         receipt = load_settings_rebind_watcher_receipt(receipt_path)
-        expected_prior = self._required_binding(record.prior_binding_id, name="prior")
+        expected_prior = record.prior_binding_id
         expected_candidate = record.candidate_binding_id
         if (
             receipt.desired_revision != record.desired_revision
@@ -549,8 +564,11 @@ class DormantSettingsRebindReconciler:
         record: SettingsRebindRecord,
         cfg: RegistryConfig,
     ) -> None:
+        # A first adoption has no prior binding; begin_cycle only admits it
+        # when the candidate is the configured root, so the candidate is the
+        # old root the handoff brackets.
         prior = DormantSettingsRebindReconciler._required_binding(
-            record.prior_binding_id, name="prior"
+            record.prior_binding_id or record.candidate_binding_id, name="prior"
         )
         registration = snapshot.registrations.get(prior)
         if registration is None:
@@ -561,11 +579,32 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind watcher is not bound to the durable prior root")
 
     @staticmethod
+    def _is_first_adoption_of_configured_root(
+        snapshot: RegistrySnapshot,
+        record: SettingsRebindRecord,
+        cfg: RegistryConfig,
+    ) -> bool:
+        """Return True when a never-bound record selects the root already watched."""
+
+        if record.prior_binding_id is not None or record.candidate_binding_id is None:
+            return False
+        registration = snapshot.registrations.get(record.candidate_binding_id)
+        if registration is None:
+            return False
+        try:
+            configured = resolve_filesystem_root_identity(cfg.vault_path)
+            candidate = resolve_filesystem_root_identity(registration.path)
+        except FilesystemIdentityError:
+            return False
+        return same_filesystem_root(configured, candidate)
+
+    @staticmethod
     def _validate_record_bindings(record: SettingsRebindRecord) -> None:
-        prior = DormantSettingsRebindReconciler._required_binding(
-            record.prior_binding_id, name="prior"
-        )
+        prior = record.prior_binding_id
         candidate = record.candidate_binding_id
+        if prior is None:
+            # begin_cycle has already restricted this to a first adoption.
+            return
         if candidate is not None and prior == candidate:
             raise RegistryError(
                 "settings rebind watcher requires distinct old and candidate bindings"
