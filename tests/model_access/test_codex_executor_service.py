@@ -15,6 +15,7 @@ from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import (
     create_codex_executor_app,
     require_loopback_bind_host,
+    serve_executor,
 )
 from app.model_access.ollama_http import OllamaHttpAdapter
 
@@ -136,6 +137,48 @@ def test_complete_requires_loopback_and_served_app_capability() -> None:
     assert require_loopback_bind_host("127.0.0.1") == "127.0.0.1"
     with pytest.raises(ValueError, match="loopback"):
         require_loopback_bind_host("0.0.0.0")
+
+
+def test_serve_executor_ignores_forwarded_client_ip_for_loopback_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uvicorn
+
+    app, codex, ollama = _app()
+    observed: dict[str, Any] = {}
+
+    def exercise_uvicorn(asgi_app: Any, **options: Any) -> None:
+        observed["options"] = options
+        config = uvicorn.Config(asgi_app, **options)
+        config.load()
+
+        async def send_request() -> httpx.Response:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(
+                    app=config.loaded_app, client=("127.0.0.1", 12345)
+                ),
+                base_url="http://127.0.0.1",
+            ) as client:
+                return await client.post(
+                    "/v1/complete",
+                    json=_payload(),
+                    headers={
+                        **CAPABILITY_HEADER,
+                        "X-Forwarded-For": "100.64.0.42",
+                    },
+                )
+
+        observed["response"] = asyncio.run(send_request())
+
+    monkeypatch.setattr(uvicorn, "run", exercise_uvicorn)
+    serve_executor(app, host="127.0.0.1", port=8787)
+
+    response = observed["response"]
+    assert observed["options"]["proxy_headers"] is False
+    assert response.status_code == 200
+    assert response.json()["content"] == "codex result"
+    assert len(codex.calls) == 1
+    assert len(ollama.calls) == 0
 
 
 def test_codex_complete_preserves_channels_and_rejects_tools() -> None:
@@ -324,3 +367,8 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
         {"role": "user", "content": "UNTRUSTED request"},
     ]
     assert sent["stream"] is False
+
+
+def test_ollama_endpoint_rejects_an_explicit_zero_port() -> None:
+    with pytest.raises(ValueError, match="host-local HTTP origin"):
+        OllamaHttpAdapter(base_url="http://127.0.0.1:0")

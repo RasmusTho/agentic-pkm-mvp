@@ -38,7 +38,7 @@ def _require_loopback_base_url(base_url: str) -> str:
             or parsed.path not in {"", "/"}
         ):
             raise ValueError("unsupported Ollama endpoint")
-        port = parsed.port or 11434
+        port = parsed.port if parsed.port is not None else 11434
         if not 1 <= port <= 65535:
             raise ValueError("unsupported Ollama port")
     except (TypeError, ValueError) as exc:

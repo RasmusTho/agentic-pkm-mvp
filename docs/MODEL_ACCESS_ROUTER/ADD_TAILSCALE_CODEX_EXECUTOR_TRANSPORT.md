@@ -38,9 +38,11 @@ The host service exposes only `/v1/complete`; docs, OpenAPI, health, catalog, an
 are disabled. It binds only to loopback and requires the configured Serve-forwarded
 `Tailscale-App-Capabilities` claim for `channel=product` and `actions=["complete"]`. It does not
 authorize from request-body claims or ordinary identity headers. Tailscale Serve 1.92 or later is
-required to forward app capabilities. No Funnel/public endpoint, direct LAN listener, shared bearer
-token, or unencrypted fallback is allowed. The grant, endpoint, Codex safe-profile path, CLI
-environment, and Ollama endpoint remain operator-owned host configuration, not Git policy.
+required to forward app capabilities. The Uvicorn runner disables proxy-header rewriting so the
+loopback guard sees the local Serve connection rather than the remote peer in `X-Forwarded-For`.
+No Funnel/public endpoint, direct LAN listener, shared bearer token, or unencrypted fallback is
+allowed. The grant, endpoint, Codex safe-profile path, CLI environment, and Ollama endpoint remain
+operator-owned host configuration, not Git policy.
 
 Bound request/response bytes, adapter concurrency, and execution time. Do not log prompts, output,
 capability claims, endpoint identity, or raw adapter output. The Product client uses verified HTTPS,

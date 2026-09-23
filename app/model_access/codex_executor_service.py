@@ -322,7 +322,17 @@ def serve_executor(app: FastAPI, *, host: str = "127.0.0.1", port: int = 8787) -
         raise ValueError("model executor port is invalid")
     import uvicorn
 
-    uvicorn.run(app, host=bind_host, port=port, access_log=False, log_level="warning")
+    # Tailscale Serve forwards the original peer in X-Forwarded-For. Keep the
+    # ASGI client address bound to the actual loopback connection: the app's
+    # loopback guard must not be rewritten to the remote tailnet peer.
+    uvicorn.run(
+        app,
+        host=bind_host,
+        port=port,
+        proxy_headers=False,
+        access_log=False,
+        log_level="warning",
+    )
 
 
 def _repository_root() -> Path:
