@@ -1,0 +1,37 @@
+{
+  "$description": "Yggdrasil Light \"Shell\" material: the neon city behind porcelain sheets. Apply the backdrop to the app frame, never behind body text.",
+  "tokens": {
+    "material-backdrop": {
+      "$value": "repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px), radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%), radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%), radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%), radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%), linear-gradient(120deg, #6a2bff, #1a0a2e 60%)",
+      "$type": "string"
+    },
+    "material-backdrop-size": {
+      "$value": "auto",
+      "$type": "dimension"
+    },
+    "material-glass": {
+      "$value": "rgba(10,8,24,0.74)",
+      "$type": "color"
+    },
+    "material-on-glass": {
+      "$value": "#ffffff",
+      "$type": "color"
+    },
+    "material-on-glass-2": {
+      "$value": "rgba(255,255,255,0.8)",
+      "$type": "color"
+    },
+    "material-sheet": {
+      "$value": "linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%)",
+      "$type": "string"
+    },
+    "material-rim-light": {
+      "$value": "-14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95)",
+      "$type": "shadow"
+    },
+    "material-chroma-split": {
+      "$value": "-1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55)",
+      "$type": "shadow"
+    }
+  }
+}

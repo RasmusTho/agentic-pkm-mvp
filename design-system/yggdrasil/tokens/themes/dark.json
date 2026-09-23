@@ -1,0 +1,190 @@
+{
+  "$description": "Yggdrasil Dark: the default theme. Every name and value is the v1 sheet, unchanged.",
+  "tokens": {
+    "bg-base": {
+      "$value": "#070b12",
+      "$type": "color",
+      "$description": "deepest — page root, near black with blue cast"
+    },
+    "bg-surface": {
+      "$value": "#0c1220",
+      "$type": "color",
+      "$description": "panels, sidebars"
+    },
+    "bg-raised": {
+      "$value": "#111a2e",
+      "$type": "color",
+      "$description": "cards, inputs, raised surfaces"
+    },
+    "bg-overlay": {
+      "$value": "#162038",
+      "$type": "color",
+      "$description": "hover states, popovers"
+    },
+    "bg-modal": {
+      "$value": "#0e1828",
+      "$type": "color",
+      "$description": "modal / dialog backdrop content"
+    },
+    "fg-1": {
+      "$value": "#dce8f0",
+      "$type": "color",
+      "$description": "primary — cool blue-white"
+    },
+    "fg-2": {
+      "$value": "#7a9ab8",
+      "$type": "color",
+      "$description": "secondary / muted"
+    },
+    "fg-3": {
+      "$value": "#3d5570",
+      "$type": "color",
+      "$description": "tertiary / disabled / dim"
+    },
+    "fg-inverse": {
+      "$value": "#070b12",
+      "$type": "color",
+      "$description": "text on light/accent backgrounds"
+    },
+    "border": {
+      "$value": "#152030",
+      "$type": "color",
+      "$description": "default — subtle grid line"
+    },
+    "border-strong": {
+      "$value": "#1e3050",
+      "$type": "color",
+      "$description": "emphasis — dividers, active edges"
+    },
+    "border-focus": {
+      "$value": "#00d4e8",
+      "$type": "color",
+      "$description": "focus ring — electric cyan"
+    },
+    "accent": {
+      "$value": "#d4a843",
+      "$type": "color",
+      "$description": "primary accent — active, focus, key affordances"
+    },
+    "accent-dim": {
+      "$value": "#80621a",
+      "$type": "color",
+      "$description": "dimmed gold"
+    },
+    "accent-muted": {
+      "$value": "#2a1e06",
+      "$type": "color",
+      "$description": "gold at low opacity"
+    },
+    "cyan": {
+      "$value": "#00d4e8",
+      "$type": "color",
+      "$description": "electric cyan — Tron primary glow"
+    },
+    "cyan-dim": {
+      "$value": "#007a8a",
+      "$type": "color",
+      "$description": "dimmed cyan"
+    },
+    "cyan-muted": {
+      "$value": "#001e28",
+      "$type": "color",
+      "$description": "cyan tint background"
+    },
+    "cyan-glow": {
+      "$value": "0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5)",
+      "$type": "shadow"
+    },
+    "vault": {
+      "$value": "#39e87d",
+      "$type": "color",
+      "$description": "vault-connected — electric green"
+    },
+    "vault-dim": {
+      "$value": "#1a7840",
+      "$type": "color",
+      "$description": "vault hover"
+    },
+    "vault-muted": {
+      "$value": "#041a10",
+      "$type": "color",
+      "$description": "vault background tint"
+    },
+    "vault-glow": {
+      "$value": "0 0 8px rgba(57,232,125,0.3)",
+      "$type": "shadow"
+    },
+    "agent": {
+      "$value": "#4a9eff",
+      "$type": "color",
+      "$description": "agent-contributed UI and content"
+    },
+    "agent-dim": {
+      "$value": "#1e5a9a",
+      "$type": "color",
+      "$description": "agent hover"
+    },
+    "agent-muted": {
+      "$value": "#051228",
+      "$type": "color",
+      "$description": "agent background tint"
+    },
+    "agent-glow": {
+      "$value": "0 0 8px rgba(74,158,255,0.3)",
+      "$type": "shadow"
+    },
+    "amber": {
+      "$value": "#f09030",
+      "$type": "color",
+      "$description": "warnings, uncommitted/staged state"
+    },
+    "amber-dim": {
+      "$value": "#805010",
+      "$type": "color"
+    },
+    "amber-muted": {
+      "$value": "#1a0e02",
+      "$type": "color"
+    },
+    "destructive": {
+      "$value": "#ff3d3d",
+      "$type": "color"
+    },
+    "destructive-dim": {
+      "$value": "#8a1a1a",
+      "$type": "color"
+    },
+    "destructive-muted": {
+      "$value": "#160404",
+      "$type": "color"
+    },
+    "color-bg": {
+      "$value": "var(--bg-base)",
+      "$type": "color"
+    },
+    "color-surface": {
+      "$value": "var(--bg-surface)",
+      "$type": "color"
+    },
+    "color-text": {
+      "$value": "var(--fg-1)",
+      "$type": "color"
+    },
+    "color-muted": {
+      "$value": "var(--fg-2)",
+      "$type": "color"
+    },
+    "color-dim": {
+      "$value": "var(--fg-3)",
+      "$type": "color"
+    },
+    "color-border": {
+      "$value": "var(--border)",
+      "$type": "color"
+    },
+    "color-accent": {
+      "$value": "var(--accent)",
+      "$type": "color"
+    }
+  }
+}

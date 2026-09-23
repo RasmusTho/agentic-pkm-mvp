@@ -1,0 +1,13 @@
+{
+  "$description": "Comfortable density: the v1 spacing plus control and row heights.",
+  "tokens": {
+    "control-height": {
+      "$value": "36px",
+      "$type": "dimension"
+    },
+    "row-height": {
+      "$value": "40px",
+      "$type": "dimension"
+    }
+  }
+}
