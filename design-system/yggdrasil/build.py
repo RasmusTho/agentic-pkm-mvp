@@ -34,6 +34,8 @@ CSS_OUTPUTS = (
 # Written inside companion-ui/companion-app/ so the Companion image (which copies
 # only that directory) serves it.
 TOKENS_CSS_OUTPUT = "companion-ui/companion-app/yggdrasil-tokens.css"
+# The same tokens-only sheet for the web Builder surfaces served from app/web/static.
+TOKENS_CSS_OUTPUTS = (TOKENS_CSS_OUTPUT, "app/web/static/yggdrasil-tokens.css")
 SWIFT_OUTPUT = "design-system/yggdrasil/dist/YggdrasilTokens.swift"
 JSON_OUTPUT = "design-system/yggdrasil/dist/tokens.json"
 
@@ -261,9 +263,10 @@ def render_all(src: dict[str, object] | None = None) -> dict[str, str]:
     src = src or load()
     css = render_css(src)
     outputs = {path: css for path in CSS_OUTPUTS}
-    outputs[TOKENS_CSS_OUTPUT] = render_css(src, include_base=False).replace(
+    tokens_only = render_css(src, include_base=False).replace(
         "— Colors & Type", "— Tokens only (no element defaults)", 1
     )
+    outputs.update({path: tokens_only for path in TOKENS_CSS_OUTPUTS})
     outputs[SWIFT_OUTPUT] = render_swift(src)
     outputs[JSON_OUTPUT] = json.dumps(flatten(src), indent=2, ensure_ascii=False) + "\n"
     return outputs
