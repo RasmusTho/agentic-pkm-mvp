@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Spacing" name="Density — comfortable and compact" subtitle="data-density · text-base 15/13px · control-height 36/28px · row-height 40/28px" viewport="700x250" -->
+<html lang="en">
+<head><meta charset="UTF-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+body { background: var(--bg-base); padding: 20px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.col { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-4); }
+.meta { font-family: var(--font-mono); font-size: 10px; color: var(--fg-2); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: var(--space-3); }
+.rowi { height: var(--row-height); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font-size: var(--text-base); color: var(--fg-1); }
+.rowi span { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-2); }
+.btn { margin-top: var(--space-3); height: var(--control-height); padding: 0 var(--space-4); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 500; background: transparent; color: var(--accent); border: 1px solid var(--accent-dim); border-radius: var(--radius-sm); }
+</style>
+</head>
+<body>
+  <div class="col" data-density="comfortable">
+    <div class="meta">Comfortable · Companion</div>
+    <div class="rowi">Q3 planning thread<span>2h</span></div>
+    <div class="rowi">Vault restructure<span>1d</span></div>
+    <button class="btn">New session</button>
+  </div>
+  <div class="col" data-density="compact">
+    <div class="meta">Compact · Builder dashboards</div>
+    <div class="rowi">#5628 Reconcile live system<span>ready</span></div>
+    <div class="rowi">#5631 Governance promotion<span>blocked</span></div>
+    <button class="btn">Refresh board</button>
+  </div>
+</body>
+</html>

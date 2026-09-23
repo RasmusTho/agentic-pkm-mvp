@@ -5,7 +5,7 @@ Owner: Companion UI / interaction model
 Temporal class: stable
 Review cadence: event-driven
 Source of truth: authoritative for the handoff chain
-Last reviewed: 2026-08-12
+Last reviewed: 2026-09-23
 Last verified against: companion-ui/design_handoff/, companion-ui/prompts/claude-design/README.md, companion-ui/prompts/claude-design/YGGDRASIL_HANDOFF_TEMPLATE.md, companion-ui/companion-app/colors_and_type.css, .codex/skills/yggdrasil-design-handoff/SKILL.md, docs/COMPANION_UI_PRODUCT_SPEC.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, companion-ui/design_handoff/2026-05-14-claude-design-package/README.md, companion-ui/design_handoff/2026-05-14-handoff-governance-pack/, companion-ui/design_handoff/2026-06-09-system-entry-point/, issue #901
 
 # Design Handoff Governance
@@ -203,6 +203,10 @@ a Crossing-B cleanup task.
 
 - Resolve the live Claude Design system by exact name through `list_design_systems`; the currently
   verified ID is `f2b13410-af14-4875-8029-445352123f57`.
+- Current reconciled state (YDS-02, #5628): system version `2.0.0` (`design-system/yggdrasil/VERSION`),
+  token SHA-256 `99120ff9bb29dc0b497cd09802cc2e6ea87dcd9814a1afdf22690126fa837243`, reconciled
+  2026-09-23 by reading the live `colors_and_type.css` back after the `/design-sync` upload. A live
+  or repo sheet with any other hash fails this gate until the next reconciliation records it here.
 - Select it at project creation. For an existing project that cannot express selection, attach its
   `SKILL.md`, `README.md`, exact `colors_and_type.css`, and relevant component/reference previews
   under `design-system/`, and include the binding prompt preamble.
