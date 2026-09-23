@@ -1379,8 +1379,10 @@ def test_enabled_static_root_watcher_refuses_first_selection_of_foreign_root(
 
     record = runtime.open_settings_rebind_store().read()
     assert record.phase == "cancelled"
+    assert record.lifecycle_posture == "dormant"
     assert record.candidate_binding_id is None
     assert runtime.registry.load().last_active_vault_ref is None
+    assert not _revision_receipt_path(tmp_path, record.desired_revision).exists()
 
     # A cancelled first selection restores the never-bound posture: the
     # env-root watcher keeps scanning A instead of disabling itself.
@@ -1434,3 +1436,128 @@ def test_stranded_no_lifecycle_first_selection_converges(
     assert result.reload_revision == result.desired_revision
     snapshot = runtime.registry.load()
     assert snapshot.last_active_vault_ref == snapshot.registrations["binding-a"].ref
+
+
+def test_first_adoption_stays_stable_when_env_root_changes_after_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#5644 review: a completed first adoption is not re-judged against a new env root."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, vault_a, vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    _run_watcher_while_waiting(monkeypatch, config_path)
+    SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=0.5,
+    ).activate(
+        selection=_selection_for(runtime, "binding-a"),
+        candidate_binding_id="binding-a",
+        candidate_root=vault_a,
+    )
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    if outbox_path.exists():
+        outbox_path.unlink()
+
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_b))
+    note = vault_a / "after-env-drift.md"
+    note.write_text("durable candidate wins\n", encoding="utf-8")
+    registry.run_registry_once(config_path)
+
+    heartbeat = json.loads(
+        (tmp_path / "watcher-heartbeat.json").read_text(encoding="utf-8")
+    )
+    assert heartbeat["vault_path"] == str(vault_a)
+    event_paths = _event_paths(tmp_path)
+    assert str(note) in event_paths
+    assert not any(path.startswith(str(vault_b)) for path in event_paths if path)
+
+
+def test_cancelled_selection_after_cleared_default_keeps_watcher_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#5644 review: only a never-bound cancel restores the env-root posture."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False
+    )
+    cleared = SettingsRebindRecord(
+        desired_revision=1,
+        applied_revision=1,
+        phase="committed",
+        lifecycle_posture="watcher",
+        prior_binding_id="binding-a",
+        candidate_binding_id=None,
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        cleared.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    activation = SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+    )
+    activation.store.prepare(candidate_binding_id="binding-b")
+    activation._cancel_before_commit(cleared, expected_candidate_binding_id="binding-b")
+
+    record = runtime.open_settings_rebind_store().read()
+    assert record.phase == "cancelled"
+    assert record.lifecycle_posture == "watcher"
+    reconciler = DormantSettingsRebindReconciler(
+        registry_path=runtime.registry.path,
+        state_dir=tmp_path / "watcher-state",
+    )
+    cfg = registry.load_registry_config(config_path)
+    assert reconciler.begin_cycle(cfg).mode == "stable"
+
+
+def test_stranded_no_lifecycle_default_set_commits_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#5644 review: a default SET on the stranded record commits the default."""
+    from app.instance.settings_rebind import SettingsRebindActivation
+
+    runtime, _vault_a, _vault_b, config_path = _first_selection_fixture(
+        tmp_path, monkeypatch
+    )
+    stranded = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=2,
+        phase="no_lifecycle",
+        lifecycle_posture="no_lifecycle",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=0,
+        scalar_drain_revision=2,
+    )
+    runtime.registry.set_settings_rebind_state(
+        stranded.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    _run_watcher_while_waiting(monkeypatch, config_path)
+
+    result = SettingsRebindActivation(
+        runtime.registry,
+        watcher_state_dir=tmp_path / "watcher-state",
+        watcher_enabled=True,
+        wait_timeout_seconds=0.5,
+    ).activate_default(
+        binding_id="binding-a",
+        provenance="explicit_default_command",
+        capability=STORAGE_MUTATION_CAPABILITY,
+    )
+
+    assert result.reload_revision == result.desired_revision
+    snapshot = runtime.registry.load()
+    assert snapshot.default_vault_binding_id == "binding-a"
+    assert snapshot.last_active_vault_ref is None

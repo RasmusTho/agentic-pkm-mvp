@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, replace
@@ -35,6 +36,8 @@ if TYPE_CHECKING:
     from app.watcher.registry import RegistryConfig
     from app.watcher.state import WatcherState
 
+
+logger = logging.getLogger(__name__)
 
 SETTINGS_REBIND_WATCHER_SCHEMA = "settings_rebind_watcher.v1"
 SETTINGS_REBIND_WATCHER_FILENAME_TEMPLATE = "settings-rebind-watcher-r{revision}.json"
@@ -372,7 +375,7 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind record is not installed")
         record = SettingsRebindRecord.from_payload(snapshot.settings_rebind)
         if record.phase == "cancelled":
-            if record.candidate_binding_id is None and record.prior_binding_id is None:
+            if record.lifecycle_posture == "dormant":
                 # A cancelled first selection restores the never-bound
                 # posture. Like ``dormant``, it must not disable an env-root
                 # watcher that was scanning before the attempt (#5644).
@@ -395,6 +398,13 @@ class DormantSettingsRebindReconciler:
                 mode="no_lifecycle",
                 receipt=None,
             )
+        if record.phase == "committed" and record.prior_binding_id is None:
+            # A completed first adoption is stable state like any completed
+            # handoff: the durable candidate wins over a later env root, so it
+            # must not be re-judged against the configured root.
+            receipt = self._load_matching_receipt(record)
+            if receipt is not None and receipt.stage == "completed":
+                return RebindCycle(record=record, mode="stable", receipt=receipt)
         if record.prior_binding_id is None and not self._is_first_adoption_of_configured_root(
             snapshot, record, cfg
         ):
@@ -402,6 +412,11 @@ class DormantSettingsRebindReconciler:
                 # No old root to bracket and the candidate is not the root this
                 # watcher scans. Refuse without acknowledging; the API times
                 # out and cancels, and the watcher keeps its current root.
+                logger.warning(
+                    "settings rebind watcher refused first selection revision=%s: "
+                    "candidate is not the configured watcher root",
+                    record.desired_revision,
+                )
                 return RebindCycle(record=record, mode="refused", receipt=None)
             raise RegistryError("settings rebind watcher prior binding is missing")
         self._validate_record_bindings(record)

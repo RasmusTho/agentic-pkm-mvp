@@ -91,6 +91,9 @@ _PHASE_POSTURES = {
     "no_lifecycle": "no_lifecycle",
     "cancelled": "watcher",
 }
+# A cancelled first selection keeps ``dormant`` posture so an env-root watcher
+# can tell "never bound" from a cleared default, which also has no binding (#5644).
+_EXTRA_PHASE_POSTURES = {"cancelled": frozenset({"dormant"})}
 
 
 def _checksum(payload: Mapping[str, object]) -> str:
@@ -173,7 +176,10 @@ class SettingsRebindRecord:
         posture = value.get("lifecyclePosture")
         if not isinstance(phase, str) or phase not in _PHASE_POSTURES:
             raise RegistryError("settings rebind record has an invalid phase")
-        if posture != _PHASE_POSTURES[phase]:
+        if not isinstance(posture, str) or (
+            posture != _PHASE_POSTURES[phase]
+            and posture not in _EXTRA_PHASE_POSTURES.get(phase, ())
+        ):
             raise RegistryError("settings rebind phase and lifecycle posture disagree")
         if phase == "dormant" and (desired != 0 or applied != 0):
             raise RegistryError("dormant settings rebind revisions must be zero")
@@ -614,11 +620,14 @@ class SettingsRebindActivation:
                 or current.candidate_binding_id != expected_candidate_binding_id
             ):
                 return
+            never_bound = prior.phase == "dormant" or (
+                prior.phase == "cancelled" and prior.lifecycle_posture == "dormant"
+            )
             cancelled = replace(
                 current,
                 applied_revision=current.desired_revision,
                 phase="cancelled",
-                lifecycle_posture="watcher",
+                lifecycle_posture="dormant" if never_bound else "watcher",
                 prior_binding_id=prior.candidate_binding_id,
                 candidate_binding_id=prior.candidate_binding_id,
                 reload_revision=current.desired_revision,
@@ -642,8 +651,9 @@ class SettingsRebindActivation:
         if current.candidate_binding_id == candidate_binding_id:
             if current.phase in {"dormant", "no_lifecycle", "cancelled"}:
                 if current.phase == "no_lifecycle":
-                    if default_change is None:
-                        current = self._commit_uncommitted_selection(current, selection)
+                    current = self._commit_uncommitted_selection(
+                        current, selection, default_change=default_change
+                    )
                     return self._reload_if_needed(current, candidate_root)
                 return current
             if current.phase == "committed":
@@ -722,6 +732,8 @@ class SettingsRebindActivation:
         self,
         record: SettingsRebindRecord,
         selection: KnownVaultRef | None,
+        *,
+        default_change: tuple[str | None, str | None] | None,
     ) -> SettingsRebindRecord:
         """Commit a no_lifecycle candidate whose selection never became durable.
 
@@ -733,12 +745,24 @@ class SettingsRebindActivation:
 
         if selection is None or record.candidate_binding_id is None:
             return record
-        if self.store._registry.load().last_active_vault_ref == selection.ref:
-            return record
         with compatibility_ingress_window(self.store._registry, transition=True):
+            current = self.store.read()
+            if (
+                current.phase != "no_lifecycle"
+                or current.desired_revision != record.desired_revision
+                or current.candidate_binding_id != record.candidate_binding_id
+            ):
+                return current
+            snapshot = self.store._registry.load()
+            if default_change is None:
+                if snapshot.last_active_vault_ref == selection.ref:
+                    return current
+            elif snapshot.default_vault_binding_id == default_change[0]:
+                return current
             return self.store.commit_selection(
-                desired_revision=record.desired_revision,
+                desired_revision=current.desired_revision,
                 selection=selection,
+                default_change=default_change,
             )
 
     def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
