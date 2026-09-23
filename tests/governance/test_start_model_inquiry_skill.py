@@ -287,18 +287,70 @@ else:
     assert "OPENAI_API_KEY" not in serialized
 
 
-def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
+def test_subscription_adapter_uses_shared_codex_executor_and_resolved_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     spec = importlib.util.spec_from_file_location("model_inquiry_subscription_adapter", SUBSCRIPTION_ADAPTER)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/fixtures/{name}")
+    from app.model_access.codex_cli import CodexCliResult
 
-    sol_argv = module.build_argv("configured-sol-model", "high")
+    calls: dict[str, object] = {}
+    response = {
+        "schema_version": module.OUTPUT_SCHEMA_REF,
+        "stance": "draft",
+        "content": "safe result",
+        "claims": [],
+        "risks": [],
+        "blocking_questions": [],
+        "reviewed_artifact_refs": [],
+        "accepted_artifact_hash": None,
+    }
+
+    class FakeExecutor:
+        def __init__(self, **init_kwargs):
+            calls["init"] = init_kwargs
+
+        def execute(self, **kwargs):
+            calls["execute"] = kwargs
+            return CodexCliResult(
+                response_text=json.dumps(response),
+                cli_version="codex-cli 0.99.0",
+                safe_profile_ref="profile.codex_cli_no_tools_v2",
+            )
+
+    monkeypatch.setattr(module, "CodexCliExecutor", FakeExecutor)
+    output = module.run_perspective(
+        {
+            "system_prompt": "trusted policy text",
+            "question": "untrusted caller question",
+            "reviewed_artifact_refs": [],
+        },
+        "synthesis",
+        "configured-sol-model",
+        "high",
+        module.OUTPUT_SCHEMA_REF,
+        environment={
+            "PATH": "/fixture/bin",
+            "HOME": "/fixture/home",
+            "CODEX_CLI_SAFE_PROFILE_PATH": "/fixture/profile.json",
+        },
+    )
 
     assert module.COMMAND_TIMEOUT_SECONDS == 1200
-    assert sol_argv[sol_argv.index("-c") + 1] == 'model_reasoning_effort="high"'
-    assert sol_argv[sol_argv.index("--model") + 1] == "configured-sol-model"
+    assert output == response
+    execute_kwargs = calls["execute"]
+    assert execute_kwargs["model"] == "configured-sol-model"
+    assert execute_kwargs["reasoning_effort"] == "high"
+    assert execute_kwargs["output_schema_ref"] == module.OUTPUT_SCHEMA_REF
+    assert "trusted policy text" in execute_kwargs["developer_instructions"]
+    assert "untrusted caller question" not in execute_kwargs["developer_instructions"]
+    assert json.loads(execute_kwargs["user_prompt"]) == {
+        "question": "untrusted caller question",
+        "reviewed_artifact_refs": [],
+    }
+    assert calls["init"]["execution_timeout_seconds"] == 1200
 
 
 def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
@@ -306,12 +358,16 @@ def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/fixtures/{name}")
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(module.subprocess.TimeoutExpired(args[0], 1200)),
-    )
+    from app.model_access.codex_cli import CodexCliError
+
+    class TimedOutExecutor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def execute(self, **_kwargs):
+            raise CodexCliError("command_timeout")
+
+    monkeypatch.setattr(module, "CodexCliExecutor", TimedOutExecutor)
 
     with pytest.raises(SystemExit) as raised:
         module.run_perspective(
@@ -320,6 +376,7 @@ def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
             "configured-sol-model",
             "xhigh",
             module.OUTPUT_SCHEMA_REF,
+            environment={"CODEX_CLI_SAFE_PROFILE_PATH": "/fixture/profile.json"},
         )
 
     assert raised.value.code == module.TIMEOUT_EXIT_CODE

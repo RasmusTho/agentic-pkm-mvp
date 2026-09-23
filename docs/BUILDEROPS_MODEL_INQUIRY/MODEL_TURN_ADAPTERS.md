@@ -10,10 +10,15 @@ can_parallelize_with: []
 ---
 
 State: Implemented. Model Inquiry uses explicit `single_target` acceptance over one provider-neutral capability
-declared in the provider census. The current operational profile enables only the Codex subscription
-transport; that temporary configuration is not a permanent provider, model, or capability architecture.
-Future provider/model changes require declared configuration plus an explicitly registered compatible
-transport; Fable/GPT references remain compatibility/provenance only.
+declared in the provider census. The configured `codex_subscription` name is a compatibility alias for
+the shared bounded Codex CLI executor, not a separate transport implementation. The exact-version
+no-tools profile is host-local and is not supplied by this repository; without it, the bridge fails
+closed before inference. Model Inquiry remains fallback-forbidden. Future provider/model changes require
+declared configuration plus an explicitly registered compatible transport; Fable/GPT references remain
+compatibility/provenance only.
+
+The current operational profile remains Codex-only by declared configuration; that temporary profile
+is not a permanent provider, model, or capability architecture.
 
 # Model Turn Adapters
 
@@ -64,13 +69,36 @@ This outcome is deliberately distinct from `consensus`. It must never be inferre
 fingerprints, a failed second adapter, or a fallback. A provider failure, malformed output, refusal,
 missing credential, or persistence failure remains a typed terminal failure and cannot be promoted.
 
-The operational subscription bridge is the declared `codex_subscription` transport for the current
-Model Inquiry capability. It receives the resolver-selected model and never selects another provider/model.
+The operational subscription bridge is the declared `codex_subscription` compatibility alias for the
+shared `app.model_access.codex_cli.CodexCliExecutor`. It receives the resolver-selected model and never
+selects another provider/model. It passes trusted instruction text through Codex CLI's separate
+`developer_instructions` configuration and caller content through stdin; it does not flatten those
+channels or claim literal system-role equivalence. The executor checks the exact CLI version, required
+CLI flags, and login status, then uses ephemeral read-only execution in a fresh empty directory. It
+strictly validates the response schema whether or not that CLI build supports `--output-schema`.
 Active v2 single-target execution does not use an alternate adapter as fallback; a provider/command
 failure is terminal `provider_error`, never `degraded_consensus`, and cannot become ready or
 promotable. Legacy v1 records remain readable and deterministic, but legacy execution is not
 reactivated through the configured path. The desktop
 launcher invokes the host-local launcher once; it does not retry the inquiry.
+
+The host must set `CODEX_CLI_SAFE_PROFILE_PATH` to a local JSON profile with the exact installed
+`codex --version`, `profile.codex_cli_no_tools_v2`, the reviewed tool-surface and model-catalog schema
+versions, and whether `--output-schema` is supported. Its strict JSON keys are `schema_version`
+(`codex-cli-safe-profile.v2`), `profile_ref`, `cli_version`, `output_schema_supported`,
+`tool_surface_catalog_version`, and `model_catalog_schema_version`; additional keys are rejected.
+The profile is an exact-version review
+reference, not a caller-supplied list that can attest its own completeness. Before each inference,
+the executor reads `codex debug models --bundled`, rejects an unknown catalog shape or missing exact
+model slug, and writes a temporary sanitized catalog that disables model-derived tool modes,
+shell/patch/search, Node REPL, app/plugin/skill instructions, experimental tools, and multi-agent
+fields. It also applies the closed CLI configuration gates and never exposes raw catalog metadata in
+receipts or diagnostics. Unknown CLI versions, flags, catalog fields, or missing profiles fail closed
+before inference. The profile contains no credential and must not be committed; this code change does
+not create or activate it on a Mac host. `CODEX_HOME` may remain host-local for the existing
+subscription session and is never copied into intent or receipts. Fixture tests prove the effective
+catalog and CLI arguments are neutralized; the designated-host acceptance is still required before
+activation.
 
 ## Credentials and host boundary
 

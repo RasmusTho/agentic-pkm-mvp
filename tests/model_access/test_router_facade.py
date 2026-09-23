@@ -93,10 +93,16 @@ class _Resolver:
 class _Registry:
     def __init__(self, descriptors: dict[str, ModelAccessAdapterDescriptor]) -> None:
         self.descriptors = descriptors
-        self.lookups: list[str] = []
+        self.lookups: list[tuple[str, str, str]] = []
 
-    def describe(self, adapter_id: str) -> ModelAccessAdapterDescriptor:
-        self.lookups.append(adapter_id)
+    def describe(
+        self,
+        adapter_id: str,
+        *,
+        provider: str,
+        model: str,
+    ) -> ModelAccessAdapterDescriptor:
+        self.lookups.append((adapter_id, provider, model))
         return self.descriptors[adapter_id]
 
 
@@ -235,7 +241,10 @@ def test_product_and_builder_profiles_resolve_without_policy_leakage() -> None:
     assert builder_resolver.calls == [
         ("builder", "builder.model_inquiry", "builder.model_inquiry")
     ]
-    assert registry.lookups == ["product-openai", "builder-codex-subscription"]
+    assert registry.lookups == [
+        ("product-openai", "openai", "gpt-5.6-sol"),
+        ("builder-codex-subscription", "openai", "gpt-5.6-sol"),
+    ]
     assert product_route.transport_id == "openai_api"
     assert product_route.caller_profile == "profile.product_runtime"
     assert product_route.preflight_status == "not_run"
@@ -512,7 +521,9 @@ def test_facade_rejects_fallback_provenance_that_mismatches_selected_route(
     if mismatch in {"identity", "degradation"}:
         assert registry.lookups == []
     else:
-        assert registry.lookups == ["selected-adapter"]
+        assert registry.lookups == [
+            ("selected-adapter", "openai", "gpt-5.6-sol")
+        ]
 
 
 def test_facade_rejects_capabilities_not_attested_by_adapter() -> None:

@@ -44,7 +44,11 @@ class ModelAccessRouter:
         resolved = ResolvedModelAccess(**resolver_result.model_dump())
         validate_resolved_group((request,), (resolved,))
 
-        descriptor = self._adapter_registry.describe(resolved.adapter_id)
+        descriptor = self._adapter_registry.describe(
+            resolved.adapter_id,
+            provider=resolved.provider,
+            model=resolved.model,
+        )
         if descriptor.adapter_id != resolved.adapter_id:
             raise ValueError("adapter registry descriptor does not match resolved adapter")
         if (descriptor.provider, descriptor.model) != (resolved.provider, resolved.model):

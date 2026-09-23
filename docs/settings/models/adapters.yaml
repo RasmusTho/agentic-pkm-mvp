@@ -1,0 +1,56 @@
+version: 1
+adapters:
+  - id: codex_cli
+    provider: openai
+    model_source: provider_census
+    transport_id: codex_cli
+    supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: false}
+    execution_host_profile: profile.codex_local_cli
+    execution_boundary: local_subprocess
+    authentication_scheme: local_subscription_session
+    instruction_mapping_ref: profile.codex_developer_prompt_v1
+  - id: ollama_http
+    provider: ollama
+    model_source: provider_census
+    transport_id: ollama_http
+    supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: false}
+    execution_host_profile: profile.ollama_local_http
+    execution_boundary: local_http
+    authentication_scheme: none
+    instruction_mapping_ref: profile.instructions_separate_v1
+  - id: openai_api
+    provider: openai
+    model_source: provider_census
+    transport_id: openai_api
+    supported_capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true, deterministic_execution: false}
+    execution_host_profile: profile.openai_provider_api
+    execution_boundary: provider_https
+    authentication_scheme: provider_credential_ref
+    instruction_mapping_ref: profile.instructions_separate_v1
+  - id: anthropic_api
+    provider: anthropic
+    model_source: provider_census
+    transport_id: anthropic_api
+    supported_capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true, deterministic_execution: false}
+    execution_host_profile: profile.anthropic_provider_api
+    execution_boundary: provider_https
+    authentication_scheme: provider_credential_ref
+    instruction_mapping_ref: profile.instructions_separate_v1
+  - id: deepseek_api
+    provider: deepseek
+    model_source: provider_census
+    transport_id: deepseek_api
+    supported_capabilities: {structured_output: false, native_tools: false, system_prompt_channel: false, deterministic_execution: false}
+    execution_host_profile: profile.deepseek_provider_api
+    execution_boundary: provider_https
+    authentication_scheme: provider_credential_ref
+    instruction_mapping_ref: profile.instructions_separate_v1
+  - id: mock
+    provider: mock
+    model_source: provider_census
+    transport_id: mock
+    supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: true}
+    execution_host_profile: profile.mock_in_process
+    execution_boundary: in_process
+    authentication_scheme: none
+    instruction_mapping_ref: profile.instructions_separate_v1

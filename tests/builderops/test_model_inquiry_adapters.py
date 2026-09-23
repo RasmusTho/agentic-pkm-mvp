@@ -148,6 +148,32 @@ def test_subscription_adapter_uses_resolved_target_profile() -> None:
         load_operational_adapters(env, resolver=resolver)
 
 
+def test_codex_subscription_alias_preserves_no_fallback_contract(tmp_path: Path) -> None:
+    env = {
+        **intent_env(),
+        "BUILDEROPS_MODEL_INQUIRY_OPERATIONAL_SUBSCRIPTION": "1",
+        "HOME": str(tmp_path),
+    }
+    env.pop("CODEX_CLI_SAFE_PROFILE_PATH", None)
+    resolver = adapters_module.BuilderModelAccessResolver.from_declared_sources(env=env)
+    selected, config, resolution = adapters_module.resolve_inquiry_target(
+        env, resolver=resolver
+    )
+    target_intent = selected.model_inquiry_profile(config.channel).target_intent
+    adapters = load_operational_adapters(env, resolver=resolver)
+
+    assert selected.model_inquiry_profile(config.channel).operational_transport == (
+        "codex_subscription"
+    )
+    assert target_intent.fallback_requirement == "fallback_forbidden"
+    assert set(adapters) == {"synthesis", "verification"}
+    assert all(adapter.model == resolution.model for adapter in adapters.values())
+    for adapter in adapters.values():
+        with pytest.raises(AdapterExecutionError) as error:
+            adapter.execute({"system_prompt": "trusted", "question": "user"})
+        assert error.value.failure_class == "unsupported_profile"
+
+
 def test_operational_transport_rejects_incompatible_provider() -> None:
     env = {
         **intent_env(),

@@ -145,6 +145,14 @@ def test_kernel_exposes_exactly_the_adr0063_contracts() -> None:
             "unexpected_adapter_error",
             "credential_unavailable",
             "session_expired",
+            "cli_missing",
+            "authentication_unavailable",
+            "cli_version_unsupported",
+            "tool_surface_unknown",
+            "unsupported_profile",
+            "model_unavailable",
+            "schema_violation",
+            "input_oversize",
         }
     )
 
