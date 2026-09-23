@@ -65,7 +65,11 @@ _MODEL = {
     "slug": "gpt-5.6-luna",
     "support_verbosity": True,
     "supported_in_api": True,
-    "supported_reasoning_levels": ["low", "medium", "high"],
+    "supported_reasoning_levels": [
+        {"effort": "low"},
+        {"effort": "medium"},
+        {"effort": "high"},
+    ],
     "supports_experimental_context": True,
     "supports_image_detail_original": True,
     "supports_search_tool": True,
@@ -114,7 +118,7 @@ def _fake_cli(
     *,
     trace_path: Path,
     version: str = "codex-cli 0.99.0",
-    login_output: str = "Logged in with ChatGPT",
+    login_output: str = "Logged in using ChatGPT",
     login_exit: int = 0,
     help_output: str = _HELP,
     response: str = '{"answer":"ok"}',
@@ -123,8 +127,10 @@ def _fake_cli(
     execution_delay_seconds: float = 0,
     execution_stdout_bytes: int = 0,
     spawn_child: bool = False,
+    redirect_child_stdio: bool = False,
     crash_parent: bool = False,
     replace_self_during_catalog: bool = False,
+    minimal_trace: bool = False,
 ) -> Path:
     script = f"""#!{sys.executable}
 import json
@@ -154,6 +160,14 @@ elif args == ["debug", "models", "--bundled"]:
         os.replace(replacement, __file__)
 else:
     trace = Path({str(trace_path)!r})
+    if {minimal_trace!r}:
+        count_path = trace.with_suffix(trace.suffix + ".count")
+        count = int(count_path.read_text(encoding="utf-8")) if count_path.exists() else 0
+        count_path.write_text(str(count + 1), encoding="utf-8")
+        trace.write_text(json.dumps({{"pid": os.getpid()}}), encoding="utf-8")
+        output_path = Path(args[args.index("--output-last-message") + 1])
+        output_path.write_text({response!r}, encoding="utf-8")
+        raise SystemExit({execution_exit})
     count_path = trace.with_suffix(trace.suffix + ".count")
     count = int(count_path.read_text(encoding="utf-8")) if count_path.exists() else 0
     count_path.write_text(str(count + 1), encoding="utf-8")
@@ -166,11 +180,14 @@ else:
         "cwd_entries": sorted(item.name for item in Path.cwd().iterdir()),
     }}
     if {spawn_child!r}:
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL if {redirect_child_stdio!r} else None,
+            stderr=subprocess.DEVNULL if {redirect_child_stdio!r} else None,
+        )
         record["child_pid"] = child.pid
     trace.write_text(json.dumps(record), encoding="utf-8")
     output_path = Path(args[args.index("--output-last-message") + 1])
-    output_path.write_text({response!r}, encoding="utf-8")
     config_values = [args[index + 1] for index, item in enumerate(args[:-1]) if item == "-c"]
     model_catalog_config = next(item.split("=", 1)[1] for item in config_values if item.startswith("model_catalog_json="))
     safe_catalog_path = Path(json.loads(model_catalog_config))
@@ -187,6 +204,7 @@ else:
         for descriptor in safe_catalog["models"]
     ]
     trace.write_text(json.dumps(record), encoding="utf-8")
+    output_path.write_text({response!r}, encoding="utf-8")
     if {crash_parent!r}:
         os.kill(os.getppid(), signal.SIGKILL)
     if {execution_delay_seconds!r}:
@@ -316,6 +334,35 @@ def test_preflight_classifies_cli_auth_and_version_failures(tmp_path: Path) -> N
         _executor(no_auth, home=home).preflight(model="gpt-5.6-luna")
     assert error.value.failure_code == "authentication_unavailable"
 
+    api_key_dir = tmp_path / "api-key-auth"
+    api_key_dir.mkdir()
+    api_key_auth = _fake_cli(
+        api_key_dir / "codex",
+        trace_path=tmp_path / "api-key-auth-trace.json",
+        login_output="Logged in using an API key - synthetic-redacted-key",
+    )
+    with pytest.raises(CodexCliError) as error:
+        _executor(api_key_auth, home=home).execute(
+            model="gpt-5.6-luna",
+            reasoning_effort="low",
+            developer_instructions="developer",
+            user_prompt="user",
+        )
+    assert error.value.failure_code == "authentication_unavailable"
+    assert not (tmp_path / "api-key-auth-trace.json").exists()
+    assert "synthetic-redacted-key" not in str(error.value)
+
+    subscription_dir = tmp_path / "subscription-auth"
+    subscription_dir.mkdir()
+    subscription_auth = _fake_cli(
+        subscription_dir / "codex",
+        trace_path=tmp_path / "subscription-auth-trace.json",
+    )
+    preflight = _executor(subscription_auth, home=home).preflight(
+        model="gpt-5.6-luna"
+    )
+    assert preflight.authentication_status == "chatgpt_subscription"
+
     version_dir = tmp_path / "wrong-version"
     version_dir.mkdir()
     wrong_version = _fake_cli(
@@ -393,6 +440,29 @@ def test_execution_timeout_and_cli_failure_are_terminal_and_redacted(
     assert (tmp_path / "chatty-trace.json.count").read_text() == "1"
 
 
+def test_exit_cleanup_kills_descendant_with_redirected_output(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "success-with-child.json"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        spawn_child=True,
+        redirect_child_stdio=True,
+    )
+
+    result = _executor(binary, home=home).execute(
+        model="gpt-5.6-luna",
+        reasoning_effort="low",
+        developer_instructions="developer",
+        user_prompt="user",
+    )
+
+    assert result.response_text == '{"answer":"ok"}'
+    invocation = json.loads(trace.read_text(encoding="utf-8"))
+    _assert_pids_exit(invocation["pid"], invocation["child_pid"])
+
+
 def test_execution_is_ephemeral_pinned_bounded_and_single_target(
     tmp_path: Path,
 ) -> None:
@@ -407,10 +477,10 @@ def test_execution_is_ephemeral_pinned_bounded_and_single_target(
     binary = _fake_cli(
         tmp_path / "codex",
         trace_path=trace,
-        response="x" * 2000,
+        response="x" * 65536,
         catalog_output=json.dumps(bundled_catalog),
     )
-    executor = _executor(binary, home=home, max_output_bytes=1024)
+    executor = _executor(binary, home=home, max_output_bytes=32768)
 
     with pytest.raises(CodexCliError) as error:
         executor.execute(
@@ -515,6 +585,46 @@ def test_schema_support_and_strict_validation_fallback(tmp_path: Path) -> None:
             output_schema=_SCHEMA,
         )
     assert error.value.failure_code == "schema_violation"
+
+    for nonstandard_constant in ("NaN", "Infinity", "-Infinity"):
+        invalid_constant = _fake_cli(
+            tmp_path / f"codex-invalid-{nonstandard_constant.replace('-', 'minus')}",
+            trace_path=tmp_path / f"invalid-{nonstandard_constant.replace('-', 'minus')}.json",
+            response=nonstandard_constant,
+        )
+        with pytest.raises(CodexCliError) as error:
+            _executor(invalid_constant, home=home).execute(
+                model="gpt-5.6-luna",
+                reasoning_effort="medium",
+                developer_instructions="developer",
+                user_prompt="user",
+                output_schema_ref="json-number.v1",
+                output_schema={"type": "number"},
+            )
+        assert error.value.failure_code == "schema_violation"
+
+
+def test_response_file_is_hard_limited_during_execution(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "oversized-response.json"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        response="x" * 8192,
+        minimal_trace=True,
+    )
+
+    with pytest.raises(CodexCliError) as error:
+        _executor(binary, home=home, max_output_bytes=1024).execute(
+            model="gpt-5.6-luna",
+            reasoning_effort="low",
+            developer_instructions="developer",
+            user_prompt="user",
+        )
+
+    assert error.value.failure_code == "stdout_oversize"
+    assert (tmp_path / "oversized-response.json.count").read_text() == "1"
 
 
 def test_trusted_instruction_and_user_content_use_separate_channels(
@@ -637,6 +747,30 @@ def test_catalog_schema_drift_and_unknown_model_fail_before_model_execution(
         )
     assert error.value.failure_code == "tool_surface_unknown"
     assert not trace.exists()
+
+    for case in ("missing_required_field", "wrong_scalar_type", "wrong_nested_type"):
+        malformed = _catalog()
+        descriptor = malformed["models"][0]
+        if case == "missing_required_field":
+            descriptor.pop("description")
+        elif case == "wrong_scalar_type":
+            descriptor["context_window"] = "128000"
+        else:
+            descriptor["supported_reasoning_levels"] = ["low", "medium"]
+        malformed_binary = _fake_cli(
+            tmp_path / f"codex-{case}",
+            trace_path=trace,
+            catalog_output=json.dumps(malformed),
+        )
+        with pytest.raises(CodexCliError) as error:
+            _executor(malformed_binary, home=home).execute(
+                model="gpt-5.6-luna",
+                reasoning_effort="low",
+                developer_instructions="developer",
+                user_prompt="user",
+            )
+        assert error.value.failure_code == "tool_surface_unknown"
+        assert not trace.exists()
 
 
 def test_cli_executable_replacement_during_preflight_fails_before_execution(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -12,6 +13,7 @@ import selectors
 import signal
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, IO, Literal
@@ -23,13 +25,12 @@ SAFE_PROFILE_REF = "profile.codex_cli_no_tools_v2"
 TOOL_SURFACE_CATALOG_VERSION = "codex_cli_tool_surfaces.v2"
 MODEL_CATALOG_SCHEMA_VERSION = "codex_cli_model_catalog.v1"
 _MAX_BUNDLED_CATALOG_BYTES = 2_000_000
-_MODEL_DESCRIPTOR_KEYS = frozenset(
+_MODEL_DESCRIPTOR_REQUIRED_KEYS = frozenset(
     {
         "additional_speed_tiers",
         "apply_patch_tool_type",
         "availability_nux",
         "base_instructions",
-        "comp_hash",
         "context_window",
         "default_reasoning_level",
         "default_reasoning_summary",
@@ -44,9 +45,6 @@ _MODEL_DESCRIPTOR_KEYS = frozenset(
         "input_modalities",
         "max_context_window",
         "model_messages",
-        "model_specialty",
-        "multi_agent_reasoning_effort",
-        "multi_agent_version",
         "node_repl_auto_review_required",
         "node_repl_disabled",
         "priority",
@@ -59,13 +57,72 @@ _MODEL_DESCRIPTOR_KEYS = frozenset(
         "supports_experimental_context",
         "supports_image_detail_original",
         "supports_search_tool",
-        "tool_mode",
         "truncation_policy",
         "upgrade",
         "use_responses_lite",
         "visibility",
         "web_search_tool_type",
     }
+)
+_MODEL_DESCRIPTOR_OPTIONAL_KEYS = frozenset(
+    {
+        "comp_hash",
+        "model_specialty",
+        "multi_agent_reasoning_effort",
+        "multi_agent_version",
+        "tool_mode",
+    }
+)
+_MODEL_DESCRIPTOR_KEYS = (
+    _MODEL_DESCRIPTOR_REQUIRED_KEYS | _MODEL_DESCRIPTOR_OPTIONAL_KEYS
+)
+_MODEL_DESCRIPTOR_STRING_FIELDS = frozenset(
+    {
+        "base_instructions",
+        "default_reasoning_level",
+        "default_reasoning_summary",
+        "default_verbosity",
+        "description",
+        "display_name",
+        "model_specialty",
+        "multi_agent_reasoning_effort",
+        "multi_agent_version",
+        "slug",
+        "visibility",
+    }
+)
+_MODEL_DESCRIPTOR_INTEGER_FIELDS = frozenset(
+    {
+        "context_window",
+        "effective_context_window_percent",
+        "max_context_window",
+        "priority",
+    }
+)
+_MODEL_DESCRIPTOR_BOOLEAN_FIELDS = frozenset(
+    {
+        "include_apps_usage_instructions",
+        "include_plugin_usage_instructions",
+        "include_skills_usage_instructions",
+        "node_repl_auto_review_required",
+        "node_repl_disabled",
+        "support_verbosity",
+        "supported_in_api",
+        "supports_experimental_context",
+        "supports_image_detail_original",
+        "supports_search_tool",
+        "use_responses_lite",
+    }
+)
+_MODEL_DESCRIPTOR_STRING_LIST_FIELDS = frozenset(
+    {
+        "additional_speed_tiers",
+        "experimental_supported_tools",
+        "input_modalities",
+    }
+)
+_MODEL_DESCRIPTOR_OBJECT_LIST_FIELDS = frozenset(
+    {"service_tiers", "supported_reasoning_levels"}
 )
 _DISABLED_CONFIG: tuple[tuple[str, Any], ...] = (
     ("agents.enabled", False),
@@ -128,6 +185,22 @@ _REQUIRED_EXEC_FLAGS = (
     "--output-last-message",
     "--sandbox",
 )
+_FILE_SIZE_LIMIT_LAUNCHER = """
+import json
+import os
+import resource
+import sys
+
+target = sys.argv[1]
+expected = tuple(json.loads(sys.argv[2]))
+limit = int(sys.argv[3])
+stat = os.stat(target)
+actual = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+if actual != expected:
+    raise SystemExit(125)
+resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+os.execve(target, [target, *sys.argv[4:]], os.environ)
+"""
 _ENVIRONMENT_ALLOWLIST = frozenset(
     {"PATH", "HOME", "CODEX_HOME", "TMPDIR", "LANG", "LC_ALL", "NO_COLOR"}
 )
@@ -153,6 +226,94 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError("duplicate JSON object key")
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _is_json_value(value: Any, *, depth: int = 0) -> bool:
+    if depth > 32:
+        return False
+    if value is None or type(value) in {str, bool, int}:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_json_value(item, depth=depth + 1) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_json_value(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
+    keys = set(descriptor)
+    if not _MODEL_DESCRIPTOR_REQUIRED_KEYS.issubset(keys):
+        return False
+    if not keys.issubset(_MODEL_DESCRIPTOR_KEYS):
+        return False
+    if any(
+        not isinstance(descriptor[key], str)
+        for key in _MODEL_DESCRIPTOR_STRING_FIELDS.intersection(keys)
+    ):
+        return False
+    if any(
+        type(descriptor[key]) is not int
+        for key in _MODEL_DESCRIPTOR_INTEGER_FIELDS
+    ):
+        return False
+    if any(
+        type(descriptor[key]) is not bool
+        for key in _MODEL_DESCRIPTOR_BOOLEAN_FIELDS
+    ):
+        return False
+    if any(
+        not isinstance(descriptor[key], list)
+        or any(not isinstance(item, str) for item in descriptor[key])
+        for key in _MODEL_DESCRIPTOR_STRING_LIST_FIELDS
+    ):
+        return False
+    if any(
+        not isinstance(descriptor[key], list)
+        or any(not isinstance(item, dict) for item in descriptor[key])
+        for key in _MODEL_DESCRIPTOR_OBJECT_LIST_FIELDS
+    ):
+        return False
+    if not isinstance(descriptor["model_messages"], dict):
+        return False
+    if not isinstance(descriptor["truncation_policy"], dict):
+        return False
+    if descriptor["availability_nux"] is not None:
+        return False
+    if not isinstance(descriptor["apply_patch_tool_type"], str):
+        return False
+    if not isinstance(descriptor["shell_type"], str):
+        return False
+    if not isinstance(descriptor["web_search_tool_type"], str):
+        return False
+    if descriptor.get("comp_hash") is not None and not isinstance(
+        descriptor["comp_hash"], str
+    ):
+        return False
+    if descriptor.get("tool_mode") is not None and not isinstance(
+        descriptor["tool_mode"], str
+    ):
+        return False
+    if descriptor.get("upgrade") is not None and not isinstance(
+        descriptor["upgrade"], dict
+    ):
+        return False
+    if any(
+        isinstance(descriptor.get(key), int) and descriptor[key] < 0
+        for key in ("context_window", "max_context_window", "priority")
+    ):
+        return False
+    if not 0 <= descriptor["effective_context_window_percent"] <= 100:
+        return False
+    return all(_is_json_value(value) for value in descriptor.values())
 
 
 def _executable_identity(path: Path) -> tuple[int, int, int, int, int]:
@@ -262,7 +423,7 @@ class CodexCliSafeProfile:
 @dataclass(frozen=True)
 class CodexCliPreflight:
     cli_version: str
-    authentication_status: Literal["logged_in"]
+    authentication_status: Literal["chatgpt_subscription"]
     output_schema_supported: bool
     safe_profile_ref: str
 
@@ -370,7 +531,7 @@ class CodexCliExecutor:
         if any(marker in auth_text.lower() for marker in _SESSION_EXPIRED_MARKERS):
             raise CodexCliError("session_expired")
         if auth_result.returncode != 0 or not re.search(
-            r"\blogged[ -]in\b", auth_text, re.IGNORECASE
+            r"(?m)^\s*Logged in using ChatGPT\s*$", auth_text, re.IGNORECASE
         ):
             raise CodexCliError("authentication_unavailable")
 
@@ -397,7 +558,7 @@ class CodexCliExecutor:
         return (
             CodexCliPreflight(
                 cli_version=profile.cli_version,
-                authentication_status="logged_in",
+                authentication_status="chatgpt_subscription",
                 output_schema_supported=profile.output_schema_supported,
                 safe_profile_ref=profile.profile_ref,
             ),
@@ -412,6 +573,7 @@ class CodexCliExecutor:
             catalog = json.loads(
                 raw.decode("utf-8", errors="strict"),
                 object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
             )
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise CodexCliError("tool_surface_unknown") from exc
@@ -425,10 +587,8 @@ class CodexCliExecutor:
         selected_matches = 0
         safe_models: list[dict[str, Any]] = []
         for descriptor in models:
-            if (
-                not isinstance(descriptor, dict)
-                or "slug" not in descriptor
-                or not set(descriptor).issubset(_MODEL_DESCRIPTOR_KEYS)
+            if not isinstance(descriptor, dict) or not _valid_model_descriptor(
+                descriptor
             ):
                 raise CodexCliError("tool_surface_unknown")
             slug = descriptor.get("slug")
@@ -510,10 +670,16 @@ class CodexCliExecutor:
             )
             schema_path = root / "output.schema.json"
             if output_schema is not None and preflight.output_schema_supported:
-                schema_path.write_text(
-                    json.dumps(output_schema, ensure_ascii=False, sort_keys=True),
-                    encoding="utf-8",
-                )
+                try:
+                    schema_text = json.dumps(
+                        output_schema,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        allow_nan=False,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise CodexCliError("schema_violation") from exc
+                schema_path.write_text(schema_text, encoding="utf-8")
             env = self._child_environment(temp_root=root)
             try:
                 result = self._run_bounded(
@@ -523,15 +689,28 @@ class CodexCliExecutor:
                     timeout_seconds=self._execution_timeout_seconds,
                     environment=env,
                     expected_executable_identity=cli_identity,
+                    max_file_bytes=self._max_output_bytes,
                 )
             except CodexCliError:
                 raise
             if result.returncode != 0:
-                error_for_auth = result.stderr.decode(
-                    "utf-8", errors="replace"
-                )
+                if result.returncode == 125:
+                    raise CodexCliError("cli_version_unsupported")
+                error_text = result.stderr.decode("utf-8", errors="replace").lower()
+                if "file too large" in error_text or "file size limit" in error_text:
+                    raise CodexCliError("stdout_oversize")
+                try:
+                    output_was_limited = (
+                        output_path.stat().st_size >= self._max_output_bytes
+                    )
+                except OSError:
+                    output_was_limited = False
+                if output_was_limited or result.returncode == -getattr(
+                    signal, "SIGXFSZ", -1
+                ):
+                    raise CodexCliError("stdout_oversize")
                 if any(
-                    marker in error_for_auth.lower()
+                    marker in error_text
                     for marker in _SESSION_EXPIRED_MARKERS
                 ):
                     raise CodexCliError("session_expired")
@@ -556,6 +735,7 @@ class CodexCliExecutor:
                     payload = json.loads(
                         response_text,
                         object_pairs_hook=_unique_json_object,
+                        parse_constant=_reject_json_constant,
                     )
                     validate_schema_payload(output_schema_ref or "", output_schema, payload)
                 except (json.JSONDecodeError, UnicodeError, ValueError) as exc:
@@ -631,6 +811,7 @@ class CodexCliExecutor:
         environment: Mapping[str, str] | None = None,
         max_output_bytes: int | None = None,
         expected_executable_identity: tuple[int, int, int, int, int] | None = None,
+        max_file_bytes: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         input_bytes = None if input_text is None else input_text.encode("utf-8")
         if input_bytes is not None and len(input_bytes) > self._max_input_bytes:
@@ -658,8 +839,26 @@ class CodexCliExecutor:
                         raise CodexCliError("cli_missing") from exc
                     if current_identity != expected_executable_identity:
                         raise CodexCliError("cli_version_unsupported")
+                launch_argv = argv
+                if max_file_bytes is not None:
+                    if (
+                        expected_executable_identity is None
+                        or os.name != "posix"
+                        or max_file_bytes <= 0
+                    ):
+                        raise CodexCliError("unsupported_profile")
+                    launch_argv = [
+                        sys.executable,
+                        "-I",
+                        "-c",
+                        _FILE_SIZE_LIMIT_LAUNCHER,
+                        argv[0],
+                        json.dumps(expected_executable_identity),
+                        str(max_file_bytes),
+                        *argv[1:],
+                    ]
                 process = subprocess.Popen(
-                    argv,
+                    launch_argv,
                     cwd=cwd,
                     stdin=stdin_source,
                     stdout=subprocess.PIPE,
@@ -708,7 +907,7 @@ class CodexCliExecutor:
                 for stream in (process.stdout, process.stderr):
                     if stream is not None:
                         stream.close()
-                if process.poll() is None:
+                if self._process_group_mode == "isolated" or process.poll() is None:
                     self._terminate(process)
             stdin_context.close()
 

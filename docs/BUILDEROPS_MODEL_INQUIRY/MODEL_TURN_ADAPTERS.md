@@ -73,9 +73,11 @@ The operational subscription bridge is the declared `codex_subscription` compati
 shared `app.model_access.codex_cli.CodexCliExecutor`. It receives the resolver-selected model and never
 selects another provider/model. It passes trusted instruction text through Codex CLI's separate
 `developer_instructions` configuration and caller content through stdin; it does not flatten those
-channels or claim literal system-role equivalence. The executor checks the exact CLI version, required
-CLI flags, and login status, then uses ephemeral read-only execution in a fresh empty directory. It
-strictly validates the response schema whether or not that CLI build supports `--output-schema`.
+channels or claim literal system-role equivalence. The executor checks the exact CLI version and
+required CLI flags, and requires `codex login status` to report `Logged in using ChatGPT`; API-key,
+workload-identity, expired, and ambiguous auth modes are rejected. It then uses ephemeral read-only
+execution in a fresh empty directory. It strictly validates standards-compliant JSON whether or not
+that CLI build supports `--output-schema`.
 Active v2 single-target execution does not use an alternate adapter as fallback; a provider/command
 failure is terminal `provider_error`, never `degraded_consensus`, and cannot become ready or
 promotable. Legacy v1 records remain readable and deterministic, but legacy execution is not
@@ -89,16 +91,19 @@ versions, and whether `--output-schema` is supported. Its strict JSON keys are `
 `tool_surface_catalog_version`, and `model_catalog_schema_version`; additional keys are rejected.
 The profile is an exact-version review
 reference, not a caller-supplied list that can attest its own completeness. Before each inference,
-the executor reads `codex debug models --bundled`, rejects an unknown catalog shape or missing exact
-model slug, and writes a temporary sanitized catalog that disables model-derived tool modes,
+the executor reads `codex debug models --bundled`, validates each required descriptor field and type,
+rejects an unknown catalog shape or missing exact model slug, and writes a temporary sanitized
+catalog that disables model-derived tool modes,
 shell/patch/search, Node REPL, app/plugin/skill instructions, experimental tools, and multi-agent
 fields. It also applies the closed CLI configuration gates and never exposes raw catalog metadata in
 receipts or diagnostics. Unknown CLI versions, flags, catalog fields, or missing profiles fail closed
 before inference. The profile contains no credential and must not be committed; this code change does
 not create or activate it on a Mac host. `CODEX_HOME` may remain host-local for the existing
 subscription session and is never copied into intent or receipts. Fixture tests prove the effective
-catalog and CLI arguments are neutralized; the designated-host acceptance is still required before
-activation.
+catalog and CLI arguments are neutralized. The last-message file is limited by an OS file-size
+ceiling during execution, process-group cleanup also runs when the CLI leader exits before a
+redirected descendant, and strict JSON validation rejects non-standard `NaN`/infinity constants.
+The designated-host acceptance is still required before activation.
 
 ## Credentials and host boundary
 
