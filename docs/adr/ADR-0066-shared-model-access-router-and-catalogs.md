@@ -24,6 +24,12 @@ Introduce a public ModelAccessRouter over the neutral llm_contract. It returns o
 
 The facade is policy-agnostic. Product calls supply Product policy; Builder calls supply Builder policy. It may adapt Product LLMTaskIntent and retain LLMRoute as a compatibility projection during migration, but the neutral kernel does not import Product routers, settings, BuilderOps, credentials, provider sessions, or runtime stores. Builder does not import the Product LLM router or fabric.
 
+The neutral request distinguishes a trusted instruction channel from a literal system-role requirement. A transport mapping trusted instructions to `developer_instructions` may satisfy only the former; a policy requiring the literal system role rejects that route.
+
+Fallback provenance retains the source and selected effective identity, source and selected transport, preflight cause, and the owner profile that authorized selection; the selected identity and policy authority must match the route, and a selected fallback is visibly degraded with a closed reason code. The facade records this evidence but does not choose a fallback.
+
+This remains a target-state decision for provider execution and caller adoption. MARR-01 delivers only the neutral route/provenance contracts and policy-agnostic composition seam; Product and Builder keep their current runtime paths until their separately gated adapter and migration slices land.
+
 ### D2 — Product reaches Codex CLI through a Tailscale-only macOS executor
 
 The Product runtime remains on its designated Linux/Tailscale hosts. It does not start a Codex

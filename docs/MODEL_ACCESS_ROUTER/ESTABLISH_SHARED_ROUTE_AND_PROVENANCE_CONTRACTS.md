@@ -20,6 +20,10 @@ Define the neutral route/result contract needed by one shared facade without tra
 
 Extend llm_contract with provider-neutral route provenance: exact transport_id, catalog snapshot reference/hash, preflight status, logical execution-host profile, execution-boundary/authentication scheme, logical caller profile, resolved capability set, trusted-instruction channel mapping, and capability/fallback provenance. None of these fields may contain a concrete hostname, endpoint, raw Tailscale identity/capability claim, secret, prompt, or CLI environment. Define a policy-agnostic ModelAccessRouter seam that accepts an owner resolver/profile and adapter registry. Keep Product LLMRoute as a compatibility projection and keep existing Builder resolution independent.
 
+Used fallback provenance identifies the original and selected effective targets, both transports, the preflight reason, and the owner policy profile; the selected target must match the route, which must carry visible degradation and a closed reason code. This preserves ADR-0063's fallback lineage without granting the facade fallback authority.
+
+The request distinguishes a trusted channel separate from user content from an intent that requires the literal system role. A `developer_instructions` mapping may satisfy only the former; it must not be projected as a literal system channel.
+
 The kernel remains side-effect-free: it does not load provider policy, credentials, host sessions, Product settings, BuilderOps, or runtime stores.
 
 ## Concretely
