@@ -50,6 +50,7 @@ from pathlib import Path
 
 import pytest
 
+import tests.architecture.durable_table_classification as durable_sql_inventory
 import app.governance.binding_authority as binding_authority
 from app.governance.binding_authority import (
     RegistryBindingAuthorizer,
@@ -74,6 +75,7 @@ from tests.architecture.durable_table_classification import (
     REPO_ROOT,
     SEPARATE_SCHEMA_PLANES,
     _resolver,
+    codex_model_execute_call_count,
     cutover_worklist,
     exempted_statement_sites,
     discover_durable_mutation_paths,
@@ -1037,6 +1039,40 @@ def test_no_executed_sql_statement_is_invisible_to_the_scan() -> None:
         "rather than leaving a statement invisible: an INSERT written this way "
         "would never reach the producer gate."
     )
+
+
+def test_model_executor_execute_is_not_classified_as_sql() -> None:
+    """The bounded Codex CLI invocation is not a database execute call."""
+    assert codex_model_execute_call_count() == 1
+    assert not any(
+        site.startswith("app/model_access/codex_executor_service.py:")
+        for site in unresolvable_statement_sites()
+    )
+
+
+def test_unresolved_database_execute_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Codex exception must not hide a genuine unresolved SQL call."""
+    module_path = tmp_path / "app" / "unresolved_sql.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text(
+        "def write(connection, statement):\n"
+        "    connection.execute(statement)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(durable_sql_inventory, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(durable_sql_inventory, "APP_ROOT", tmp_path / "app")
+    monkeypatch.setattr(
+        durable_sql_inventory, "_app_modules", lambda: iter((module_path,))
+    )
+    durable_sql_inventory._statement_sites.cache_clear()
+    try:
+        assert durable_sql_inventory.unresolvable_statement_sites() == (
+            "app/unresolved_sql.py:2 execute(statement)",
+        )
+    finally:
+        durable_sql_inventory._statement_sites.cache_clear()
 
 
 def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
