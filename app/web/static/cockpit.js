@@ -168,13 +168,13 @@ function flawsHeaderMarkup(header) {
     const items = notEvaluated
       .map((entry) => `${esc(entry.predicate)} (${esc(entry.reason)})`)
       .join(" · ");
-    html += `<p class="mono flaws-not-evaluated" style="color:var(--fg-3)">not evaluated this read (source not fresh): ${items}</p>`;
+    html += `<p class="mono flaws-not-evaluated" style="color:var(--fg-2)">not evaluated this read (source not fresh): ${items}</p>`;
   }
   if (unread.length) {
     const items = unread
       .map((entry) => `${esc(entry.predicate)} (${esc(entry.plane)})`)
       .join(" · ");
-    html += `<p class="mono flaws-unread" style="color:var(--fg-3)">flaw types v1 never reads: ${items}</p>`;
+    html += `<p class="mono flaws-unread" style="color:var(--fg-2)">flaw types v1 never reads: ${items}</p>`;
   }
   return html;
 }
@@ -190,7 +190,7 @@ function bandMarkup(band) {
     bodyHtml =
       flawsHeaderMarkup(band.header) +
       (band.items.length === 0
-        ? `<p class="mono" style="color:var(--fg-3)">0 — counted, not assumed</p>`
+        ? `<p class="mono" style="color:var(--fg-2)">0 — counted, not assumed</p>`
         : `<div class="lane"><div class="lane-cards">${laneCardsMarkup(band.items)}</div></div>`);
   } else if (band.key === "done") {
     const cards = laneCardsMarkup(band.items);
@@ -198,13 +198,13 @@ function bandMarkup(band) {
       `<div class="tier tier-invite"><div class="tier-head"><h3>Ready for you to use</h3>` +
       `<p>Delivered threads. The open link goes to the authority, never to a copy.</p></div>` +
       `<div class="lane-cards">${cards || ""}</div>` +
-      (cards ? "" : `<p class="mono" style="color:var(--fg-3)">nothing delivered and unread</p>`) +
+      (cards ? "" : `<p class="mono" style="color:var(--fg-2)">nothing delivered and unread</p>`) +
       `</div>` +
       `<div class="tier tier-archive"><div class="tier-head"><h3>Tried by you</h3>` +
       `<p>Empty by contract: no owner-acceptance receipt exists yet (INV-DG-7).` +
       ` Its emptiness is itself an honest claim.</p></div></div>`;
   } else if (band.items.length === 0) {
-    bodyHtml = `<p class="mono" style="color:var(--fg-3)">0 — counted, not assumed</p>`;
+    bodyHtml = `<p class="mono" style="color:var(--fg-2)">0 — counted, not assumed</p>`;
   } else {
     bodyHtml = `<div class="lane"><div class="lane-cards">${laneCardsMarkup(
       band.items
@@ -278,7 +278,7 @@ function graphColumnMarkup(rungName, threads) {
     `<div class="graf-col" data-rung="${esc(rungName)}"><h3>${esc(
       RUNG_LABELS[rungName] || rungName
     )}</h3>` +
-    (nodes || `<p class="mono" style="color:var(--fg-3)">no threads</p>`) +
+    (nodes || `<p class="mono" style="color:var(--fg-2)">no threads</p>`) +
     `</div>`
   );
 }
@@ -354,7 +354,7 @@ function focusScreenMarkup(index, band) {
     `<p class="a${band.countable ? "" : " warn"}">${esc(focusClaim(band.key, band))}</p>` +
     (rows
       ? `<ul class="focus-list">${rows}</ul>`
-      : `<p class="mono" style="color:var(--fg-3)">nothing to show</p>`) +
+      : `<p class="mono" style="color:var(--fg-2)">nothing to show</p>`) +
     // The deferral link lives inside .focus-nav alongside nav/back — it is
     // a navigation control (switches lens), not a printable claim, and the
     // print rule that hides .focus-nav must catch it too (#4453 review).
