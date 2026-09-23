@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import uuid
 from typing import Any, IO, Literal
 
@@ -34,6 +35,7 @@ _MAX_SCHEMA_NODES = 2_048
 _MAX_SCHEMA_DEPTH = 32
 _MAX_CONFIGURED_INPUT_BYTES = 8_000_000
 _MAX_CONFIGURED_OUTPUT_BYTES = 8_000_000
+_MAX_CODEX_CONFIG_BYTES = 1_000_000
 _MAX_TRUNCATION_LIMIT = 100_000_000
 _PROCESS_SUPERVISOR_PATH = Path(__file__).with_name("process_supervisor.py")
 _REASONING_EFFORTS = frozenset(
@@ -615,15 +617,16 @@ class CodexCliExecutor:
             raise ValueError("Codex CLI byte bounds exceed the hard maximum")
 
     def preflight(self, *, model: str) -> CodexCliPreflight:
-        preflight, _safe_catalog, _cli_path, _cli_identity = self._preflight(
-            model=model
+        preflight, _safe_catalog, _cli_path, _cli_identity, _credential_store = (
+            self._preflight(model=model)
         )
         return preflight
 
     def _preflight(
         self, *, model: str, reasoning_effort: str | None = None
-    ) -> tuple[CodexCliPreflight, bytes, str, tuple[int, int, int, int, int]]:
+    ) -> tuple[CodexCliPreflight, bytes, str, tuple[int, int, int, int, int], str]:
         profile = self._require_profile()
+        credential_store = self._credential_store()
         cli_path = shutil.which(
             self._executable_name,
             path=self._environment.get("PATH", ""),
@@ -665,7 +668,13 @@ class CodexCliExecutor:
             raise CodexCliError("cli_version_unsupported")
 
         auth_result = self._run_bounded(
-            [cli_path, "login", "status"],
+            [
+                cli_path,
+                "-c",
+                f"cli_auth_credentials_store={json.dumps(credential_store)}",
+                "login",
+                "status",
+            ],
             cwd=None,
             input_text=None,
             timeout_seconds=self._preflight_timeout_seconds,
@@ -718,7 +727,48 @@ class CodexCliExecutor:
             safe_catalog,
             cli_path,
             cli_identity,
+            credential_store,
         )
+
+    def _credential_store(self) -> str:
+        home = self._environment.get("HOME")
+        if home is None:
+            try:
+                home = str(Path.home())
+            except RuntimeError as exc:
+                raise CodexCliError("authentication_unavailable") from exc
+        if not home or not Path(home).is_absolute():
+            raise CodexCliError("authentication_unavailable")
+        configured_home = self._environment.get("CODEX_HOME")
+        if configured_home:
+            codex_home = Path(configured_home)
+            if not codex_home.is_absolute():
+                raise CodexCliError("authentication_unavailable")
+            config_path = codex_home / "config.toml"
+        elif "CODEX_HOME" in self._environment:
+            raise CodexCliError("authentication_unavailable")
+        else:
+            config_path = Path(home) / ".codex" / "config.toml"
+        try:
+            with config_path.open("rb") as config_file:
+                config_bytes = config_file.read(_MAX_CODEX_CONFIG_BYTES + 1)
+        except FileNotFoundError:
+            return "file"
+        except OSError as exc:
+            raise CodexCliError("authentication_unavailable") from exc
+        if len(config_bytes) > _MAX_CODEX_CONFIG_BYTES:
+            raise CodexCliError("authentication_unavailable")
+        try:
+            config = tomllib.loads(config_bytes.decode("utf-8"))
+        except (UnicodeError, ValueError) as exc:
+            raise CodexCliError("authentication_unavailable") from exc
+        credential_store = config.get("cli_auth_credentials_store", "file")
+        if not isinstance(credential_store, str) or credential_store not in {
+            "file",
+            "keyring",
+        }:
+            raise CodexCliError("authentication_unavailable")
+        return credential_store
 
     @staticmethod
     def _sanitize_model_catalog(
@@ -825,9 +875,8 @@ class CodexCliExecutor:
                 max_bytes=min(_MAX_SCHEMA_BYTES, self._max_input_bytes),
             )
 
-        preflight, safe_catalog, cli_path, cli_identity = self._preflight(
-            model=model,
-            reasoning_effort=reasoning_effort,
+        preflight, safe_catalog, cli_path, cli_identity, credential_store = (
+            self._preflight(model=model, reasoning_effort=reasoning_effort)
         )
 
         with tempfile.TemporaryDirectory(prefix="model-access-codex-") as temp_root:
@@ -842,6 +891,7 @@ class CodexCliExecutor:
                 model=model,
                 reasoning_effort=reasoning_effort,
                 developer_instructions=developer_instructions,
+                credential_store=credential_store,
                 output_path=output_path,
                 model_catalog_path=model_catalog_path,
                 output_schema_path=(root / "output.schema.json")
@@ -939,6 +989,7 @@ class CodexCliExecutor:
         model: str,
         reasoning_effort: str,
         developer_instructions: str,
+        credential_store: str,
         output_path: Path,
         model_catalog_path: Path,
         output_schema_path: Path | None,
@@ -961,6 +1012,8 @@ class CodexCliExecutor:
             "-c",
             f"developer_instructions={json.dumps(developer_instructions, ensure_ascii=False)}",
             "-c",
+            f"cli_auth_credentials_store={json.dumps(credential_store)}",
+            "-c",
             f"model_catalog_json={json.dumps(str(model_catalog_path))}",
         ]
         for key, value in _DISABLED_CONFIG:
@@ -977,6 +1030,8 @@ class CodexCliExecutor:
             if key in _ENVIRONMENT_ALLOWLIST and isinstance(value, str)
         }
         allowed.setdefault("PATH", "")
+        if "HOME" not in allowed:
+            allowed["HOME"] = str(Path.home())
         allowed["TMPDIR"] = str(temp_root)
         allowed["NO_COLOR"] = "1"
         return allowed

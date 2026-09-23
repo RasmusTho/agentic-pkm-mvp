@@ -150,6 +150,22 @@ if args == ["--version"]:
     print({version!r})
 elif args == ["exec", "--help"]:
     print({help_output!r})
+elif (
+    len(args) == 4
+    and args[0] == "-c"
+    and args[1].startswith("cli_auth_credentials_store=")
+    and args[2:] == ["login", "status"]
+):
+    auth_trace = Path({str(trace_path)!r}).with_suffix(".auth.json")
+    auth_trace.write_text(
+        json.dumps({{
+            "argv": args,
+            "credential_store": json.loads(args[1].split("=", 1)[1]),
+        }}),
+        encoding="utf-8",
+    )
+    print({login_output!r})
+    raise SystemExit({login_exit})
 elif args == ["login", "status"]:
     print({login_output!r})
     raise SystemExit({login_exit})
@@ -546,6 +562,78 @@ def test_preflight_classifies_cli_auth_and_version_failures(tmp_path: Path) -> N
         model="gpt-5.6-luna"
     )
     assert preflight.authentication_status == "chatgpt_subscription"
+
+    keyring_home = tmp_path / "keyring-home"
+    keyring_home.mkdir()
+    codex_home = tmp_path / "isolated-codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'cli_auth_credentials_store = "keyring"\n', encoding="utf-8"
+    )
+    keyring_trace = tmp_path / "keyring-trace.json"
+    keyring_cli = _fake_cli(
+        tmp_path / "codex-keyring",
+        trace_path=keyring_trace,
+    )
+    keyring_executor = CodexCliExecutor(
+        safe_profile_path=_profile_file(tmp_path / "keyring-profile.json"),
+        executable_name=keyring_cli.name,
+        environment={
+            "PATH": f"{keyring_cli.parent}:{os.environ.get('PATH', '')}",
+            "HOME": str(keyring_home),
+            "CODEX_HOME": str(codex_home),
+        },
+        execution_timeout_seconds=2,
+        preflight_timeout_seconds=2,
+    )
+    result = keyring_executor.execute(
+        model="gpt-5.6-luna",
+        reasoning_effort="low",
+        developer_instructions="developer",
+        user_prompt="user",
+    )
+    execution = json.loads(keyring_trace.read_text(encoding="utf-8"))
+    login = json.loads(
+        keyring_trace.with_suffix(".auth.json").read_text(encoding="utf-8")
+    )
+    execution_configs = [
+        execution["argv"][index + 1]
+        for index, argument in enumerate(execution["argv"][:-1])
+        if argument == "-c"
+    ]
+    assert result.response_text == '{"answer":"ok"}'
+    assert login["credential_store"] == "keyring"
+    assert execution_configs.count('cli_auth_credentials_store="keyring"') == 1
+    assert not (codex_home / "auth.json").exists()
+
+    unsupported_home = tmp_path / "unsupported-store-home"
+    unsupported_home.mkdir()
+    unsupported_codex_home = tmp_path / "unsupported-store-codex-home"
+    unsupported_codex_home.mkdir()
+    (unsupported_codex_home / "config.toml").write_text(
+        'cli_auth_credentials_store = "workload"\n', encoding="utf-8"
+    )
+    unsupported_trace = tmp_path / "unsupported-store-trace.json"
+    unsupported_cli = _fake_cli(
+        tmp_path / "codex-unsupported-store",
+        trace_path=unsupported_trace,
+    )
+    unsupported_executor = CodexCliExecutor(
+        safe_profile_path=_profile_file(tmp_path / "unsupported-store-profile.json"),
+        executable_name=unsupported_cli.name,
+        environment={
+            "PATH": f"{unsupported_cli.parent}:{os.environ.get('PATH', '')}",
+            "HOME": str(unsupported_home),
+            "CODEX_HOME": str(unsupported_codex_home),
+        },
+        execution_timeout_seconds=2,
+        preflight_timeout_seconds=2,
+    )
+    with pytest.raises(CodexCliError) as error:
+        unsupported_executor.preflight(model="gpt-5.6-luna")
+    assert error.value.failure_code == "authentication_unavailable"
+    assert not unsupported_trace.with_suffix(".auth.json").exists()
+    assert not unsupported_trace.exists()
 
     version_dir = tmp_path / "wrong-version"
     version_dir.mkdir()
