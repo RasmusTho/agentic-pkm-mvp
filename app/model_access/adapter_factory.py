@@ -33,6 +33,12 @@ _CAPABILITY_FIELDS = (
     "system_prompt_channel",
     "deterministic_execution",
 )
+_CODEX_CLI_CAPABILITY_CEILING = {
+    "structured_output": True,
+    "native_tools": False,
+    "system_prompt_channel": True,
+    "deterministic_execution": False,
+}
 
 
 class _StrictConfig(BaseModel):
@@ -134,6 +140,19 @@ class ModelAccessAdapterFactory:
         declaration = self._declarations.get(adapter_id)
         if declaration is None:
             raise AdapterRegistryError("selected adapter is not declared")
+        if adapter_id == "codex_cli":
+            if (
+                declaration.provider != "openai"
+                or declaration.transport_id != "codex_cli"
+                or declaration.execution_host_profile != "profile.codex_local_cli"
+                or declaration.execution_boundary != "local_subprocess"
+                or declaration.authentication_scheme != "local_subscription_session"
+                or declaration.instruction_mapping_ref
+                != "profile.codex_developer_prompt_v1"
+            ):
+                raise AdapterRegistryError(
+                    "Codex CLI declaration exceeds its reviewed execution boundary"
+                )
         if declaration.provider != provider:
             raise AdapterRegistryError("selected adapter does not serve the resolved provider")
         try:
@@ -155,6 +174,11 @@ class ModelAccessAdapterFactory:
             **{
                 name: declared[name]
                 and getattr(declaration.supported_capabilities, name)
+                and (
+                    _CODEX_CLI_CAPABILITY_CEILING[name]
+                    if adapter_id == "codex_cli"
+                    else True
+                )
                 for name in _CAPABILITY_FIELDS
             }
         )

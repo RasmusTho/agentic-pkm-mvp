@@ -77,7 +77,8 @@ channels or claim literal system-role equivalence. The executor checks the exact
 required CLI flags, and requires `codex login status` to report `Logged in using ChatGPT`; API-key,
 workload-identity, expired, and ambiguous auth modes are rejected. It then uses ephemeral read-only
 execution in a fresh empty directory. It strictly validates standards-compliant JSON whether or not
-that CLI build supports `--output-schema`.
+that CLI build supports `--output-schema`; it first snapshots and validates the bounded inline
+schema, and rejects references, regexes, and unsupported schema keywords before any provider call.
 Active v2 single-target execution does not use an alternate adapter as fallback; a provider/command
 failure is terminal `provider_error`, never `degraded_consensus`, and cannot become ready or
 promotable. Legacy v1 records remain readable and deterministic, but legacy execution is not
@@ -102,7 +103,14 @@ not create or activate it on a Mac host. `CODEX_HOME` may remain host-local for 
 subscription session and is never copied into intent or receipts. Fixture tests prove the effective
 catalog and CLI arguments are neutralized. The last-message file is limited by an OS file-size
 ceiling during execution, process-group cleanup also runs when the CLI leader exits before a
-redirected descendant, and strict JSON validation rejects non-standard `NaN`/infinity constants.
+redirected descendant, and an independent supervisor cancels the CLI process group when its caller
+dies or its own deadline expires. The executable is opened and identity-checked, cloned into a
+short-lived sibling snapshot in its resolved installation `bin` directory (copy-on-write on APFS),
+and executed from that snapshot to preserve `current_exe()` resource discovery. The path snapshot
+prevents a source-path replacement from substituting another binary. Requested reasoning effort must be
+present in the selected model descriptor. Strict response validation rejects duplicate keys,
+non-standard `NaN`/infinity constants, exponent overflow, and over-nested JSON. The Codex adapter
+capability ceiling remains `native_tools=false` even if adapter configuration is changed.
 The designated-host acceptance is still required before activation.
 
 ## Credentials and host boundary

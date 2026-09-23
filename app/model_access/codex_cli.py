@@ -16,7 +16,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from typing import Any, IO, Literal
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 from llm_contract import validate_schema_payload
 
@@ -25,6 +29,16 @@ SAFE_PROFILE_REF = "profile.codex_cli_no_tools_v2"
 TOOL_SURFACE_CATALOG_VERSION = "codex_cli_tool_surfaces.v2"
 MODEL_CATALOG_SCHEMA_VERSION = "codex_cli_model_catalog.v1"
 _MAX_BUNDLED_CATALOG_BYTES = 2_000_000
+_MAX_SCHEMA_BYTES = 128_000
+_MAX_SCHEMA_NODES = 2_048
+_MAX_SCHEMA_DEPTH = 32
+_MAX_CONFIGURED_INPUT_BYTES = 8_000_000
+_MAX_CONFIGURED_OUTPUT_BYTES = 8_000_000
+_MAX_TRUNCATION_LIMIT = 100_000_000
+_PROCESS_SUPERVISOR_PATH = Path(__file__).with_name("process_supervisor.py")
+_REASONING_EFFORTS = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+)
 _MODEL_DESCRIPTOR_REQUIRED_KEYS = frozenset(
     {
         "additional_speed_tiers",
@@ -79,16 +93,22 @@ _MODEL_DESCRIPTOR_KEYS = (
 _MODEL_DESCRIPTOR_STRING_FIELDS = frozenset(
     {
         "base_instructions",
-        "default_reasoning_level",
         "default_reasoning_summary",
+        "display_name",
+        "slug",
+        "visibility",
+    }
+)
+_MODEL_DESCRIPTOR_NULLABLE_STRING_FIELDS = frozenset(
+    {
+        "apply_patch_tool_type",
+        "default_reasoning_level",
         "default_verbosity",
         "description",
-        "display_name",
         "model_specialty",
         "multi_agent_reasoning_effort",
         "multi_agent_version",
-        "slug",
-        "visibility",
+        "web_search_tool_type",
     }
 )
 _MODEL_DESCRIPTOR_INTEGER_FIELDS = frozenset(
@@ -185,26 +205,9 @@ _REQUIRED_EXEC_FLAGS = (
     "--output-last-message",
     "--sandbox",
 )
-_FILE_SIZE_LIMIT_LAUNCHER = """
-import json
-import os
-import resource
-import sys
-
-target = sys.argv[1]
-expected = tuple(json.loads(sys.argv[2]))
-limit = int(sys.argv[3])
-stat = os.stat(target)
-actual = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-if actual != expected:
-    raise SystemExit(125)
-resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
-os.execve(target, [target, *sys.argv[4:]], os.environ)
-"""
 _ENVIRONMENT_ALLOWLIST = frozenset(
     {"PATH", "HOME", "CODEX_HOME", "TMPDIR", "LANG", "LC_ALL", "NO_COLOR"}
 )
-_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 _SESSION_EXPIRED_MARKERS = (
     "please run /login",
     "please log in",
@@ -261,6 +264,11 @@ def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
     ):
         return False
     if any(
+        descriptor[key] is not None and not isinstance(descriptor[key], str)
+        for key in _MODEL_DESCRIPTOR_NULLABLE_STRING_FIELDS.intersection(keys)
+    ):
+        return False
+    if any(
         type(descriptor[key]) is not int
         for key in _MODEL_DESCRIPTOR_INTEGER_FIELDS
     ):
@@ -282,30 +290,75 @@ def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
         for key in _MODEL_DESCRIPTOR_OBJECT_LIST_FIELDS
     ):
         return False
+    reasoning_levels = descriptor["supported_reasoning_levels"]
+    if any(
+        set(item) != {"effort", "description"}
+        or not isinstance(item["effort"], str)
+        or item["effort"] not in _REASONING_EFFORTS
+        or not isinstance(item["description"], str)
+        for item in reasoning_levels
+    ):
+        return False
+    if len({item["effort"] for item in reasoning_levels}) != len(reasoning_levels):
+        return False
+    service_tiers = descriptor["service_tiers"]
+    if any(
+        set(item) != {"id", "name", "description"}
+        or any(not isinstance(item[key], str) for key in ("id", "name", "description"))
+        for item in service_tiers
+    ):
+        return False
     if not isinstance(descriptor["model_messages"], dict):
         return False
-    if not isinstance(descriptor["truncation_policy"], dict):
+    truncation_policy = descriptor["truncation_policy"]
+    if (
+        not isinstance(truncation_policy, dict)
+        or set(truncation_policy) != {"mode", "limit"}
+        or not isinstance(truncation_policy.get("mode"), str)
+        or truncation_policy.get("mode") not in {"tokens", "bytes"}
+        or type(truncation_policy.get("limit")) is not int
+        or not 0 < truncation_policy["limit"] <= _MAX_TRUNCATION_LIMIT
+    ):
         return False
-    if descriptor["availability_nux"] is not None:
-        return False
-    if not isinstance(descriptor["apply_patch_tool_type"], str):
+    availability_nux = descriptor["availability_nux"]
+    if availability_nux is not None and (
+        not isinstance(availability_nux, dict)
+        or set(availability_nux) != {"message"}
+        or not isinstance(availability_nux["message"], str)
+    ):
         return False
     if not isinstance(descriptor["shell_type"], str):
-        return False
-    if not isinstance(descriptor["web_search_tool_type"], str):
         return False
     if descriptor.get("comp_hash") is not None and not isinstance(
         descriptor["comp_hash"], str
     ):
         return False
-    if descriptor.get("tool_mode") is not None and not isinstance(
-        descriptor["tool_mode"], str
-    ):
+    if descriptor.get("tool_mode") is not None and not isinstance(descriptor["tool_mode"], str):
         return False
     if descriptor.get("upgrade") is not None and not isinstance(
         descriptor["upgrade"], dict
     ):
         return False
+    upgrade = descriptor.get("upgrade")
+    if upgrade is not None:
+        upgrade_shapes = (
+            {"model", "migration_markdown", "retirement_at"},
+            {
+                "id",
+                "migration_config_key",
+                "model_link",
+                "upgrade_copy",
+                "migration_markdown",
+                "retirement_at",
+            },
+        )
+        if set(upgrade) not in upgrade_shapes:
+            return False
+        if any(
+            value is not None and not isinstance(value, str)
+            for value in upgrade.values()
+        ):
+            return False
     if any(
         isinstance(descriptor.get(key), int) and descriptor[key] < 0
         for key in ("context_window", "max_context_window", "priority")
@@ -314,6 +367,89 @@ def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
     if not 0 <= descriptor["effective_context_window_percent"] <= 100:
         return False
     return all(_is_json_value(value) for value in descriptor.values())
+
+
+def _schema_tree_is_bounded(value: Any) -> bool:
+    allowed_keywords = frozenset(
+        {
+            "type",
+            "properties",
+            "required",
+            "additionalProperties",
+            "items",
+            "enum",
+            "const",
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "multipleOf",
+            "minLength",
+            "maxLength",
+            "minItems",
+            "maxItems",
+            "minProperties",
+            "maxProperties",
+        }
+    )
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    visited = 0
+    while pending:
+        current, depth = pending.pop()
+        visited += 1
+        if (
+            depth > _MAX_SCHEMA_DEPTH
+            or visited > _MAX_SCHEMA_NODES
+            or not isinstance(current, dict)
+            or not set(current).issubset(allowed_keywords)
+        ):
+            return False
+        properties = current.get("properties", {})
+        if not isinstance(properties, dict):
+            return False
+        pending.extend((item, depth + 1) for item in properties.values())
+        for keyword in ("items", "additionalProperties"):
+            nested = current.get(keyword)
+            if isinstance(nested, dict):
+                pending.append((nested, depth + 1))
+            elif nested is not None and not isinstance(nested, bool):
+                return False
+        for keyword in ("enum", "const"):
+            if keyword in current and not _is_json_value(current[keyword]):
+                return False
+    return True
+
+
+def _bounded_schema_snapshot(
+    schema_ref: str,
+    schema: Mapping[str, Any],
+    *,
+    max_bytes: int,
+) -> tuple[dict[str, Any], str]:
+    try:
+        schema_value = dict(schema)
+        if not _schema_tree_is_bounded(schema_value):
+            raise ValueError("schema tree exceeds bounds or uses references")
+        serialized = json.dumps(
+            schema_value,
+            ensure_ascii=False,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        encoded = serialized.encode("utf-8")
+        if len(encoded) > max_bytes:
+            raise ValueError("schema exceeds byte bound")
+        snapshot = json.loads(
+            serialized,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+        if not isinstance(snapshot, dict):
+            raise ValueError("schema root must be an object")
+        Draft202012Validator.check_schema(snapshot)
+    except (TypeError, ValueError, OverflowError, RecursionError, SchemaError) as exc:
+        raise CodexCliError("schema_violation") from exc
+    return snapshot, serialized
 
 
 def _executable_identity(path: Path) -> tuple[int, int, int, int, int]:
@@ -469,13 +605,17 @@ class CodexCliExecutor:
             max_input_bytes,
         ) <= 0:
             raise ValueError("Codex CLI bounds must be positive")
+        if max_output_bytes > _MAX_CONFIGURED_OUTPUT_BYTES or max_input_bytes > _MAX_CONFIGURED_INPUT_BYTES:
+            raise ValueError("Codex CLI byte bounds exceed the hard maximum")
 
     def preflight(self, *, model: str) -> CodexCliPreflight:
-        preflight, _safe_catalog, _cli_path, _cli_identity = self._preflight(model=model)
+        preflight, _safe_catalog, _cli_path, _cli_identity = self._preflight(
+            model=model
+        )
         return preflight
 
     def _preflight(
-        self, *, model: str
+        self, *, model: str, reasoning_effort: str | None = None
     ) -> tuple[CodexCliPreflight, bytes, str, tuple[int, int, int, int, int]]:
         profile = self._require_profile()
         cli_path = shutil.which(
@@ -530,9 +670,12 @@ class CodexCliExecutor:
         )
         if any(marker in auth_text.lower() for marker in _SESSION_EXPIRED_MARKERS):
             raise CodexCliError("session_expired")
-        if auth_result.returncode != 0 or not re.search(
-            r"(?m)^\s*Logged in using ChatGPT\s*$", auth_text, re.IGNORECASE
-        ):
+        auth_streams = [
+            stream.decode("utf-8", errors="replace").strip()
+            for stream in (auth_result.stdout, auth_result.stderr)
+            if stream.strip()
+        ]
+        if auth_result.returncode != 0 or auth_streams != ["Logged in using ChatGPT"]:
             raise CodexCliError("authentication_unavailable")
 
         if not _MODEL_ID.fullmatch(model):
@@ -547,7 +690,11 @@ class CodexCliExecutor:
         )
         if catalog_result.returncode != 0:
             raise CodexCliError("tool_surface_unknown")
-        safe_catalog = self._sanitize_model_catalog(catalog_result.stdout, model=model)
+        safe_catalog = self._sanitize_model_catalog(
+            catalog_result.stdout,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
 
         try:
             if _executable_identity(Path(cli_path)) != cli_identity:
@@ -568,7 +715,9 @@ class CodexCliExecutor:
         )
 
     @staticmethod
-    def _sanitize_model_catalog(raw: bytes, *, model: str) -> bytes:
+    def _sanitize_model_catalog(
+        raw: bytes, *, model: str, reasoning_effort: str | None = None
+    ) -> bytes:
         try:
             catalog = json.loads(
                 raw.decode("utf-8", errors="strict"),
@@ -608,6 +757,7 @@ class CodexCliExecutor:
                     "include_skills_usage_instructions": False,
                     "multi_agent_reasoning_effort": None,
                     "multi_agent_version": None,
+                    "model_messages": {},
                     "node_repl_auto_review_required": False,
                     "node_repl_disabled": True,
                     "shell_type": "disabled",
@@ -616,6 +766,13 @@ class CodexCliExecutor:
                     "web_search_tool_type": None,
                 }
             )
+            if slug == model and reasoning_effort is not None:
+                supported_efforts = {
+                    item["effort"]
+                    for item in descriptor["supported_reasoning_levels"]
+                }
+                if reasoning_effort not in supported_efforts:
+                    raise CodexCliError("model_unavailable")
             safe_models.append(safe_descriptor)
         if selected_matches != 1:
             raise CodexCliError("model_unavailable")
@@ -648,7 +805,19 @@ class CodexCliExecutor:
         if len(developer_instructions.encode("utf-8")) > self._max_input_bytes:
             raise CodexCliError("input_oversize")
 
-        preflight, safe_catalog, cli_path, cli_identity = self._preflight(model=model)
+        normalized_schema: dict[str, Any] | None = None
+        schema_text: str | None = None
+        if output_schema is not None:
+            normalized_schema, schema_text = _bounded_schema_snapshot(
+                output_schema_ref or "",
+                output_schema,
+                max_bytes=min(_MAX_SCHEMA_BYTES, self._max_input_bytes),
+            )
+
+        preflight, safe_catalog, cli_path, cli_identity = self._preflight(
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
 
         with tempfile.TemporaryDirectory(prefix="model-access-codex-") as temp_root:
             root = Path(temp_root)
@@ -665,20 +834,11 @@ class CodexCliExecutor:
                 output_path=output_path,
                 model_catalog_path=model_catalog_path,
                 output_schema_path=(root / "output.schema.json")
-                if output_schema is not None and preflight.output_schema_supported
+                if normalized_schema is not None and preflight.output_schema_supported
                 else None,
             )
             schema_path = root / "output.schema.json"
-            if output_schema is not None and preflight.output_schema_supported:
-                try:
-                    schema_text = json.dumps(
-                        output_schema,
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        allow_nan=False,
-                    )
-                except (TypeError, ValueError) as exc:
-                    raise CodexCliError("schema_violation") from exc
+            if schema_text is not None and preflight.output_schema_supported:
                 schema_path.write_text(schema_text, encoding="utf-8")
             env = self._child_environment(temp_root=root)
             try:
@@ -694,8 +854,6 @@ class CodexCliExecutor:
             except CodexCliError:
                 raise
             if result.returncode != 0:
-                if result.returncode == 125:
-                    raise CodexCliError("cli_version_unsupported")
                 error_text = result.stderr.decode("utf-8", errors="replace").lower()
                 if "file too large" in error_text or "file size limit" in error_text:
                     raise CodexCliError("stdout_oversize")
@@ -730,15 +888,26 @@ class CodexCliExecutor:
                 raise CodexCliError("schema_violation") from exc
             if not response_text:
                 raise CodexCliError("stdout_empty")
-            if output_schema is not None:
+            if normalized_schema is not None:
                 try:
                     payload = json.loads(
                         response_text,
                         object_pairs_hook=_unique_json_object,
                         parse_constant=_reject_json_constant,
                     )
-                    validate_schema_payload(output_schema_ref or "", output_schema, payload)
-                except (json.JSONDecodeError, UnicodeError, ValueError) as exc:
+                    if not _is_json_value(payload):
+                        raise ValueError("response JSON exceeds depth or value limits")
+                    validate_schema_payload(
+                        output_schema_ref or "", normalized_schema, payload
+                    )
+                except (
+                    json.JSONDecodeError,
+                    UnicodeError,
+                    ValueError,
+                    TypeError,
+                    OverflowError,
+                    RecursionError,
+                ) as exc:
                     raise CodexCliError("schema_violation") from exc
 
         return CodexCliResult(
@@ -816,6 +985,15 @@ class CodexCliExecutor:
         input_bytes = None if input_text is None else input_text.encode("utf-8")
         if input_bytes is not None and len(input_bytes) > self._max_input_bytes:
             raise CodexCliError("input_oversize")
+        if (
+            os.name != "posix"
+            or not hasattr(os, "fork")
+            or expected_executable_identity is None
+            or not _PROCESS_SUPERVISOR_PATH.is_file()
+        ):
+            raise CodexCliError("unsupported_profile")
+        if max_file_bytes is not None and max_file_bytes <= 0:
+            raise CodexCliError("unsupported_profile")
         stdin_context = tempfile.TemporaryFile()
         process: subprocess.Popen[bytes] | None = None
         selector = selectors.DefaultSelector()
@@ -823,6 +1001,13 @@ class CodexCliExecutor:
         stdout = bytearray()
         stderr = bytearray()
         output_limit = self._max_output_bytes if max_output_bytes is None else max_output_bytes
+        parent_read_fd, parent_write_fd = os.pipe()
+        status_read_fd, status_write_fd = os.pipe()
+        status_read_open = True
+        snapshot_path: str | None = None
+        status_buffer = bytearray()
+        terminal_status: dict[str, Any] | None = None
+        cli_process_group: int | None = None
         try:
             stdin_source: int | IO[bytes]
             if input_bytes is not None:
@@ -832,31 +1017,36 @@ class CodexCliExecutor:
             else:
                 stdin_source = subprocess.DEVNULL
             try:
-                if expected_executable_identity is not None:
-                    try:
-                        current_identity = _executable_identity(Path(argv[0]))
-                    except OSError as exc:
-                        raise CodexCliError("cli_missing") from exc
-                    if current_identity != expected_executable_identity:
-                        raise CodexCliError("cli_version_unsupported")
-                launch_argv = argv
-                if max_file_bytes is not None:
-                    if (
-                        expected_executable_identity is None
-                        or os.name != "posix"
-                        or max_file_bytes <= 0
-                    ):
-                        raise CodexCliError("unsupported_profile")
-                    launch_argv = [
-                        sys.executable,
-                        "-I",
-                        "-c",
-                        _FILE_SIZE_LIMIT_LAUNCHER,
-                        argv[0],
-                        json.dumps(expected_executable_identity),
-                        str(max_file_bytes),
-                        *argv[1:],
-                    ]
+                try:
+                    current_identity = _executable_identity(Path(argv[0]))
+                except OSError as exc:
+                    raise CodexCliError("cli_missing") from exc
+                if current_identity != expected_executable_identity:
+                    raise CodexCliError("cli_version_unsupported")
+                source_path = Path(argv[0])
+                snapshot_path = str(
+                    source_path.parent
+                    / f".{source_path.name}.model-access-{uuid.uuid4().hex}"
+                )
+                launch_argv = [
+                    sys.executable,
+                    "-I",
+                    str(_PROCESS_SUPERVISOR_PATH),
+                    "--parent-fd",
+                    str(parent_read_fd),
+                    "--status-fd",
+                    str(status_write_fd),
+                    "--timeout-ms",
+                    str(max(1, round(timeout_seconds * 1000))),
+                    "--file-limit",
+                    str(max_file_bytes or 0),
+                    "--staging-path",
+                    snapshot_path,
+                    "--expected-identity",
+                    json.dumps(expected_executable_identity),
+                    "--",
+                    *argv,
+                ]
                 process = subprocess.Popen(
                     launch_argv,
                     cwd=cwd,
@@ -867,21 +1057,61 @@ class CodexCliExecutor:
                         temp_root=Path(tempfile.gettempdir())
                     ),
                     shell=False,
-                    start_new_session=self._process_group_mode == "isolated",
+                    start_new_session=True,
+                    pass_fds=(parent_read_fd, status_write_fd),
                 )
             except FileNotFoundError as exc:
                 raise CodexCliError("cli_missing") from exc
+            os.close(parent_read_fd)
+            parent_read_fd = -1
+            os.close(status_write_fd)
+            status_write_fd = -1
             assert process.stdout is not None and process.stderr is not None
             os.set_blocking(process.stdout.fileno(), False)
             os.set_blocking(process.stderr.fileno(), False)
+            os.set_blocking(status_read_fd, False)
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+            selector.register(status_read_fd, selectors.EVENT_READ, "status")
             while selector.get_map():
                 remaining = timeout_seconds - (time.monotonic() - started)
                 if remaining <= 0:
-                    self._terminate(process)
                     raise CodexCliError("command_timeout")
                 for key, _ in selector.select(min(remaining, 0.1)):
+                    if key.data == "status":
+                        chunk = os.read(status_read_fd, 4096)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            status_read_open = False
+                            if terminal_status is None:
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("command_exit_nonzero")
+                            continue
+                        status_buffer.extend(chunk)
+                        if len(status_buffer) > 4096:
+                            self._kill_process_group(cli_process_group)
+                            raise CodexCliError("command_exit_nonzero")
+                        while b"\n" in status_buffer:
+                            line, _, remainder = status_buffer.partition(b"\n")
+                            status_buffer = bytearray(remainder)
+                            try:
+                                message = json.loads(line.decode("utf-8", errors="strict"))
+                            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("command_exit_nonzero") from exc
+                            if not isinstance(message, dict):
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("command_exit_nonzero")
+                            if message.get("kind") == "started":
+                                process_group = message.get("process_group")
+                                if type(process_group) is not int or process_group <= 1:
+                                    raise CodexCliError("command_exit_nonzero")
+                                cli_process_group = process_group
+                            elif terminal_status is None:
+                                terminal_status = message
+                            else:
+                                raise CodexCliError("command_exit_nonzero")
+                        continue
                     chunk = os.read(key.fd, 65536)
                     if not chunk:
                         selector.unregister(key.fileobj)
@@ -889,42 +1119,95 @@ class CodexCliExecutor:
                     target = stdout if key.data == "stdout" else stderr
                     target.extend(chunk)
                     if len(stdout) + len(stderr) > output_limit:
-                        self._terminate(process)
                         raise CodexCliError("stdout_oversize")
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
-                self._terminate(process)
                 raise CodexCliError("command_timeout")
-            return_code = process.wait(timeout=remaining)
-            return subprocess.CompletedProcess(argv, return_code, bytes(stdout), bytes(stderr))
+            process.wait(timeout=remaining)
+            status = terminal_status
+            if status is None or status_buffer:
+                self._kill_process_group(cli_process_group)
+                raise CodexCliError("command_exit_nonzero")
+            status_kind = status.get("kind")
+            if status_kind == "identity_mismatch":
+                raise CodexCliError("cli_version_unsupported")
+            if status_kind == "unsupported":
+                raise CodexCliError("unsupported_profile")
+            if status_kind == "limit_unavailable":
+                raise CodexCliError("unsupported_profile")
+            if status_kind in {"timeout", "parent_lost"}:
+                raise CodexCliError("command_timeout")
+            if status_kind != "completed" or type(status.get("returncode")) is not int:
+                raise CodexCliError("command_exit_nonzero")
+            return subprocess.CompletedProcess(
+                argv,
+                status["returncode"],
+                bytes(stdout),
+                bytes(stderr),
+            )
         except subprocess.TimeoutExpired as exc:
-            if process is not None:
-                self._terminate(process)
             raise CodexCliError("command_timeout") from exc
         finally:
             selector.close()
             if process is not None:
+                if parent_write_fd >= 0:
+                    os.close(parent_write_fd)
+                    parent_write_fd = -1
+                if terminal_status is None or terminal_status.get("kind") not in {
+                    "completed",
+                    "timeout",
+                    "parent_lost",
+                }:
+                    self._kill_process_group(cli_process_group)
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    self._terminate(process)
                 for stream in (process.stdout, process.stderr):
                     if stream is not None:
-                        stream.close()
-                if self._process_group_mode == "isolated" or process.poll() is None:
-                    self._terminate(process)
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
+            for fd in (parent_read_fd, parent_write_fd, status_write_fd):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            if status_read_open:
+                try:
+                    os.close(status_read_fd)
+                except OSError:
+                    pass
+            if snapshot_path is not None:
+                self._remove_snapshot_path(snapshot_path)
             stdin_context.close()
 
+    @staticmethod
+    def _remove_snapshot_path(path: str) -> None:
+        try:
+            Path(path).unlink()
+        except OSError:
+            pass
+
+    @staticmethod
+    def _kill_process_group(process_group: int | None) -> None:
+        if process_group is None:
+            return
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
     def _terminate(self, process: subprocess.Popen[bytes]) -> None:
-        if self._process_group_mode == "isolated":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-        else:
-            try:
-                process.terminate()
+                process.kill()
             except ProcessLookupError:
                 pass
         try:
