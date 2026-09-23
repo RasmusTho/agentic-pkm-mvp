@@ -293,6 +293,11 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Upstream artifact:** `docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` — keep refresh task writes serialized with claims before applying snapshots.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: `BUILDEROPS_API_URL` is absent and no connected BuilderOps writer is available. No store write was attempted.
 
+## 2026-09-23 — #5618 (Model Access Router: thin model/harness facade)
+**Source:** human clarification during implementation
+**Diverged:** The eight-slice plan made dynamic catalogs, broad preflight fallback, full host acceptance, and staged rollout prerequisites even though the immediate need is a thin API that hides model and harness choice and routes to a temporarily configured target.
+**Upstream artifact:** `docs/MODEL_ACCESS_ROUTER/README.md :: Capability Contract / Implementation Tasks`
+
 ## 2026-09-23 — #5619 (neutral route and provenance contracts)
 **Source:** capture-learning after independent convergence review
 **Diverged:** The route contract rejected an owner-authorized selection of a different model over the same transport, although ADR-0066 assigns fallback selection to owner resolvers and does not require a transport switch.

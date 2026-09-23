@@ -8,7 +8,7 @@ Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 ## Purpose
 
-Deliver one provider-neutral model-access facade that can be used by Product and Builder while keeping their policy resolvers, registries, credential authorities, fallback decisions, execution receipts, and health views separate. Product gains a Codex CLI subscription route with a strictly preflight-only Ollama fallback; Builder Model Inquiry retains its current single-target, fallback-forbidden behavior.
+Deliver a thin Product API that hides the selected model harness behind one bounded completion call while Product remains the authority that selects the exact temporary route. Keep Product and Builder policy, registries, credentials, fallback decisions, and execution receipts separate. Builder Model Inquiry retains its current single-target, fallback-forbidden behavior.
 
 ## Current State and Boundary
 
@@ -16,6 +16,7 @@ Deliver one provider-neutral model-access facade that can be used by Product and
 - Builder model access resolves independently through app/builderops/model_access_resolver.py and app/builderops/model_inquiry_adapters.py.
 - llm_contract is the neutral, side-effect-free kernel. Builder may not import the Product router or fabric.
 - MARR-01 adds neutral route/receipt provenance contracts and `app.model_access.router.ModelAccessRouter`, which composes a caller-supplied owner resolver/profile with a read-only adapter descriptor lookup. MARR-02 adds `app.model_access.adapter_factory.ModelAccessAdapterFactory`, driven by `docs/settings/models/adapters.yaml` and the provider census, plus the bounded `app.model_access.codex_cli.CodexCliExecutor`. Product and Builder runtime callers are not migrated by this seam.
+- MARR-08 (#5635) adds a single `POST /v1/complete` executor API and a Product-side client. Product supplies an already resolved provider/model/transport; the host validates that route against declared adapters and executes it exactly once. This code does not activate the Mac service or migrate Product callers.
 - Model Inquiry's `codex_subscription` remains a compatibility alias for the shared local Codex executor; its current single-target and no-fallback semantics do not change. Host activation still requires an exact-version no-tools profile outside Git.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
 - Product currently runs on Linux/Tailscale hosts. The current-state environment and host owner docs still describe the macOS host as Ollama/model-serving only; the selected remote Codex executor is a future, unshipped exception that requires separate host and tailnet acceptance.
@@ -31,63 +32,56 @@ Deliver one provider-neutral model-access facade that can be used by Product and
 
 ## Capability Contract
 
-The target request flow is:
+The thin API request flow is:
 
-Product on Linux → Product policy → authorized catalog snapshot → exact route → Tailscale-only preflight → one remote Codex executor or Ollama adapter → result/receipt
+Product policy selects an exact route → Product client sends one `POST /v1/complete` over configured Tailscale Serve HTTPS → loopback Mac service validates the forwarded Product capability and route → one `codex_cli` or `ollama_http` completion → result with the exact provider/model/transport.
 
 Builder continues through its own resolver/profile and adapters. The shared facade does not make
 Product and Builder share policy or credentials.
 
-The shared facade accepts an owner profile and cannot select or merge that profile's policy. A route binds exact provider, model, transport, requested/resolved capabilities, catalog snapshot hash/reference, preflight status, execution host, and any pre-inference fallback cause. Used fallback provenance is returned by the owner resolver with its selected target, not invented by profile metadata; it carries source and selected effective identities, both transports, preflight reason, and the authorizing owner profile. The selected values must match the route, which is visibly degraded with a closed reason code. Source and selected transports may be the same when the owner resolver chooses another target over that transport. The neutral contract rejects used fallback for `fallback_forbidden` and `human_decision_required`, and requires source/selected identity equality for `fallback_same_identity`; compatible-identity and policy-selected choices remain owner-resolver decisions. Route `preflight_status` describes the selected target, while the reason for a source preflight fallback stays in `fallback_provenance` until selected-target preflight. The adapter descriptor declares its supported capability envelope, and the facade rejects target claims outside it; `adapter_attestation` provenance names that exact descriptor ID.
+The shared facade remains policy-agnostic: Product resolves the route, and this API neither picks a model nor joins Product and Builder authority. For this MVP, the request and response carry only exact provider, model, and transport identity. Catalog snapshots, route preflight state, execution receipts, and automatic model promotion are not prerequisites for the API.
 
-Codex CLI/Luna is Product's primary target for configured general agent/text routes, executed by a
-single-purpose service on the designated macOS host. The service is not a Product API/gateway and
-does not execute on the Product host. Product may reach it only through Tailscale Serve HTTPS with
-a narrowly granted application capability; the backend binds to loopback and has no public, LAN, or
-Funnel listener. Request bodies cannot choose shell commands, CLI arguments, workspace paths,
-environment, MCP servers, or unrestricted tools.
+The host offers one bounded operation, `POST /v1/complete`; it has no health, catalog, or preflight
+endpoint. The request supplies one declared provider/model/transport, optional reasoning effort and
+output schema, a capability intent, trusted instructions, and user content as distinct fields. It
+cannot supply commands, argv, paths, environment, tools, MCP servers, provider endpoints, or
+credentials. The response returns the same route identity with the completion.
 
-Ollama can be selected only if executor/Tailscale/CLI authentication/model preflight fails before an
-inference request is sent, and only if it satisfies the complete intent. If an execute request may
-have reached the Codex host, a timeout or lost response is terminal and cannot trigger a second
-provider call. Missing native-tool support, trusted-instruction separation, reasoning level,
-structured-output support, stale/unordered catalog data, and missing credentials fail closed or
-retain an explicit pinned target as described by policy; they never silently weaken the intent.
+The service is exposed only behind Tailscale Serve HTTPS, binds to loopback, and requires the
+configured Serve-forwarded `Tailscale-App-Capabilities` grant for the Product channel and the
+`complete` action. Tailscale Serve 1.92 or later is required for capability forwarding. The host
+grant, Serve endpoint, CLI profile path, `CODEX_HOME`, subscription session, and Ollama endpoint
+remain host-local configuration; this repository does not activate or reconfigure them.
 
-The Codex adapter carries Product trusted system-instruction content separately from caller/user
-content. It maps trusted content only to the CLI's separate `developer_instructions` message and
-user content only to the prompt; the fields may never be concatenated. This preserves the
-trusted-versus-user boundary but does not claim literal system-role equivalence. A request whose
-policy requires a literal system role is not eligible for the Codex route. The exact mapping is
-versioned, recorded without prompt contents, and tested; Ollama fallback must satisfy the same
-channel requirement.
+The endpoint dispatches exactly once to the named adapter and performs no fallback or retry. Once
+the Product request is sent, an ambiguous timeout is terminal; the client must not repeat the
+request or switch provider. Product may issue a different route only as a separately selected,
+explicit request outside this adapter's retry behavior. Native-tool intent is rejected because the
+current Codex and Ollama executor profiles declare no native tools.
 
-Neutral requests distinguish `system_prompt_channel` (trusted instructions remain separate from
-user content) from `literal_system_role_required` (the transport must preserve an actual system
-role). A `developer_instructions` mapping can satisfy only the former; a literal-role requirement
-fails closed unless the adapter declares a `system` mapping.
+Trusted instructions and user content remain separate end to end. Codex maps trusted instructions
+to its existing `developer_instructions` channel, not a literal system role; Ollama uses its
+explicit `system` message. A literal-system-role request fails on Codex.
 
-## Catalog and Freshness Policy
+## Deferred Catalog and Freshness Follow-up
 
-The neutral catalog descriptor is shared; Product model IDs/pricing/user-facing metadata and Builder provider census/policy remain separate scopes. Runtime CatalogSnapshot data is host-local derived state, not policy or credential authority.
+Dynamic discovery and per-request latest-compatible model selection are follow-up work, not an API
+prerequisite. Until that work is delivered, Product supplies an exact model ID from its existing
+policy/registry. No latest-model promotion occurs inside `/v1/complete`.
 
-- Refresh TTL: five minutes. Maximum stale age: 24 hours.
-- Discovery performs no inference. A snapshot binds the exact source, fetch time, descriptor set, and deterministic hash.
-- Per-request latest-compatible selection requires provider-supplied release/created metadata or an explicit provider replacement/upgrade relation. Array position, model-name spelling, and Ollama local pull time are not release evidence.
-- Codex app-server model/list is account-scoped availability/capability discovery using the existing host-local subscription session. The executor returns only a validated, secret-free snapshot through its app-capability-gated catalog operation. If the source has no release timestamp or explicit upgrade edge for a profile, retain its pinned model; never infer chronology from list order.
-- OpenAI and Anthropic API catalog adapters may use only an already authorized and already configured credential reference. This delivery does not provision credentials or enable metered API inference. Missing credentials make that source unavailable; tests use fake HTTP only.
-- Ollama discovery inspects configured local models and declared metadata. It never claims native_tools unless both model metadata and the tested adapter establish that capability.
+- A future catalog slice may add provider-specific OpenAI, Anthropic, Codex, and Ollama discovery, with freshness, release ordering, deprecation, capability, and snapshot-hash contracts.
+- Discovery must remain read-only and must not make model calls or create credentials. Model Inquiry continues to use a pinned single target and never inherits Product catalog or fallback behavior.
 
-## Cross-Task Invariants / Interaction Safety
+## Cross-Task Invariants / Follow-up Boundaries
 
 1. Policy ownership: the facade accepts Product or Builder policy explicitly. If the neutral contract lands before either profile mapper, existing route behavior stays unchanged; no default policy is guessed.
 2. Model Inquiry isolation: the Codex alias continues to resolve exactly one target with fallback_forbidden. Product's Ollama fallback cannot enter Model Inquiry, including when shared adapter code is reused.
 3. Cross-host identity: Tailscale Serve is private-only, its backend is loopback-only, and the backend authorizes the forwarded app-capability grant for the caller's Product channel. User identity headers or request-body claims are not substitutes. No public listener, Funnel, shared bearer token, or generic execution endpoint is allowed. The forwarded header authenticates tailnet permission only at the loopback backend; host-local processes remain within the executor host's trust boundary.
 4. Codex host isolation: Product Codex execution uses a dedicated empty cwd, read-only sandbox, ignored ambient user/project config, and an exact version-reviewed no-tools profile. It disables shell/execution and every other model-callable file, browser/computer, app, MCP, plugin, and agent capability. A new or unknown CLI tool/profile fails closed. Host authentication uses the existing interactive login session, never fresh non-interactive SSH.
 5. Prompt-channel preservation: trusted Product system-instruction content and untrusted user content remain separate end-to-end; the CLI maps them only to its distinct developer-instructions and user-prompt channels. No flattening or concatenation. The route does not assert literal system-role equivalence.
-6. Preflight boundary: fallback is permitted only before an inference request can reach the executor. If execution may have started, including an ambiguous remote timeout, the route is terminal and no second provider receives the prompt.
-7. Capability preservation: fallback is eligible only when the candidate satisfies every requested capability and instruction-channel requirement. Ollama lacking a capability such as native tools is a terminal preflight refusal, not a degraded route.
-8. Catalog failure: failed refresh may use a snapshot only while it is within maximum stale age and the owning policy allows it. A stale, unordered, or unverifiable snapshot cannot auto-promote; with no pinned policy target, routing fails closed.
+6. Retry boundary: the thin client makes one HTTP request. Any ambiguous result is terminal and does not retry or trigger a second provider call.
+7. Capability preservation: the named adapter must satisfy the request. The current API rejects native-tool intent rather than claiming support or silently weakening it.
+8. Catalog boundary: dynamic discovery and latest-compatible promotion belong to a later slice. Until then the caller supplies a concrete, registry-declared model ID; this API does not infer chronology or refresh catalogs.
 9. Provider compatibility: existing declared DeepSeek Product routing remains supported through an explicit `deepseek_api` adapter and pinned registry descriptor unless a separate reviewed change retires it. This migration cannot silently remove an existing provider.
 10. Partial Product migration: unmigrated Product callers continue through the legacy facade. Migrated callers go through one shared route and one adapter; no dual execution/shadow inference is permitted.
 11. Host and rollout gates: missing app-capability grant, executor/login, Ollama model, or failed acceptance leaves the parent blocked. No model download, API key creation, host credential change, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
@@ -96,21 +90,22 @@ The neutral catalog descriptor is shared; Product model IDs/pricing/user-facing 
 
 1. [Establish shared route and provenance contracts](ESTABLISH_SHARED_ROUTE_AND_PROVENANCE_CONTRACTS.md) — MARR-01
 2. [Build the adapter registry and local Codex CLI executor](BUILD_ADAPTER_REGISTRY_AND_CODEX_CLI_TRANSPORT.md) — MARR-02; depends on MARR-01
-3. [Formalize Ollama and preflight-only fallback](FORMALIZE_OLLAMA_AND_PREFLIGHT_FALLBACK.md) — MARR-03; depends on MARR-01 and MARR-02
-4. [Add the authenticated Tailscale executor transport](ADD_TAILSCALE_CODEX_EXECUTOR_TRANSPORT.md) — MARR-08; depends on MARR-01 and MARR-02
-5. [Discover and select from fresh model catalogs](DISCOVER_FRESH_MODEL_CATALOGS.md) — MARR-04; depends on MARR-01–03 and MARR-08
+3. [Formalize Ollama and preflight-only fallback](FORMALIZE_OLLAMA_AND_PREFLIGHT_FALLBACK.md) — MARR-03; future follow-up, not part of the thin API
+4. [Add the authenticated Tailscale executor transport](ADD_TAILSCALE_CODEX_EXECUTOR_TRANSPORT.md) — MARR-08 / #5635; one completion endpoint and client, no automatic fallback or catalog API
+5. [Discover and select from fresh model catalogs](DISCOVER_FRESH_MODEL_CATALOGS.md) — MARR-04; future follow-up, not required to route an explicitly configured model
 6. [Migrate Product LLM callers to the shared facade](MIGRATE_PRODUCT_LLM_CALLERS.md) — MARR-05; depends on MARR-01–04 and MARR-08
 7. [Prove the designated macOS executor profile and acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06; depends on MARR-01–05 and MARR-08
 8. [Roll out through release channels with config rollback](ROLLOUT_WITH_CONFIG_ROLLBACK.md) — MARR-07; depends on MARR-06 and explicit release-channel operator acknowledgment
 
 ## Capability Acceptance
 
-- [ ] All eight task receipts are linked here and to the parent validation issue.
-- [ ] Contract/adapter/catalog/Product behavior passes the task-level fake-provider and integration tests.
-- [ ] The designated-host receipt proves the reviewed Tailscale app-capability grant and Serve boundary, Product-to-executor route, loopback-only service, Codex CLI version/auth in the interactive login session, exact Luna route, Ollama probe, compatible preflight fallback, trusted-instruction mapping, and correct refusal for a tool route that Ollama cannot satisfy; it contains no concrete host identity, endpoint, prompt, or secret.
-- [ ] After host acceptance, environment and host owner docs describe only behavior proven by merged implementation and the designated-host receipt; until then, current-state docs retain the existing Ollama-only host truth.
-- [ ] Dev → test → prod follows the release-channel skills; production is not claimed until the operator-acknowledged release and verification receipts exist.
-- [ ] The parent validation issue receives the final acceptance and owner-doc handoff before closure.
+This parent-level acceptance remains separate from merging the MARR-08 thin API slice.
+
+- [ ] MARR-08 is verified by its slice tests and merged; this proves code exists, not live host activation.
+- [ ] Product caller migration, if desired, is delivered as a separate bounded slice after the thin client is merged.
+- [ ] Dynamic catalogs/latest-model promotion and preflight fallback remain separately scoped follow-ups; neither blocks MARR-08.
+- [ ] A separate operator-owned host acceptance is required before claiming the Mac service or Tailscale Serve is live.
+- [ ] The parent validation issue remains open until its chosen broader acceptance scope is explicitly satisfied.
 
 ## Relationship to GitHub Issues
 
