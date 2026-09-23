@@ -175,7 +175,7 @@ def test_resolved_access_validates_capabilities_and_visible_degradation() -> Non
         model="claude-fable",
         effective_identity="anthropic:claude-fable",
         degraded=True,
-        degradation_reason="runtime policy selected an allowed compatible identity",
+        degradation_reason="policy_selected_compatible_route",
     )
     assert degraded.degraded is True
     assert degraded.degradation_reason
@@ -184,6 +184,34 @@ def test_resolved_access_validates_capabilities_and_visible_degradation() -> Non
         ResolvedModelAccess(
             **degraded.model_dump(),
             credential_value="must-not-enter-neutral-provenance",
+        )
+
+
+def test_resolved_access_rejects_sensitive_route_values_before_facade_binding() -> None:
+    request = _request("product.chat", independence="none")
+    valid = _resolved(
+        request,
+        provider="openai",
+        model="gpt-safe",
+        effective_identity="openai/gpt-safe",
+    ).model_dump()
+    for field in (
+        "provider",
+        "model",
+        "adapter_id",
+        "effective_identity",
+        "credential_identity_ref",
+    ):
+        with pytest.raises(ValidationError):
+            ResolvedModelAccess(**{**valid, field: "sk-ant-api03-abc123"})
+
+    with pytest.raises(ValidationError):
+        ResolvedModelAccess(
+            **{
+                **valid,
+                "degraded": True,
+                "degradation_reason": "sk-ant-api03-abc123",
+            }
         )
 
 
@@ -275,6 +303,38 @@ def test_resolved_fallback_obeys_declared_requirement_and_identity() -> None:
         **target,
     )
     assert compatible_result.fallback_provenance == fallback
+
+
+def test_route_allows_owner_selected_fallback_over_the_same_transport() -> None:
+    request = _request(
+        "product.agent",
+        independence="none",
+        fallback_requirement="fallback_compatible_identity",
+    )
+    same_transport_fallback = FallbackProvenance(
+        used=True,
+        phase="preflight",
+        reason_code="model_unavailable",
+        source_transport_id="ollama_http",
+        selected_transport_id="ollama_http",
+        policy_authority="profile.product_general",
+        source_effective_identity="ollama/llama3.1:8b",
+        selected_effective_identity="ollama/llama3.2:8b",
+    )
+
+    route = _route(
+        request=request,
+        provider="ollama",
+        model="llama3.2:8b",
+        effective_identity="ollama/llama3.2:8b",
+        transport_id="ollama_http",
+        degraded=True,
+        degradation_reason="preflight_fallback",
+        fallback_provenance=same_transport_fallback,
+    )
+
+    assert route.fallback_provenance.source_transport_id == "ollama_http"
+    assert route.fallback_provenance.selected_transport_id == "ollama_http"
 
 
 def test_group_resolution_enforces_distinct_effective_targets() -> None:

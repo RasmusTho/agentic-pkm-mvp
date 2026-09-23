@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 from typing import Sequence
 
+from pydantic import ValidationError
 import pytest
 
 from app.model_access import ModelAccessRouter
@@ -131,6 +132,7 @@ def _descriptor(
     execution_boundary: str,
     authentication_scheme: str,
     supported_capabilities: ModelCapabilities | None = None,
+    trusted_instruction_mapping: TrustedInstructionMapping | None = None,
 ) -> ModelAccessAdapterDescriptor:
     return ModelAccessAdapterDescriptor(
         adapter_id=adapter_id,
@@ -142,7 +144,8 @@ def _descriptor(
         execution_host_profile=execution_host_profile,
         execution_boundary=execution_boundary,
         authentication_scheme=authentication_scheme,
-        trusted_instruction_mapping=TrustedInstructionMapping(
+        trusted_instruction_mapping=trusted_instruction_mapping
+        or TrustedInstructionMapping(
             mapping_ref="profile.instructions_separate_v1",
             trusted_channel="developer_instructions",
             untrusted_channel="user",
@@ -259,6 +262,42 @@ def test_product_and_builder_profiles_resolve_without_policy_leakage() -> None:
         or module.startswith("app.services.llm")
         for module in imports
     )
+
+
+def test_facade_accepts_model_specific_adapter_id_from_builder_resolver() -> None:
+    profile = _profile(
+        profile_id="profile.builder_inquiry",
+        runtime="builder",
+        channel="builder.model_inquiry",
+        consumer="builder.model_inquiry",
+        caller_profile="profile.builder_inquiry",
+    )
+    adapter_id = "ollama-llama3.1:8b"
+    resolver = _Resolver(
+        provider="ollama",
+        model="llama3.1:8b",
+        adapter_id=adapter_id,
+    )
+    registry = _Registry(
+        {
+            adapter_id: _descriptor(
+                adapter_id=adapter_id,
+                provider="ollama",
+                model="llama3.1:8b",
+                transport_id="ollama_http",
+                execution_host_profile="profile.macos_ollama",
+                execution_boundary="local_http",
+                authentication_scheme="none",
+            )
+        }
+    )
+
+    route = ModelAccessRouter(adapter_registry=registry).resolve(
+        _request(), resolver=resolver, profile=profile
+    )
+
+    assert route.adapter_id == adapter_id
+    assert route.model == "llama3.1:8b"
 
 
 def test_facade_rejects_registry_identity_drift_before_execution() -> None:
@@ -457,6 +496,61 @@ def test_facade_rejects_capabilities_not_attested_by_adapter() -> None:
         ModelAccessRouter(adapter_registry=registry).resolve(
             _request(), resolver=resolver, profile=profile
         )
+
+
+def test_facade_enforces_literal_system_role_mapping() -> None:
+    profile = _profile(
+        profile_id="profile.product_general",
+        runtime="product",
+        channel="product.chat",
+        consumer="product.agent",
+        caller_profile="profile.product_runtime",
+    )
+    base_request = _request()
+    request = base_request.model_copy(
+        update={
+            "requirements": base_request.requirements.model_copy(
+                update={"literal_system_role_required": True}
+            )
+        }
+    )
+    resolver = _Resolver(
+        provider="openai",
+        model="gpt-5.6-sol",
+        adapter_id="selected-adapter",
+    )
+    descriptor_values = {
+        "adapter_id": "selected-adapter",
+        "provider": "openai",
+        "model": "gpt-5.6-sol",
+        "transport_id": "openai_api",
+        "execution_host_profile": "profile.provider_openai",
+        "execution_boundary": "provider_https",
+        "authentication_scheme": "provider_credential_ref",
+    }
+    with pytest.raises(ValidationError, match="literal system role"):
+        ModelAccessRouter(
+            adapter_registry=_Registry(
+                {"selected-adapter": _descriptor(**descriptor_values)}
+            )
+        ).resolve(request, resolver=resolver, profile=profile)
+
+    system_mapping = TrustedInstructionMapping(
+        mapping_ref="profile.instructions_openai_system_v1",
+        trusted_channel="system",
+        untrusted_channel="user",
+    )
+    route = ModelAccessRouter(
+        adapter_registry=_Registry(
+            {
+                "selected-adapter": _descriptor(
+                    **descriptor_values,
+                    trusted_instruction_mapping=system_mapping,
+                )
+            }
+        )
+    ).resolve(request, resolver=resolver, profile=profile)
+    assert route.trusted_instruction_mapping == system_mapping
 
 
 def test_adapter_attestation_provenance_must_match_selected_adapter() -> None:

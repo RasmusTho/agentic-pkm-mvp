@@ -65,7 +65,7 @@ AdapterId = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
-        pattern=r"^[a-z][a-z0-9_-]{0,63}$",
+        pattern=r"^[a-z][a-z0-9._:-]{0,127}$",
     ),
 ]
 RouteModelId = Annotated[
@@ -280,8 +280,6 @@ class FallbackProvenance(_StrictFrozenModel):
                 raise ValueError(
                     "used fallback requires preflight phase, reason, transports, policy, and source/selected identities"
                 )
-            if self.source_transport_id == self.selected_transport_id:
-                raise ValueError("fallback transports must be different")
             for identity in (
                 self.source_effective_identity,
                 self.selected_effective_identity,
@@ -390,13 +388,29 @@ class ResolvedModelAccess(_StrictFrozenModel):
     adapter_id: NonEmptyString
     effective_identity: NonEmptyString
     capabilities: ModelCapabilities
-    credential_identity_ref: NonEmptyString
+    credential_identity_ref: CredentialIdentityRef
     degraded: bool = False
     degradation_reason: NonEmptyString | None = None
     fallback_provenance: FallbackProvenance = Field(default_factory=FallbackProvenance)
 
     @model_validator(mode="after")
     def _validate_capabilities_and_degradation(self) -> "ResolvedModelAccess":
+        for field_name in (
+            "provider",
+            "model",
+            "adapter_id",
+            "effective_identity",
+            "credential_identity_ref",
+        ):
+            if _contains_sensitive_route_value(getattr(self, field_name)):
+                raise ValueError(
+                    f"{field_name} must be a logical reference, not sensitive data"
+                )
+        if self.degradation_reason is not None and _contains_sensitive_route_value(
+            self.degradation_reason
+        ):
+            raise ValueError("degradation_reason must not contain sensitive data")
+
         required = self.request.requirements
         capabilities = self.capabilities
         boolean_requirements = {
