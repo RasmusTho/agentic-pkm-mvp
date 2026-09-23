@@ -1,12 +1,12 @@
 ---
 name: Migrate Product LLM Callers
-description: Replace Product provider/model dispatch branches with the shared router/factory while retaining LLMRoute compatibility and separate embedding identity.
+description: Replace Product provider/model dispatch branches with the shared router/factory while retaining LLMRoute compatibility, remote Tailscale Codex execution, existing provider routes, and separate embedding identity.
 task_id: MARR-05
 github_issue: 5623
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D6
 parent_capability: MODEL_ACCESS_ROUTER
-prerequisites: [MARR-01, MARR-02, MARR-03, MARR-04]
-depends_on: [ESTABLISH_SHARED_ROUTE_AND_PROVENANCE_CONTRACTS.md, BUILD_ADAPTER_REGISTRY_AND_CODEX_CLI_TRANSPORT.md, FORMALIZE_OLLAMA_AND_PREFLIGHT_FALLBACK.md, DISCOVER_FRESH_MODEL_CATALOGS.md]
+prerequisites: [MARR-01, MARR-02, MARR-03, MARR-04, MARR-08]
+depends_on: [ESTABLISH_SHARED_ROUTE_AND_PROVENANCE_CONTRACTS.md, BUILD_ADAPTER_REGISTRY_AND_CODEX_CLI_TRANSPORT.md, FORMALIZE_OLLAMA_AND_PREFLIGHT_FALLBACK.md, DISCOVER_FRESH_MODEL_CATALOGS.md, ADD_TAILSCALE_CODEX_EXECUTOR_TRANSPORT.md]
 can_parallelize_with: []
 ---
 
@@ -18,13 +18,13 @@ Move Product route execution to the shared facade without changing caller-level 
 
 ## What This Task Does
 
-Migrate get_chat_client, reasoning, constrained completion, eval, and health/provider projections from hard-coded provider/model dispatch to the shared router and adapter factory. Keep LLMRoute as a compatibility projection until all in-scope callers use the new route. Derive dispatch/prober membership from declared provider/transport configuration and the selected registry snapshot. Preserve policy settings authority, route explanation, deterministic mock behavior, and existing embedding identity.
+Migrate get_chat_client, reasoning, constrained completion, eval, and health/provider projections from hard-coded provider/model dispatch to the shared router and adapter factory. Keep LLMRoute as a compatibility projection until all in-scope callers use the new route. Derive dispatch/prober membership from declared provider/transport configuration and the selected registry snapshot. Preserve policy settings authority, route explanation, deterministic mock behavior, existing DeepSeek provider/configuration support, and existing embedding identity.
 
-Product policy initially selects the configured Luna/Codex route for general agent/text work. Compatible text/JSON work may declare Ollama preflight fallback; native-tool or stronger reasoning routes must meet their complete capability intent and fail closed when they cannot.
+Product policy initially selects the configured Luna/Codex route through `codex_cli_tailscale` for general agent/text work. The Product runtime remains on Linux; host/session execution remains on the separate macOS executor. Product system instructions and user content must remain separate through the adapter boundary. Compatible text/JSON work may declare Ollama preflight fallback; native-tool, literal-system-role, or stronger reasoning routes must meet their complete capability intent and fail closed when they cannot. Existing configured DeepSeek calls continue through `deepseek_api` until a separate reviewed retirement.
 
 ## Concretely
 
-get_chat_client(intent) resolves one owner policy, receives one exact route from ModelAccessRouter, and obtains the bound adapter from the factory. Health reports that route and its snapshot/fallback provenance without exposing secrets. Embedding clients continue through their current identity resolver.
+get_chat_client(intent) resolves one owner policy, receives one exact route from ModelAccessRouter, and obtains the bound adapter from the factory. Health reports that route, logical executor/caller profiles, prompt-channel mapping, and snapshot/fallback provenance without exposing host identity or secrets. The Product call preserves `system_prompt` as trusted instructions separate from `user` content at the remote executor boundary. Embedding clients continue through their current identity resolver.
 
 ## Why This Matters
 
@@ -36,12 +36,16 @@ Updating only the low-level adapter would leave other Product code paths on diff
   - Verify: `tests/components/llm/test_fabric.py::test_product_call_sites_use_shared_model_access_router`
 - [ ] The configured Luna route returns exact route/transport/snapshot provenance and does not alter embedding identity.
   - Verify: `tests/components/llm/test_fabric.py::test_luna_route_provenance_and_embedding_identity_are_separate`
+- [ ] Product system instructions and user content reach the Tailscale Codex executor in distinct fields; the factory does not concatenate them or claim literal system-role semantics.
+  - Verify: `tests/components/llm/test_fabric.py::test_product_trusted_and_user_messages_remain_separate_on_remote_route`
 - [ ] Dispatch sets, health probes, and model registry projections match declared provider/transport configuration.
   - Verify: `tests/settings/test_provider_census.py::test_product_dispatch_and_health_projections_match_declared_transports`
 - [ ] Product code adds no new hard-coded model IDs outside registry descriptors and explicit compatibility aliases.
   - Verify: `tests/architecture/test_product_model_ids_are_registry_backed.py::test_product_runtime_model_ids_are_registry_backed`
 - [ ] Existing deterministic mock, env override, route enforcement, and route explanation behavior remains compatible.
   - Verify: `tests/components/llm/test_router_enforced_provider.py::test_legacy_route_projection_and_enforcement_compatibility`
+- [ ] Existing declared DeepSeek route remains dispatchable through `deepseek_api` and no migration silently drops its provider/configuration support.
+  - Verify: `tests/components/llm/test_router_enforced_provider.py::test_deepseek_legacy_route_projects_to_declared_adapter`
 
 ## How to Verify (Pre-Merge)
 

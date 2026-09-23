@@ -15,11 +15,11 @@ Initial state: agent:blocked; the parent waits on child work and host acceptance
 
 - Keep the child issue ledger and dependencies aligned with README.md.
 - Record each merged child's validation receipt.
-- Hold the integrated Codex CLI/Ollama fallback proof and designated-host runtime receipt.
+- Hold the integrated Product-Linux-to-macOS-executor proof, Tailscale app-capability/Serve boundary, Codex CLI/Ollama fallback evidence, and sanitized runtime receipt.
 - Keep current-state owner docs unchanged until the capability acceptance gate passes.
 - Hand off production rollout to the release-channel workflow; do not treat a PR merge as deployment approval.
 - Close only after acceptance is complete and owner-doc writeback is resolved.
 
 ## Parent Closure Gate
 
-The parent closes only when the capability acceptance checklist in README.md is satisfied, every child receipt is linked, the designated-host acceptance receipt is valid and secret-free, release-channel verification is complete for the authorized target, and owner-doc changes state only what is actually shipped.
+The parent closes only when the capability acceptance checklist in README.md is satisfied, every child receipt is linked, the cross-host designated-executor receipt proves the app-capability grant and loopback-only service without leaking host identity or secrets, release-channel verification is complete for the authorized target, and owner-doc changes state only what is actually shipped.

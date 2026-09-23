@@ -1,6 +1,6 @@
 ---
 name: Build Adapter Registry and Codex CLI Transport
-description: Add the shared adapter factory and a bounded Codex CLI adapter while retaining the Model Inquiry codex_subscription compatibility alias.
+description: Add the shared adapter factory and a bounded local Codex CLI executor while retaining the Model Inquiry codex_subscription compatibility alias.
 task_id: MARR-02
 github_issue: 5620
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D2
@@ -14,19 +14,21 @@ can_parallelize_with: []
 
 ## Purpose
 
-Deliver the first-class Codex CLI transport and a registry that binds provider-neutral routes to explicit adapters. Product can use its existing host-local subscription login without creating a metered API key.
+Deliver the bounded local Codex CLI executor and a registry that binds provider-neutral routes to explicit adapters. The Product-side remote transport is a separate MARR-08 slice. The executor uses the existing host-local subscription login without creating a metered API key.
 
 ## What This Task Does
 
-Register codex_cli, ollama_http, openai_api, anthropic_api, and mock adapters behind the shared contract. Generalize the existing Model Inquiry bridge internally to the Codex CLI adapter while retaining codex_subscription as a Model Inquiry compatibility name.
+Register `codex_cli`, `ollama_http`, `openai_api`, `anthropic_api`, `deepseek_api`, and `mock` adapters behind the shared contract. Generalize the existing Model Inquiry bridge internally to the local Codex CLI adapter while retaining `codex_subscription` as a Model Inquiry compatibility name. Keep DeepSeek on an explicit adapter backed by its already-declared Product provider/model configuration; do not require new credentials or implicitly retire its current route.
 
-The Codex adapter preflights executable/version/login status, binds one exact model and reasoning effort, and runs `codex exec --ephemeral` in a dedicated empty work directory—not the Product workspace or repository. It enforces `--sandbox read-only`, disables `shell_tool` and `unified_exec`, ignores ambient user/project tool configuration, and passes only an explicit host-local environment allowlist needed for authentication. It exposes no Product shell, file, MCP, app, or other tool capability. If the installed CLI cannot enforce this profile, preflight fails closed before inference. It requests `--output-schema` only when the installed CLI supports it and strictly validates the result either way. It classifies missing CLI, auth/session expiry, unsupported safe-execution profile, timeout, CLI exit, output-bound, and schema errors separately. It does not retry with a new model or provider after execution begins.
+The Codex executor runs only on the designated macOS host. It preflights the executable/version/login status from the same active interactive user session that owns the existing Keychain-backed Codex login; fresh non-interactive SSH is not supported. It binds one exact model and reasoning effort, then runs `codex exec --ephemeral` in a dedicated empty work directory—not the Product workspace or repository. It enforces `--sandbox read-only`, ignores user/project configuration, and applies a version-reviewed safe profile that removes every model-callable tool, not merely shell and unified execution. Unknown CLI versions, unknown tool surfaces, or a profile that cannot prove no tool execution fail closed before inference. The read-only sandbox and empty cwd are defense-in-depth, not substitutes for the no-tools requirement.
 
-Host path, CODEX_HOME, login session, and credential values remain host-local. The adapter does not enable unrestricted shell or write execution merely because Codex CLI can run tools; tool capability is declared only after the Product tool contract and sandbox are explicitly tested.
+The Codex invocation preserves trusted and untrusted prompt channels. Product system-instruction content is passed only as the CLI's separate `developer_instructions` override; user content is passed only as the user prompt. Do not concatenate the fields. This does not claim that the CLI's developer role is literally a system role: reject requests whose policy requires that exact role. A CLI-version-pinned test verifies the mapping and that ambient files/config cannot replace it. The executor exposes no Product shell, file, browser/computer, MCP, app, plugin, agent-spawn, or other tool capability. It requests `--output-schema` only when the installed CLI supports it and strictly validates the result either way. It classifies missing CLI, auth/session expiry, unsupported safe-execution profile, timeout, CLI exit, output-bound, and schema errors separately. It does not retry with a new model or provider after execution begins.
+
+Host path, CODEX_HOME, login session, and credential values remain host-local. This task implements the local executor only; it does not install or activate its host service, configure Tailscale Serve, or edit tailnet grants. The executor does not enable unrestricted shell or write execution merely because Codex CLI can run tools; tool capability is never declared by this slice.
 
 ## Concretely
 
-The factory receives an exact resolved target such as provider=openai, model=gpt-5.6-luna, transport=codex_cli; preflight either returns ready or a typed preflight failure. The fake executable verifies the safe sandbox flags, isolated working directory, and environment allowlist without reading host state. The factory never picks the next catalog model itself.
+The executor receives an exact resolved target such as provider=openai, model=<catalog-resolved-id>, transport=codex_cli; preflight either returns ready or a typed preflight failure. Fake CLI and feature-catalog fixtures verify the safe profile, isolated working directory, separate instruction/user fields, and absence of all tool registrations without reading host state. The factory never picks the next catalog model itself.
 
 ## Why This Matters
 
@@ -34,7 +36,7 @@ Model Inquiry already has a bounded CLI bridge, but Product cannot route through
 
 ## Acceptance Criteria
 
-- [ ] Factory registration is derived from declared provider/transport configuration and resolves the five supported adapter IDs.
+- [ ] Factory registration is derived from declared provider/transport configuration and resolves the six supported adapter IDs, including the existing DeepSeek route.
   - Verify: `tests/model_access/test_adapter_factory.py::test_factory_resolves_only_declared_adapter_ids`
 - [ ] Codex preflight checks CLI version and login status and reports typed missing-cli/session-expired failures without exposing host secrets.
   - Verify: `tests/model_access/test_codex_cli_adapter.py::test_preflight_classifies_cli_auth_and_version_failures`
@@ -42,8 +44,12 @@ Model Inquiry already has a bounded CLI bridge, but Product cannot route through
   - Verify: `tests/model_access/test_codex_cli_adapter.py::test_execution_is_ephemeral_pinned_bounded_and_single_target`
 - [ ] Schema handling uses --output-schema only when supported and otherwise strictly validates JSON locally.
   - Verify: `tests/model_access/test_codex_cli_adapter.py::test_schema_support_and_strict_validation_fallback`
-- [ ] Product Codex execution uses a read-only sandbox, disables shell/execution features, ignores ambient tool configuration, and runs in the isolated work directory; unsupported CLI profiles fail before inference.
-  - Verify: `tests/model_access/test_codex_cli_adapter.py::test_exec_disables_host_tools_and_uses_isolated_readonly_workdir`
+- [ ] Codex execution preserves trusted instruction and user channels by using separate `developer_instructions` and user-prompt inputs; it never concatenates them or claims literal system-role equivalence.
+  - Verify: `tests/model_access/test_codex_cli_adapter.py::test_trusted_instruction_and_user_content_use_separate_channels`
+- [ ] Codex execution uses a read-only sandbox and isolated work directory, disables every model-callable tool and ambient configuration, and fails closed on an unknown CLI version/tool surface.
+  - Verify: `tests/model_access/test_codex_cli_adapter.py::test_versioned_no_tools_profile_fails_closed_on_unknown_features`
+- [ ] DeepSeek routes retain a declared adapter and existing configured endpoint/model behavior without requiring new credentials.
+  - Verify: `tests/model_access/test_adapter_factory.py::test_deepseek_route_remains_available_from_declared_provider_config`
 - [ ] codex_subscription remains an alias that keeps Model Inquiry single-target and fallback-forbidden.
   - Verify: `tests/builderops/test_model_inquiry_adapters.py::test_codex_subscription_alias_preserves_no_fallback_contract`
 - [ ] No Product tool capability is advertised without a tested, bounded tool contract.
@@ -52,12 +58,12 @@ Model Inquiry already has a bounded CLI bridge, but Product cannot route through
 ## How to Verify (Pre-Merge)
 
 - Run pytest -q tests/model_access/test_adapter_factory.py tests/model_access/test_codex_cli_adapter.py tests/builderops/test_model_inquiry_adapters.py.
-- Use a fake Codex executable for version, login, safe-profile flags, isolated cwd/environment, timeout, exit, schema, and output-size cases; do not invoke a live model.
+- Use fake Codex executables and feature catalogs for version, login, no-tools profile, prompt-channel mapping, isolated cwd/environment, timeout, exit, schema, and output-size cases; do not invoke a live model.
 - Inspect route/receipt fixtures and logs for secret redaction.
 
 ## Out of Scope
 
-- Modifying designated-host configuration or subscription state.
+- Installing or activating a designated-host service, changing Tailscale policy/Serve configuration, or changing subscription state.
 - Enabling arbitrary command execution, writes, or Product native tools without a separately verified sandbox/contract.
 - Selecting a replacement model after the route was resolved.
 
