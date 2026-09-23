@@ -353,17 +353,17 @@ def overlay_host_markup(*, anchor_note_path: str = "") -> str:
       justify-content: space-between;
     }}
     .overlay-frame-title {{
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       flex: 1 1 auto;
       font-family: var(--font-ui, sans-serif);
       font-size: var(--text-sm, 13px);
       font-weight: 600;
     }}
     .overlay-frame-status-pill {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border, #152030);
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
       border-radius: 4px;
-      color: var(--fg-2, #7a9ab8);
+      color: var(--fg-2);
       font-family: var(--font-mono, monospace);
       font-size: var(--text-xs, 11px);
       padding: 2px 7px;
@@ -372,13 +372,13 @@ def overlay_host_markup(*, anchor_note_path: str = "") -> str:
     .overlay-frame-close {{
       background: transparent;
       border: none;
-      color: var(--fg-2, #7a9ab8);
+      color: var(--fg-2);
       cursor: pointer;
       font-size: 1.2rem;
       line-height: 1;
       padding: 0 4px;
     }}
-    .overlay-frame-close:hover {{ color: var(--fg-1, #dce8f0); }}
+    .overlay-frame-close:hover {{ color: var(--fg-1); }}
   </style>
   <!-- Shared overlay host (#1785, SEP-03) — the single mount/dismiss
        substrate for shell overlays. Esc and the scrim dismiss the topmost

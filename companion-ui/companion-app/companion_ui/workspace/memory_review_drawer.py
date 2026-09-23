@@ -461,8 +461,8 @@ def memory_review_drawer_markup() -> str:
        outcomes and receipts and never classifies or promotes locally. -->
   <style>
     .memory-review-drawer {{
-      background: var(--bg-surface, #0c1220);
-      border-left: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border-strong);
       bottom: 0;
       box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
       display: flex;
@@ -484,69 +484,69 @@ def memory_review_drawer_markup() -> str:
       justify-content: space-between;
     }}
     .memory-review-kicker {{
-      color: var(--fg-3, #3d5570); font-size: 11px; letter-spacing: 0.08em;
+      color: var(--fg-2); font-size: 11px; letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
-    .memory-review-title {{ color: var(--fg-1, #dce8f0); font-size: 17px; margin: 2px 0 0; }}
+    .memory-review-title {{ color: var(--fg-1); font-size: 17px; margin: 2px 0 0; }}
     .memory-review-close {{
-      background: none; border: 1px solid var(--border, #152030);
-      border-radius: 4px; color: var(--fg-2, #7a9ab8); cursor: pointer;
+      background: none; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--fg-2); cursor: pointer;
       font-size: 16px; line-height: 1; padding: 4px 9px;
     }}
     .memory-review-callout {{
-      border: 1px solid var(--amber-dim, #805010);
-      border-left: 3px solid var(--amber, #f09030);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); font-size: 13px;
+      border: 1px solid var(--amber-dim);
+      border-left: 3px solid var(--amber);
+      border-radius: 4px; color: var(--fg-1); font-size: 13px;
       margin: 14px 0; padding: 9px 12px;
     }}
     .memory-review-candidate {{
-      border: 1px solid var(--border, #152030); border-radius: 6px;
+      border: 1px solid var(--border); border-radius: 6px;
       margin: 0 0 12px; padding: 12px;
     }}
     .memory-candidate-head {{
       display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px;
     }}
-    .memory-candidate-title {{ color: var(--fg-1, #dce8f0); font-size: 14px; }}
+    .memory-candidate-title {{ color: var(--fg-1); font-size: 14px; }}
     .memory-candidate-authority-tag {{
-      color: var(--amber, #f09030); font-family: var(--font-mono, monospace);
+      color: var(--amber); font-family: var(--font-mono, monospace);
       font-size: 11px;
     }}
-    .memory-candidate-why-now {{ color: var(--fg-2, #7a9ab8); font-size: 13px; margin: 6px 0; }}
+    .memory-candidate-why-now {{ color: var(--fg-2); font-size: 13px; margin: 6px 0; }}
     .memory-candidate-provenance {{ margin: 8px 0; }}
     .memory-provenance-row {{
-      color: var(--fg-3, #3d5570); display: flex; font-size: 12px; gap: 8px;
+      color: var(--fg-2); display: flex; font-size: 12px; gap: 8px;
     }}
-    .memory-provenance-row code {{ color: var(--fg-2, #7a9ab8); word-break: break-all; }}
+    .memory-provenance-row code {{ color: var(--fg-2); word-break: break-all; }}
     .memory-provenance-label {{
       flex: 0 0 92px; letter-spacing: 0.05em; text-transform: uppercase;
       font-size: 10px; line-height: 1.8;
     }}
     .memory-review-actions {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
     .memory-review-action {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer;
+      background: var(--bg-raised); border: 1px solid var(--border-strong);
+      border-radius: 4px; color: var(--fg-1); cursor: pointer;
       font-size: 12px; padding: 6px 12px;
     }}
-    .memory-review-action[data-governed="true"] {{ border-color: var(--accent-dim, #80621a); }}
+    .memory-review-action[data-governed="true"] {{ border-color: var(--accent-dim); }}
     .memory-review-action:disabled {{ cursor: default; opacity: 0.45; }}
     .memory-decision-outcome[data-outcome-state="none"] {{ display: none; }}
     .memory-decision-outcome {{
-      border-top: 1px dashed var(--border, #152030); color: var(--fg-2, #7a9ab8);
+      border-top: 1px dashed var(--border); color: var(--fg-2);
       font-size: 12px; margin-top: 10px; padding-top: 8px;
     }}
     .memory-outcome-receipt {{
       display: grid; gap: 2px 10px; grid-template-columns: auto 1fr; margin: 6px 0 0;
     }}
     .memory-outcome-receipt dt {{
-      color: var(--fg-3, #3d5570); font-size: 10px; letter-spacing: 0.05em;
+      color: var(--fg-2); font-size: 10px; letter-spacing: 0.05em;
       text-transform: uppercase;
     }}
     .memory-outcome-receipt dd {{
-      color: var(--fg-2, #7a9ab8); font-family: var(--font-mono, monospace);
+      color: var(--fg-2); font-family: var(--font-mono, monospace);
       font-size: 11px; margin: 0; word-break: break-all;
     }}
     .memory-review-empty, .memory-review-unavailable, .memory-review-loading {{
-      color: var(--fg-2, #7a9ab8); font-size: 13px;
+      color: var(--fg-2); font-size: 13px;
     }}
     /* Overlay-host layer styles (duplicated verbatim from the workspace
        sheet so the host substrate is also styled on the orientation

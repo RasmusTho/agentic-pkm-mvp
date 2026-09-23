@@ -263,7 +263,7 @@ def capture_modal_markup() -> str:
       background: var(--accent);
       border: none;
       border-radius: 8px;
-      color: #0a0e16;
+      color: var(--fg-inverse);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
@@ -271,7 +271,7 @@ def capture_modal_markup() -> str:
       padding: 8px 14px;
     }
     .capture-status {
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-ui);
       font-size: var(--text-xs);
       min-height: 1em;
@@ -300,7 +300,7 @@ def capture_modal_markup() -> str:
       white-space: pre-wrap;
     }
     .capture-session-state {
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }

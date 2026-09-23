@@ -4,7 +4,7 @@ description: Contract for local, non-authoritative display/listening preference 
 doc_role: Local-state contract
 authority: Binding contract for local display/listening preference state in Companion UI. Canonical artifact authority remains with the vault; this contract owns only the local-UI-state boundary. Where it disagrees with WORKSPACE_STATE_CONTRACT.md on the local-state home, that contract wins.
 owner: Companion UI / product architecture
-last_reviewed: 2026-06-07
+last_reviewed: 2026-09-23
 source_contracts:
   - companion-ui/docs/WORKSPACE_STATE_CONTRACT.md
   - companion-ui/docs/UI_RUNTIME_BOUNDARIES.md
@@ -26,6 +26,7 @@ Display and listening preferences are Local UI state. They re-render identical c
 Local re-rendering of identical content in the read-only Companion projection may affect:
 
 - Note/source body rendering: font, size, line length, spacing, contrast, and theme.
+- Workspace theme: Yggdrasil Dark (canonical) or Yggdrasil Light "Shell" (per-user trial, YDS-03 #5629). It is the `theme` key (`"dark"` | `"light"`) of the shipped `companion.displayPreferences.v1` display state, applied as `data-theme` on the root element; tokens come from the generated `yggdrasil-tokens.css`. Choosing Light shows the local-only indicator, and reset-to-canonical returns to Dark.
 - Proposal and card text typography/spacing/visual separation, but never option text, option count, default selection, or consequence labelling.
 - Resurfaced card rendering within server-declared content.
 - Listening modality and pacing: read, listen, sequential, bimodal, and speed.

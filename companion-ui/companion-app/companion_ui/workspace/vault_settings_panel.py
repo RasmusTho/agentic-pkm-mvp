@@ -415,16 +415,16 @@ def _vault_settings_editor_styles() -> str:
     }}
     .vault-setting-row {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }}
     {inputs} {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); padding: 5px 8px; width: 100%;
+      background: var(--bg-raised); border: 1px solid var(--border-strong);
+      border-radius: 4px; color: var(--fg-1); padding: 5px 8px; width: 100%;
     }}
     {buttons} {{
-      background: var(--bg-raised, #111a2e); border: 1px solid var(--border-strong, #1e3050);
-      border-radius: 4px; color: var(--fg-1, #dce8f0); cursor: pointer; padding: 6px 10px;
+      background: var(--bg-raised); border: 1px solid var(--border-strong);
+      border-radius: 4px; color: var(--fg-1); cursor: pointer; padding: 6px 10px;
     }}
     {buttons_disabled} {{ cursor: not-allowed; opacity: 0.55; }}
     .vault-permissions {{ display: flex; flex-wrap: wrap; gap: 6px; }}
-    .vault-permission {{ border: 1px solid var(--border, #152030); border-radius: 4px; padding: 3px 6px; }}"""
+    .vault-permission {{ border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }}"""
 
 
 def vault_settings_panel_markup(
@@ -463,13 +463,13 @@ def vault_settings_panel_markup(
     return f"""
   <style>
     .vault-settings-panel {{
-      border-top: 1px solid var(--border, #152030);
+      border-top: 1px solid var(--border);
       display: grid; gap: 12px; padding: 14px 16px;
     }}
     .vault-settings-panel[hidden] {{ display: none !important; }}
     .vault-settings-panel[data-display-mode="drawer"] {{
-      background: var(--bg-surface, #0b1220);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
       border-radius: 8px;
       bottom: 16px;
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);

@@ -187,3 +187,18 @@ def test_reduced_motion_zeroes_durations() -> None:
     block = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("\n}", 1)[0]
     for name in ("duration-fast", "duration-base", "duration-slow"):
         assert f"--{name}: 0ms;" in block
+
+
+def test_tokens_only_sheet_has_no_element_defaults() -> None:
+    """dist/yggdrasil-tokens.css carries the same tokens but no v1 element defaults or utilities."""
+    build = _build()
+    tokens_only = (REPO_ROOT / build.TOKENS_CSS_OUTPUT).read_text(encoding="utf-8")
+    assert _root_tokens(tokens_only) == _root_tokens(BINDING.read_text(encoding="utf-8"))
+    rules = _rules(tokens_only)
+    assert rules
+    not_opt_in = [
+        selector
+        for selector, body in rules
+        if not any(marker in selector or marker in body for marker in OPT_IN_MARKERS + ACCESSIBILITY_MARKERS)
+    ]
+    assert not_opt_in == []
