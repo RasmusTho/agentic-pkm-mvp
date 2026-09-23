@@ -60,7 +60,8 @@ design-system/yggdrasil/
   tokens/semantic.json        # roles that reference primitives
   tokens/themes/dark.json     # role -> primitive bindings (Yggdrasil Dark, default)
   tokens/themes/shell.json    # role -> primitive bindings (Yggdrasil Light "Shell", trial)
-  tokens/materials/*.json     # per-theme backdrop, glass, surface finish, light, motion
+  tokens/css-values.json      # CSS-native values DTCG cannot express (shadow stacks,
+                              # gradients/materials, em letter-spacing, keyword easing)
   tokens/density/comfortable.json
   tokens/density/compact.json
   VERSION                     # semver of the system
@@ -235,7 +236,7 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 
 | Slice | Outcome | Depends on | Notes |
 |---|---|---|---|
-| **S1** Token source and generator | DTCG source, stdlib generator, regenerated binding sheet with byte-compatible Dark semantics, Shell theme and material, density profiles, effects layer, contrast and freshness CI | — | Enabling change. Dark token values, the global `:focus-visible` rule, and the existing utility classes are unchanged, so existing consumers render identically in Dark/comfortable. New rules (focus ring, effects layer, Shell, density) are opt-in. |
+| **S1** Token source and generator | **Delivered (#5627).** `design-system/yggdrasil/` holds the DTCG source (primitives, semantic aliases, Dark and Shell themes, density; structured values and `{alias}` syntax, checked by `test_token_source_is_valid_dtcg`), `css-values.json` for CSS-native values DTCG cannot express (shadows, materials, em tracking, keyword easing), the contrast pairs, `VERSION` 2.0.0, and the stdlib `build.py` (`--check` for freshness). It generates both CSS copies, `dist/YggdrasilTokens.swift`, and `dist/tokens.json`. Every v1 token and rule is unchanged (checked against `tests/design_system/fixtures/colors_and_type.v1.css`). Shell, compact density, the v2 focus ring (`data-focus="v2"`), and `.fx-*` effects are opt-in only. JetBrains Mono now loads from Google Fonts. `prefers-reduced-motion` zeroes the duration tokens. `dist/tokens.json` resolves every alias to a concrete value. | — | The live Claude Design gate fails closed until S2 re-syncs the new sheet bytes. |
 | **S2** Live system reconciliation | Claude Design system republished from S1 output (Dark and Shell), no longer Legacy; README matches tokens (closes DS-1); component previews promoted to exports (DS-2); gate records new SHA-256 | S1 | **Owner-assisted:** needs a working Claude Design login. Until S2 lands, the byte-parity gate fails closed and new design generation waits. |
 | **S3** Companion migration | Workspace modules, renderer modules, and the canvas/converse/panel pages use tokens only; inlined subset replaced by the served sheet; off-palette colours removed; readable `fg-3` moved to `fg-2`; opt in to the new focus ring; per-user Light (Shell) toggle for the trial | S1 | Hex-literal ceiling test per module. **Trial gate:** the owner uses Shell in the Companion and then decides whether it graduates, needs changes, or is dropped. |
 | **S4** Builder UI migration | Cockpit, Signboard, legacy dashboard, CKM overview (`app/builderops/ckm/overview_html.py`), the DevUI candidate, and the **served managed DevUI stylesheet** `app/builderops/devui_managed.css` on tokens with compact density. Includes updating `ASSET_SHA256` in `app/builderops/devui_assets.py` and its provenance tests. Readable `fg-3` moved to `fg-2`; opt in to the new focus ring. | S1 | Can run in parallel with S3. |

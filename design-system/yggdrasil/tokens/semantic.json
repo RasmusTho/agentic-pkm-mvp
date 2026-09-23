@@ -1,0 +1,45 @@
+{
+  "$description": "Additive semantic aliases. Status roles alias the domain roles; mark tones default to the role colour.",
+  "tokens": {
+    "status-success": {
+      "$type": "color",
+      "$value": "{vault}"
+    },
+    "status-warning": {
+      "$type": "color",
+      "$value": "{amber}"
+    },
+    "status-danger": {
+      "$type": "color",
+      "$value": "{destructive}"
+    },
+    "status-info": {
+      "$type": "color",
+      "$value": "{agent}"
+    },
+    "accent-mark": {
+      "$type": "color",
+      "$value": "{accent}"
+    },
+    "cyan-mark": {
+      "$type": "color",
+      "$value": "{cyan}"
+    },
+    "vault-mark": {
+      "$type": "color",
+      "$value": "{vault}"
+    },
+    "agent-mark": {
+      "$type": "color",
+      "$value": "{agent}"
+    },
+    "amber-mark": {
+      "$type": "color",
+      "$value": "{amber}"
+    },
+    "destructive-mark": {
+      "$type": "color",
+      "$value": "{destructive}"
+    }
+  }
+}

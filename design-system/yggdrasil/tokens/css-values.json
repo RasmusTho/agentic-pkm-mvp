@@ -1,0 +1,131 @@
+{
+  "$description": "CSS-native values that DTCG cannot express exactly (shadow stacks, gradients, em letter-spacing, keyword easing, rgba glass, keyword sizes). They are emitted verbatim into the CSS outputs and resolved into dist/tokens.json. \"root\" belongs to Yggdrasil Dark (default); \"shell\" overrides it for Yggdrasil Light \"Shell\".",
+  "root": {
+    "tracking-tight": {
+      "$value": "-0.02em",
+      "$type": "dimension"
+    },
+    "tracking-normal": {
+      "$value": "0em",
+      "$type": "dimension"
+    },
+    "tracking-wide": {
+      "$value": "0.04em",
+      "$type": "dimension"
+    },
+    "tracking-wider": {
+      "$value": "0.08em",
+      "$type": "dimension"
+    },
+    "shadow-sm": {
+      "$value": "0 1px 3px rgba(0,0,0,0.3)",
+      "$type": "shadow"
+    },
+    "shadow-md": {
+      "$value": "0 4px 12px rgba(0,0,0,0.4)",
+      "$type": "shadow"
+    },
+    "shadow-lg": {
+      "$value": "0 8px 32px rgba(0,0,0,0.5)",
+      "$type": "shadow"
+    },
+    "shadow-float": {
+      "$value": "0 4px 24px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.3)",
+      "$type": "shadow"
+    },
+    "shadow-inset": {
+      "$value": "inset 0 1px 3px rgba(0,0,0,0.35)",
+      "$type": "shadow"
+    },
+    "ease-linear": {
+      "$value": "linear",
+      "$type": "cubicBezier"
+    },
+    "cyan-glow": {
+      "$value": "0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5)",
+      "$type": "shadow"
+    },
+    "vault-glow": {
+      "$value": "0 0 8px rgba(57,232,125,0.3)",
+      "$type": "shadow"
+    },
+    "agent-glow": {
+      "$value": "0 0 8px rgba(74,158,255,0.3)",
+      "$type": "shadow"
+    },
+    "material-backdrop": {
+      "$value": "linear-gradient(rgba(0,212,232,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(0,212,232,0.04) 1px, transparent 1px)",
+      "$type": "string"
+    },
+    "material-backdrop-size": {
+      "$value": "32px 32px",
+      "$type": "dimension"
+    },
+    "material-glass": {
+      "$value": "rgba(12,18,32,0.85)",
+      "$type": "color"
+    },
+    "material-on-glass": {
+      "$value": "#dce8f0",
+      "$type": "color"
+    },
+    "material-on-glass-2": {
+      "$value": "#7a9ab8",
+      "$type": "color"
+    },
+    "material-rim-light": {
+      "$value": "none",
+      "$type": "shadow"
+    },
+    "material-chroma-split": {
+      "$value": "none",
+      "$type": "shadow"
+    }
+  },
+  "shell": {
+    "cyan-glow": {
+      "$value": "0 0 12px rgba(0,229,255,0.45)",
+      "$type": "shadow"
+    },
+    "vault-glow": {
+      "$value": "0 0 8px rgba(22,201,94,0.45)",
+      "$type": "shadow"
+    },
+    "agent-glow": {
+      "$value": "0 0 8px rgba(47,107,255,0.4)",
+      "$type": "shadow"
+    },
+    "material-backdrop": {
+      "$value": "repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px), radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%), radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%), radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%), radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%), linear-gradient(120deg, #6a2bff, #1a0a2e 60%)",
+      "$type": "string"
+    },
+    "material-backdrop-size": {
+      "$value": "auto",
+      "$type": "dimension"
+    },
+    "material-glass": {
+      "$value": "rgba(10,8,24,0.74)",
+      "$type": "color"
+    },
+    "material-on-glass": {
+      "$value": "#ffffff",
+      "$type": "color"
+    },
+    "material-on-glass-2": {
+      "$value": "rgba(255,255,255,0.8)",
+      "$type": "color"
+    },
+    "material-sheet": {
+      "$value": "linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%)",
+      "$type": "string"
+    },
+    "material-rim-light": {
+      "$value": "-14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95)",
+      "$type": "shadow"
+    },
+    "material-chroma-split": {
+      "$value": "-1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55)",
+      "$type": "shadow"
+    }
+  }
+}
