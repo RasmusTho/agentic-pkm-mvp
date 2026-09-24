@@ -838,17 +838,24 @@ jobs:
           # with bounded concurrency, then run the host/Fd-sensitive boundary
           # tests after every shard has exited.
           marker='not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime'
-          shard_root="$(mktemp -d)"
+          # Keep partial logs outside a temporary directory with an EXIT cleanup:
+          # a cancelled step must still leave evidence for the always-run upload.
+          shard_root="$RUNNER_TEMP/pytest-not-pg-shards"
+          mkdir -p "$shard_root"
           shard_list="$shard_root/shards"
           status_file="$shard_root/status"
           log_dir="$shard_root/logs"
           mkdir -p "$log_dir"
-          trap 'rm -rf "$shard_root"' EXIT
+          : > "$status_file"
 
           find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
             while IFS= read -r path; do
               case "$path" in
-                tests/*/*) printf '%s\n' "${path%/*}" ;;
+                tests/*/*)
+                  # pytest recurses, so a nested directory cannot also be a shard.
+                  relative="${path#tests/}"
+                  printf 'tests/%s\n' "${relative%%/*}"
+                  ;;
                 tests/*) printf '%s\n' "$path" ;;
               esac
             done |
@@ -872,13 +879,15 @@ jobs:
             shard="$1"
             safe="${shard//\//_}"
             log="$log_dir/$safe.log"
-            python -m pytest -q -m "$marker" "$shard" \
+            started=$SECONDS
+            python -m pytest -q -m "$marker" "$shard" --durations=20 \
               --ignore=tests/invariants/test_vault_multiwriter.py > "$log" 2>&1
             rc=$?
             if [[ "$rc" -eq 5 ]] && ! grep -Eq "FAILED|ERROR" "$log" && \
               grep -Eq "no tests ran|[0-9]+ deselected" "$log"; then
               rc=0
             fi
+            echo "SHARD FINISHED ($rc): $shard in $((SECONDS - started))s"
             printf "%s %s\n" "$rc" "$shard" >> "$status_file"
             exit 0
           ' _ < "$shard_list"
@@ -920,7 +929,7 @@ jobs:
           set -o pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
           echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
-          pytest ${{ steps.select-tests.outputs.pytest_args }} | tee pytest-not-pg.log
+          pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20 | tee pytest-not-pg.log
 
       - name: Skip unit tests for docs-only PR
         if: steps.changes.outputs.code != 'true'
@@ -932,6 +941,13 @@ jobs:
         with:
           name: pytest-not-pg-logs
           path: pytest-not-pg.log
+
+      - name: Upload process shard logs
+        if: always() && steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-not-pg-shards
+          path: ${{ runner.temp }}/pytest-not-pg-shards/
 
   pr-index-pg-contracts:
     name: Index PG contracts
@@ -1167,11 +1183,16 @@ jobs:
       - name: Run exact index, BuilderOps, YouTube quota, entity-review journal, and durable table ownership PG surface
         if: steps.changes.outputs.index_pg == 'true'
         shell: bash
+        env:
+          # A blocked DB call must name the test and dump its stack before the
+          # whole job reaches its 30-minute ceiling. The plugin is fail-loud.
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
         run: |
           set -o pipefail
           # FCA-ID-A (#5550): the two Issue-delivery Verify nodes require
           # the explicit scratch PostgreSQL service in this lane.
-          pytest -q -m "pg" \
+          pytest -vv --durations=20 -m "pg" \
             tests/index/test_provenance_stamp.py \
             tests/index/test_identity_migration.py \
             tests/indexer/test_outbox_roundtrip_pg.py \
