@@ -1,5 +1,5 @@
 /* ============================================================
-   Yggdrasil Design System v2.1.0 — Colors & Type
+   Yggdrasil Design System v2.2.0 — Colors & Type
    ============================================================
    GENERATED from design-system/yggdrasil/ by build.py. Do not edit;
    change the token source and run: python3 design-system/yggdrasil/build.py
@@ -135,6 +135,14 @@
   --surface-title-shadow: none;
   --surface-panel-filter: none;   /* backdrop filter on panels; frost when the sheet is translucent */
   --surface-reading: var(--bg-base);   /* note body and source editor reading surface */
+  --material-glitch: none;   /* Shell night-city tear layer; Dark has none */
+  --material-dip: transparent;   /* Shell night-city power-dip layer */
+  --city-dip-animation: none;   /* animation name for .fx-city; none keeps Dark static */
+  --city-fade-2-animation: none;   /* animation name for .fx-city layers; none keeps Dark static */
+  --city-fade-3-animation: none;   /* animation name for .fx-city layers; none keeps Dark static */
+  --city-glitch-animation: none;   /* animation name for .fx-city layers; none keeps Dark static */
+  --material-backdrop-2: none;   /* Shell night-city palette layer 2 (Aurora) */
+  --material-backdrop-3: none;   /* Shell night-city palette layer 3 (Ice & Ember) */
   --control-height: 36px;
   --row-height: 40px;
 }
@@ -366,12 +374,12 @@ hr {
   --cyan-glow: 0 0 12px rgba(0,229,255,0.45);
   --vault-glow: 0 0 8px rgba(22,201,94,0.45);
   --agent-glow: 0 0 8px rgba(47,107,255,0.4);
-  --material-backdrop: repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px), radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%), radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%), radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%), radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%), linear-gradient(120deg, #6a2bff, #1a0a2e 60%);
+  --material-backdrop: repeating-linear-gradient(90deg, transparent 0 37px, color-mix(in srgb, var(--city-1-b) 45%, transparent) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.28) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, color-mix(in srgb, var(--city-1-a) 50%, transparent) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px), radial-gradient(9% 12% at 34% 22%, color-mix(in srgb, var(--city-1-b) 85%, transparent), transparent 70%), radial-gradient(7% 10% at 62% 64%, color-mix(in srgb, var(--city-1-a) 85%, transparent), transparent 70%), radial-gradient(11% 9% at 78% 30%, color-mix(in srgb, var(--city-1-c) 80%, transparent), transparent 70%), radial-gradient(8% 12% at 22% 70%, color-mix(in srgb, var(--city-1-d) 80%, transparent), transparent 70%), radial-gradient(26% 34% at 0% 18%, var(--city-1-a), transparent 72%), radial-gradient(22% 30% at 100% 6%, var(--city-1-b), transparent 72%), radial-gradient(30% 32% at 84% 100%, var(--city-1-c), transparent 72%), radial-gradient(28% 32% at 10% 100%, var(--city-1-d), transparent 72%), linear-gradient(125deg, #150a2a 0%, #06040c 42%, #020104 100%);
   --material-backdrop-size: auto;
   --material-glass: rgba(10,8,24,0.74);
   --material-on-glass: #ffffff;
   --material-on-glass-2: rgba(255,255,255,0.8);
-  --material-sheet: linear-gradient(160deg, rgba(255,255,255,0.81) 0%, rgba(241,242,245,0.75) 45%, rgba(228,230,235,0.75) 100%);
+  --material-sheet: linear-gradient(160deg, rgba(255,255,255,0.9) 0%, rgba(241,242,245,0.85) 45%, rgba(228,230,235,0.85) 100%);
   --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
   --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
   --surface-page: var(--material-backdrop);
@@ -382,8 +390,28 @@ hr {
   --surface-panel-radius: 2px;
   --surface-frame-gap: 10px;
   --surface-title-shadow: var(--material-chroma-split);
-  --surface-panel-filter: blur(4px) saturate(1.3);
+  --surface-panel-filter: blur(6px) saturate(1.5);
   --surface-reading: repeating-linear-gradient(0deg, rgba(15,16,20,0.035) 0 1px, transparent 1px 4px), linear-gradient(90deg, transparent 0 11%, rgba(0,229,255,0.16) 11% calc(11% + 1px), transparent calc(11% + 1px) 73%, rgba(255,31,75,0.14) 73% calc(73% + 2px), transparent calc(73% + 2px)), linear-gradient(rgba(228,230,235,0.86), rgba(228,230,235,0.86));
+  --city-1-a: #ff1f4b;
+  --city-1-b: #00e5ff;
+  --city-1-c: #ff2aa0;
+  --city-1-d: #2850ff;
+  --city-2-a: #ff5a4f;
+  --city-2-b: #00f0c8;
+  --city-2-c: #8a3dff;
+  --city-2-d: #ffb020;
+  --city-3-a: #ff3d1a;
+  --city-3-b: #6cf2ff;
+  --city-3-c: #3b2bff;
+  --city-3-d: #ffd23a;
+  --city-glitch-animation: fx-city-glitch;
+  --city-dip-animation: fx-city-dip;
+  --material-glitch: linear-gradient(0deg, transparent 0 22.4%, color-mix(in srgb, var(--city-1-b) 14%, transparent) 22.4% 24.2%, transparent 24.2% 76.3%, color-mix(in srgb, var(--city-1-a) 14%, transparent) 76.3% 78.6%, transparent 78.6%), linear-gradient(0deg, transparent 0 23%, color-mix(in srgb, var(--city-1-b) 80%, transparent) 23% calc(23% + 3px), transparent calc(23% + 3px) 58%, rgba(255,255,255,0.5) 58% calc(58% + 1px), transparent calc(58% + 1px) 77%, color-mix(in srgb, var(--city-1-a) 85%, transparent) 77% calc(77% + 4px), transparent calc(77% + 4px));
+  --material-dip: rgba(2,1,6,0.5);
+  --material-backdrop-2: repeating-linear-gradient(90deg, transparent 0 37px, color-mix(in srgb, var(--city-2-b) 45%, transparent) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.28) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, color-mix(in srgb, var(--city-2-a) 50%, transparent) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px), radial-gradient(9% 12% at 34% 22%, color-mix(in srgb, var(--city-2-b) 85%, transparent), transparent 70%), radial-gradient(7% 10% at 62% 64%, color-mix(in srgb, var(--city-2-a) 85%, transparent), transparent 70%), radial-gradient(11% 9% at 78% 30%, color-mix(in srgb, var(--city-2-c) 80%, transparent), transparent 70%), radial-gradient(8% 12% at 22% 70%, color-mix(in srgb, var(--city-2-d) 80%, transparent), transparent 70%), radial-gradient(26% 34% at 0% 18%, var(--city-2-a), transparent 72%), radial-gradient(22% 30% at 100% 6%, var(--city-2-b), transparent 72%), radial-gradient(30% 32% at 84% 100%, var(--city-2-c), transparent 72%), radial-gradient(28% 32% at 10% 100%, var(--city-2-d), transparent 72%), linear-gradient(125deg, #150a2a 0%, #06040c 42%, #020104 100%);
+  --material-backdrop-3: repeating-linear-gradient(90deg, transparent 0 37px, color-mix(in srgb, var(--city-3-b) 45%, transparent) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.28) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, color-mix(in srgb, var(--city-3-a) 50%, transparent) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px), radial-gradient(9% 12% at 34% 22%, color-mix(in srgb, var(--city-3-b) 85%, transparent), transparent 70%), radial-gradient(7% 10% at 62% 64%, color-mix(in srgb, var(--city-3-a) 85%, transparent), transparent 70%), radial-gradient(11% 9% at 78% 30%, color-mix(in srgb, var(--city-3-c) 80%, transparent), transparent 70%), radial-gradient(8% 12% at 22% 70%, color-mix(in srgb, var(--city-3-d) 80%, transparent), transparent 70%), radial-gradient(26% 34% at 0% 18%, var(--city-3-a), transparent 72%), radial-gradient(22% 30% at 100% 6%, var(--city-3-b), transparent 72%), radial-gradient(30% 32% at 84% 100%, var(--city-3-c), transparent 72%), radial-gradient(28% 32% at 10% 100%, var(--city-3-d), transparent 72%), linear-gradient(125deg, #150a2a 0%, #06040c 42%, #020104 100%);
+  --city-fade-2-animation: fx-city-fade-2;
+  --city-fade-3-animation: fx-city-fade-3;
 }
 
 @media (prefers-color-scheme: light) {
@@ -428,12 +456,12 @@ hr {
     --cyan-glow: 0 0 12px rgba(0,229,255,0.45);
     --vault-glow: 0 0 8px rgba(22,201,94,0.45);
     --agent-glow: 0 0 8px rgba(47,107,255,0.4);
-    --material-backdrop: repeating-linear-gradient(90deg, transparent 0 37px, rgba(0,229,255,0.55) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.45) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, rgba(255,31,75,0.6) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 1px, transparent 1px 3px), radial-gradient(45% 60% at 0% 20%, #ff1f4b, transparent 70%), radial-gradient(40% 55% at 100% 10%, #00e5ff, transparent 70%), radial-gradient(50% 60% at 80% 100%, #ff2aa0, transparent 70%), radial-gradient(50% 60% at 15% 100%, #2850ff, transparent 70%), linear-gradient(120deg, #6a2bff, #1a0a2e 60%);
+    --material-backdrop: repeating-linear-gradient(90deg, transparent 0 37px, color-mix(in srgb, var(--city-1-b) 45%, transparent) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.28) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, color-mix(in srgb, var(--city-1-a) 50%, transparent) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px), radial-gradient(9% 12% at 34% 22%, color-mix(in srgb, var(--city-1-b) 85%, transparent), transparent 70%), radial-gradient(7% 10% at 62% 64%, color-mix(in srgb, var(--city-1-a) 85%, transparent), transparent 70%), radial-gradient(11% 9% at 78% 30%, color-mix(in srgb, var(--city-1-c) 80%, transparent), transparent 70%), radial-gradient(8% 12% at 22% 70%, color-mix(in srgb, var(--city-1-d) 80%, transparent), transparent 70%), radial-gradient(26% 34% at 0% 18%, var(--city-1-a), transparent 72%), radial-gradient(22% 30% at 100% 6%, var(--city-1-b), transparent 72%), radial-gradient(30% 32% at 84% 100%, var(--city-1-c), transparent 72%), radial-gradient(28% 32% at 10% 100%, var(--city-1-d), transparent 72%), linear-gradient(125deg, #150a2a 0%, #06040c 42%, #020104 100%);
     --material-backdrop-size: auto;
     --material-glass: rgba(10,8,24,0.74);
     --material-on-glass: #ffffff;
     --material-on-glass-2: rgba(255,255,255,0.8);
-    --material-sheet: linear-gradient(160deg, rgba(255,255,255,0.81) 0%, rgba(241,242,245,0.75) 45%, rgba(228,230,235,0.75) 100%);
+    --material-sheet: linear-gradient(160deg, rgba(255,255,255,0.9) 0%, rgba(241,242,245,0.85) 45%, rgba(228,230,235,0.85) 100%);
     --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
     --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
     --surface-page: var(--material-backdrop);
@@ -444,8 +472,28 @@ hr {
     --surface-panel-radius: 2px;
     --surface-frame-gap: 10px;
     --surface-title-shadow: var(--material-chroma-split);
-    --surface-panel-filter: blur(4px) saturate(1.3);
+    --surface-panel-filter: blur(6px) saturate(1.5);
     --surface-reading: repeating-linear-gradient(0deg, rgba(15,16,20,0.035) 0 1px, transparent 1px 4px), linear-gradient(90deg, transparent 0 11%, rgba(0,229,255,0.16) 11% calc(11% + 1px), transparent calc(11% + 1px) 73%, rgba(255,31,75,0.14) 73% calc(73% + 2px), transparent calc(73% + 2px)), linear-gradient(rgba(228,230,235,0.86), rgba(228,230,235,0.86));
+    --city-1-a: #ff1f4b;
+    --city-1-b: #00e5ff;
+    --city-1-c: #ff2aa0;
+    --city-1-d: #2850ff;
+    --city-2-a: #ff5a4f;
+    --city-2-b: #00f0c8;
+    --city-2-c: #8a3dff;
+    --city-2-d: #ffb020;
+    --city-3-a: #ff3d1a;
+    --city-3-b: #6cf2ff;
+    --city-3-c: #3b2bff;
+    --city-3-d: #ffd23a;
+    --city-glitch-animation: fx-city-glitch;
+    --city-dip-animation: fx-city-dip;
+    --material-glitch: linear-gradient(0deg, transparent 0 22.4%, color-mix(in srgb, var(--city-1-b) 14%, transparent) 22.4% 24.2%, transparent 24.2% 76.3%, color-mix(in srgb, var(--city-1-a) 14%, transparent) 76.3% 78.6%, transparent 78.6%), linear-gradient(0deg, transparent 0 23%, color-mix(in srgb, var(--city-1-b) 80%, transparent) 23% calc(23% + 3px), transparent calc(23% + 3px) 58%, rgba(255,255,255,0.5) 58% calc(58% + 1px), transparent calc(58% + 1px) 77%, color-mix(in srgb, var(--city-1-a) 85%, transparent) 77% calc(77% + 4px), transparent calc(77% + 4px));
+    --material-dip: rgba(2,1,6,0.5);
+    --material-backdrop-2: repeating-linear-gradient(90deg, transparent 0 37px, color-mix(in srgb, var(--city-2-b) 45%, transparent) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.28) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, color-mix(in srgb, var(--city-2-a) 50%, transparent) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px), radial-gradient(9% 12% at 34% 22%, color-mix(in srgb, var(--city-2-b) 85%, transparent), transparent 70%), radial-gradient(7% 10% at 62% 64%, color-mix(in srgb, var(--city-2-a) 85%, transparent), transparent 70%), radial-gradient(11% 9% at 78% 30%, color-mix(in srgb, var(--city-2-c) 80%, transparent), transparent 70%), radial-gradient(8% 12% at 22% 70%, color-mix(in srgb, var(--city-2-d) 80%, transparent), transparent 70%), radial-gradient(26% 34% at 0% 18%, var(--city-2-a), transparent 72%), radial-gradient(22% 30% at 100% 6%, var(--city-2-b), transparent 72%), radial-gradient(30% 32% at 84% 100%, var(--city-2-c), transparent 72%), radial-gradient(28% 32% at 10% 100%, var(--city-2-d), transparent 72%), linear-gradient(125deg, #150a2a 0%, #06040c 42%, #020104 100%);
+    --material-backdrop-3: repeating-linear-gradient(90deg, transparent 0 37px, color-mix(in srgb, var(--city-3-b) 45%, transparent) 37px 38px, transparent 38px 91px), repeating-linear-gradient(90deg, transparent 0 53px, rgba(255,255,255,0.28) 53px 54px, transparent 54px 131px), repeating-linear-gradient(90deg, transparent 0 71px, color-mix(in srgb, var(--city-3-a) 50%, transparent) 71px 73px, transparent 73px 167px), repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 3px), radial-gradient(9% 12% at 34% 22%, color-mix(in srgb, var(--city-3-b) 85%, transparent), transparent 70%), radial-gradient(7% 10% at 62% 64%, color-mix(in srgb, var(--city-3-a) 85%, transparent), transparent 70%), radial-gradient(11% 9% at 78% 30%, color-mix(in srgb, var(--city-3-c) 80%, transparent), transparent 70%), radial-gradient(8% 12% at 22% 70%, color-mix(in srgb, var(--city-3-d) 80%, transparent), transparent 70%), radial-gradient(26% 34% at 0% 18%, var(--city-3-a), transparent 72%), radial-gradient(22% 30% at 100% 6%, var(--city-3-b), transparent 72%), radial-gradient(30% 32% at 84% 100%, var(--city-3-c), transparent 72%), radial-gradient(28% 32% at 10% 100%, var(--city-3-d), transparent 72%), linear-gradient(125deg, #150a2a 0%, #06040c 42%, #020104 100%);
+    --city-fade-2-animation: fx-city-fade-2;
+    --city-fade-3-animation: fx-city-fade-3;
   }
 }
 
@@ -482,6 +530,44 @@ hr {
 .fx-grid       { background-image: var(--material-backdrop); background-size: var(--material-backdrop-size); }
 .fx-chroma     { text-shadow: var(--material-chroma-split); }
 
+/* Shell night city (#5662). Opt in with class="fx-city" on <html>. Three static
+   palette layers (the page backdrop plus html::before/::after) cross-fade over a
+   600 s cycle with opacity only, so the cycle runs on the compositor. Animation
+   names are tokens, so Dark (name: none) never moves. Tear and dip layers never
+   take input; reduced motion stops everything (see the accessibility block). */
+@keyframes fx-city-fade-2 {
+  0% { opacity: 0; }
+  33.333% { opacity: 1; }
+  66.667%, 100% { opacity: 0; }
+}
+@keyframes fx-city-fade-3 {
+  0%, 33.333% { opacity: 0; }
+  66.667% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes fx-city-glitch {
+  0%, 70.9% { opacity: 0; transform: none; }
+  71% { opacity: 1; transform: translateX(-9px); }
+  71.25% { opacity: 1; transform: translateX(14px) scaleY(1.03); }
+  71.5%, 100% { opacity: 0; transform: none; }
+}
+@keyframes fx-city-dip {
+  0%, 87.9% { opacity: 0; }
+  88% { opacity: 1; }
+  88.15% { opacity: 0; }
+  88.5% { opacity: 0.7; }
+  88.65%, 100% { opacity: 0; }
+}
+.fx-city::before,
+.fx-city::after,
+.fx-city > body::before,
+.fx-city > body::after { content: ""; inset: 0; opacity: 0; pointer-events: none; position: fixed; z-index: -1; }
+.fx-city::before { animation: var(--city-fade-2-animation) 600s linear infinite; background: var(--material-backdrop-2); }
+.fx-city::after { animation: var(--city-fade-3-animation) 600s linear infinite; background: var(--material-backdrop-3); }
+.fx-city > body { isolation: isolate; }
+.fx-city > body::before { animation: var(--city-glitch-animation) 29s steps(1) infinite; background: var(--material-glitch); z-index: 2147483000; }
+.fx-city > body::after { animation: var(--city-dip-animation) 53s steps(1) infinite; background: var(--material-dip); }
+
 /* ============================================================
    ACCESSIBILITY — reduced motion (always on)
    ============================================================ */
@@ -491,4 +577,5 @@ hr {
     --duration-base: 0ms;
     --duration-slow: 0ms;
   }
+  .fx-city::before, .fx-city::after, .fx-city > body::before, .fx-city > body::after { animation: none; }
 }

@@ -1,6 +1,6 @@
 # Yggdrasil Design System
 
-Version 2.1.0. Token sheet: `colors_and_type.css`, generated from the repo token source
+Version 2.2.0. Token sheet: `colors_and_type.css`, generated from the repo token source
 `design-system/yggdrasil/` in `RasmusTho/agentic-pkm-mvp`. The repo sheet
 `companion-ui/companion-app/colors_and_type.css` is the binding authority. This project's copy must
 match it byte for byte. If this README and the sheet ever disagree, the sheet wins.
@@ -119,10 +119,11 @@ amber, and red carry domain meaning. The only material is a faint cyan grid, ava
 porcelain sheets. The frame around them is a saturated neon city that the porcelain catches as rim
 light.
 
-- **City backdrop** (app frame): `var(--surface-page)`. Red, cyan, magenta, and blue radial fields
-  over violet, with vertical glitch streaks and faint scanlines.
+- **City backdrop** (app frame): `var(--surface-page)`. A lit night: a near-black base with small
+  neon sign glows and corner fields in four palette colours, glitch streaks, and scanlines. With
+  `class="fx-city"` on `<html>` the palette cycles over 10 minutes (Neo-Tokyo, Aurora, Ice & Ember).
 - **Porcelain sheet** (content): `var(--surface-panel)` and `var(--surface-main)`, frosted glass.
-  A translucent white to `#e4e6eb` gradient (75 % coverage) with `backdrop-filter:
+  A translucent white to `#e4e6eb` gradient (85 % coverage) with `backdrop-filter:
   var(--surface-panel-filter)`, so the city and its glitch streaks show through. Rim light is
   `var(--surface-panel-shadow)`: cyan from the left, red from the right.
 - **Reading surface** (note body, editors): `var(--surface-reading)`. Calm glitch: denser porcelain
@@ -130,7 +131,8 @@ light.
 - **Dark glass chrome** (top bar, anything directly on the city): `var(--material-glass)` with
   `var(--material-on-glass)` text.
 - **Emblem:** the ᛉ rune inside a thin triangle. Wordmark in light, widely tracked capitals.
-- **Motion:** the streak layer may jump a few pixels every 7s. Content never moves. Disabled under
+- **Motion (`.fx-city`):** a brief horizontal tear every 29 s and a city power dip every 53 s,
+  never more than three flashes per second. Content never moves. Everything stops under
   `prefers-reduced-motion`.
 
 Shell's material belongs to the theme. Dark surfaces must not borrow it.

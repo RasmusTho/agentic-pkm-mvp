@@ -114,7 +114,8 @@ def shell_overrides(src: dict[str, object]) -> dict[str, dict[str, object]]:
 REDUCED_MOTION = (
     "/* ============================================================\n   ACCESSIBILITY — reduced motion (always on)\n   ============================================================ */\n"
     "@media (prefers-reduced-motion: reduce) {\n"
-    "  :root {\n    --duration-fast: 0ms;\n    --duration-base: 0ms;\n    --duration-slow: 0ms;\n  }\n}"
+    "  :root {\n    --duration-fast: 0ms;\n    --duration-base: 0ms;\n    --duration-slow: 0ms;\n  }\n"
+    "  .fx-city::before, .fx-city::after, .fx-city > body::before, .fx-city > body::after { animation: none; }\n}"
 )
 
 
@@ -246,7 +247,17 @@ def flatten(src: dict[str, object]) -> dict[str, object]:
         def one(name: str, depth: int = 0) -> str:
             value = css_value(resolve(tokens, name))
             ref = re.fullmatch(r"var\(--([a-z0-9-]+)\)", value)
-            return one(ref.group(1), depth + 1) if ref and ref.group(1) in tokens and depth < 8 else value
+            if ref and ref.group(1) in tokens and depth < 8:
+                return one(ref.group(1), depth + 1)
+            if depth < 8:
+                # Inline references inside composite values (e.g. the Shell city
+                # backdrop's palette colours) resolve to their static defaults.
+                value = re.sub(
+                    r"var\(--([a-z0-9-]+)\)",
+                    lambda m: one(m.group(1), depth + 1) if m.group(1) in tokens else m.group(0),
+                    value,
+                )
+            return value
 
         return {name: one(name) for name in tokens}
 

@@ -89,7 +89,7 @@ def test_light_theme_is_per_user_opt_in() -> None:
     # Tokens are linked, the page opts in to the v2 focus ring, and no theme is
     # forced: Dark is the default until the user chooses Light.
     assert f'<link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">' in html
-    assert '<html lang="en" data-focus="v2">' in html
+    assert '<html lang="en" class="fx-city" data-focus="v2">' in html
     assert 'data-theme="light"' not in html.split("<head>", 1)[0]
     assert DISPLAY_PREF_CANONICAL["theme"] == "dark"
     # The choice is a display preference in the settings drawer, off by default.
@@ -190,3 +190,11 @@ def test_orientation_page_honours_the_theme_preference() -> None:
     layer = html[layer_start : html.index("}", layer_start)]
     assert "background: var(--surface-main);" in layer
     assert "backdrop-filter: var(--surface-panel-filter);" in layer
+
+
+def test_companion_pages_opt_into_the_city_backdrop() -> None:
+    """#5662: workspace and orientation put .fx-city on <html>, where the palette resolves."""
+    from tests.companion_ui.test_reentry_orientation_treatment import _render_no_vault_orientation
+
+    for html in (render_workspace_html(), _render_no_vault_orientation()):
+        assert '<html lang="en" class="fx-city" data-focus="v2">' in html

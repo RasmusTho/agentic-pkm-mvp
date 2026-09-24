@@ -1,8 +1,8 @@
-// GENERATED from design-system/yggdrasil/ (v2.1.0) by build.py. Do not edit.
+// GENERATED from design-system/yggdrasil/ (v2.2.0) by build.py. Do not edit.
 import SwiftUI
 
 public enum YggdrasilTokens {
-    public static let version = "2.1.0"
+    public static let version = "2.2.0"
     public enum Dark {
         public static let bgBase = Color(yggHex: 0x070B12)
         public static let bgSurface = Color(yggHex: 0x0C1220)
