@@ -33,12 +33,15 @@ def resolve_note_artifact_identity(
     safe_note_path: str,
     body: str | None = None,
     heal_missing_uuid: bool = True,
+    allow_recovered_identity: bool = False,
 ) -> ArtifactIdentity:
     """Resolve active workspace identity without path/hash fallbacks.
 
-    A create-once note without a uuid is never rewritten here; it resolves to the
-    retained-source recovery identity shared with ingest, not a workspace-local
-    path or content hash.
+    A create-once note without a uuid is never rewritten here. Read-only callers
+    that pass ``allow_recovered_identity=True`` get the retained-source recovery
+    identity shared with ingest (``identity_state="recovered"``). Every other
+    caller gets an unresolved identity, because a recovered identity was never
+    written to the note and must not authorize a mutation of it.
     """
     companion_identity = _companion_identity(vault_root=vault_root, safe_note_path=safe_note_path)
     if companion_identity is not None:
@@ -71,12 +74,14 @@ def resolve_note_artifact_identity(
         # A create-once note (ADR-0055) is never rewritten, least of all by a read:
         # the backfill write would be refused. Use the same read-only, stable
         # recovery identity ingest derives for this retained note instead (#5660).
-        return _recovery_identity(
-            artifact_path=contained_artifact_path,
-            vault_root=resolved_root,
-            safe_note_path=safe_note_path,
-            body=body,
-        )
+        if allow_recovered_identity:
+            return _recovery_identity(
+                artifact_path=contained_artifact_path,
+                vault_root=resolved_root,
+                safe_note_path=safe_note_path,
+                body=body,
+            )
+        return _unresolved_identity(safe_note_path)
 
     if heal_missing_uuid:
         try:
@@ -98,6 +103,10 @@ def resolve_note_artifact_identity(
                 identity_state="healed",
             )
 
+    return _unresolved_identity(safe_note_path)
+
+
+def _unresolved_identity(safe_note_path: str) -> ArtifactIdentity:
     return ArtifactIdentity(
         artifact_id=None,
         artifact_kind="human_note",

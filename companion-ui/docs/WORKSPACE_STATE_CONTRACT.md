@@ -158,7 +158,7 @@ workspace.
 
 | Field | Rule |
 |---|---|
-| `artifact_id` | Stable artifact identifier when available. For normal human vault notes this is the frontmatter `uuid` or a UUID written by the approved healing path. A create-once note (for example under `Sources/`) without a `uuid` is never rewritten by a read; it reports the read-only retained-source recovery identity that ingest derives for the same note (`identity_source=recovery_candidate`, `identity_state=recovered`). `null` means identity is explicitly unresolved. Path strings and content hashes must not be used as fallback artifact IDs. |
+| `artifact_id` | Stable artifact identifier when available. For normal human vault notes this is the frontmatter `uuid` or a UUID written by the approved healing path. A create-once note (for example under `Sources/`) without a `uuid` is never rewritten by a read; it reports the read-only retained-source recovery identity that ingest derives for the same note (`identity_source=recovery_candidate`, `identity_state=recovered`). A recovered identity is read-only: the workspace exposes no selectable Panel options for it, and mutation paths such as checkbox projection resolve the note as unresolved and refuse. `null` means identity is explicitly unresolved. Path strings and content hashes must not be used as fallback artifact IDs. |
 | `artifact_kind` | `human_note` for normal vault notes; `companion_note` for system-plane companion continuity artifacts. |
 | `note_path` | Browser-safe runtime-relative path or opaque note reference. It must not be an absolute vault path. |
 | `title` | Display title extracted or supplied by the runtime. |

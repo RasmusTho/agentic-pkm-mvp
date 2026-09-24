@@ -993,6 +993,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # is tests/services/test_note_update_service.py.
             "app/services/note_update.py",
             "app/services/note_uuid.py",
+            # Note artifact identity resolution gates checkbox projection
+            # (app/panel/checkbox_projection.py) and the workspace read; leaving
+            # it unowned failed PR selection closed (#5660).
+            "app/services/artifact_identity.py",
+            "tests/services/test_artifact_identity_service.py",
+            "tests/services/test_note_uuid_create_once.py",
             "tests/agents/panel_agent/",
             "tests/agents/test_panel",
             "tests/promotion/",
@@ -1015,6 +1021,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/agents/test_panel_receipts.py",
             "tests/agents/test_panel_writeback_guard.py",
             "tests/services/test_note_update_service.py",
+            "tests/services/test_artifact_identity_service.py",
+            "tests/services/test_note_uuid_create_once.py",
             "tests/promotion",
             "tests/panel",
             *E2E_TARGETS["promotion_panel"],
