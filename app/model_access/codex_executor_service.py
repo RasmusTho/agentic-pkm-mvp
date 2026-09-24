@@ -510,9 +510,9 @@ def main() -> None:
     if not capability_name:
         raise SystemExit("MODEL_ACCESS_SERVE_CAPABILITY_NAME is required")
 
-    ollama_base_url = os.environ.get(
-        "MODEL_ACCESS_OLLAMA_BASE_URL", "http://127.0.0.1:11434"
-    )
+    ollama_base_url = os.environ.get("MODEL_ACCESS_OLLAMA_BASE_URL", "")
+    if not ollama_base_url:
+        raise SystemExit("MODEL_ACCESS_OLLAMA_BASE_URL is required")
     try:
         port = int(os.environ.get("MODEL_ACCESS_EXECUTOR_PORT", "8787"))
     except ValueError as exc:

@@ -62,8 +62,9 @@ freshness, and content hash.
 The service is exposed only behind Tailscale Serve HTTPS, binds to loopback, and requires the
 configured Serve-forwarded `Tailscale-App-Capabilities` grant for the Product channel and the
 operation-specific `complete`, `preflight`, or `catalog` action. Tailscale Serve 1.92 or later is required for capability forwarding. The host
-grant, Serve endpoint, CLI profile path, `CODEX_HOME`, subscription session, and Ollama endpoint
-remain host-local configuration; this repository does not activate or reconfigure them.
+grant, Serve endpoint, CLI profile path, `CODEX_HOME`, subscription session, and the
+`MODEL_ACCESS_OLLAMA_BASE_URL` Ollama endpoint remain host-local configuration. The executor refuses
+to start without that explicit host setting; this repository does not activate or reconfigure it.
 
 The completion endpoint dispatches exactly once to the named adapter and performs no fallback or
 retry. Once a completion request is sent, an ambiguous timeout is terminal; the client must not
