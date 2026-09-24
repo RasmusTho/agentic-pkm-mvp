@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import (
     create_codex_executor_app,
+    main,
     require_loopback_bind_host,
     serve_executor,
 )
@@ -130,6 +131,15 @@ def _payload(transport_id: str = "codex_cli") -> dict[str, Any]:
         "user_input": "Return the configured route result.",
         "output_schema": None,
     }
+
+
+def test_main_requires_configured_ollama_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CODEX_CLI_SAFE_PROFILE_PATH", "/tmp/codex-safe-profile.json")
+    monkeypatch.setenv("MODEL_ACCESS_SERVE_CAPABILITY_NAME", CAPABILITY_NAME)
+    monkeypatch.delenv("MODEL_ACCESS_OLLAMA_BASE_URL", raising=False)
+
+    with pytest.raises(SystemExit, match="MODEL_ACCESS_OLLAMA_BASE_URL is required"):
+        main()
 
 
 def _preflight_payload(transport_id: str = "codex_cli") -> dict[str, Any]:
