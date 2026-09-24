@@ -91,7 +91,7 @@ class OllamaHttpAdapter:
     def __init__(
         self,
         *,
-        base_url: str = "http://127.0.0.1:11434",
+        base_url: str,
         timeout_seconds: float = 120.0,
         max_output_bytes: int = 512_000,
         transport: httpx.BaseTransport | None = None,
