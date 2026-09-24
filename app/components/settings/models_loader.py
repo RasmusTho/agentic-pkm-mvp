@@ -47,6 +47,8 @@ class ModelDescriptor(BaseModel):
     model: str = Field(..., min_length=1)
     dims: Optional[int] = None
     notes: Optional[str] = None
+    selection_group: Optional[str] = None
+    allowed_transports: List[str] = Field(default_factory=list)
     pricing: Optional[ModelPricing] = None
 
 

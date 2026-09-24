@@ -42,6 +42,7 @@ class CompletionCapabilityIntent(_StrictModel):
     structured_output: bool = False
     native_tools: bool = False
     literal_system_role_required: bool = False
+    max_output_tokens_required: bool = False
 
 
 class CompletionRequest(_StrictModel):
@@ -57,6 +58,7 @@ class CompletionRequest(_StrictModel):
     trusted_instructions: str = Field(max_length=32_768)
     user_input: str = Field(min_length=1, max_length=96_000)
     output_schema: dict[str, Any] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
 
     @model_validator(mode="after")
     def _request_matches_declared_capabilities(self) -> "CompletionRequest":
@@ -66,6 +68,10 @@ class CompletionRequest(_StrictModel):
             raise ValueError("Ollama routes do not accept Codex reasoning effort")
         if self.capability_intent.structured_output != (self.output_schema is not None):
             raise ValueError("structured output intent must match the supplied schema")
+        if self.capability_intent.max_output_tokens_required != (
+            self.max_output_tokens is not None
+        ):
+            raise ValueError("output token limit intent must match the supplied limit")
         return self
 
 

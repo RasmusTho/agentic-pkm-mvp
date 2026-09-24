@@ -30,7 +30,33 @@ def test_health_ollama_check_accepts_openai_base_url(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["provider"] == "ollama"
-    assert result["base_url"] == "http://ollama.local:11434/v1"
+    assert result["base_url"] == "http://ollama.local:11434"
+
+
+def test_health_ollama_output_redacts_url_credentials_query_and_path(monkeypatch) -> None:
+    raw_url = "http://user:password@ollama.local:11434/private/path?token=secret"
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_BASE_URL", raw_url)
+
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, object]:
+            return {"models": []}
+
+    def fake_get(url: str, timeout: float) -> DummyResponse:
+        assert url == f"{raw_url}/api/tags"
+        return DummyResponse()
+
+    monkeypatch.setattr(health_module.httpx, "get", fake_get)
+
+    result = health_module._check_ollama()
+
+    assert result["base_url"] == "http://ollama.local:11434"
+    assert "password" not in str(result)
+    assert "secret" not in str(result)
+    assert "/private/path" not in str(result)
 
 
 def test_health_ollama_check_does_not_default_to_ollama(monkeypatch) -> None:

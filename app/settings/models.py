@@ -69,6 +69,14 @@ class LLMRoutingSettings(BaseModel):
             default=None,
             description="Optional embedding profile override when routing embed tasks.",
         )
+        transport_id: str | None = Field(
+            default=None,
+            description="Optional declared transport for this exact model route.",
+        )
+        reasoning_effort: str | None = Field(
+            default=None,
+            description="Optional Codex reasoning effort selected by Product policy.",
+        )
 
     class FallbackPolicy(BaseModel):
         mode: Literal["never", "local", "allowed", "skip"] = Field(
@@ -90,6 +98,14 @@ class LLMRoutingSettings(BaseModel):
         profile: str | None = Field(
             default=None,
             description="Fallback embedding profile override when fallback is allowed.",
+        )
+        transport_id: str | None = Field(
+            default=None,
+            description="Optional declared transport for the configured fallback route.",
+        )
+        reasoning_effort: str | None = Field(
+            default=None,
+            description="Optional reasoning effort for a Codex fallback route.",
         )
 
     class TaskPolicy(BaseModel):

@@ -230,6 +230,7 @@ class OllamaHttpAdapter:
         user_input: str,
         output_schema: dict[str, Any] | None,
         literal_system_role_required: bool,
+        max_output_tokens: int | None = None,
     ) -> str:
         if output_schema is not None:
             validate_inline_schema(output_schema)
@@ -243,6 +244,10 @@ class OllamaHttpAdapter:
         }
         if output_schema is not None:
             payload["format"] = output_schema
+        if max_output_tokens is not None:
+            if max_output_tokens < 1:
+                raise OllamaHttpError("ollama_request_invalid")
+            payload["options"] = {"num_predict": max_output_tokens}
 
         try:
             with self._client.stream("POST", self._url, json=payload) as response:

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.chat.session_log import load_chat_sessions_for_note
+from app.chat import reflection_conversation as reflection_module
 from app.journaling.day_context import assemble_day_context
 from app.chat.reflection_conversation import (
     ReflectionConversationService,
@@ -164,6 +165,12 @@ def test_real_provider_receives_day_context_and_transcript_in_user_messages(
     root, context, note = _vault(tmp_path)
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
     provider_messages: list[list[dict[str, str]]] = []
+    facade_intents = []
+    shared_get_chat_client = reflection_module.get_chat_client
+
+    def _observe_shared_facade(intent, **kwargs):
+        facade_intents.append(intent)
+        return shared_get_chat_client(intent, **kwargs)
 
     def fake_http_chat(**kwargs: object) -> tuple[str, dict[str, str]]:
         messages = kwargs["messages"]
@@ -177,9 +184,16 @@ def test_real_provider_receives_day_context_and_transcript_in_user_messages(
         return response, {"content": response}
 
     monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "gpt-5.4")
+    monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE", "http://provider.test/chat/completions")
     monkeypatch.setattr(llm_module, "_http_chat", fake_http_chat)
+    monkeypatch.setattr(
+        reflection_module, "get_chat_client", _observe_shared_facade
+    )
     settings = ReflectionSettings(
         evening_nudge_enabled=False,
         evening_nudge_start_hour=20,
@@ -195,6 +209,9 @@ def test_real_provider_receives_day_context_and_transcript_in_user_messages(
 
     conversation = service.start(note_path=note, day_context=bundle)
     service.submit_owner_turn(conversation, "It connected several loose ends.")
+
+    assert len(facade_intents) == 2
+    assert all(intent.task_kind == "reflection" for intent in facade_intents)
 
     opening_user = json.loads(provider_messages[0][1]["content"])
     assert opening_user["day_context"]["for_date"] == "2026-07-15"

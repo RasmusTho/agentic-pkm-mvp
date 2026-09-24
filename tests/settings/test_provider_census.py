@@ -20,7 +20,12 @@ from app.builderops.model_access_resolver import (
 )
 from app.llm.adapter import _DISPATCH_PROVIDERS as ADAPTER_DISPATCH_PROVIDERS
 from app.llm.embeddings import PROVIDER_REGISTRY
+from app.model_access.adapter_factory import (
+    ModelAccessAdapterFactory,
+    SUPPORTED_ADAPTER_IDS,
+)
 from app.services.llm import _DISPATCH_PROVIDERS as SERVICE_DISPATCH_PROVIDERS
+from app.cli.health import _check_llm_providers
 
 
 def _census():
@@ -46,7 +51,10 @@ def test_census_loads_and_rejects_unknown_fields(tmp_path: Path) -> None:
         ("app/llm/embeddings.py::PROVIDER_REGISTRY", lambda: PROVIDER_REGISTRY),
         ("app/services/llm.py::_DISPATCH_PROVIDERS", lambda: SERVICE_DISPATCH_PROVIDERS),
         ("app/llm/adapter.py::_DISPATCH_PROVIDERS", lambda: ADAPTER_DISPATCH_PROVIDERS),
-        ("app/cli/health.py::_check_llm_providers", lambda: {"mock", "ollama"}),
+        (
+            "app/cli/health.py::_check_llm_providers",
+            lambda: SERVICE_DISPATCH_PROVIDERS,
+        ),
         ("docs/settings/models/registry.yaml::provider", lambda: {item.provider for item in load_models().values()}),
         (
             "docs/LLM.md::Providers (Current)",
@@ -126,6 +134,88 @@ def test_census_ships_no_stale_known_divergences() -> None:
 def test_ladder_sites_dispatch_through_the_named_constant() -> None:
     assert SERVICE_DISPATCH_PROVIDERS == _census().projection("app/services/llm.py::_DISPATCH_PROVIDERS")
     assert ADAPTER_DISPATCH_PROVIDERS == _census().projection("app/llm/adapter.py::_DISPATCH_PROVIDERS")
+
+
+def test_product_dispatch_and_health_projections_match_declared_transports() -> None:
+    census = _census()
+    factory = ModelAccessAdapterFactory.from_declared_sources()
+    provider_ids = census.projection("app/services/llm.py::_DISPATCH_PROVIDERS")
+
+    health = _check_llm_providers({"ok": True, "detail": "ready"})
+    assert {item["name"] for item in health["providers"]} == provider_ids
+    assert SERVICE_DISPATCH_PROVIDERS == provider_ids
+    assert ADAPTER_DISPATCH_PROVIDERS == provider_ids
+    assert {
+        factory.default_adapter_id(provider) for provider in provider_ids
+    } <= SUPPORTED_ADAPTER_IDS
+
+    model_registry = load_models()
+    luna_candidates = [
+        descriptor
+        for descriptor in model_registry.values()
+        if descriptor.selection_group == "luna"
+    ]
+    assert {item.model for item in luna_candidates} == {"gpt-5.6-luna", "gpt-6-luna"}
+    for descriptor in luna_candidates:
+        assert descriptor.allowed_transports
+        for transport_id in descriptor.allowed_transports:
+            adapter = factory.describe(
+                transport_id, provider=descriptor.provider, model=descriptor.model
+            )
+            assert adapter.transport_id == transport_id
+
+
+def test_active_openai_chat_models_are_census_backed() -> None:
+    census = _census()
+    openai = census.provider("openai")
+    registry = load_models()
+    factory = ModelAccessAdapterFactory.from_declared_sources()
+
+    descriptors = [
+        descriptor
+        for descriptor in registry.values()
+        if descriptor.status == "active"
+        and descriptor.kind == "chat"
+        and descriptor.provider == openai.id
+    ]
+    assert {descriptor.model for descriptor in descriptors} >= {
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-5.4-mini",
+    }
+
+    for descriptor in descriptors:
+        assert descriptor.provider == openai.id
+        census_model = next(
+            (item for item in openai.models if item.id == descriptor.model), None
+        )
+        assert census_model is not None, descriptor.model
+        assert census_model.effective_identity == f"openai/{descriptor.model}"
+
+        transport_ids = descriptor.allowed_transports or [
+            factory.default_adapter_id(descriptor.provider)
+        ]
+        for transport_id in transport_ids:
+            adapter = factory.describe(
+                transport_id, provider=descriptor.provider, model=descriptor.model
+            )
+            assert adapter.transport_id == transport_id
+            for capability in (
+                "structured_output",
+                "native_tools",
+                "system_prompt_channel",
+            ):
+                if getattr(adapter.supported_capabilities, capability):
+                    assert (
+                        getattr(census_model.capabilities, capability)
+                        or getattr(openai.capabilities, capability)
+                    ), (descriptor.model, transport_id, capability)
+
+    for model_id in ("gpt-4.1", "gpt-4.1-mini", "gpt-5.4-mini"):
+        adapter = factory.describe("openai_api", provider=openai.id, model=model_id)
+        assert adapter.supported_capabilities.structured_output is True
+        assert adapter.supported_capabilities.native_tools is True
+        assert adapter.supported_capabilities.system_prompt_channel is True
 
 
 def test_hot_paths_do_not_load_the_census_at_runtime() -> None:

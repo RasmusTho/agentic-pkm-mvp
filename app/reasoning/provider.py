@@ -7,8 +7,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
 
-from app.components.llm.fabric import ChatClient, LLMBackendTimeout
-from app.components.llm.router import LLMRoute
+from app.components.llm.fabric import (
+    ChatClient,
+    LLMBackendTimeout,
+    get_chat_client_for_route,
+)
+from app.components.llm.router import LLMRoute, LLMTaskIntent
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 from app.settings.reasoning_route import resolve_effective_reasoning_route
 from app.llm.trace import log_llm_call
@@ -93,7 +97,9 @@ def _call_chat_with_route(
     # settings-explain and failure tracing.
     settings = SettingsBundle(llm_routing=llm_routing) if llm_routing is not None else None
     route = resolve_effective_reasoning_route(settings=settings)
-    client = ChatClient(route)
+    client = get_chat_client_for_route(
+        LLMTaskIntent(task_kind=task_kind), selected_route=route
+    )
     try:
         response = client.chat(
             task_kind,
@@ -103,7 +109,7 @@ def _call_chat_with_route(
             trace_id=trace_id,
         )
     except Exception as exc:
-        raise ReasoningRouteExecutionError(route, exc) from exc
+        raise ReasoningRouteExecutionError(client.route, exc) from exc
     return response, _route_payload(client.route)
 
 

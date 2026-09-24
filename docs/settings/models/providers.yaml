@@ -92,8 +92,20 @@ providers:
       - id: gpt-6-astra
         effective_identity: openai/gpt-6-astra
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-6-luna
+        effective_identity: openai/gpt-6-luna
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
       - id: gpt-5.4
         effective_identity: openai/gpt-5.4
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-5.4-mini
+        effective_identity: openai/gpt-5.4-mini
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-4.1
+        effective_identity: openai/gpt-4.1
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-4.1-mini
+        effective_identity: openai/gpt-4.1-mini
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
 projections:
   - site: app/components/llm/router.py::_KNOWN_PROVIDERS
@@ -107,7 +119,7 @@ projections:
   - site: app/llm/adapter.py::_DISPATCH_PROVIDERS
     providers: [mock, ollama, openai, deepseek]
   - site: app/cli/health.py::_check_llm_providers
-    providers: [mock, ollama]
+    providers: [mock, ollama, openai, deepseek]
   - site: docs/settings/models/registry.yaml::provider
     providers: [mock, ollama, openai]
   - site: docs/LLM.md::Providers (Current)
