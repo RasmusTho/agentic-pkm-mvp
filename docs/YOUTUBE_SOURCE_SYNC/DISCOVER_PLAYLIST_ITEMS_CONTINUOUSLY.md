@@ -56,10 +56,11 @@ knowledge authority.
 
 ## Explicitly deferred
 
-No scheduler or cadence is added. Owned/public/unlisted/Liked multi-playlist
-product sync, subscriptions, RSS, Takeout, backfill, filters, analytics, broad
-CLI/UI families, full-media storage, advanced receipt recovery, leases, CAS,
-journals, and automatic knowledge promotion remain outside V1.
+This YSS-05 slice adds no scheduler or cadence. The later
+[YSS-06 continuation](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) supplies discovery scheduling
+and its durable lease. Owned/public/unlisted/Liked multi-playlist product sync, subscriptions,
+RSS, Takeout, backfill, filters, analytics, broad CLI/UI families, full-media storage, advanced
+receipt recovery, and automatic knowledge promotion remain outside the supported product scope.
 
 ## Verification
 
