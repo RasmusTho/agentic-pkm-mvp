@@ -1,11 +1,15 @@
-State: Target-state capability specification, filed as parent #5626 with children #5627–#5631 (YDS-01 ready). Nothing in this document is shipped. Current binding
-token truth remains `companion-ui/companion-app/colors_and_type.css` under `docs/DESIGN_PRINCIPLES.md
-:: 11. Shared Visual Language` until a slice below is delivered and its owner doc is promoted.
+State: Capability specification for parent #5626, partly delivered. Slices S1–S5 and the Shell
+follow-ups (#5652, #5657, #5662) are shipped and recorded as delivery evidence in `:: Rollout`; the
+Shell trial decision and the owner-doc promotion (YDS-06, #5631) are still open, so the rest of this
+document remains target state. Binding token truth is the generated
+`companion-ui/companion-app/colors_and_type.css` (design-system `VERSION`) under
+`docs/DESIGN_PRINCIPLES.md :: 11. Shared Visual Language`; where this spec and the generated sheet
+disagree, the sheet wins.
 Doc role: Capability specification directory README for the Yggdrasil Design System v2 refinement.
 Owner: Yggdrasil visual language (DP-11)
 Temporal class: target-state
 Review cadence: event-driven (per delivered slice)
-Last reviewed: 2026-09-23
+Last reviewed: 2026-09-24
 Last verified against: origin/main 22a8928e8, `companion-ui/companion-app/colors_and_type.css`,
 `app/web/static/colors_and_type.css`, `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md :: Yggdrasil
 design-system gate`, `.codex/skills/yggdrasil-design-handoff/SKILL.md`,
@@ -134,14 +138,18 @@ around them is a saturated neon city that the porcelain catches as rim light.
 
 **Structure**
 
-- **City backdrop** (the app frame, visible around panels): radial fields of red `#ff1f4b`,
-  cyan `#00e5ff`, magenta `#ff2aa0`, and electric blue `#2850ff` over violet `#6a2bff` →
-  `#1a0a2e`. On top sit vertical glitch streaks (1–2px lines in cyan, white, and red at
-  irregular periods) and faint horizontal scanlines.
+- **City backdrop** (the app frame, visible around and through panels): a lit night (#5662).
+  A near-black base (`#150a2a` → `#06040c` → `#020104`) with small neon "sign" glows and corner
+  fields in four palette colours (`--city-<n>-a..d`), vertical glitch streaks, and scanlines. The
+  palette cycles over 10 minutes through three complementary sets: Neo-Tokyo (red `#ff1f4b` ↔
+  cyan `#00e5ff`, magenta `#ff2aa0` ↔ blue `#2850ff`), Aurora (coral ↔ turquoise, violet ↔ amber),
+  and Ice & Ember (ember ↔ ice cyan, indigo ↔ gold). The owner asked for more black and a slow
+  cycle on 2026-09-24.
 - **Porcelain sheet** (content surfaces): frosted glass. A translucent `#ffffff` → `#f1f2f5` →
-  `#e4e6eb` gradient at 81 % → 75 % coverage (`--material-sheet`) with a light backdrop frost
-  (`--surface-panel-filter`: `blur(4px) saturate(1.3)`), so the city and its glitch streaks show
-  through. The owner chose this level ("C · Glas") on 2026-09-24 (#5652). A faint suit panel-seam
+  `#e4e6eb` gradient at 90 % → 85 % coverage (`--material-sheet`) with a backdrop frost
+  (`--surface-panel-filter`: `blur(6px) saturate(1.5)`), so the city's glows show through. The
+  owner chose frosted glass ("C · Glas") on 2026-09-24 (#5652). Coverage rose from 75 % with the
+  night base (#5662), so the porcelain still reads as porcelain against black. A faint suit panel-seam
   line draws in one corner. Rim light: cyan from the left, red from the right.
 - **Reading surface** (note body, source editor; `--surface-reading`): calm glitch. Porcelain at
   86 % coverage with faint static scanlines and two hairline chroma streaks (cyan, red). It is
@@ -187,8 +195,13 @@ measured over the brightest point the city can put behind the glass (a white gli
 - Inputs: underline only. Focus is a cyan underline with a red offset.
 - Selection: a red and cyan double edge.
 
-**Motion:** the city's streak layer jumps a few pixels briefly every 7s (a "glitch tick"). It is
-disabled under `prefers-reduced-motion`. Content surfaces never move.
+**Motion (opt in with `class="fx-city"` on `<html>`):** three static palette layers cross-fade
+over a 600 s cycle with opacity only, so the cycle runs on the compositor (measured main-thread
+cost: about 0.3 ms/s, against about 67 ms/s for an animated colour variable). Every 29 s a horizontal tear (two neon hairlines and faint bands) crosses
+the screen for about 150 ms, above everything but never taking input. Every 53 s the city lights
+dip twice behind the glass. Combined, the flashes stay at or below three per second. Everything
+stops under `prefers-reduced-motion`; in Dark the animation-name tokens are `none`. Content
+surfaces never move.
 
 **Scope boundary:** Shell's material (city, rim light, chromatic split, glitch) belongs to the
 theme. It is not an effects utility that Dark surfaces may borrow.
@@ -229,7 +242,7 @@ Other type steps and spacing are unchanged between profiles.
 | DevUI candidate (`companion_ui/workspace/devui_candidate/`) and served managed DevUI (`app/builderops/devui_managed.css`, hash-pinned in `devui_assets.py`) | this | Inline Yggdrasil Dark copy (41/44 identical; system fonts under a strict CSP) | compact | #5637 |
 | CKM overview (`app/builderops/ckm/overview_html.py`) | this | Own inlined token copy | compact | S4 |
 | Bifrost: Heimdal capture, Mimer knowledge (`Yggdrasil/DesignSystem/Theme.swift`) | `RasmusTho/bifrost` | iOS system colours | native (Dynamic Type) | S5 |
-| Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason); re-reconciled to v2.1.0 on 2026-09-24 after the Shell frosted-glass change (#5652) | — | S2 (delivered) |
+| Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason); re-reconciled to v2.1.0 (#5652) and v2.2.0 (#5662, night city) on 2026-09-24 | — | S2 (delivered) |
 
 ### Bifrost
 
