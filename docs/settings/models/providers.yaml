@@ -98,6 +98,12 @@ providers:
       - id: gpt-5.4
         effective_identity: openai/gpt-5.4
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-4.1
+        effective_identity: openai/gpt-4.1
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-4.1-mini
+        effective_identity: openai/gpt-4.1-mini
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
 projections:
   - site: app/components/llm/router.py::_KNOWN_PROVIDERS
     providers: [mock, ollama, openai, deepseek]

@@ -165,6 +165,28 @@ def test_product_dispatch_and_health_projections_match_declared_transports() -> 
             assert adapter.transport_id == transport_id
 
 
+def test_active_reasoning_models_are_census_backed() -> None:
+    census = _census()
+    openai = census.provider("openai")
+    registry = load_models()
+    factory = ModelAccessAdapterFactory.from_declared_sources()
+
+    for model_id in ("openai.chat.gpt_4_1", "openai.chat.gpt_4_1_mini"):
+        descriptor = registry[model_id]
+        assert descriptor.status == "active"
+        assert descriptor.provider == openai.id
+        census_model = next(
+            item for item in openai.models if item.id == descriptor.model
+        )
+        assert census_model.effective_identity == f"openai/{descriptor.model}"
+        adapter = factory.describe(
+            "openai_api", provider=descriptor.provider, model=descriptor.model
+        )
+        assert adapter.supported_capabilities.structured_output is True
+        assert adapter.supported_capabilities.native_tools is True
+        assert adapter.supported_capabilities.system_prompt_channel is True
+
+
 def test_hot_paths_do_not_load_the_census_at_runtime() -> None:
     hot_paths = [
         Path("app/components/llm/router.py"),
