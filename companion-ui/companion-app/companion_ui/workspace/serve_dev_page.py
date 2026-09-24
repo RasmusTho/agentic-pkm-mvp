@@ -11682,6 +11682,7 @@ def render_index_html(
       border-right: 1px solid var(--surface-panel-border);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
       display: flex;
       flex-direction: column;
       min-height: 0;
@@ -11795,6 +11796,7 @@ def render_index_html(
       background: var(--surface-main);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
     }}
     .active-note-header h1 {{
       text-shadow: var(--surface-title-shadow);
@@ -12687,7 +12689,7 @@ def render_index_html(
       font-size: var(--text-xs);
     }}
     .note-source-editor {{
-      background: var(--bg-base);
+      background: var(--surface-reading);
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
       box-sizing: border-box;
@@ -12728,7 +12730,7 @@ def render_index_html(
        §3.3/§7 — the reading column does not own a second nested scroll and is
        not height-clamped; it grows naturally inside the .note-body scroll. */
     .note-body-content {{
-      background: var(--bg-base);
+      background: var(--surface-reading);
       border: none;
       border-radius: 0;
       margin: 0 auto;
@@ -13322,6 +13324,7 @@ def render_index_html(
       background: var(--surface-panel);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
       border-left: 1px solid color-mix(in srgb, var(--surface-panel-border) 72%, transparent);
       display: flex;
       flex-direction: column;
