@@ -88,19 +88,30 @@ def _governs(body: Any, issue_number: int) -> bool:
                 if marker[0] == fence[0] and len(marker) >= len(fence) and not suffix.strip():
                     fence = None
             continue
-        if in_comment:
-            if "-->" in line:
-                in_comment = False
-            continue
-        if match:
+        if not in_comment and match:
             fence = match[1]
             continue
-        if "<!--" in line:
-            in_comment = "-->" not in line.split("<!--", 1)[1]
+        # Consume all comment spans, retaining state across lines. A visible
+        # marker decorated with comments is not a canonical marker; a marker
+        # wholly inside a comment is not authority at all.
+        visible = ""
+        remaining = line
+        while remaining:
+            delimiter = "-->" if in_comment else "<!--"
+            before, found, after = remaining.partition(delimiter)
+            if not in_comment:
+                visible += before
+            if not found:
+                break
+            in_comment = not in_comment
+            remaining = after
+        visible_fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", visible)
+        if visible_fence:
+            fence = visible_fence[1]
             continue
-        if re.match(r"^ {0,3}Governing-Issue\s*:", line, re.IGNORECASE):
+        if re.match(r"^ {0,3}Governing-Issue\s*:", visible, re.IGNORECASE):
             marker_match = re.fullmatch(r"Governing-Issue: #([1-9][0-9]*)", line, re.IGNORECASE)
-            if marker_match is None:
+            if visible != line or marker_match is None:
                 return False
             markers.append(int(marker_match[1]))
     return markers == [issue_number]

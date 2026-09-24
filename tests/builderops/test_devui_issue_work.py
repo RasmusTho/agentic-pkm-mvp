@@ -116,12 +116,21 @@ def test_selected_issue_results_require_exact_governed_relation(monkeypatch):
     "Governing-Issue: #501\n Governing-Issue: #999",
     "Governing-Issue: #501\nGoverning-Issue: #501",
     "> Governing-Issue: #501",
+    "Governing-Issue: #501\nGoverning-Issue:  #999 <!-- conflicting marker -->",
+    "<!-- example --> <!--\nGoverning-Issue: #501\n-->",
+    "<!-- example --> Governing-Issue: #501",
 ])
 def test_result_relation_ignores_markdown_examples_and_conflicts(monkeypatch, body):
     monkeypatch.setattr(github, "_run_gh", lambda args: [_event()] if args[1].endswith("/timeline") else _pull(body=body))
     result = compose_focus_view(**_read())
     assert result["receipts"] == []
     assert not any(item["claim_id"].startswith("issue-pr:") for item in result["evidence"])
+
+
+def test_result_relation_preserves_real_marker_after_comments(monkeypatch):
+    body = "<!-- first --> <!-- second -->\n<!-- multiline\nGoverning-Issue: #999\n-->\nGoverning-Issue: #501\n```text <!--\nGoverning-Issue: #999\n```"
+    monkeypatch.setattr(github, "_run_gh", lambda args: [_event()] if args[1].endswith("/timeline") else _pull(body=body))
+    assert len(compose_focus_view(**_read())["receipts"]) == 1
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "malformed", "capped", "one_pull", "invalid_identity", "pull_cap"])
