@@ -19,6 +19,19 @@ def _adapter(handler) -> OllamaHttpAdapter:
     )
 
 
+def test_explicit_endpoint_keeps_loopback_guard() -> None:
+    adapter = OllamaHttpAdapter(
+        base_url=BASE_URL,
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200)),
+    )
+    adapter.close()
+
+    with pytest.raises(TypeError):
+        OllamaHttpAdapter()  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="host-local HTTP origin"):
+        OllamaHttpAdapter(base_url="http://192.0.2.1:11434")
+
+
 def test_preflight_reports_model_and_declared_capabilities() -> None:
     calls: list[tuple[str, str]] = []
 
