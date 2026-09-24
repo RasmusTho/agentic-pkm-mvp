@@ -138,9 +138,14 @@ around them is a saturated neon city that the porcelain catches as rim light.
   cyan `#00e5ff`, magenta `#ff2aa0`, and electric blue `#2850ff` over violet `#6a2bff` →
   `#1a0a2e`. On top sit vertical glitch streaks (1–2px lines in cyan, white, and red at
   irregular periods) and faint horizontal scanlines.
-- **Porcelain sheet** (content surfaces): a `#ffffff` → `#f1f2f5` → `#e4e6eb` gradient with a
-  faint suit panel-seam line drawing in one corner. Rim light: cyan from the left, red from the
-  right.
+- **Porcelain sheet** (content surfaces): frosted glass. A translucent `#ffffff` → `#f1f2f5` →
+  `#e4e6eb` gradient at 81 % → 75 % coverage (`--material-sheet`) with a light backdrop frost
+  (`--surface-panel-filter`: `blur(4px) saturate(1.3)`), so the city and its glitch streaks show
+  through. The owner chose this level ("C · Glas") on 2026-09-24 (#5652). A faint suit panel-seam
+  line draws in one corner. Rim light: cyan from the left, red from the right.
+- **Reading surface** (note body, source editor; `--surface-reading`): calm glitch. Porcelain at
+  86 % coverage with faint static scanlines and two hairline chroma streaks (cyan, red). It is
+  static: no animation. Dark keeps `var(--bg-base)`.
 - **Dark glass chrome** (top bar, sidebar, anything sitting directly on the city):
   `rgba(10,8,24,0.74)` with white text.
 - **Emblem:** the ᛉ rune inside a thin triangle (after the poster's triangle, and the valknut).
@@ -149,17 +154,22 @@ around them is a saturated neon city that the porcelain catches as rim light.
 **Roles.** Every role has an *ink* tone for text and a *mark* tone for the markers next to it.
 Neon colours are decorative only: never text.
 
-| Role | Ink (text) | Mark | Ink contrast on darkest porcelain `#e4e6eb` |
+| Role | Ink (text) | Mark | Worst-case ink contrast (sheet over any city colour) |
 |---|---|---|---|
-| `fg-1` | `#0f1014` | — | ≥ 15 |
-| `fg-2` | `#50545e` | — | 5.48 (lowest) |
+| `fg-1` | `#0f1014` | — | 8.83 |
+| `fg-2` | `#3f424a` | — | 4.67 |
 | `fg-3` | `#a0a4ad` | — | disabled/decorative only |
-| `accent` | `#6b4d00` | `#e8b440` | ≥ 5.48 |
-| `cyan` | `#006470` | `#00d4e8` | ≥ 5.48 |
-| `vault` | `#0b6334` | `#16c95e` | ≥ 5.48 |
-| `agent` | `#1f45b8` | `#2f6bff` | ≥ 5.48 |
-| `amber` | `#8a4300` | `#ff8a1a` | ≥ 5.48 |
-| `destructive` | `#b3162c` | `#ff1f4b` | ≥ 5.48 |
+| `accent` | `#573e00` | `#e8b440` | 4.66 |
+| `cyan` | `#004a53` | `#00d4e8` | 4.63 |
+| `vault` | `#094d29` | `#16c95e` | 4.63 |
+| `agent` | `#1a3999` | `#2f6bff` | 4.67 |
+| `amber` | `#6a3400` | `#ff8a1a` | 4.63 |
+| `destructive` | `#841021` | `#ff1f4b` | 4.69 |
+
+The inks were darkened in #5652 because the sheet is translucent: the worst case is the 75 %
+sheet over the darkest city violet `#1a0a2e`. On the solid porcelain `#e4e6eb` every ink measures
+at least 7.99. `tests/design_system/test_yggdrasil_tokens.py::test_shell_text_holds_aa_over_translucent_sheet`
+guards the composite.
 
 On dark glass, white text measures at least 8.94:1 and 80 % white at least 6.44:1. Both were
 measured over the brightest point the city can put behind the glass (a white glitch streak).
@@ -219,7 +229,7 @@ Other type steps and spacing are unchanged between profiles.
 | DevUI candidate (`companion_ui/workspace/devui_candidate/`) and served managed DevUI (`app/builderops/devui_managed.css`, hash-pinned in `devui_assets.py`) | this | Inline Yggdrasil Dark copy (41/44 identical; system fonts under a strict CSP) | compact | #5637 |
 | CKM overview (`app/builderops/ckm/overview_html.py`) | this | Own inlined token copy | compact | S4 |
 | Bifrost: Heimdal capture, Mimer knowledge (`Yggdrasil/DesignSystem/Theme.swift`) | `RasmusTho/bifrost` | iOS system colours | native (Dynamic Type) | S5 |
-| Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason) | — | S2 (delivered) |
+| Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason); re-reconciled to v2.1.0 on 2026-09-24 after the Shell frosted-glass change (#5652) | — | S2 (delivered) |
 
 ### Bifrost
 

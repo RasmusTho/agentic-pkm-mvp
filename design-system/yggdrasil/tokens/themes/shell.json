@@ -27,7 +27,7 @@
     },
     "fg-2": {
       "$type": "color",
-      "$value": "#50545e"
+      "$value": "#3f424a"
     },
     "fg-3": {
       "$type": "color",
@@ -51,7 +51,7 @@
     },
     "accent": {
       "$type": "color",
-      "$value": "#6b4d00"
+      "$value": "#573e00"
     },
     "accent-dim": {
       "$type": "color",
@@ -63,7 +63,7 @@
     },
     "cyan": {
       "$type": "color",
-      "$value": "#006470"
+      "$value": "#004a53"
     },
     "cyan-dim": {
       "$type": "color",
@@ -75,7 +75,7 @@
     },
     "vault": {
       "$type": "color",
-      "$value": "#0b6334"
+      "$value": "#094d29"
     },
     "vault-dim": {
       "$type": "color",
@@ -87,7 +87,7 @@
     },
     "agent": {
       "$type": "color",
-      "$value": "#1f45b8"
+      "$value": "#1a3999"
     },
     "agent-dim": {
       "$type": "color",
@@ -99,7 +99,7 @@
     },
     "amber": {
       "$type": "color",
-      "$value": "#8a4300"
+      "$value": "#6a3400"
     },
     "amber-dim": {
       "$type": "color",
@@ -111,7 +111,7 @@
     },
     "destructive": {
       "$type": "color",
-      "$value": "#b3162c"
+      "$value": "#841021"
     },
     "destructive-dim": {
       "$type": "color",
