@@ -1,11 +1,15 @@
-State: Target-state capability specification, filed as parent #5626 with children #5627–#5631 (YDS-01 ready). Nothing in this document is shipped. Current binding
-token truth remains `companion-ui/companion-app/colors_and_type.css` under `docs/DESIGN_PRINCIPLES.md
-:: 11. Shared Visual Language` until a slice below is delivered and its owner doc is promoted.
+State: Capability specification for parent #5626, partly delivered. Slices S1–S5 and the Shell
+follow-ups (#5652, #5657, #5662) are shipped and recorded as delivery evidence in `:: Rollout`; the
+Shell trial decision and the owner-doc promotion (YDS-06, #5631) are still open, so the rest of this
+document remains target state. Binding token truth is the generated
+`companion-ui/companion-app/colors_and_type.css` (design-system `VERSION`) under
+`docs/DESIGN_PRINCIPLES.md :: 11. Shared Visual Language`; where this spec and the generated sheet
+disagree, the sheet wins.
 Doc role: Capability specification directory README for the Yggdrasil Design System v2 refinement.
 Owner: Yggdrasil visual language (DP-11)
 Temporal class: target-state
 Review cadence: event-driven (per delivered slice)
-Last reviewed: 2026-09-23
+Last reviewed: 2026-09-24
 Last verified against: origin/main 22a8928e8, `companion-ui/companion-app/colors_and_type.css`,
 `app/web/static/colors_and_type.css`, `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md :: Yggdrasil
 design-system gate`, `.codex/skills/yggdrasil-design-handoff/SKILL.md`,
