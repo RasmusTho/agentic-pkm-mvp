@@ -9,6 +9,7 @@ watcher cycle around it.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -58,20 +59,29 @@ def test_sub_tick_gated_and_exception_isolated(
     ] == "watcher_paused"
     cfg.stop_file.unlink()
 
+    # Exercise registry -> production runtime with the governed flag values.
+    # Stubbing the runtime to return "disabled" would not prove this boundary.
+    import app.knowledge_acquisition.sync_runtime as sync_runtime
+    from app.vault.settings_service import SettingsService
+    def forbidden_client():
+        raise AssertionError("closed flags must prevent all provider/store construction")
+    monkeypatch.setattr(sync_runtime, "_build_api_client", forbidden_client)
+    for enabled, runner in ((False, False), (False, True), (True, False)):
+        monkeypatch.setattr(SettingsService, "resolve_accepted_runtime_gating",
+            lambda self, context: {
+                "youtubeSync.enabled": SimpleNamespace(value=enabled),
+                "youtubeSync.runnerEnabled": SimpleNamespace(value=runner),
+            })
+        result = _run_youtube_sync_tick(cfg, now=1000.0, cadence=SyncTickCadence())
+        assert result["reason"] == "disabled"
+        assert result["triggered"] is False
+
     # --- cadence keeps the sub-tick sparse ---------------------------------
     cadence = SyncTickCadence()
-    monkeypatch.setattr(
-        registry_module,
-        "run_scheduled_sync_tick",
-        lambda **kwargs: calls.append("ran") or _Outcome("disabled"),
-        raising=False,
-    )
 
     def _fake_runtime(**kwargs: Any) -> Any:
         calls.append("ran")
         return _Outcome("disabled")
-
-    import app.knowledge_acquisition.sync_runtime as sync_runtime
 
     monkeypatch.setattr(sync_runtime, "run_scheduled_sync_tick", _fake_runtime)
 
