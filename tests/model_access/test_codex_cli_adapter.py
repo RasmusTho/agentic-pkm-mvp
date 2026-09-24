@@ -128,6 +128,7 @@ def _fake_cli(
     response: str = '{"answer":"ok"}',
     catalog_output: str | None = None,
     app_server_pages: list[dict[str, object]] | None = None,
+    app_server_malformed_output: bool = False,
     execution_exit: int = 0,
     execution_delay_seconds: float = 0,
     execution_stdout_bytes: int = 0,
@@ -183,28 +184,57 @@ elif args == ["debug", "models", "--bundled"]:
         os.replace(replacement, __file__)
 elif args == ["app-server", "--listen", "stdio://"]:
     pages = json.loads({safe_app_server_pages!r})
-    initialize_line = sys.stdin.readline()
+    def read_request_line():
+        line = bytearray()
+        while not line.endswith(b"\\n"):
+            chunk = os.read(sys.stdin.fileno(), 1)
+            if not chunk:
+                return None
+            line.extend(chunk)
+        return json.loads(line.decode("utf-8"))
+
+    if {app_server_malformed_output!r}:
+        initialize = read_request_line()
+        if not initialize or initialize.get("method") != "initialize":
+            raise SystemExit(2)
+        sys.stdout.write("not-json\\n")
+        sys.stdout.flush()
+        time.sleep(0.05)
+        print(json.dumps({{"id": 1, "result": {{"userAgent": "fixture"}}}}))
+        sys.stdout.flush()
+        followup = read_request_line()
+        if followup is not None:
+            Path({str(trace_path)!r}).with_suffix(".app-server-unexpected-followup").write_text(
+                json.dumps(followup), encoding="utf-8"
+            )
+        raise SystemExit(0)
+
+    initialize_line = read_request_line()
     if not initialize_line:
         raise SystemExit(2)
-    initialize = json.loads(initialize_line)
+    initialize = initialize_line
     if initialize.get("method") != "initialize":
         raise SystemExit(2)
     requests = [initialize]
+    # No follow-up request may be sent before initialize's response.
+    readable, _, _ = select.select([sys.stdin.fileno()], [], [], 0.05)
+    if readable:
+        raise SystemExit(3)
     print(json.dumps({{"id": initialize["id"], "result": {{"userAgent": "fixture"}}}}))
     sys.stdout.flush()
     followup_requests = []
     for _ in range(2):
-        line = sys.stdin.readline()
+        line = read_request_line()
         if not line:
             raise SystemExit(2)
-        followup_requests.append(json.loads(line))
+        followup_requests.append(line)
     if [item.get("method") for item in followup_requests] != ["initialized", "model/list"]:
         raise SystemExit(2)
     requests.extend(followup_requests)
     # The session must remain open after initialize while model/list is pending.
     time.sleep(0.05)
-    readable, _, _ = select.select([sys.stdin], [], [], 0)
-    if readable and sys.stdin.readline() == "":
+    readable, _, _ = select.select([sys.stdin.fileno()], [], [], 0)
+    if readable and os.read(sys.stdin.fileno(), 1) == b"":
         raise SystemExit(0)
     for request in followup_requests:
         if request.get("method") == "model/list":
@@ -217,7 +247,7 @@ elif args == ["app-server", "--listen", "stdio://"]:
     request_trace = Path({str(trace_path)!r}).with_suffix(".app-server.json")
     prior_requests = json.loads(request_trace.read_text(encoding="utf-8")) if request_trace.exists() else []
     request_trace.write_text(json.dumps(prior_requests + requests), encoding="utf-8")
-    while sys.stdin.readline():
+    while read_request_line() is not None:
         pass
 else:
     trace = Path({str(trace_path)!r})
@@ -1761,6 +1791,25 @@ def test_account_catalog_uses_read_only_paginated_app_server_model_list(
     assert len(list_requests) == 2
     assert list_requests[0]["params"]["includeHidden"] is False
     assert list_requests[1]["params"]["cursor"] == "1"
+
+
+def test_account_catalog_rejects_malformed_initialize_output_before_followup(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "catalog-cli.json"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        app_server_malformed_output=True,
+    )
+
+    with pytest.raises(CodexCliError) as error:
+        _executor(binary, home=home).list_catalog_models()
+
+    assert error.value.failure_code == "tool_surface_unknown"
+    assert not trace.with_suffix(".app-server-unexpected-followup").exists()
 
 
 def test_account_catalog_does_not_overstate_profile_structured_output(

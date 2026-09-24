@@ -1547,55 +1547,68 @@ class CodexCliExecutor:
                                 json.JSONDecodeError,
                                 RecursionError,
                             ):
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("tool_surface_unknown")
+                            if not isinstance(message, dict):
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("tool_surface_unknown")
+                            if "id" not in message:
+                                if not isinstance(message.get("method"), str):
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
                                 continue
+                            response_id = message.get("id")
+                            if type(response_id) is not int or response_id not in {
+                                followup_after_jsonrpc_response_id,
+                                stdin_close_after_jsonrpc_response_id,
+                            }:
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("tool_surface_unknown")
+                            if response_id == followup_after_jsonrpc_response_id:
+                                if (
+                                    followup_input_bytes is None
+                                    or followup_input_started
+                                    or ("result" not in message and "error" not in message)
+                                ):
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
+                                followup_input_started = True
+                                if (
+                                    "error" not in message
+                                    and isinstance(message.get("result"), dict)
+                                ):
+                                    interactive_input_pending = followup_input_bytes
+                                    interactive_input_offset = 0
+                                    selector.register(
+                                        process.stdin,
+                                        selectors.EVENT_WRITE,
+                                        "stdin",
+                                    )
+                                    continue
+                                try:
+                                    selector.unregister(process.stdin)
+                                except KeyError:
+                                    pass
+                                process.stdin.close()
+                                break
                             if (
-                                isinstance(message, dict)
-                                and type(message.get("id")) is int
+                                response_id == stdin_close_after_jsonrpc_response_id
                             ):
-                                response_id = message["id"]
+                                if "result" not in message and "error" not in message:
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
                                 if (
-                                    response_id
-                                    == followup_after_jsonrpc_response_id
-                                    and followup_input_bytes is not None
-                                    and not followup_input_started
-                                    and ("result" in message or "error" in message)
+                                    followup_input_bytes is not None
+                                    and not followup_input_sent
                                 ):
-                                    followup_input_started = True
-                                    if (
-                                        "error" not in message
-                                        and isinstance(message.get("result"), dict)
-                                    ):
-                                        interactive_input_pending = followup_input_bytes
-                                        interactive_input_offset = 0
-                                        selector.register(
-                                            process.stdin,
-                                            selectors.EVENT_WRITE,
-                                            "stdin",
-                                        )
-                                        continue
-                                    try:
-                                        selector.unregister(process.stdin)
-                                    except KeyError:
-                                        pass
-                                    process.stdin.close()
-                                    break
-                                if (
-                                    response_id
-                                    == stdin_close_after_jsonrpc_response_id
-                                    and ("result" in message or "error" in message)
-                                ):
-                                    if (
-                                        followup_input_bytes is not None
-                                        and not followup_input_sent
-                                    ):
-                                        self._kill_process_group(cli_process_group)
-                                        raise CodexCliError("tool_surface_unknown")
-                                    try:
-                                        selector.unregister(process.stdin)
-                                    except KeyError:
-                                        pass
-                                    process.stdin.close()
-                                    break
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
+                                try:
+                                    selector.unregister(process.stdin)
+                                except KeyError:
+                                    pass
+                                process.stdin.close()
+                                break
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise CodexCliError("command_timeout")
