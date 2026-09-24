@@ -67,11 +67,38 @@ class CompletionRequest(_StrictModel):
         return self
 
 
+class PreflightRequest(_StrictModel):
+    """A no-inference check for one exact route and capability intent."""
+
+    route: CompletionRouteIdentity
+    reasoning_effort: Literal[
+        "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
+    capability_intent: CompletionCapabilityIntent = Field(
+        default_factory=CompletionCapabilityIntent
+    )
+
+    @model_validator(mode="after")
+    def _preflight_matches_route(self) -> "PreflightRequest":
+        if self.route.transport_id == "codex_cli" and self.reasoning_effort is None:
+            raise ValueError("Codex CLI preflight requires an explicit reasoning effort")
+        if self.route.transport_id == "ollama_http" and self.reasoning_effort is not None:
+            raise ValueError("Ollama preflight does not accept Codex reasoning effort")
+        return self
+
+
 class CompletionResponse(_StrictModel):
     """The completion and the exact route that produced it."""
 
     route: CompletionRouteIdentity
     content: str = Field(min_length=1, max_length=512_000)
+
+
+class PreflightResponse(_StrictModel):
+    """Successful, route-bound result of a check that performed no inference."""
+
+    route: CompletionRouteIdentity
+    preflight_status: Literal["passed"]
 
 
 def validate_inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -116,5 +143,7 @@ __all__ = [
     "CompletionRequest",
     "CompletionResponse",
     "CompletionRouteIdentity",
+    "PreflightRequest",
+    "PreflightResponse",
     "validate_inline_schema",
 ]

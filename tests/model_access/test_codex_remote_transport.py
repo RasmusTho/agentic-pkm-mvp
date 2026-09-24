@@ -8,11 +8,14 @@ import pytest
 from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCompletionError,
+    RemotePreflightError,
 )
 from app.model_access.remote_contract import (
     CompletionRequest,
     CompletionResponse,
     CompletionRouteIdentity,
+    PreflightRequest,
+    PreflightResponse,
 )
 
 
@@ -38,6 +41,94 @@ def _request() -> CompletionRequest:
             "output_schema": None,
         }
     )
+
+
+def _preflight_request() -> PreflightRequest:
+    request = _request()
+    return PreflightRequest(
+        route=request.route,
+        reasoning_effort=request.reasoning_effort,
+        capability_intent=request.capability_intent,
+    )
+
+
+def test_remote_preflight_is_route_bound_and_single_request() -> None:
+    request = _preflight_request()
+    calls: list[httpx.Request] = []
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request)
+        assert str(http_request.url) == ENDPOINT + "/v1/preflight"
+        assert "tailscale-app-capabilities" not in http_request.headers
+        assert "authorization" not in http_request.headers
+        sent = json.loads(http_request.content)
+        assert sent == request.model_dump(mode="json")
+        assert "trusted_instructions" not in sent
+        assert "user_input" not in sent
+        response = PreflightResponse(
+            route=request.route,
+            preflight_status="passed",
+        )
+        return httpx.Response(200, json=response.model_dump(mode="json"))
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        result = transport.preflight(request)
+    finally:
+        transport.close()
+
+    assert result.route == request.route
+    assert result.preflight_status == "passed"
+    assert len(calls) == 1
+
+
+def test_remote_preflight_preserves_only_typed_failure_codes() -> None:
+    request = _preflight_request()
+
+    def fail(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"code": "session_expired", "detail": "secret data"}},
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(fail),
+    )
+    try:
+        with pytest.raises(RemotePreflightError) as error:
+            transport.preflight(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "session_expired"
+    assert "secret" not in str(error.value).lower()
+
+
+def test_remote_preflight_transport_failure_is_safe_and_never_retried() -> None:
+    request = _preflight_request()
+    calls = 0
+
+    def time_out(_http_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("response was lost")
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(time_out),
+    )
+    try:
+        with pytest.raises(RemotePreflightError) as error:
+            transport.preflight(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "preflight_unavailable"
+    assert calls == 1
 
 
 def test_remote_complete_is_route_bound_and_never_retries() -> None:

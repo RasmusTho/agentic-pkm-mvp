@@ -9,11 +9,53 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.model_access.remote_contract import CompletionRequest, CompletionResponse
+from app.model_access.remote_contract import (
+    CompletionRequest,
+    CompletionResponse,
+    PreflightRequest,
+    PreflightResponse,
+)
 
 
 MAX_REMOTE_RESPONSE_BYTES = 600_000
 MAX_REMOTE_REQUEST_BYTES = 256_000
+MAX_PREFLIGHT_RESPONSE_BYTES = 16_000
+_PREFLIGHT_ERROR_CODES = frozenset(
+    {
+        "serve_capability_required",
+        "serve_capability_invalid",
+        "loopback_only",
+        "invalid_json",
+        "request_too_large",
+        "content_length_required",
+        "invalid_request",
+        "route_not_declared",
+        "native_tools_unavailable",
+        "structured_output_unavailable",
+        "trusted_instruction_mapping_unavailable",
+        "literal_system_role_unavailable",
+        "executor_busy",
+        "cli_missing",
+        "command_timeout",
+        "input_oversize",
+        "stdout_oversize",
+        "model_unavailable",
+        "schema_violation",
+        "unsupported_profile",
+        "session_expired",
+        "authentication_unavailable",
+        "cli_version_unsupported",
+        "tool_surface_unknown",
+        "credential_unavailable",
+        "ollama_unavailable",
+        "ollama_timeout",
+        "ollama_model_unavailable",
+        "ollama_model_capabilities_unavailable",
+        "ollama_completion_unavailable",
+        "ollama_response_invalid",
+        "ollama_response_too_large",
+    }
+)
 
 
 class RemoteCompletionError(RuntimeError):
@@ -22,6 +64,14 @@ class RemoteCompletionError(RuntimeError):
     def __init__(self, code: str, *, indeterminate: bool = False) -> None:
         self.code = code
         self.indeterminate = indeterminate
+        super().__init__(code)
+
+
+class RemotePreflightError(RuntimeError):
+    """Sanitized failure from the dedicated endpoint that never runs inference."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
         super().__init__(code)
 
 
@@ -81,6 +131,7 @@ class CodexRemoteTransport:
         if timeout_seconds <= 0 or max_request_bytes <= 0 or max_response_bytes <= 0:
             raise ValueError("remote transport bounds must be positive")
         self._url = _validate_private_https_endpoint(endpoint)
+        self._preflight_url = self._url.removesuffix("/v1/complete") + "/v1/preflight"
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
         # HTTPX verifies TLS certificates by default; spell this out for the production
@@ -92,6 +143,58 @@ class CodexRemoteTransport:
             follow_redirects=False,
             trust_env=False,
         )
+
+    def preflight(self, request: PreflightRequest) -> PreflightResponse:
+        """Check one exact remote route through the no-inference operation."""
+        try:
+            request_body = json.dumps(
+                request.model_dump(mode="json"),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            raise RemotePreflightError("preflight_request_invalid") from None
+        if len(request_body) > self._max_request_bytes:
+            raise RemotePreflightError("preflight_request_too_large")
+
+        body = bytearray()
+        try:
+            with self._client.stream(
+                "POST",
+                self._preflight_url,
+                content=request_body,
+                headers={"Content-Type": "application/json"},
+            ) as response:
+                for chunk in response.iter_bytes():
+                    if len(body) + len(chunk) > MAX_PREFLIGHT_RESPONSE_BYTES:
+                        raise RemotePreflightError("preflight_response_too_large")
+                    body.extend(chunk)
+                if response.status_code != 200:
+                    raise RemotePreflightError(
+                        _preflight_error_code(response.status_code, bytes(body))
+                    )
+        except RemotePreflightError:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError):
+            # This request targets a no-inference operation, so transport ambiguity
+            # cannot authorize or imply a completion attempt.
+            raise RemotePreflightError("preflight_unavailable") from None
+        except Exception:
+            raise RemotePreflightError("preflight_unavailable") from None
+
+        try:
+            value = json.loads(
+                bytes(body).decode("utf-8", errors="strict"),
+                object_pairs_hook=_strict_object_pairs,
+                parse_constant=_reject_json_constant,
+            )
+            result = PreflightResponse.model_validate(value)
+        except Exception:
+            raise RemotePreflightError("preflight_response_invalid") from None
+        if result.route != request.route:
+            raise RemotePreflightError("preflight_route_mismatch")
+        return result
 
     def complete(self, request: CompletionRequest) -> CompletionResponse:
         try:
@@ -159,9 +262,26 @@ class CodexRemoteTransport:
         self._client.close()
 
 
+def _preflight_error_code(status_code: int, body: bytes) -> str:
+    try:
+        value = json.loads(
+            body.decode("utf-8", errors="strict"),
+            object_pairs_hook=_strict_object_pairs,
+            parse_constant=_reject_json_constant,
+        )
+        code = value.get("error", {}).get("code") if isinstance(value, dict) else None
+    except Exception:
+        code = None
+    if isinstance(code, str) and code in _PREFLIGHT_ERROR_CODES:
+        return code
+    return f"preflight_http_{status_code}"
+
+
 __all__ = [
     "CodexRemoteTransport",
     "MAX_REMOTE_REQUEST_BYTES",
     "MAX_REMOTE_RESPONSE_BYTES",
+    "MAX_PREFLIGHT_RESPONSE_BYTES",
     "RemoteCompletionError",
+    "RemotePreflightError",
 ]

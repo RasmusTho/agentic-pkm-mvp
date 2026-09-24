@@ -26,12 +26,25 @@ CAPABILITY_HEADER = {
         {CAPABILITY_NAME: [{"channel": "product", "actions": ["complete"]}]}
     )
 }
+PREFLIGHT_CAPABILITY_HEADER = {
+    "Tailscale-App-Capabilities": json.dumps(
+        {CAPABILITY_NAME: [{"channel": "product", "actions": ["preflight"]}]}
+    )
+}
 
 
 class FakeCodexExecutor:
     def __init__(self, response_text: str = "codex result") -> None:
         self.calls: list[dict[str, Any]] = []
+        self.preflight_calls: list[dict[str, Any]] = []
         self.response_text = response_text
+
+    def preflight(self, **kwargs: Any) -> SimpleNamespace:
+        self.preflight_calls.append(kwargs)
+        return SimpleNamespace(
+            cli_version="codex-cli-test",
+            authentication_status="chatgpt_subscription",
+        )
 
     def execute(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
@@ -41,6 +54,11 @@ class FakeCodexExecutor:
 class FakeOllamaAdapter:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.preflight_calls: list[dict[str, Any]] = []
+
+    def preflight(self, **kwargs: Any) -> SimpleNamespace:
+        self.preflight_calls.append(kwargs)
+        return SimpleNamespace(model=kwargs["model"])
 
     def complete(self, **kwargs: Any) -> str:
         self.calls.append(kwargs)
@@ -95,6 +113,15 @@ def _payload(transport_id: str = "codex_cli") -> dict[str, Any]:
     }
 
 
+def _preflight_payload(transport_id: str = "codex_cli") -> dict[str, Any]:
+    request = _payload(transport_id)
+    return {
+        "route": request["route"],
+        "reasoning_effort": request["reasoning_effort"],
+        "capability_intent": request["capability_intent"],
+    }
+
+
 @pytest.mark.parametrize("transport_id", ["codex_cli", "ollama_http"])
 def test_complete_dispatches_one_declared_transport(transport_id: str) -> None:
     app, codex, ollama = _app()
@@ -109,6 +136,106 @@ def test_complete_dispatches_one_declared_transport(transport_id: str) -> None:
     assert body["content"] == ("codex result" if transport_id == "codex_cli" else "ollama result")
     assert len(codex.calls) == (1 if transport_id == "codex_cli" else 0)
     assert len(ollama.calls) == (1 if transport_id == "ollama_http" else 0)
+
+
+@pytest.mark.parametrize("transport_id", ["codex_cli", "ollama_http"])
+def test_preflight_probes_exact_declared_route_without_completion(
+    transport_id: str,
+) -> None:
+    app, codex, ollama = _app()
+    payload = _preflight_payload(transport_id)
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post(
+            "/v1/preflight",
+            json=payload,
+            headers=PREFLIGHT_CAPABILITY_HEADER,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "route": payload["route"],
+        "preflight_status": "passed",
+    }
+    assert codex.preflight_calls == (
+        [{"model": "gpt-5.6-luna", "reasoning_effort": "low"}]
+        if transport_id == "codex_cli"
+        else []
+    )
+    assert ollama.preflight_calls == (
+        [{"model": "llama3.1:8b"}] if transport_id == "ollama_http" else []
+    )
+    assert codex.calls == []
+    assert ollama.calls == []
+
+
+def test_executor_accepts_one_serve_grant_for_both_bounded_actions() -> None:
+    app, codex, ollama = _app()
+    combined_header = {
+        "Tailscale-App-Capabilities": json.dumps(
+            {
+                CAPABILITY_NAME: [
+                    {"channel": "product", "actions": ["complete", "preflight"]}
+                ]
+            }
+        )
+    }
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        preflight = client.post(
+            "/v1/preflight",
+            json=_preflight_payload(),
+            headers=combined_header,
+        )
+        completion = client.post(
+            "/v1/complete",
+            json=_payload(),
+            headers=combined_header,
+        )
+
+    assert preflight.status_code == 200
+    assert completion.status_code == 200
+    assert len(codex.preflight_calls) == 1
+    assert len(codex.calls) == 1
+    assert ollama.preflight_calls == []
+    assert ollama.calls == []
+
+
+def test_preflight_requires_its_own_capability_and_rejects_completion_fields() -> None:
+    app, codex, ollama = _app()
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        wrong_action = client.post(
+            "/v1/preflight", json=_preflight_payload(), headers=CAPABILITY_HEADER
+        )
+        with_extra_field = client.post(
+            "/v1/preflight",
+            json={**_preflight_payload(), "user_input": "must not be accepted"},
+            headers=PREFLIGHT_CAPABILITY_HEADER,
+        )
+
+    assert wrong_action.status_code == 403
+    assert with_extra_field.status_code == 422
+    assert codex.preflight_calls == []
+    assert ollama.preflight_calls == []
+    assert codex.calls == []
+    assert ollama.calls == []
+
+
+def test_preflight_rejects_native_tools_before_ollama_probe() -> None:
+    app, codex, ollama = _app()
+    payload = _preflight_payload("ollama_http")
+    payload["capability_intent"]["native_tools"] = True
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post(
+            "/v1/preflight",
+            json=payload,
+            headers=PREFLIGHT_CAPABILITY_HEADER,
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {"error": {"code": "native_tools_unavailable"}}
+    assert ollama.preflight_calls == []
+    assert codex.preflight_calls == []
+    assert ollama.calls == []
+    assert codex.calls == []
 
 
 def test_complete_requires_loopback_and_served_app_capability() -> None:
@@ -301,14 +428,17 @@ def test_complete_rejects_oversized_adapter_output_after_one_dispatch() -> None:
     assert len(ollama.calls) == 0
 
 
-def test_executor_exposes_only_one_bounded_operation() -> None:
+def test_executor_exposes_only_bounded_preflight_and_completion_operations() -> None:
     app, _codex, _ollama = _app()
     api_routes = {
         (route.path, tuple(sorted(route.methods or ())))
         for route in app.routes
         if getattr(route, "methods", None)
     }
-    assert api_routes == {("/v1/complete", ("POST",))}
+    assert api_routes == {
+        ("/v1/complete", ("POST",)),
+        ("/v1/preflight", ("POST",)),
+    }
 
 
 def test_executor_rejects_reserved_tailscale_capability_names() -> None:
