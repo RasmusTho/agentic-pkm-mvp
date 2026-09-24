@@ -21,6 +21,8 @@ def test_factory_resolves_only_declared_adapter_ids(
     factory: ModelAccessAdapterFactory,
 ) -> None:
     targets = {
+        "codex_cli_tailscale": ("openai", "gpt-6-luna"),
+        "ollama_http_tailscale": ("ollama", "llama3.1:8b"),
         "codex_cli": ("openai", "gpt-5.6-luna"),
         "ollama_http": ("ollama", "llama3.1:8b"),
         "openai_api": ("openai", "gpt-5.6-sol"),
@@ -37,7 +39,9 @@ def test_factory_resolves_only_declared_adapter_ids(
         assert descriptor.transport_id == adapter_id
         assert descriptor.trusted_instruction_mapping is not None
         assert descriptor.trusted_instruction_mapping.trusted_channel == (
-            "developer_instructions" if adapter_id == "codex_cli" else "system"
+            "developer_instructions"
+            if adapter_id in {"codex_cli", "codex_cli_tailscale"}
+            else "system"
         )
 
     with pytest.raises(AdapterRegistryError, match="not declared"):
@@ -70,6 +74,32 @@ def test_codex_adapter_capability_maximum_never_inherits_native_tools(
 
     assert descriptor.supported_capabilities.native_tools is False
     assert descriptor.transport_id == "codex_cli"
+
+
+def test_product_codex_transport_is_remote_and_has_no_native_tools(
+    factory: ModelAccessAdapterFactory,
+) -> None:
+    descriptor = factory.describe(
+        "codex_cli_tailscale", provider="openai", model="gpt-6-luna"
+    )
+
+    assert descriptor.execution_boundary == "private_tailnet_serve_https"
+    assert descriptor.authentication_scheme == "tailscale_app_capability"
+    assert descriptor.supported_capabilities.native_tools is False
+    assert factory.default_adapter_id("openai") == "openai_api"
+    assert factory.default_adapter_id("ollama") == "ollama_http"
+
+
+def test_product_ollama_fallback_transport_is_remote_and_constrained(
+    factory: ModelAccessAdapterFactory,
+) -> None:
+    descriptor = factory.describe(
+        "ollama_http_tailscale", provider="ollama", model="llama3.1:8b"
+    )
+
+    assert descriptor.execution_boundary == "private_tailnet_serve_https"
+    assert descriptor.authentication_scheme == "tailscale_app_capability"
+    assert descriptor.supported_capabilities.native_tools is False
 
 
 def test_codex_declaration_cannot_raise_tool_capability_or_change_auth_boundary(

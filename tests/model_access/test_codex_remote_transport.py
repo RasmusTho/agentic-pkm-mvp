@@ -143,6 +143,25 @@ def test_remote_catalog_rejects_wrong_transport_and_preserves_only_safe_errors()
     assert "private" not in str(error.value)
 
 
+def test_remote_catalog_unexpected_transport_exception_is_invalid() -> None:
+    request = CatalogRequest(transport_id="codex_cli")
+
+    def unexpected(_http_request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("unexpected transport adapter failure")
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(unexpected),
+    )
+    try:
+        with pytest.raises(RemoteCatalogError) as error:
+            transport.catalog(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "catalog_invalid"
+
+
 def test_remote_preflight_is_route_bound_and_single_request() -> None:
     request = _preflight_request()
     calls: list[httpx.Request] = []

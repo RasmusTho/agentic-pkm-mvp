@@ -8,7 +8,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api.app import app
-from app.eval.llm_client import configure_eval_openai_env
+from app.eval.llm_client import build_ragas_model, configure_eval_openai_env
 
 CASES_PATH = Path("docs/eval/rag_cases.yaml")
 MIN_THRESHOLD = 0.5  # seed threshold; tighten as retrieval quality improves
@@ -86,7 +86,7 @@ def test_rag_quality_with_ragas() -> None:
     dataset = Dataset.from_list(rows)
 
     try:
-        result = evaluate(dataset, metrics=metrics)
+        result = evaluate(dataset, metrics=metrics, llm=build_ragas_model(cfg))
     except Exception as exc:  # pragma: no cover - backend/config errors
         pytest.skip(f"Ragas eval backend unavailable: {exc}")
 

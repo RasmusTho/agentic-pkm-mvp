@@ -160,6 +160,11 @@ def _validate_capability_intent(
     output_schema: dict[str, Any] | None = None,
     require_output_schema: bool,
 ) -> None:
+    if (
+        intent.max_output_tokens_required
+        and route.transport_id != "ollama_http"
+    ):
+        raise _RequestFailure(422, "output_token_limit_unavailable")
     try:
         descriptor = adapter_factory.describe(
             route.transport_id,
@@ -237,6 +242,7 @@ def _ollama_complete(
         user_input=request.user_input,
         output_schema=request.output_schema,
         literal_system_role_required=request.capability_intent.literal_system_role_required,
+        max_output_tokens=request.max_output_tokens,
     )
 
 
@@ -504,9 +510,9 @@ def main() -> None:
     if not capability_name:
         raise SystemExit("MODEL_ACCESS_SERVE_CAPABILITY_NAME is required")
 
-    ollama_base_url = os.environ.get(
-        "MODEL_ACCESS_OLLAMA_BASE_URL", "http://127.0.0.1:11434"
-    )
+    ollama_base_url = os.environ.get("MODEL_ACCESS_OLLAMA_BASE_URL", "")
+    if not ollama_base_url:
+        raise SystemExit("MODEL_ACCESS_OLLAMA_BASE_URL is required")
     try:
         port = int(os.environ.get("MODEL_ACCESS_EXECUTOR_PORT", "8787"))
     except ValueError as exc:

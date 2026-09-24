@@ -3,4 +3,5 @@ status: active
 kind: chat
 provider: ollama
 model: llama3.1:8b
+allowed_transports: [ollama_http, ollama_http_tailscale]
 notes: Local default chat model (OpenAI-compatible endpoint).

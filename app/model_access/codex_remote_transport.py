@@ -35,6 +35,7 @@ _PREFLIGHT_ERROR_CODES = frozenset(
         "invalid_request",
         "route_not_declared",
         "native_tools_unavailable",
+        "output_token_limit_unavailable",
         "structured_output_unavailable",
         "trusted_instruction_mapping_unavailable",
         "literal_system_role_unavailable",
@@ -195,7 +196,9 @@ class CodexRemoteTransport:
         except (httpx.TimeoutException, httpx.TransportError):
             raise RemoteCatalogError("catalog_unavailable") from None
         except Exception:
-            raise RemoteCatalogError("catalog_unavailable") from None
+            # Only recognized network failures permit stale-cache service. Any
+            # unexpected adapter failure is terminal for this catalog refresh.
+            raise RemoteCatalogError("catalog_invalid") from None
 
         try:
             result = CatalogResponse.model_validate_json(bytes(body))

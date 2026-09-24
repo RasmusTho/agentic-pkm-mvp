@@ -25,7 +25,16 @@ from llm_contract import (
 DEFAULT_ADAPTERS_PATH = Path("docs/settings/models/adapters.yaml")
 DEFAULT_PROVIDER_CENSUS_PATH = Path("docs/settings/models/providers.yaml")
 SUPPORTED_ADAPTER_IDS = frozenset(
-    {"codex_cli", "ollama_http", "openai_api", "anthropic_api", "deepseek_api", "mock"}
+    {
+        "codex_cli_tailscale",
+        "ollama_http_tailscale",
+        "codex_cli",
+        "ollama_http",
+        "openai_api",
+        "anthropic_api",
+        "deepseek_api",
+        "mock",
+    }
 )
 _CAPABILITY_FIELDS = (
     "structured_output",
@@ -39,6 +48,7 @@ _CODEX_CLI_CAPABILITY_CEILING = {
     "system_prompt_channel": True,
     "deterministic_execution": False,
 }
+_CODEX_ADAPTERS = frozenset({"codex_cli", "codex_cli_tailscale"})
 _TRUSTED_INSTRUCTION_CHANNELS: dict[
     str, Literal["system", "developer_instructions"]
 ] = {
@@ -60,6 +70,8 @@ class _DeclaredCapabilities(_StrictConfig):
 
 class _AdapterDeclaration(_StrictConfig):
     id: Literal[
+        "codex_cli_tailscale",
+        "ollama_http_tailscale",
         "codex_cli",
         "ollama_http",
         "openai_api",
@@ -70,13 +82,21 @@ class _AdapterDeclaration(_StrictConfig):
     provider: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     model_source: Literal["provider_census"]
     transport_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+    default_for_provider: bool = False
     supported_capabilities: _DeclaredCapabilities
     execution_host_profile: str = Field(pattern=r"^profile\.[a-z][a-z0-9_]*$")
     execution_boundary: Literal[
-        "in_process", "local_subprocess", "local_http", "provider_https"
+        "in_process",
+        "local_subprocess",
+        "local_http",
+        "provider_https",
+        "private_tailnet_serve_https",
     ]
     authentication_scheme: Literal[
-        "none", "provider_credential_ref", "local_subscription_session"
+        "none",
+        "provider_credential_ref",
+        "local_subscription_session",
+        "tailscale_app_capability",
     ]
     instruction_mapping_ref: str = Field(pattern=r"^profile\.[a-z][a-z0-9_]*$")
 
@@ -98,6 +118,12 @@ class _AdapterDeclarations(_StrictConfig):
             raise ValueError("adapter declarations contain duplicate ids")
         if set(identifiers) != SUPPORTED_ADAPTER_IDS:
             raise ValueError("adapter declarations must register exactly the supported ids")
+        defaults = [
+            adapter.provider for adapter in self.adapters if adapter.default_for_provider
+        ]
+        providers = {adapter.provider for adapter in self.adapters}
+        if set(defaults) != providers or len(defaults) != len(set(defaults)):
+            raise ValueError("each adapter provider must declare exactly one default transport")
         return self
 
 
@@ -159,6 +185,32 @@ class ModelAccessAdapterFactory:
                 raise AdapterRegistryError(
                     "Codex CLI declaration exceeds its reviewed execution boundary"
                 )
+        if adapter_id == "codex_cli_tailscale":
+            if (
+                declaration.provider != "openai"
+                or declaration.transport_id != "codex_cli_tailscale"
+                or declaration.execution_host_profile != "profile.codex_remote_host"
+                or declaration.execution_boundary != "private_tailnet_serve_https"
+                or declaration.authentication_scheme != "tailscale_app_capability"
+                or declaration.instruction_mapping_ref
+                != "profile.codex_developer_prompt_v1"
+            ):
+                raise AdapterRegistryError(
+                    "Tailscale Codex declaration exceeds its reviewed execution boundary"
+                )
+        if adapter_id == "ollama_http_tailscale":
+            if (
+                declaration.provider != "ollama"
+                or declaration.transport_id != "ollama_http_tailscale"
+                or declaration.execution_host_profile != "profile.codex_remote_host"
+                or declaration.execution_boundary != "private_tailnet_serve_https"
+                or declaration.authentication_scheme != "tailscale_app_capability"
+                or declaration.instruction_mapping_ref
+                != "profile.instructions_separate_v1"
+            ):
+                raise AdapterRegistryError(
+                    "Tailscale Ollama declaration exceeds its reviewed execution boundary"
+                )
         if declaration.provider != provider:
             raise AdapterRegistryError("selected adapter does not serve the resolved provider")
         try:
@@ -166,6 +218,13 @@ class ModelAccessAdapterFactory:
         except KeyError as exc:
             raise AdapterRegistryError("resolved provider is not in the provider census") from exc
         census_model = next((item for item in census_provider.models if item.id == model), None)
+        if adapter_id == "mock" and provider == "mock" and census_model is None:
+            # Mock execution is model-agnostic; retain legacy Product model aliases
+            # while deriving only its deterministic capabilities from mock-chat.
+            census_model = next(
+                (item for item in census_provider.models if item.id == "mock-chat"),
+                None,
+            )
         if census_model is None or "chat" not in census_provider.kinds:
             raise AdapterRegistryError("resolved chat model is not declared for this provider")
         trusted_channel = _TRUSTED_INSTRUCTION_CHANNELS.get(
@@ -187,7 +246,7 @@ class ModelAccessAdapterFactory:
                 and getattr(declaration.supported_capabilities, name)
                 and (
                     _CODEX_CLI_CAPABILITY_CEILING[name]
-                    if adapter_id == "codex_cli"
+                    if adapter_id in _CODEX_ADAPTERS
                     else True
                 )
                 for name in _CAPABILITY_FIELDS
@@ -212,3 +271,14 @@ class ModelAccessAdapterFactory:
     def create_codex_cli_executor(self, **kwargs: Any) -> CodexCliExecutor:
         """Construct the local Codex executor without selecting a model target."""
         return CodexCliExecutor(**kwargs)
+
+    def default_adapter_id(self, provider: str) -> str:
+        """Return the one config-declared default transport for a provider."""
+        matches = [
+            declaration
+            for declaration in self._declarations.values()
+            if declaration.provider == provider and declaration.default_for_provider
+        ]
+        if len(matches) != 1:
+            raise AdapterRegistryError("provider has no unique default transport")
+        return matches[0].id

@@ -129,7 +129,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
     assert "Select subsystem-scoped pytest targets" in job
     assert "scripts/select_pr_tests.py" in job
-    assert "steps.select-tests.outputs.pytest_args" in job
+    assert "steps.select-tests.outputs.pytest_args }} --durations=20" in job
     assert "Run shared not-pg unit tests in process shards" in job
     assert "xargs -r -n 1 -P 4 bash -c" in job
     assert "tests/invariants/test_vault_multiwriter.py" in job
@@ -137,6 +137,95 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "Run scoped not-pg unit tests" in job
     assert "mypy app" in job
     assert "tests/eval/test_classification_golden.py" in job
+
+
+def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = ""):
+    """Execute the checked-in shell with a fake pytest, including nested tests."""
+    files = (
+        "tests/alpha/test_root.py", "tests/alpha/nested/test_child.py",
+        "tests/beta/deep/test_only_child.py", "tests/test_standalone.py",
+        "tests/ops/test_host.py", "tests/ops/nested/test_host_child.py",
+        "tests/invariants/test_vault_multiwriter.py", "tests/invariants/test_other.py",
+        "tests/e2e/test_deferred.py", "tests/e2e/nested/test_also_deferred.py",
+    )
+    for name in files:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text(
+        f"#!{sys.executable}\n" + r'''
+import os
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+targets = [arg for arg in args if arg.startswith("tests/")]
+ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
+for target in targets:
+    path = Path(target)
+    files = sorted(path.rglob("test_*.py")) if path.is_dir() else [path]
+    for file in files:
+        if str(file) not in ignored:
+            print(f"EXECUTED {file}")
+if targets[0] == os.environ.get("FAILING_SHARD"):
+    print("FAILED synthetic regression")
+    sys.exit(1)
+print("1 passed")
+''', encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") ==
+                "Run shared not-pg unit tests in process shards")
+    script = re.sub(r"\$\{\{.*?\}\}", "fixture", step["run"])
+    result = subprocess.run(
+        ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "RUNNER_TEMP": str(tmp_path / "runner"), "FAILING_SHARD": failing_shard},
+        timeout=30,
+    )
+    return result, files, job
+
+
+def test_full_suite_shards_cover_test_files_once(tmp_path: Path) -> None:
+    result, files, _job = _run_full_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    log = (tmp_path / "pytest-not-pg.log").read_text()
+    executed = re.findall(r"^EXECUTED (.+)$", log, re.MULTILINE)
+    expected = [name for name in files if not name.startswith("tests/e2e/")]
+    assert sorted(executed) == sorted(expected)
+    assert "SHARD FINISHED (0): tests/alpha in " in result.stdout
+    # The host-sensitive tests run after parallel shards and are never duplicated.
+    assert executed[-3:] == ["tests/ops/nested/test_host_child.py",
+                             "tests/ops/test_host.py",
+                             "tests/invariants/test_vault_multiwriter.py"]
+
+
+def test_full_suite_shards_retain_failure_logs(tmp_path: Path) -> None:
+    result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard="tests/alpha")
+    assert result.returncode == 1
+    assert "SHARD FAILED (1): tests/alpha" in result.stderr
+    shard_root = tmp_path / "runner" / "pytest-not-pg-shards"
+    assert "FAILED synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
+    assert "1 tests/alpha" in (shard_root / "status").read_text()
+    assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
+    upload = next(s for s in job["steps"] if s.get("name") == "Upload process shard logs")
+    assert "always()" in upload["if"]
+    assert "${{ runner.temp }}/pytest-not-pg-shards/" in upload["with"]["path"]
+
+
+def test_pg_contracts_have_bounded_diagnostics() -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-index-pg-contracts"]
+    step = next(s for s in job["steps"] if s.get("name", "").startswith("Run exact index,"))
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["env"]["PYTHONUNBUFFERED"] == "1"
+    assert 120 < job["timeout-minutes"] * 60
+    assert 'pytest -vv --durations=20 -m "pg"' in step["run"]
+    install = next(s for s in job["steps"] if s.get("name") == "Install dependencies")
+    assert "pip install -r dev-requirements.txt" in install["run"]
+    assert "pytest-timeout==" in (REPO_ROOT / "dev-requirements.txt").read_text()
 
 
 def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:

@@ -841,6 +841,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "tests/components/embeddings",
             "tests/components/llm",
+            "tests/components/reasoning",
             "tests/index/test_identity_migration.py",
             "tests/llm",
             "tests/eval",
@@ -1127,6 +1128,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 )
 
 
+EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
+    "llm_eval": frozenset({"app/components/reasoning/facade.py"}),
+}
+
+
 @dataclass(frozen=True)
 class Selection:
     full_suite: bool
@@ -1158,6 +1164,12 @@ def _dedupe(items: list[str]) -> tuple[str, ...]:
             seen.add(item)
             result.append(item)
     return tuple(result)
+
+
+def _subsystem_owns_path(path: str, name: str, prefixes: tuple[str, ...]) -> bool:
+    return path in EXACT_SUBSYSTEM_FILES.get(name, frozenset()) or any(
+        path.startswith(prefix) for prefix in prefixes
+    )
 
 
 def _is_full_suite_file(path: str) -> bool:
@@ -1239,7 +1251,7 @@ def _foreign_subsystem_matches(
     return [
         (name, subsystem_targets)
         for name, prefixes, subsystem_targets in SUBSYSTEMS
-        if any(path.startswith(prefix) for path in paths for prefix in prefixes)
+        if any(_subsystem_owns_path(path, name, prefixes) for path in paths)
         and any(target not in tolerated_targets for target in subsystem_targets)
     ]
 
@@ -1272,10 +1284,14 @@ def _pr_targets(targets: list[str]) -> tuple[str, ...]:
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
     owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
+    owned_exact_paths = frozenset(
+        path for exact_paths in EXACT_SUBSYSTEM_FILES.values() for path in exact_paths
+    )
     return tuple(
         path
         for path in paths
         if path.startswith(runtime_prefixes)
+        and path not in owned_exact_paths
         and not any(path.startswith(prefix) for prefix in owned_prefixes)
     )
 
@@ -1347,7 +1363,7 @@ def select_tests(changed_files: list[str]) -> Selection:
     else:
         matched: list[str] = []
         for name, prefixes, subsystem_targets in SUBSYSTEMS:
-            if any(path.startswith(prefix) for path in paths for prefix in prefixes):
+            if any(_subsystem_owns_path(path, name, prefixes) for path in paths):
                 matched.append(name)
                 targets.extend(subsystem_targets)
         if not matched:
