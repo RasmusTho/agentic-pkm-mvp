@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.model_access.catalog import CatalogSnapshot
+
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -101,6 +103,18 @@ class PreflightResponse(_StrictModel):
     preflight_status: Literal["passed"]
 
 
+class CatalogRequest(_StrictModel):
+    """Select a catalog source on the executor; never accepts an endpoint or model call."""
+
+    transport_id: Literal["codex_cli", "ollama_http"]
+
+
+class CatalogResponse(_StrictModel):
+    """Sanitized, content-hash-bound result of a read-only catalog operation."""
+
+    snapshot: CatalogSnapshot
+
+
 def validate_inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Validate a small inline JSON Schema without external reference resolution."""
 
@@ -143,6 +157,8 @@ __all__ = [
     "CompletionRequest",
     "CompletionResponse",
     "CompletionRouteIdentity",
+    "CatalogRequest",
+    "CatalogResponse",
     "PreflightRequest",
     "PreflightResponse",
     "validate_inline_schema",

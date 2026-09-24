@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -8,9 +9,12 @@ import pytest
 from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCompletionError,
+    RemoteCatalogError,
     RemotePreflightError,
 )
+from app.model_access.catalog import CatalogModelDescriptor, CatalogSnapshot
 from app.model_access.remote_contract import (
+    CatalogRequest,
     CompletionRequest,
     CompletionResponse,
     CompletionRouteIdentity,
@@ -50,6 +54,93 @@ def _preflight_request() -> PreflightRequest:
         reasoning_effort=request.reasoning_effort,
         capability_intent=request.capability_intent,
     )
+
+
+def _catalog_response(transport_id: str = "codex_cli") -> dict[str, object]:
+    provider = "openai" if transport_id == "codex_cli" else "ollama"
+    model = "gpt-5.6-luna" if transport_id == "codex_cli" else "llama3.1:8b"
+    descriptor = CatalogModelDescriptor(
+        provider=provider,
+        model=model,
+        transports=(transport_id,),
+        capabilities={},
+        reasoning_efforts=("low",) if transport_id == "codex_cli" else (),
+    )
+    snapshot = CatalogSnapshot.create(
+        provider=provider,
+        transport_id=transport_id,
+        source_id=(
+            "codex_app_server_model_list"
+            if transport_id == "codex_cli"
+            else "ollama_api_tags"
+        ),
+        fetched_at=datetime.now(timezone.utc),
+        models=[descriptor],
+    )
+    return {"snapshot": snapshot.model_dump(mode="json")}
+
+
+def test_remote_catalog_is_authenticated_transport_selection_and_hash_bound() -> None:
+    request = CatalogRequest(transport_id="codex_cli")
+    calls: list[httpx.Request] = []
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request)
+        assert str(http_request.url) == ENDPOINT + "/v1/catalog"
+        assert http_request.method == "POST"
+        assert "tailscale-app-capabilities" not in http_request.headers
+        assert "authorization" not in http_request.headers
+        assert json.loads(http_request.content) == {"transport_id": "codex_cli"}
+        return httpx.Response(200, json=_catalog_response())
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        result = transport.catalog(request)
+    finally:
+        transport.close()
+
+    assert result.snapshot.provider == "openai"
+    assert result.snapshot.models[0].model == "gpt-5.6-luna"
+    assert result.snapshot.snapshot_hash == result.snapshot.compute_hash()
+    assert len(calls) == 1
+
+
+def test_remote_catalog_rejects_wrong_transport_and_preserves_only_safe_errors() -> None:
+    request = CatalogRequest(transport_id="codex_cli")
+
+    def wrong_route(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_catalog_response("ollama_http"))
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(wrong_route),
+    )
+    try:
+        with pytest.raises(RemoteCatalogError, match="catalog_transport_mismatch"):
+            transport.catalog(request)
+    finally:
+        transport.close()
+
+    def fail(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"code": "catalog_unavailable", "detail": "private endpoint secret"}},
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(fail),
+    )
+    try:
+        with pytest.raises(RemoteCatalogError) as error:
+            transport.catalog(request)
+    finally:
+        transport.close()
+    assert error.value.code == "catalog_unavailable"
+    assert "private" not in str(error.value)
 
 
 def test_remote_preflight_is_route_bound_and_single_request() -> None:

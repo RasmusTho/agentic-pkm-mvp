@@ -127,6 +127,7 @@ def _fake_cli(
     help_output: str = _HELP,
     response: str = '{"answer":"ok"}',
     catalog_output: str | None = None,
+    app_server_pages: list[dict[str, object]] | None = None,
     execution_exit: int = 0,
     execution_delay_seconds: float = 0,
     execution_stdout_bytes: int = 0,
@@ -136,6 +137,7 @@ def _fake_cli(
     replace_self_during_catalog: bool = False,
     minimal_trace: bool = False,
 ) -> Path:
+    safe_app_server_pages = json.dumps(app_server_pages or [])
     script = f"""#!{sys.executable}
 import json
 import os
@@ -178,6 +180,21 @@ elif args == ["debug", "models", "--bundled"]:
         replacement.write_text("#!{sys.executable}\\nraise SystemExit(0)\\n", encoding="utf-8")
         replacement.chmod(0o700)
         os.replace(replacement, __file__)
+elif args == ["app-server", "--listen", "stdio://"]:
+    pages = json.loads({safe_app_server_pages!r})
+    requests = [json.loads(line) for line in sys.stdin.read().splitlines() if line]
+    for request in requests:
+        if request.get("method") == "initialize":
+            print(json.dumps({{"id": request["id"], "result": {{"userAgent": "fixture"}}}}))
+        elif request.get("method") == "model/list":
+            cursor = request.get("params", {{}}).get("cursor")
+            page_index = int(cursor) if cursor is not None else 0
+            print(json.dumps({{"id": request["id"], "result": pages[page_index]}}))
+        elif request.get("method") != "initialized":
+            raise SystemExit(2)
+    request_trace = Path({str(trace_path)!r}).with_suffix(".app-server.json")
+    prior_requests = json.loads(request_trace.read_text(encoding="utf-8")) if request_trace.exists() else []
+    request_trace.write_text(json.dumps(prior_requests + requests), encoding="utf-8")
 else:
     trace = Path({str(trace_path)!r})
     if {minimal_trace!r}:
@@ -1664,3 +1681,90 @@ def test_codex_cli_does_not_claim_literal_system_role(tmp_path: Path) -> None:
             literal_system_role_required=True,
         )
     assert error.value.failure_code == "unsupported_profile"
+
+
+def test_account_catalog_uses_read_only_paginated_app_server_model_list(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "catalog-cli.json"
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=trace,
+        app_server_pages=[
+            {
+                "data": [
+                    {
+                        "model": "gpt-5.6-luna",
+                        "hidden": False,
+                        "upgrade": "gpt-6-astra",
+                        "description": "PRIVATE_PROMPT must not escape",
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "low", "description": "private"}
+                        ],
+                    }
+                ],
+                "nextCursor": "1",
+            },
+            {
+                "data": [
+                    {
+                        "model": "gpt-6-astra",
+                        "hidden": False,
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "max"}
+                        ],
+                    }
+                ],
+                "nextCursor": None,
+            },
+        ],
+    )
+
+    models = _executor(binary, home=home).list_catalog_models()
+
+    assert [item["model"] for item in models] == ["gpt-5.6-luna", "gpt-6-astra"]
+    assert models[0]["upgrade"] == "gpt-6-astra"
+    assert models[0]["supportedReasoningEfforts"] == [{"reasoningEffort": "low"}]
+    assert models[0]["structuredOutputSupported"] is True
+    assert "description" not in models[0]
+    assert not trace.exists()
+    protocol_requests = json.loads(
+        trace.with_suffix(".app-server.json").read_text(encoding="utf-8")
+    )
+    list_requests = [item for item in protocol_requests if item["method"] == "model/list"]
+    assert len(list_requests) == 2
+    assert list_requests[0]["params"]["includeHidden"] is False
+    assert list_requests[1]["params"]["cursor"] == "1"
+
+
+def test_account_catalog_does_not_overstate_profile_structured_output(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    binary = _fake_cli(
+        tmp_path / "codex",
+        trace_path=tmp_path / "trace.json",
+        app_server_pages=[
+            {
+                "data": [
+                    {
+                        "model": "gpt-5.6-luna",
+                        "hidden": False,
+                        "supportedReasoningEfforts": [{"reasoningEffort": "low"}],
+                    }
+                ],
+                "nextCursor": None,
+            }
+        ],
+    )
+    profile = _profile_file(
+        tmp_path / "profile.json",
+        output_schema_supported=False,
+    )
+
+    models = _executor(binary, home=home, profile=profile).list_catalog_models()
+
+    assert models[0]["structuredOutputSupported"] is False

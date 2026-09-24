@@ -31,12 +31,18 @@ PREFLIGHT_CAPABILITY_HEADER = {
         {CAPABILITY_NAME: [{"channel": "product", "actions": ["preflight"]}]}
     )
 }
+CATALOG_CAPABILITY_HEADER = {
+    "Tailscale-App-Capabilities": json.dumps(
+        {CAPABILITY_NAME: [{"channel": "product", "actions": ["catalog"]}]}
+    )
+}
 
 
 class FakeCodexExecutor:
     def __init__(self, response_text: str = "codex result") -> None:
         self.calls: list[dict[str, Any]] = []
         self.preflight_calls: list[dict[str, Any]] = []
+        self.catalog_calls = 0
         self.response_text = response_text
 
     def preflight(self, **kwargs: Any) -> SimpleNamespace:
@@ -49,6 +55,19 @@ class FakeCodexExecutor:
     def execute(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
         return SimpleNamespace(response_text=self.response_text)
+
+    def list_catalog_models(self) -> list[dict[str, Any]]:
+        self.catalog_calls += 1
+        return [
+            {
+                "model": "gpt-5.6-luna",
+                "hidden": False,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "xhigh"},
+                ],
+            }
+        ]
 
 
 class FakeOllamaAdapter:
@@ -236,6 +255,34 @@ def test_preflight_rejects_native_tools_before_ollama_probe() -> None:
     assert codex.preflight_calls == []
     assert ollama.calls == []
     assert codex.calls == []
+
+
+def test_catalog_operation_is_authorized_and_never_calls_a_model() -> None:
+    app, codex, ollama = _app()
+    payload = {"transport_id": "codex_cli"}
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        allowed = client.post(
+            "/v1/catalog", json=payload, headers=CATALOG_CAPABILITY_HEADER
+        )
+        wrong_action = client.post(
+            "/v1/catalog", json=payload, headers=CAPABILITY_HEADER
+        )
+        extra_field = client.post(
+            "/v1/catalog",
+            json={**payload, "endpoint": "https://must-not-be-caller-selected"},
+            headers=CATALOG_CAPABILITY_HEADER,
+        )
+
+    assert allowed.status_code == 200
+    snapshot = allowed.json()["snapshot"]
+    assert snapshot["transport_id"] == "codex_cli"
+    assert snapshot["models"][0]["model"] == "gpt-5.6-luna"
+    assert snapshot["snapshot_hash"].startswith("sha256:")
+    assert wrong_action.status_code == 403
+    assert extra_field.status_code == 422
+    assert codex.catalog_calls == 1
+    assert codex.calls == []
+    assert ollama.calls == []
 
 
 def test_complete_requires_loopback_and_served_app_capability() -> None:
@@ -428,7 +475,7 @@ def test_complete_rejects_oversized_adapter_output_after_one_dispatch() -> None:
     assert len(ollama.calls) == 0
 
 
-def test_executor_exposes_only_bounded_preflight_and_completion_operations() -> None:
+def test_executor_exposes_only_bounded_model_operations() -> None:
     app, _codex, _ollama = _app()
     api_routes = {
         (route.path, tuple(sorted(route.methods or ())))
@@ -438,6 +485,7 @@ def test_executor_exposes_only_bounded_preflight_and_completion_operations() -> 
     assert api_routes == {
         ("/v1/complete", ("POST",)),
         ("/v1/preflight", ("POST",)),
+        ("/v1/catalog", ("POST",)),
     }
 
 

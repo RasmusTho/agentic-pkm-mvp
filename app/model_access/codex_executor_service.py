@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, Request
@@ -18,6 +19,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
+from app.model_access.catalog import CatalogError
+from app.model_access.catalog_discovery import OllamaCatalogDiscovery, codex_catalog_snapshot
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
 from app.model_access.remote_contract import (
@@ -25,6 +28,8 @@ from app.model_access.remote_contract import (
     CompletionRequest,
     CompletionResponse,
     CompletionRouteIdentity,
+    CatalogRequest,
+    CatalogResponse,
     PreflightRequest,
     PreflightResponse,
     validate_inline_schema,
@@ -34,6 +39,7 @@ from app.model_access.remote_contract import (
 MAX_REQUEST_BYTES = 256_000
 MAX_CAPABILITY_HEADER_BYTES = 8_192
 MAX_OUTPUT_BYTES = 512_000
+MAX_CATALOG_RESPONSE_BYTES = 2_000_000
 DEFAULT_CONCURRENCY = 2
 _CAPABILITY_NAME = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]{1,160}$")
 _CONTENT_LENGTH = re.compile(r"^[0-9]{1,12}$")
@@ -110,7 +116,7 @@ def _require_serve_capability(
             continue
         actions = grant.get("actions")
         if not isinstance(actions, list) or any(
-            not isinstance(value, str) or value not in {"complete", "preflight"}
+            not isinstance(value, str) or value not in {"complete", "preflight", "catalog"}
             for value in actions
         ):
             continue
@@ -249,6 +255,8 @@ def _adapter_failure(exc: Exception) -> _RequestFailure:
         if exc.failure_code == "ollama_output_too_large":
             return _RequestFailure(502, exc.failure_code)
         return _RequestFailure(503, exc.failure_code)
+    if isinstance(exc, CatalogError):
+        return _RequestFailure(503, exc.code)
     if isinstance(exc, (SchemaError, ValidationError)):
         return _RequestFailure(422, "adapter_validation_failed")
     return _RequestFailure(502, "adapter_execution_failed")
@@ -333,6 +341,52 @@ def create_codex_executor_app(
                 preflight_status="passed",
             )
             return JSONResponse(content=response.model_dump(mode="json"))
+        except _RequestFailure as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"code": exc.code}},
+            )
+
+    @app.post("/v1/catalog", response_model=CatalogResponse)
+    async def catalog(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            _require_serve_capability(request, serve_capability_name, action="catalog")
+            body = await _read_bounded_body(request, max_bytes=max_request_bytes)
+            try:
+                catalog_request = CatalogRequest.model_validate(_decode_json_object(body))
+            except ValidationError as exc:
+                raise _RequestFailure(422, "invalid_request") from exc
+
+            if not slots.acquire(blocking=False):
+                raise _RequestFailure(429, "executor_busy")
+            try:
+                if catalog_request.transport_id == "codex_cli":
+                    raw_models = await run_in_threadpool(codex_executor.list_catalog_models)
+                    snapshot = codex_catalog_snapshot(
+                        raw_models,
+                        fetched_at=datetime.now(timezone.utc),
+                    )
+                else:
+                    snapshot = await run_in_threadpool(
+                        OllamaCatalogDiscovery(ollama_adapter).discover
+                    )
+            except Exception as exc:
+                raise _adapter_failure(exc) from exc
+            finally:
+                slots.release()
+
+            response = CatalogResponse(snapshot=snapshot)
+            response_json = response.model_dump(mode="json")
+            encoded = json.dumps(
+                response_json,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded) > MAX_CATALOG_RESPONSE_BYTES:
+                raise _RequestFailure(502, "catalog_response_too_large")
+            return JSONResponse(content=response_json)
         except _RequestFailure as exc:
             return JSONResponse(
                 status_code=exc.status_code,

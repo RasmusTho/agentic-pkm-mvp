@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 from dataclasses import dataclass
+from datetime import datetime
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -33,6 +34,14 @@ class OllamaHttpPreflight:
     model_capabilities: tuple[str, ...]
     structured_output_supported: bool
     native_tools_supported: bool
+
+
+@dataclass(frozen=True)
+class OllamaHttpCatalogModel:
+    """Installed model identity and local pull/update time; not release chronology."""
+
+    model: str
+    local_modified_at: datetime | None
 
 
 def _require_loopback_base_url(base_url: str) -> str:
@@ -144,6 +153,38 @@ class OllamaHttpAdapter:
             structured_output_supported=True,
             native_tools_supported=False,
         )
+
+    def list_models(self) -> tuple[OllamaHttpCatalogModel, ...]:
+        """List installed local model metadata without calling inference or `/api/show`."""
+        tags = self._metadata_request(
+            "GET", f"{self._api_root}/api/tags", failure_code="ollama_unavailable"
+        )
+        raw_models = tags.get("models")
+        if not isinstance(raw_models, list) or not raw_models or len(raw_models) > 4_096:
+            raise OllamaHttpError("ollama_response_invalid")
+        models: list[OllamaHttpCatalogModel] = []
+        seen: set[str] = set()
+        for raw in raw_models:
+            if not isinstance(raw, dict):
+                raise OllamaHttpError("ollama_response_invalid")
+            model = raw.get("name", raw.get("model"))
+            if not isinstance(model, str) or not _MODEL_ID.fullmatch(model) or model in seen:
+                raise OllamaHttpError("ollama_response_invalid")
+            seen.add(model)
+            modified = raw.get("modified_at")
+            if modified is None:
+                local_modified_at = None
+            elif isinstance(modified, str):
+                try:
+                    local_modified_at = datetime.fromisoformat(modified.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise OllamaHttpError("ollama_response_invalid") from exc
+                if local_modified_at.tzinfo is None or local_modified_at.utcoffset() is None:
+                    raise OllamaHttpError("ollama_response_invalid")
+            else:
+                raise OllamaHttpError("ollama_response_invalid")
+            models.append(OllamaHttpCatalogModel(model, local_modified_at))
+        return tuple(sorted(models, key=lambda item: item.model))
 
     def _metadata_request(
         self,

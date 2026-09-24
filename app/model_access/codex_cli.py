@@ -30,6 +30,9 @@ SAFE_PROFILE_REF = "profile.codex_cli_no_tools_v2"
 TOOL_SURFACE_CATALOG_VERSION = "codex_cli_tool_surfaces.v2"
 MODEL_CATALOG_SCHEMA_VERSION = "codex_cli_model_catalog.v1"
 _MAX_BUNDLED_CATALOG_BYTES = 2_000_000
+_MAX_ACCOUNT_CATALOG_MODELS = 1_024
+_MAX_ACCOUNT_CATALOG_PAGES = 16
+_ACCOUNT_CATALOG_PAGE_SIZE = 100
 _MAX_SCHEMA_BYTES = 128_000
 _MAX_SCHEMA_NODES = 2_048
 _MAX_SCHEMA_DEPTH = 32
@@ -623,6 +626,230 @@ class CodexCliExecutor:
             self._preflight(model=model, reasoning_effort=reasoning_effort)
         )
         return preflight
+
+    def list_catalog_models(self) -> list[dict[str, Any]]:
+        """Read account-visible models using app-server `model/list`; never infer.
+
+        Only an allowlisted subset of the app-server response is returned. In
+        particular, display text, instructions, paths, account metadata, and raw
+        protocol errors never leave this method.
+        """
+        profile = self._require_profile()
+        credential_store = self._credential_store()
+        cli_path = shutil.which(
+            self._executable_name,
+            path=self._environment.get("PATH", ""),
+        )
+        if cli_path is None:
+            raise CodexCliError("cli_missing")
+        try:
+            cli_path = str(Path(cli_path).resolve(strict=True))
+            cli_identity = _executable_identity(Path(cli_path))
+        except OSError as exc:
+            raise CodexCliError("cli_missing") from exc
+
+        version_result = self._run_bounded(
+            [cli_path, "--version"],
+            cwd=None,
+            input_text=None,
+            timeout_seconds=self._preflight_timeout_seconds,
+            expected_executable_identity=cli_identity,
+        )
+        version_text = version_result.stdout.decode("utf-8", errors="replace").strip()
+        if version_result.returncode != 0 or version_text != profile.cli_version:
+            raise CodexCliError("cli_version_unsupported")
+
+        auth_result = self._run_bounded(
+            [
+                cli_path,
+                "-c",
+                f"cli_auth_credentials_store={json.dumps(credential_store)}",
+                "login",
+                "status",
+            ],
+            cwd=None,
+            input_text=None,
+            timeout_seconds=self._preflight_timeout_seconds,
+            expected_executable_identity=cli_identity,
+        )
+        auth_text = (auth_result.stdout + b"\n" + auth_result.stderr).decode(
+            "utf-8", errors="replace"
+        )
+        if any(marker in auth_text.lower() for marker in _SESSION_EXPIRED_MARKERS):
+            raise CodexCliError("session_expired")
+        auth_streams = [
+            stream.decode("utf-8", errors="replace").strip()
+            for stream in (auth_result.stdout, auth_result.stderr)
+            if stream.strip()
+        ]
+        if auth_result.returncode != 0 or auth_streams != ["Logged in using ChatGPT"]:
+            raise CodexCliError("authentication_unavailable")
+
+        models: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _ in range(_MAX_ACCOUNT_CATALOG_PAGES):
+            params: dict[str, Any] = {
+                "limit": _ACCOUNT_CATALOG_PAGE_SIZE,
+                "includeHidden": False,
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
+            messages = [
+                {
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {
+                            "name": "model-access-router",
+                            "version": "1",
+                        }
+                    },
+                },
+                {"method": "initialized"},
+                {"id": 2, "method": "model/list", "params": params},
+            ]
+            request_text = "\n".join(
+                json.dumps(message, separators=(",", ":"), allow_nan=False)
+                for message in messages
+            ) + "\n"
+            result = self._run_bounded(
+                [cli_path, "app-server", "--listen", "stdio://"],
+                cwd=None,
+                input_text=request_text,
+                timeout_seconds=self._preflight_timeout_seconds,
+                max_output_bytes=_MAX_BUNDLED_CATALOG_BYTES,
+                expected_executable_identity=cli_identity,
+            )
+            if result.returncode != 0:
+                raise CodexCliError("tool_surface_unknown")
+            model_page = self._parse_app_server_model_page(result.stdout)
+            models.extend(
+                {
+                    **self._sanitize_app_server_model(item),
+                    "structuredOutputSupported": profile.output_schema_supported,
+                }
+                for item in model_page[0]
+            )
+            if len(models) > _MAX_ACCOUNT_CATALOG_MODELS:
+                raise CodexCliError("stdout_oversize")
+            next_cursor = model_page[1]
+            if next_cursor is None:
+                break
+            if next_cursor in seen_cursors or next_cursor == cursor:
+                raise CodexCliError("tool_surface_unknown")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise CodexCliError("stdout_oversize")
+
+        if not models:
+            raise CodexCliError("model_unavailable")
+        if len({item["model"] for item in models}) != len(models):
+            raise CodexCliError("tool_surface_unknown")
+        return models
+
+    @staticmethod
+    def _parse_app_server_model_page(
+        stdout: bytes,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        responses: dict[int, dict[str, Any]] = {}
+        try:
+            lines = stdout.decode("utf-8", errors="strict").splitlines()
+            for line in lines:
+                if not line:
+                    continue
+                message = json.loads(
+                    line,
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=_reject_json_constant,
+                )
+                if not isinstance(message, dict):
+                    raise ValueError("app-server message is not an object")
+                if "id" not in message:
+                    if not isinstance(message.get("method"), str):
+                        raise ValueError("app-server notification is malformed")
+                    continue
+                request_id = message["id"]
+                if type(request_id) is not int or request_id not in {1, 2}:
+                    raise ValueError("app-server response id is invalid")
+                if request_id in responses or "error" in message:
+                    raise ValueError("app-server request failed")
+                result = message.get("result")
+                if not isinstance(result, dict):
+                    raise ValueError("app-server result is malformed")
+                responses[request_id] = result
+        except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError):
+            raise CodexCliError("tool_surface_unknown") from None
+        if set(responses) != {1, 2}:
+            raise CodexCliError("tool_surface_unknown")
+
+        page = responses[2]
+        raw_models = page.get("data")
+        next_cursor = page.get("nextCursor")
+        if (
+            not isinstance(raw_models, list)
+            or len(raw_models) > _ACCOUNT_CATALOG_PAGE_SIZE
+            or (next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 512))
+        ):
+            raise CodexCliError("tool_surface_unknown")
+        if any(not isinstance(item, dict) for item in raw_models):
+            raise CodexCliError("tool_surface_unknown")
+        return raw_models, next_cursor
+
+    @staticmethod
+    def _sanitize_app_server_model(raw: Mapping[str, Any]) -> dict[str, Any]:
+        model = raw.get("model", raw.get("id"))
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model):
+            raise CodexCliError("tool_surface_unknown")
+        hidden = raw.get("hidden", False)
+        if type(hidden) is not bool:
+            raise CodexCliError("tool_surface_unknown")
+        raw_efforts = raw.get("supportedReasoningEfforts", [])
+        if not isinstance(raw_efforts, list) or len(raw_efforts) > 32:
+            raise CodexCliError("tool_surface_unknown")
+        efforts: list[dict[str, str]] = []
+        for item in raw_efforts:
+            if not isinstance(item, dict):
+                raise CodexCliError("tool_surface_unknown")
+            effort = item.get("reasoningEffort")
+            if not isinstance(effort, str) or not re.fullmatch(
+                r"[a-z][a-z0-9_-]{0,31}", effort
+            ):
+                raise CodexCliError("tool_surface_unknown")
+            efforts.append({"reasoningEffort": effort})
+        if len({item["reasoningEffort"] for item in efforts}) != len(efforts):
+            raise CodexCliError("tool_surface_unknown")
+
+        safe: dict[str, Any] = {
+            "model": model,
+            "hidden": hidden,
+            "supportedReasoningEfforts": efforts,
+        }
+        replacement = raw.get("upgrade")
+        if replacement is not None:
+            if not isinstance(replacement, str) or not _MODEL_ID.fullmatch(replacement):
+                raise CodexCliError("tool_surface_unknown")
+            safe["upgrade"] = replacement
+        upgrade_info = raw.get("upgradeInfo")
+        if upgrade_info is not None:
+            if not isinstance(upgrade_info, dict):
+                raise CodexCliError("tool_surface_unknown")
+            retirement = upgrade_info.get("retirementAt")
+            if retirement is not None:
+                if type(retirement) is not int or retirement < 0:
+                    raise CodexCliError("tool_surface_unknown")
+                safe["upgradeInfo"] = {"retirementAt": retirement}
+        for source, destination in (
+            ("contextWindow", "contextWindow"),
+            ("maxContextWindow", "maxContextWindow"),
+        ):
+            value = raw.get(source)
+            if value is not None:
+                if type(value) is not int or value < 1:
+                    raise CodexCliError("tool_surface_unknown")
+                safe[destination] = value
+        return safe
 
     def _preflight(
         self, *, model: str, reasoning_effort: str | None = None
