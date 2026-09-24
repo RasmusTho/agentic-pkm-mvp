@@ -40,7 +40,7 @@ EXPECTED_DISCLOSURE_SUMMARIES = {
         "Inspect evidence details",
         "Inspect evidence details",
     ],
-    "focus": ["Inspect source and technical details"] * 10,
+    "focus": ["Inspect source and technical details"] * 12,
 }
 EXPECTED_OVERVIEW_EVIDENCE_IDENTITIES = [
     {
@@ -95,6 +95,12 @@ EXPECTED_FOCUS_ENTRY_IDENTITIES = {
         },
         {
             "key": "claim_id",
+            "value": "issue-work-state:49af6f0b01d3bcd3",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
+        },
+        {
+            "key": "claim_id",
             "value": "issue-declaration:acceptance-criteria:r1-56e00693da9440a2",
             "source_id": "example/fixture#501",
             "locator": "https://github.com/Example/Fixture/issues/501#acceptance-criteria",
@@ -111,6 +117,12 @@ EXPECTED_FOCUS_ENTRY_IDENTITIES = {
             "value": "criterion_results_unassessed",
             "source_id": "example/fixture#501",
             "locator": "https://github.com/Example/Fixture/issues/501#acceptance-criteria",
+        },
+        {
+            "key": "kind",
+            "value": "issue_results_unassessed",
+            "source_id": "example/fixture#501",
+            "locator": "https://github.com/Example/Fixture/issues/501",
         },
         {"key": "kind", "value": "owner_facts_unavailable", "source_id": None, "locator": None},
     ],
@@ -231,7 +243,8 @@ def _assert_focus_technical_axis_disclosure(page):
     assert "not delivered" in conversation.inner_text().lower()
     next_step = page.locator('[data-testid="focus-next-step"]')
     assert "unavailable" in next_step.inner_text().lower()
-    assert "infer" in next_step.inner_text().lower()
+    assert "cannot launch or control work" in next_step.inner_text().lower()
+    assert "https://github.com/Example/Fixture/issues/501" in next_step.inner_text()
     limitation_text = page.locator('[data-testid="focus-limitations"]').inner_text().lower()
     assert any(token in limitation_text for token in ("acceptance", "unassessed", "owner outcome"))
 
