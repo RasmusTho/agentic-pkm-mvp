@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from app.config.paths import VaultRootMisconfiguredError
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note
+from app.rebuildability.product_total_loss import parse_bounded_frontmatter
 from app.services.companion_note import companion_path
 from app.services.note_uuid import ensure_note_uuid
 from app.write_guard import WritesBlockedError
@@ -30,8 +33,16 @@ def resolve_note_artifact_identity(
     safe_note_path: str,
     body: str | None = None,
     heal_missing_uuid: bool = True,
+    allow_recovered_identity: bool = False,
 ) -> ArtifactIdentity:
-    """Resolve active workspace identity without path/hash fallbacks."""
+    """Resolve active workspace identity without path/hash fallbacks.
+
+    A create-once note without a uuid is never rewritten here. Read-only callers
+    that pass ``allow_recovered_identity=True`` get the retained-source recovery
+    identity shared with ingest (``identity_state="recovered"``). Every other
+    caller gets an unresolved identity, because a recovered identity was never
+    written to the note and must not authorize a mutation of it.
+    """
     companion_identity = _companion_identity(vault_root=vault_root, safe_note_path=safe_note_path)
     if companion_identity is not None:
         return companion_identity
@@ -59,10 +70,29 @@ def resolve_note_artifact_identity(
             identity_state="legacy_resolved",
         )
 
+    if _is_create_once(resolved_root, contained_artifact_path):
+        # A create-once note (ADR-0055) is never rewritten, least of all by a read:
+        # the backfill write would be refused. Use the same read-only, stable
+        # recovery identity ingest derives for this retained note instead (#5660).
+        if allow_recovered_identity:
+            return _recovery_identity(
+                artifact_path=contained_artifact_path,
+                vault_root=resolved_root,
+                safe_note_path=safe_note_path,
+                body=body,
+            )
+        return _unresolved_identity(safe_note_path)
+
     if heal_missing_uuid:
         try:
             healed_uuid = ensure_note_uuid(contained_artifact_path, vault_root=resolved_root)
-        except (OSError, ValueError, VaultRootMisconfiguredError, WritesBlockedError):
+        except (
+            OSError,
+            ValueError,
+            VaultRootMisconfiguredError,
+            WritesBlockedError,
+            KnowledgeWriteConflict,
+        ):
             healed_uuid = ""
         if healed_uuid:
             return ArtifactIdentity(
@@ -73,12 +103,49 @@ def resolve_note_artifact_identity(
                 identity_state="healed",
             )
 
+    return _unresolved_identity(safe_note_path)
+
+
+def _unresolved_identity(safe_note_path: str) -> ArtifactIdentity:
     return ArtifactIdentity(
         artifact_id=None,
         artifact_kind="human_note",
         note_path=safe_note_path,
         identity_source="missing",
         identity_state="unresolved_missing_uuid",
+    )
+
+
+def _is_create_once(vault_root: Path, artifact_path: Path) -> bool:
+    # Mirrors the filesystem knowledge adapter's write classification, which is
+    # what refuses the expected-version uuid backfill for non-rewritten classes.
+    relative = artifact_path.relative_to(vault_root).as_posix()
+    return classify_note(relative, WriteOperation.WRITE) is NoteClass.CREATE_ONCE
+
+
+def _recovery_identity(
+    *,
+    artifact_path: Path,
+    vault_root: Path,
+    safe_note_path: str,
+    body: str | None,
+) -> ArtifactIdentity:
+    from app.ingest.vault_alpha import resolve_vault_note_identity
+
+    text = body if body is not None else artifact_path.read_text(encoding="utf-8")
+    frontmatter, note_body, _ = parse_bounded_frontmatter(text)
+    identity = resolve_vault_note_identity(
+        artifact_path,
+        vault_root=vault_root,
+        frontmatter=frontmatter,
+        body=note_body,
+    )
+    return ArtifactIdentity(
+        artifact_id=identity.note_uuid,
+        artifact_kind="human_note",
+        note_path=safe_note_path,
+        identity_source="recovery_candidate",
+        identity_state="recovered",
     )
 
 
