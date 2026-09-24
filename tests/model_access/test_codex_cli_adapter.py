@@ -191,20 +191,21 @@ elif args == ["app-server", "--listen", "stdio://"]:
         requests.append(json.loads(line))
     if len(requests) != 3:
         raise SystemExit(2)
-    # Model-list can respond asynchronously. EOF before its response means the
-    # client closed the app-server session too early.
+    initialize = next(item for item in requests if item.get("method") == "initialize")
+    print(json.dumps({{"id": initialize["id"], "result": {{"userAgent": "fixture"}}}}))
+    sys.stdout.flush()
+    # The initialization response is not the end of this JSON-RPC session.
+    # Model-list can respond asynchronously after it.
     time.sleep(0.05)
     readable, _, _ = select.select([sys.stdin], [], [], 0)
     if readable and sys.stdin.readline() == "":
         raise SystemExit(0)
     for request in requests:
-        if request.get("method") == "initialize":
-            print(json.dumps({{"id": request["id"], "result": {{"userAgent": "fixture"}}}}))
-        elif request.get("method") == "model/list":
+        if request.get("method") == "model/list":
             cursor = request.get("params", {{}}).get("cursor")
             page_index = int(cursor) if cursor is not None else 0
             print(json.dumps({{"id": request["id"], "result": pages[page_index]}}))
-        elif request.get("method") != "initialized":
+        elif request.get("method") not in {{"initialize", "initialized"}}:
             raise SystemExit(2)
     sys.stdout.flush()
     request_trace = Path({str(trace_path)!r}).with_suffix(".app-server.json")
