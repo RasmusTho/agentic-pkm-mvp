@@ -3,8 +3,9 @@
 The dev incident left ``_conflicts/`` with four ``concurrent-save`` copies per
 event and a briefing whose frontmatter/body no longer matched. That signature is
 exactly one ingest-time uuid heal (``ensure_note_uuid``) rewriting the derived,
-read-only briefing after it was composed: the watcher observes the new or
-re-observed dated note, the worker heals the missing ``uuid`` through the
+read-only briefing after it was composed: the vault-wide watcher emits
+``ingest.vault.changed`` for the new or re-observed dated note, the outbox
+worker's ``handle_ingest_vault_changed`` heals the missing ``uuid`` through the
 multiwriter adapter, and the reserialized note fails the canonical re-render
 check. These tests race first-contact triggers against that ingest writer and
 replay the restart path against an existing past-date briefing.
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -24,8 +26,8 @@ from app.briefing import load_briefing
 from app.briefing.compose import briefing_note_path
 from app.briefing.trigger import first_contact_briefing, scheduled_briefing_tick
 from app.services import note_uuid as note_uuid_module
-from app.services.note_uuid import ensure_note_uuid
 from app.vault.manager import VaultContext
+from app.workers.outbox_worker import _ensure_uuid_with_backoff
 from app.write_guard import WriteGuard
 
 HEALTHY = WriteGuard(lambda: {"state": "healthy"})
@@ -61,10 +63,11 @@ def _conflict_copies(context: VaultContext, for_date: date) -> list[str]:
 
 
 def _ingest_uuid_heal(context: VaultContext, for_date: date) -> None:
-    """Replay the watcher->worker ingest heal every vault-changed note receives."""
+    """Replay the worker's ingest uuid heal (``handle_ingest_vault_changed``)."""
 
     note = briefing_note_path(vault_context=context, for_date=for_date)
-    ensure_note_uuid(note, vault_root=Path(context.active_vault_path or ""))
+    assert note.exists()
+    _ensure_uuid_with_backoff(note, vault_root=Path(context.active_vault_path or ""))
 
 
 def test_concurrent_first_contact_composes_one_readable_briefing(
@@ -102,10 +105,9 @@ def test_concurrent_first_contact_composes_one_readable_briefing(
         # while other first-contact requests are still in flight.
         try:
             barrier.wait()
-            for _ in range(2000):
-                if target.exists():
-                    break
-                threading.Event().wait(0.001)
+            deadline = time.monotonic() + 30
+            while not target.exists() and time.monotonic() < deadline:
+                time.sleep(0.001)
             _ingest_uuid_heal(vault, TODAY)
         except BaseException as exc:  # pragma: no cover - surfaced below
             errors.append(exc)

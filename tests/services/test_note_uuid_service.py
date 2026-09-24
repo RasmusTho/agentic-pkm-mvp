@@ -111,10 +111,11 @@ def test_ensure_note_uuid_rejects_outside_vault_root_before_read_or_write(
 @pytest.mark.parametrize(
     ("frontmatter", "expect_write"),
     [
-        ("agent_maintained: true\nread_only: true\n", False),
-        ("agent_maintained: true\n", True),
-        ("read_only: true\n", True),
-        ("agent_maintained: 'true'\nread_only: true\n", True),
+        ("agent_maintained: true\nread_only: true\nauthority_role: derived\n", False),
+        ("agent_maintained: true\nread_only: true\n", True),
+        ("agent_maintained: true\nauthority_role: derived\n", True),
+        ("read_only: true\nauthority_role: derived\n", True),
+        ("agent_maintained: 'true'\nread_only: true\nauthority_role: derived\n", True),
     ],
 )
 def test_ensure_note_uuid_skips_only_read_only_derived_artifacts(

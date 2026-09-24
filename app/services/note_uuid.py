@@ -25,13 +25,17 @@ def _new_note_uuid() -> str:
 def is_read_only_derived_artifact(frontmatter: dict[str, object]) -> bool:
     """Return whether a note declares itself a byte-owned derived artifact.
 
-    Agent-maintained, read-only artifacts (for example the Daily Briefing) are
+    Agent-maintained, read-only, derived artifacts (for example the Daily Briefing) are
     owned end to end by their composer, and their readers verify the exact
     rendered bytes. A uuid heal would reserialize such a note under a second
     writer and make it unreadable (#5656), so identity healing leaves them alone.
     """
 
-    return frontmatter.get("agent_maintained") is True and frontmatter.get("read_only") is True
+    return (
+        frontmatter.get("agent_maintained") is True
+        and frontmatter.get("read_only") is True
+        and frontmatter.get("authority_role") == "derived"
+    )
 
 
 def ensure_note_uuid(
