@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.components.llm.router import LLMRoute, LLMRouter
+from app.components.llm.fabric import (
+    ChatClient,
+    LLMRoute,
+    LLMTaskIntent,
+    _resolve_product_access_route,
+)
+from app.components.llm.router import LLMRouter
 from app.components.reasoning.facade import ReasoningFacade, TelemetryRecord, ToolResult
 
 
@@ -34,6 +41,40 @@ SIMPLE_MESSAGES: list[dict[str, str]] = [
     {"role": "system", "content": "You are helpful."},
     {"role": "user", "content": "Hello"},
 ]
+
+
+def _bound_remote_client(intent: LLMTaskIntent, content: str):
+    class _Remote:
+        completion_request = None
+
+        def preflight(self, _request):
+            pass
+
+        def complete(self, request):
+            self.completion_request = request
+            return SimpleNamespace(content=content)
+
+    remote = _Remote()
+    access_route = _resolve_product_access_route(
+        intent,
+        LLMRoute(
+            provider="openai",
+            model="gpt-5.4",
+            mode="chat",
+            reason="test",
+            transport_id="codex_cli_tailscale",
+            reasoning_effort="low",
+        ),
+        allow_catalog_promotion=False,
+    )
+    client = ChatClient(
+        route=LLMRoute.from_model_access_route(
+            access_route, mode="chat", reason="test"
+        ),
+        model_access_route=access_route,
+        remote_transport=remote,
+    )
+    return client, remote
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +165,29 @@ class TestStructured:
         assert facade.telemetry[0].method == "structured"
 
     @patch("app.components.reasoning.facade.get_chat_client_for_route")
+    def test_forwards_schema_to_bound_remote_route(
+        self, mock_get_client: MagicMock
+    ) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+        client, remote = _bound_remote_client(
+            LLMTaskIntent(task_kind="decide", json_schema_required=True),
+            '{"answer":42}',
+        )
+        mock_get_client.return_value = client
+
+        result = _facade().structured(
+            SIMPLE_MESSAGES, schema=schema, task_kind="decide", trace_id="s3"
+        )
+
+        assert result == {"answer": 42}
+        assert remote.completion_request is not None
+        assert remote.completion_request.output_schema == schema
+
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_raises_on_bad_json(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = "not json"
@@ -160,6 +224,36 @@ class TestToolUse:
         assert result.tool_name == "search"
         assert result.arguments == {"query": "langgraph"}
         assert facade.telemetry[0].method == "tool_use"
+
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
+    def test_forwards_tool_call_schema_to_bound_remote_route(
+        self, mock_get_client: MagicMock
+    ) -> None:
+        client, remote = _bound_remote_client(
+            LLMTaskIntent(task_kind="tool", json_schema_required=True),
+            '{"tool":"search","arguments":{"query":"langgraph"}}',
+        )
+        mock_get_client.return_value = client
+        tools = [
+            {"name": "search", "description": "Search the web"},
+            {"name": "summarize", "description": "Summarize a page"},
+        ]
+
+        result = _facade().tool_use(
+            SIMPLE_MESSAGES, tools=tools, task_kind="tool", trace_id="tu3"
+        )
+
+        assert result.tool_name == "search"
+        assert remote.completion_request is not None
+        assert remote.completion_request.output_schema == {
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string", "enum": ["search", "summarize"]},
+                "arguments": {"type": "object"},
+            },
+            "required": ["tool", "arguments"],
+            "additionalProperties": False,
+        }
 
     @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_raises_on_bad_json(self, mock_client_cls: MagicMock) -> None:

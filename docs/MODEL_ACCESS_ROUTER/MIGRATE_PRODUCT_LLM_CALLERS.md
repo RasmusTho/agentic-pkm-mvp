@@ -36,6 +36,8 @@ Updating only the low-level adapter would leave other Product code paths on diff
 
 - [ ] Chat, reasoning, constrained completion, eval, and health use the shared facade on the production call path.
   - Verify: `tests/components/llm/test_fabric.py::test_product_call_sites_use_shared_model_access_router`
+- [ ] Reasoning structured and tool-use calls forward their JSON Schema through the bound chat client to remote transports; tool-use output restricts the tool name to the declared set.
+  - Verify: `tests/components/reasoning/test_facade.py::TestStructured::test_forwards_schema_to_bound_remote_route` and `tests/components/reasoning/test_facade.py::TestToolUse::test_forwards_tool_call_schema_to_bound_remote_route`
 - [ ] The configured Luna route returns exact route/transport/snapshot provenance and does not alter embedding identity.
   - Verify: `tests/components/llm/test_fabric.py::test_luna_route_provenance_and_embedding_identity_are_separate`
 - [ ] Product system instructions and user content reach the Tailscale Codex executor in distinct fields; the factory does not concatenate them or claim literal system-role semantics.
