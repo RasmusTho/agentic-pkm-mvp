@@ -9291,6 +9291,7 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
       /* #2562: vault-green identity colour, matching the shell's vault
@@ -9327,7 +9328,8 @@ def _render_orientation_index_html(
     body {{
       margin: 0;
       min-height: 100vh;
-      background: var(--bg-base);
+      background: var(--surface-page);
+      background-size: var(--material-backdrop-size);
       color: var(--fg-1);
       font-family: var(--font-ui);
       line-height: 1.55;
@@ -9398,9 +9400,25 @@ def _render_orientation_index_html(
     .orientation-shell {{
       display: grid;
       gap: 16px;
-      margin: 0 auto;
+      margin: var(--surface-frame-gap) auto;
       max-width: 1180px;
       padding: 24px;
+      /* Shell material (#5652) sits on a pseudo-element: a backdrop-filter on
+         the shell itself would make it the containing block for the fixed
+         re-entry cues inside it. Dark resolves these tokens to its unchanged look. */
+      isolation: isolate;
+      position: relative;
+    }}
+    .orientation-shell::before {{
+      background: var(--surface-main);
+      backdrop-filter: var(--surface-panel-filter);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
+      content: "";
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+      z-index: -1;
     }}
     .orientation-header {{
       border-bottom: 1px solid var(--border);
@@ -11682,6 +11700,7 @@ def render_index_html(
       border-right: 1px solid var(--surface-panel-border);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
       display: flex;
       flex-direction: column;
       min-height: 0;
@@ -11795,6 +11814,7 @@ def render_index_html(
       background: var(--surface-main);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
     }}
     .active-note-header h1 {{
       text-shadow: var(--surface-title-shadow);
@@ -12687,7 +12707,7 @@ def render_index_html(
       font-size: var(--text-xs);
     }}
     .note-source-editor {{
-      background: var(--bg-base);
+      background: var(--surface-reading);
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
       box-sizing: border-box;
@@ -12728,7 +12748,7 @@ def render_index_html(
        §3.3/§7 — the reading column does not own a second nested scroll and is
        not height-clamped; it grows naturally inside the .note-body scroll. */
     .note-body-content {{
-      background: var(--bg-base);
+      background: var(--surface-reading);
       border: none;
       border-radius: 0;
       margin: 0 auto;
@@ -13322,6 +13342,7 @@ def render_index_html(
       background: var(--surface-panel);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
       border-left: 1px solid color-mix(in srgb, var(--surface-panel-border) 72%, transparent);
       display: flex;
       flex-direction: column;
@@ -14150,7 +14171,8 @@ def render_index_html(
         display: none;
       }}
       .portrait-sheet {{
-        background: var(--bg-surface);
+        background: var(--surface-panel);
+        backdrop-filter: var(--surface-panel-filter);
         border-top: 1px solid var(--border);
         bottom: 0;
         display: block;

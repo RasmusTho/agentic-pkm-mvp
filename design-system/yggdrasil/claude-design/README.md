@@ -1,6 +1,6 @@
 # Yggdrasil Design System
 
-Version 2.0.0. Token sheet: `colors_and_type.css`, generated from the repo token source
+Version 2.1.0. Token sheet: `colors_and_type.css`, generated from the repo token source
 `design-system/yggdrasil/` in `RasmusTho/agentic-pkm-mvp`. The repo sheet
 `companion-ui/companion-app/colors_and_type.css` is the binding authority. This project's copy must
 match it byte for byte. If this README and the sheet ever disagree, the sheet wins.
@@ -121,9 +121,12 @@ light.
 
 - **City backdrop** (app frame): `var(--surface-page)`. Red, cyan, magenta, and blue radial fields
   over violet, with vertical glitch streaks and faint scanlines.
-- **Porcelain sheet** (content): `var(--surface-panel)` and `var(--surface-main)`, a white to
-  `#e4e6eb` gradient. Rim light is `var(--surface-panel-shadow)`: cyan from the left, red from the
-  right.
+- **Porcelain sheet** (content): `var(--surface-panel)` and `var(--surface-main)`, frosted glass.
+  A translucent white to `#e4e6eb` gradient (75 % coverage) with `backdrop-filter:
+  var(--surface-panel-filter)`, so the city and its glitch streaks show through. Rim light is
+  `var(--surface-panel-shadow)`: cyan from the left, red from the right.
+- **Reading surface** (note body, editors): `var(--surface-reading)`. Calm glitch: denser porcelain
+  with faint static scanlines and two hairline chroma streaks. It never animates.
 - **Dark glass chrome** (top bar, anything directly on the city): `var(--material-glass)` with
   `var(--material-on-glass)` text.
 - **Emblem:** the ᛉ rune inside a thin triangle. Wordmark in light, widely tracked capitals.
@@ -156,17 +159,18 @@ text.
 
 | Role | Dark | Shell ink | Shell mark |
 |------|------|-----------|------------|
-| accent | `#d4a843` | `#6b4d00` | `#e8b440` |
-| cyan | `#00d4e8` | `#006470` | `#00d4e8` |
-| vault | `#39e87d` | `#0b6334` | `#16c95e` |
-| agent | `#4a9eff` | `#1f45b8` | `#2f6bff` |
-| amber | `#f09030` | `#8a4300` | `#ff8a1a` |
-| destructive | `#ff3d3d` | `#b3162c` | `#ff1f4b` |
+| accent | `#d4a843` | `#573e00` | `#e8b440` |
+| cyan | `#00d4e8` | `#004a53` | `#00d4e8` |
+| vault | `#39e87d` | `#094d29` | `#16c95e` |
+| agent | `#4a9eff` | `#1a3999` | `#2f6bff` |
+| amber | `#f09030` | `#6a3400` | `#ff8a1a` |
+| destructive | `#ff3d3d` | `#841021` | `#ff1f4b` |
 
 Surface tokens for layout: `--surface-page`, `--surface-panel`, `--surface-main`,
 `--surface-panel-border`, `--surface-panel-shadow`, `--surface-panel-radius`,
-`--surface-frame-gap`, `--surface-title-shadow`. Build app frames from these and the same markup
-renders Dark or Shell.
+`--surface-frame-gap`, `--surface-title-shadow`, `--surface-panel-filter` (apply as
+`backdrop-filter` on panels), and `--surface-reading` (reading surfaces such as a note body).
+Build app frames from these and the same markup renders Dark or Shell.
 
 ### Typography
 
@@ -247,7 +251,8 @@ and adds `--shadow-inset`. Destructive hover uses `--destructive-muted`.
 ### Imagery, blur, transparency
 
 - No photography, no stock imagery, no grain. The vault is the content.
-- Blur (`backdrop-filter`) only for floating overlays and Shell's dark glass chrome.
+- Blur (`backdrop-filter`) only for floating overlays, Shell's dark glass chrome, and Shell's
+  frosted sheets through `--surface-panel-filter`.
 - Transparency layers surfaces. It is never decoration.
 
 ---
