@@ -106,3 +106,29 @@ def test_ensure_note_uuid_rejects_outside_vault_root_before_read_or_write(
         raise AssertionError("outside path was accepted")
 
     assert writes == []
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "expect_write"),
+    [
+        ("agent_maintained: true\nread_only: true\n", False),
+        ("agent_maintained: true\n", True),
+        ("read_only: true\n", True),
+        ("agent_maintained: 'true'\nread_only: true\n", True),
+    ],
+)
+def test_ensure_note_uuid_skips_only_read_only_derived_artifacts(
+    monkeypatch, tmp_path: Path, frontmatter: str, expect_write: bool
+) -> None:
+    note = tmp_path / "note.md"
+    note.write_text(f"---\n{frontmatter}---\nBody\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def _fake_write(path: Path, content: str, **_kwargs: object) -> None:
+        calls.append(content)
+
+    monkeypatch.setattr(note_uuid, "write_note_from_absolute", _fake_write)
+    monkeypatch.setattr(note_uuid.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _action: None)
+    result = note_uuid.ensure_note_uuid(note, vault_root=tmp_path)
+    assert bool(calls) is expect_write
+    assert bool(result) is expect_write

@@ -3,6 +3,8 @@
 The briefing consumes the three existing durable source projections exactly once,
 normalizes them into a deterministic schema, and atomically replaces one system-owned
 dated note. It never writes back to a source or acquires authority over source state.
+The note's ``agent_maintained``/``read_only`` frontmatter keeps ingest uuid healing
+from rewriting it, so the composer stays its only writer (#5656).
 """
 
 from __future__ import annotations
