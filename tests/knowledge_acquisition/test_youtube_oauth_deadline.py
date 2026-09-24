@@ -249,3 +249,47 @@ def test_deadline_during_transport_failure_keeps_provider_diagnostic_private(run
         traceback.format_exception(caught.value)
     )
     assert _snapshot(runtime) == before
+
+
+@pytest.mark.parametrize("effect", ["account_failure", "source_failure", "status_clear"])
+def test_refresh_shared_status_effect_refuses_stale_holder(runtime, effect):
+    from contextlib import contextmanager
+    from datetime import datetime, timedelta, timezone
+    from app.knowledge_acquisition.sync_scheduler import LEASE_KEY, LEASE_TTL_SECONDS
+    from app.knowledge_acquisition.sync_state import MemorySyncStateStore, SyncLeaseLostError
+    from tests.knowledge_acquisition.test_youtube_oauth import _invalid_grant
+
+    state = MemorySyncStateStore()
+    now = [datetime.now(timezone.utc)]
+    assert state.acquire_lease(key=LEASE_KEY, holder="old", ttl_seconds=LEASE_TTL_SECONDS, now=now[0])
+    if effect == "status_clear":
+        runtime.bindings.set_state(runtime.binding_id, state="degraded", reason_code="auth_expired")
+    else:
+        runtime.provider.token_responses.append(_invalid_grant())
+    before_source = runtime.registry.get(runtime.source.binding_id)
+    before_binding = runtime.bindings.get(runtime.binding_id)
+    admissions = []
+
+    def check_active():
+        if not state.heartbeat_lease(key=LEASE_KEY, holder="old", ttl_seconds=LEASE_TTL_SECONDS, now=now[0]):
+            raise SyncLeaseLostError("fixture lost ownership")
+
+    @contextmanager
+    def commit_guard():
+        admissions.append(effect)
+        target = 2 if effect == "source_failure" else 1
+        if len(admissions) == target:
+            now[0] += timedelta(seconds=LEASE_TTL_SECONDS + 1)
+            assert state.acquire_lease(key=LEASE_KEY, holder="new", ttl_seconds=LEASE_TTL_SECONDS, now=now[0])
+        with state.owned_effect(key=LEASE_KEY, holder="old", now=now[0]) as conn:
+            yield conn
+
+    with pytest.raises(SyncLeaseLostError):
+        runtime.token_provider.get_access_token(check_active=check_active, commit_guard=commit_guard)
+    assert runtime.registry.get(runtime.source.binding_id) == before_source
+    if effect == "source_failure":
+        # Earlier admitted account failure is legitimate; the later source write is refused.
+        assert runtime.bindings.get(runtime.binding_id).state == "degraded"
+    else:
+        assert runtime.bindings.get(runtime.binding_id) == before_binding
+    assert state.get(LEASE_KEY)["holder"] == "new"

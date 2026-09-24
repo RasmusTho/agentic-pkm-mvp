@@ -38,6 +38,7 @@ import os
 import socket
 import time
 import uuid
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol
@@ -119,7 +120,9 @@ class SyncStateStore(Protocol):
 
     def get(self, key: str) -> dict[str, Any] | None: ...
 
-    def set(self, key: str, value: Mapping[str, Any]) -> None: ...
+    def set(self, key: str, value: Mapping[str, Any], *, transaction_conn: Any = None) -> None: ...
+
+    def owned_effect(self, *, key: str, holder: str, now: datetime) -> AbstractContextManager[Any]: ...
 
 
 @dataclass(frozen=True)
@@ -281,9 +284,13 @@ class SyncScheduler:
         # startup. Recheck each tick, including after a failed recovery attempt.
         self._ensure_lease()
         try:
-            self._requests.reset_stale_in_progress(
-                older_than_seconds=STALE_IN_PROGRESS_SECONDS, now=now
-            )
+            with self._owned_effect() as conn:
+                self._requests.reset_stale_in_progress(
+                    older_than_seconds=STALE_IN_PROGRESS_SECONDS, now=now,
+                    **({"transaction_conn": conn} if conn is not None else {}),
+                )
+        except SyncLeaseLostError:
+            raise
         except Exception:
             logger.exception("stale in-progress reset failed; continuing this tick")
         if not self._reconciled:
@@ -314,16 +321,18 @@ class SyncScheduler:
             deduped += int(getattr(result, "deduped", 0) or 0)
 
         self._ensure_lease()
-        self._state.set(
-            LAST_TICK_KEY,
-            {
-                "at": now.isoformat(),
-                "polled": len(polled),
-                "discovered": discovered,
-                "enqueued": enqueued,
-                "deduped": deduped,
-            },
-        )
+        with self._owned_effect() as conn:
+            self._state.set(
+                LAST_TICK_KEY,
+                {
+                    "at": now.isoformat(),
+                    "polled": len(polled),
+                    "discovered": discovered,
+                    "enqueued": enqueued,
+                    "deduped": deduped,
+                },
+                transaction_conn=conn,
+            )
 
         return TickOutcome(
             reason="ran",
@@ -370,11 +379,13 @@ class SyncScheduler:
         # The attempt time is recorded here as well as by `poll_source`, because
         # the provider path does not record one when it raises.
         key = f"{_BACKOFF_KEY_PREFIX}{binding_id}"
-        failures = 0 if not failed else self._consecutive_failures(binding_id) + 1
-        self._state.set(
-            key,
-            {"consecutive_failures": failures, "last_attempt_at": now.isoformat()},
-        )
+        with self._owned_effect() as conn:
+            failures = 0 if not failed else self._consecutive_failures(binding_id) + 1
+            self._state.set(
+                key,
+                {"consecutive_failures": failures, "last_attempt_at": now.isoformat()},
+                transaction_conn=conn,
+            )
 
     def _resolve_poll_fn(self) -> Callable[..., Any]:
         if self._poll_fn is not None:
@@ -382,6 +393,11 @@ class SyncScheduler:
         from app.knowledge_acquisition.playlist_discovery import poll_source
 
         return poll_source
+
+    def _owned_effect(self) -> AbstractContextManager[Any]:
+        now = _utc(self._clock())
+        assert now is not None
+        return self._state.owned_effect(key=LEASE_KEY, holder=self._holder, now=now)
 
     def _ensure_lease(self) -> None:
         now = _utc(self._clock())
@@ -402,6 +418,7 @@ class SyncScheduler:
                 deadline=deadline,
                 monotonic=self._monotonic,
                 check_active=self._ensure_lease,
+                commit_guard=self._owned_effect,
             )
         except SyncLeaseLostError:
             raise

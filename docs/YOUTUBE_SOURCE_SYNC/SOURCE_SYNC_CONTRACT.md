@@ -150,6 +150,17 @@ only under INV-YSS-1 (*request-before-cursor*):
   `--flat-playlist` (logged-out) or full API pagination, diffs against existing
   requests/dispositions, and enqueues only the gap. It never rewinds an incremental cursor.
 
+Scheduled and manual discovery publish shared database effects only inside an ownership
+transaction: the lease row is locked and its current holder checked on the same Postgres
+connection used by the effect. This covers request enqueue plus outbox, stale-request reset,
+source cursor/failure/auth status, account auth status, source backoff, and `last_tick`.
+A contender skips an admitted effect even when the TTL expires; an old holder paused before
+admission is refused after takeover. Losing the database session rolls back its effect.
+Memory mode provides equivalent exclusion for local execution. This is per-effect atomicity,
+not a transaction across the entire poll. Quota spending remains monotonic API accounting;
+node-local encrypted credential files retain the V1 safety floor and are not part of a
+cross-resource database/filesystem transaction.
+
 ## Event topics (YSS-04/05/06; schemas registered per KERNEL-08)
 
 Only the source-discovery and acquisition topics in this table are shipped for V1. The per-run

@@ -14,8 +14,11 @@ read paths plus the lease semantics the exclusion invariant depends on.
 
 from __future__ import annotations
 
+import os
+import threading
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,8 +29,14 @@ from alembic.config import Config
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from sqlalchemy.engine import URL
 
+from app.knowledge_acquisition.acquisition_requests import (
+    AcquisitionRequests,
+    DiscoveryTrigger,
+)
+from app.knowledge_acquisition.source_registry import SourceBinding, SourceRegistry
 from app.knowledge_acquisition.sync_scheduler import LEASE_KEY, LEASE_TTL_SECONDS
 from app.knowledge_acquisition.sync_state import (
+    SyncLeaseLostError,
     SyncStateSchemaMissingError,
     for_runtime,
 )
@@ -49,9 +58,13 @@ def _alembic_config() -> Config:
 def scratch_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[Config]:
     from app.db.dsn import resolve_dsn
 
-    admin_dsn = resolve_dsn()
-    if not admin_dsn:
+    explicit_dsn = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+    if not explicit_dsn:
         pytest.skip("DATABASE_URL/DB_DSN not configured")
+    admin_dsn = resolve_dsn(explicit_dsn)
+    admin_database = conninfo_to_dict(admin_dsn).get("dbname", "")
+    if admin_database != "app_test" and not admin_database.startswith("scratch_"):
+        pytest.skip("YSS-06 Postgres tests require an explicit app_test or scratch admin database")
     try:
         with psycopg.connect(admin_dsn, connect_timeout=2):
             pass
@@ -157,3 +170,214 @@ def test_pg_schema_preflight_fails_loud_before_the_migration(
         for_runtime()
 
     assert "alembic upgrade head" in str(excinfo.value)
+
+
+def _scratch_connection() -> psycopg.Connection:
+    """A real independent observer, restricted to this fixture's isolated DB."""
+    dsn = os.environ["DATABASE_URL"]
+    assert conninfo_to_dict(dsn)["dbname"].startswith("scratch_yss06_state_")
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=2)
+
+
+def _source_registry() -> tuple[SourceRegistry, SourceBinding]:
+    registry = SourceRegistry.for_runtime()
+    source = registry.register(
+        collection_kind="inbox_playlist",
+        collection_ref="PL__test__atomic_sync",
+        title="Synthetic scheduler transaction source",
+        account_binding_id=str(uuid.uuid4()),
+    )
+    assert source.account_binding_id is not None
+    source = registry.set_inbox(source.account_binding_id, source.binding_id)
+    return registry, source
+
+
+def _trigger(source: SourceBinding) -> DiscoveryTrigger:
+    return DiscoveryTrigger(
+        binding_id=source.binding_id,
+        collection_kind=source.collection_kind,
+        collection_ref=source.collection_ref,
+        trigger="poll",
+    )
+
+
+@pytest.mark.pg
+def test_pg_owned_effect_fences_cursor_and_state_after_takeover(
+    scratch_database: Config,
+) -> None:
+    command.upgrade(scratch_database, YSS06_HEAD)
+    store = for_runtime()
+    registry, source = _source_registry()
+    first, second = "old-runner", "new-runner"
+    later = NOW + timedelta(seconds=LEASE_TTL_SECONDS + 1)
+    state_key = f"backoff:{source.binding_id}"
+    assert store.acquire_lease(
+        key=LEASE_KEY, holder=first, ttl_seconds=LEASE_TTL_SECONDS, now=NOW
+    )
+    paused_before_effect = threading.Event()
+    resume_old_runner = threading.Event()
+
+    def old_writer() -> None:
+        paused_before_effect.set()
+        assert resume_old_runner.wait(timeout=5)
+        with pytest.raises(SyncLeaseLostError):
+            with store.owned_effect(key=LEASE_KEY, holder=first, now=later) as conn:
+                registry.record_poll_success(
+                    source.binding_id, cursor={"owner": first}, transaction_conn=conn
+                )
+                registry.record_poll_failure(
+                    source.binding_id, reason_code="network_error", transaction_conn=conn
+                )
+                store.set(state_key, {"owner": first}, transaction_conn=conn)
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        stale_write = workers.submit(old_writer)
+        try:
+            assert paused_before_effect.wait(timeout=5)
+            assert store.acquire_lease(
+                key=LEASE_KEY, holder=second, ttl_seconds=LEASE_TTL_SECONDS, now=later
+            )
+            with store.owned_effect(key=LEASE_KEY, holder=second, now=later) as conn:
+                registry.record_poll_success(
+                    source.binding_id, cursor={"owner": second}, transaction_conn=conn
+                )
+                store.set(state_key, {"owner": second}, transaction_conn=conn)
+        finally:
+            resume_old_runner.set()
+        stale_write.result(timeout=5)
+
+    current = registry.get(source.binding_id)
+    assert current is not None
+    assert current.cursor == {"owner": second}
+    assert current.last_error is None
+    assert store.get(state_key) == {"owner": second}
+    store.release_lease(key=LEASE_KEY, holder=first)
+    lease = store.get(LEASE_KEY)
+    assert lease is not None and lease["holder"] == second
+
+
+@pytest.mark.pg
+def test_pg_owned_effect_blocks_takeover_until_admitted_effect_commits(
+    scratch_database: Config,
+) -> None:
+    command.upgrade(scratch_database, YSS06_HEAD)
+    store, contender = for_runtime(), for_runtime()
+    registry, source = _source_registry()
+    later = NOW + timedelta(seconds=LEASE_TTL_SECONDS + 1)
+    assert store.acquire_lease(
+        key=LEASE_KEY, holder="admitted", ttl_seconds=LEASE_TTL_SECONDS, now=NOW
+    )
+
+    # The first runner pauses inside the real owned transaction. The second
+    # connection sees an expired TTL, but cannot take over the row being used
+    # by the admitted writer. No Python lock or mocked connection decides this.
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        with store.owned_effect(key=LEASE_KEY, holder="admitted", now=NOW) as conn:
+            attempted_takeover = workers.submit(
+                contender.acquire_lease,
+                key=LEASE_KEY,
+                holder="contender",
+                ttl_seconds=LEASE_TTL_SECONDS,
+                now=later,
+            )
+            assert attempted_takeover.result(timeout=5) is False
+            registry.record_poll_success(
+                source.binding_id, cursor={"committed": True}, transaction_conn=conn
+            )
+            store.set("last_tick", {"owner": "admitted"}, transaction_conn=conn)
+
+    current = registry.get(source.binding_id)
+    assert current is not None and current.cursor == {"committed": True}
+    assert store.get("last_tick") == {"owner": "admitted"}
+    assert contender.acquire_lease(
+        key=LEASE_KEY, holder="contender", ttl_seconds=LEASE_TTL_SECONDS, now=later
+    ), "takeover becomes possible only after the admitted transaction releases its row lock"
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("poll_outcome", ["success", "failure"])
+def test_pg_owned_effect_session_abort_rolls_back_all_protected_writes(
+    scratch_database: Config,
+    poll_outcome: str,
+) -> None:
+    command.upgrade(scratch_database, YSS06_HEAD)
+    store = for_runtime()
+    registry, source = _source_registry()
+    queue = AcquisitionRequests.for_runtime()
+    initial_cursor = {"frontier": "before-transaction"}
+    registry.record_poll_success(source.binding_id, cursor=initial_cursor)
+    initial_source = registry.get(source.binding_id)
+    state_key = f"backoff:{source.binding_id}"
+    store.set(state_key, {"consecutive_failures": 0})
+    initial_state = store.get(state_key)
+
+    old = NOW - timedelta(hours=2)
+    stale_request = queue.enqueue(
+        source_kind="youtube_url", item_ref="aaaaaaaaaaa",
+        source_ref="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        trigger=_trigger(source), now=old,
+    )
+    claimed = queue.claim_batch(1, now=old)
+    assert len(claimed) == 1 and claimed[0].request_id == stale_request.request_id
+    assert claimed[0].status == "in_progress"
+    initial_request = queue.get(stale_request.request_id)
+
+    assert store.acquire_lease(
+        key=LEASE_KEY, holder="to-be-aborted", ttl_seconds=LEASE_TTL_SECONDS, now=NOW
+    )
+    with _scratch_connection() as observer:
+        initial_outbox_count = observer.execute("SELECT count(*) FROM outbox").fetchone()[0]
+        session_terminated = False
+        with pytest.raises(psycopg.Error):
+            with store.owned_effect(key=LEASE_KEY, holder="to-be-aborted", now=NOW) as conn:
+                # Use the exact connection yielded by the production fence;
+                # neither row_factory nor transaction handling is substituted.
+                assert conn.info.dbname.startswith("scratch_yss06_state_")
+                assert conn.info.backend_pid != observer.info.backend_pid
+                if poll_outcome == "success":
+                    registry.record_poll_success(
+                        source.binding_id, cursor={"frontier": "uncommitted"},
+                        transaction_conn=conn,
+                    )
+                else:
+                    registry.record_poll_failure(
+                        source.binding_id, reason_code="network_error", transaction_conn=conn
+                    )
+                store.set(state_key, {"consecutive_failures": 3}, transaction_conn=conn)
+                new_request = queue.enqueue(
+                    source_kind="youtube_url", item_ref="bbbbbbbbbbb",
+                    source_ref="https://www.youtube.com/watch?v=bbbbbbbbbbb",
+                    trigger=_trigger(source), now=NOW, transaction_conn=conn,
+                )
+                assert queue.reset_stale_in_progress(
+                    older_than_seconds=3600, now=NOW, transaction_conn=conn
+                ) == 1
+
+                # A separate live session cannot see any of the effects before
+                # commit. This catches a helper silently opening an autocommit
+                # connection, including the queue's canonical outbox emissions.
+                assert registry.get(source.binding_id) == initial_source
+                assert store.get(state_key) == initial_state
+                assert queue.get(new_request.request_id) is None
+                assert queue.get(stale_request.request_id) == initial_request
+                assert observer.execute("SELECT count(*) FROM outbox").fetchone()[0] == initial_outbox_count
+
+                assert observer.execute(
+                    "SELECT pg_terminate_backend(%s)", (conn.info.backend_pid,)
+                ).fetchone()[0] is True
+                session_terminated = True
+                conn.execute("SELECT 1")  # surface the actual terminated-session error
+
+        assert session_terminated, "an earlier SQL failure is not proof of session-abort rollback"
+        assert registry.get(source.binding_id) == initial_source
+        assert store.get(state_key) == initial_state
+        assert queue.get(new_request.request_id) is None
+        assert queue.get(stale_request.request_id) == initial_request
+        assert observer.execute("SELECT count(*) FROM outbox").fetchone()[0] == initial_outbox_count
+
+    # Session death releases the lock: a later runner can take the expired
+    # lease, while none of the aborted writer's source/queue/state effects exist.
+    assert store.acquire_lease(
+        key=LEASE_KEY, holder="replacement", ttl_seconds=LEASE_TTL_SECONDS,
+        now=NOW + timedelta(seconds=LEASE_TTL_SECONDS + 1),
+    )

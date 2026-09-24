@@ -51,8 +51,11 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
    holder identities; a live lease blocks another holder, a stale lease may be taken over after
    expiry, and renewal/release check the acquiring holder. Existing manual Inbox sync uses the
    same scheduler lease and backoff state for one immediate attempt. Polling renews/checks
-   ownership at cooperative boundaries and refuses durable publication after ownership loss.
-   This adds no new CLI/UI surface.
+   ownership at cooperative boundaries. Shared database effects lock/check the lease and write
+   on the same transaction connection, so a paused or disconnected old holder cannot publish
+   after takeover; an admitted effect excludes contenders until commit/rollback. See
+   [Cursor discipline](SOURCE_SYNC_CONTRACT.md#cursor-discipline-yss-0507-guarded-by-yss-06)
+   for the per-effect boundary and credential-file limitation. This adds no new CLI/UI surface.
 4. **Offline/restart reconciliation:** active ticks retry stale `in_progress` recovery; failure
    does not mark recovery complete. The first catch-up pass makes enabled sources due, while
    later ticks honor cadence/backoff. Durable cursors and requests preserve idempotency; only

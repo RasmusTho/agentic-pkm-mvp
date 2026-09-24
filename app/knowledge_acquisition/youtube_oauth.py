@@ -34,6 +34,8 @@ record and disables dependent sources -- never an acquired artifact.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
+
 import base64
 import hashlib
 import hmac
@@ -669,10 +671,11 @@ class TokenProvider:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> str:
         guard = _OperationGuard(deadline, monotonic, check_active)
         guard()
-        token = self._read_token(check_active=guard)
+        token = self._read_token(check_active=guard, commit_guard=commit_guard)
         if self._is_fresh(token):
             guard()
             return token.access_token  # type: ignore[return-value]
@@ -683,17 +686,19 @@ class TokenProvider:
             raise OAuthDeadlineExceeded()
         try:
             guard()
-            token = self._read_token(check_active=guard)
+            token = self._read_token(check_active=guard, commit_guard=commit_guard)
             if self._is_fresh(token):
                 guard()
                 return token.access_token  # type: ignore[return-value]
             return self._refresh(
-                token, deadline=deadline, monotonic=monotonic, check_active=check_active
+                token, deadline=deadline, monotonic=monotonic, check_active=check_active,
+                commit_guard=commit_guard
             )
         finally:
             self._lock.release()
 
-    def _read_token(self, *, check_active: Callable[[], None] | None = None) -> StoredToken:
+    def _read_token(self, *, check_active: Callable[[], None] | None = None,
+                    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext) -> StoredToken:
         guard = _OperationGuard(check_active=check_active)
         guard()
         binding = self._bindings.get(self._binding_id)
@@ -705,14 +710,14 @@ class TokenProvider:
         try:
             token = self._store.get(self._binding_id)
         except TokenStoreKeyMissingError:
-            self._degrade("auth_key_missing", check_active=guard)
+            self._degrade("auth_key_missing", check_active=guard, commit_guard=commit_guard)
             raise AuthDegradedError("auth_key_missing", "token store key is not provisioned") from None
         guard()
         if token is None:
-            self._degrade("auth_missing", check_active=guard)
+            self._degrade("auth_missing", check_active=guard, commit_guard=commit_guard)
             raise AuthDegradedError("auth_missing", "no token stored for this binding")
         if token.provider_channel_id != binding.provider_channel_id:
-            self._degrade("auth_missing", check_active=guard)
+            self._degrade("auth_missing", check_active=guard, commit_guard=commit_guard)
             raise AuthDegradedError(
                 "auth_missing", "stored credential identity does not match its binding"
             )
@@ -736,6 +741,7 @@ class TokenProvider:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> str:
         guard = _OperationGuard(deadline, monotonic, check_active)
         guard()
@@ -749,7 +755,7 @@ class TokenProvider:
                     check_active=check_active,
                 )
         except AuthDegradedError as exc:
-            self._degrade(exc.reason_code, check_active=guard)
+            self._degrade(exc.reason_code, check_active=guard, commit_guard=commit_guard)
             raise
         guard()
         refreshed = StoredToken(
@@ -762,12 +768,13 @@ class TokenProvider:
         )
         guard()
         self._store.put(self._binding_id, refreshed)
-        self._clear_degradation(check_active=guard)
+        self._clear_degradation(check_active=guard, commit_guard=commit_guard)
         guard()
         return bundle.access_token
 
     def _degrade(
-        self, reason_code: str, *, check_active: Callable[[], None] | None = None
+        self, reason_code: str, *, check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext
     ) -> None:
         """Stamp the reason on the binding + dependent sources; no cursor touched."""
         guard = _OperationGuard(check_active=check_active)
@@ -775,20 +782,27 @@ class TokenProvider:
         binding = self._bindings.get(self._binding_id)
         guard()
         if binding is not None:
-            self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
+            with commit_guard() as conn:
+                self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code,
+                    **({"transaction_conn": conn} if conn is not None else {}))
         guard()
         if self._registry is not None:
             for source in self._registry.list_for_account(self._binding_id):
                 guard()
-                self._registry.record_source_degradation(source.binding_id, reason_code=reason_code)
+                with commit_guard() as conn:
+                    self._registry.record_source_degradation(source.binding_id, reason_code=reason_code,
+                        **({"transaction_conn": conn} if conn is not None else {}))
 
-    def _clear_degradation(self, *, check_active: Callable[[], None] | None = None) -> None:
+    def _clear_degradation(self, *, check_active: Callable[[], None] | None = None,
+                           commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext) -> None:
         guard = _OperationGuard(check_active=check_active)
         guard()
         binding = self._bindings.get(self._binding_id)
         guard()
         if binding is not None and binding.state != "connected":
-            self._bindings.set_state(self._binding_id, state="connected", reason_code=None)
+            with commit_guard() as conn:
+                self._bindings.set_state(self._binding_id, state="connected", reason_code=None,
+                    **({"transaction_conn": conn} if conn is not None else {}))
 
 
 # --- Account binding manager -------------------------------------------------

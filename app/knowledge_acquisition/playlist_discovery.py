@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 import uuid
 from copy import deepcopy
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, NoReturn
 
@@ -107,15 +108,20 @@ def _raise_persistence_error() -> NoReturn:
 def _best_effort_persistence_degradation(
     binding_id: str,
     registry: SourceRegistry,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> None:
     """Record a fixed failure without ever forwarding backend diagnostics."""
 
     try:
-        registry.record_poll_failure(
-            binding_id,
-            reason_code="network_error",
-            detail="Durable source-sync storage was unavailable; retry the manual sync.",
-        )
+        with commit_guard() as conn:
+            registry.record_poll_failure(
+                binding_id,
+                reason_code="network_error",
+                detail="Durable source-sync storage was unavailable; retry the manual sync.",
+                **({"transaction_conn": conn} if conn is not None else {}),
+            )
+    except SyncLeaseLostError:
+        raise
     except Exception:
         # A failed status store cannot safely provide more detail. The detached
         # public exception below remains the only caller-visible diagnostic.
@@ -150,13 +156,18 @@ def _successful_result(
     enqueued: int,
     deduped: int,
     not_modified: bool,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> SourcePollResult:
     persistence_failed = False
     try:
-        registry.record_poll_success(
-            binding.binding_id,
-            cursor=cursor,
-        )
+        with commit_guard() as conn:
+            registry.record_poll_success(
+                binding.binding_id,
+                cursor=cursor,
+                **({"transaction_conn": conn} if conn is not None else {}),
+            )
+    except SyncLeaseLostError:
+        raise
     except Exception:
         persistence_failed = True
     if persistence_failed:
@@ -179,7 +190,7 @@ def _successful_result(
                 or recovered.last_attempt_at != binding.last_attempt_at
             )
         ):
-            _best_effort_persistence_degradation(binding.binding_id, registry)
+            _best_effort_persistence_degradation(binding.binding_id, registry, commit_guard)
             _raise_persistence_error()
     duration_ms = _duration_ms(started)
     quota_units_spent = max(0, quota_after - quota_before)
@@ -203,16 +214,21 @@ def _degraded_result(
     started: float,
     reason_code: str,
     detail: str | None = None,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> SourcePollResult:
     normalized_reason = reason_code if reason_code in SAFE_REASON_CODES else "api_unavailable"
     safe_detail = detail or _SAFE_REASON_DETAILS[normalized_reason]
     persistence_failed = False
     try:
-        registry.record_poll_failure(
-            binding.binding_id,
-            reason_code=normalized_reason,
-            detail=safe_detail,
-        )
+        with commit_guard() as conn:
+            registry.record_poll_failure(
+                binding.binding_id,
+                reason_code=normalized_reason,
+                detail=safe_detail,
+                **({"transaction_conn": conn} if conn is not None else {}),
+            )
+    except SyncLeaseLostError:
+        raise
     except Exception:
         persistence_failed = True
     if persistence_failed:
@@ -286,6 +302,7 @@ def poll_source(
     deadline: float | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     check_active: Callable[[], None] | None = None,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> SourcePollResult:
     """Poll the one enabled V1 Inbox and publish only a disposed frontier.
 
@@ -305,11 +322,11 @@ def poll_source(
 
     def degraded(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
         guard()
-        return _degraded_result(binding, **kwargs)
+        return _degraded_result(binding, commit_guard=commit_guard, **kwargs)
 
     def successful(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
         guard()
-        return _successful_result(binding, **kwargs)
+        return _successful_result(binding, commit_guard=commit_guard, **kwargs)
 
     guard()
     current: SourceBinding | None = None
@@ -320,7 +337,7 @@ def poll_source(
         persistence_failed = True
     if persistence_failed:
         guard()
-        _best_effort_persistence_degradation(binding.binding_id, registry)
+        _best_effort_persistence_degradation(binding.binding_id, registry, commit_guard)
         _raise_persistence_error()
     if current is None:
         raise KeyError(f"no such binding: {binding.binding_id}")
@@ -371,7 +388,8 @@ def poll_source(
             binding.collection_ref,
             etag=prior_cursor.get("etag") if isinstance(prior_cursor.get("etag"), str) else None,
             page_token=None,
-            **({"deadline": deadline, "monotonic": monotonic, "check_active": check_active}
+            **({"deadline": deadline, "monotonic": monotonic, "check_active": check_active,
+                "commit_guard": commit_guard}
                if deadline is not None or check_active is not None else {}),
         )
     except SyncLeaseLostError:
@@ -439,21 +457,23 @@ def poll_source(
                         request_identity("youtube_url", item.video_id, policy_version)
                     )
             guard()
-            requests.enqueue(
-                source_kind="youtube_url",
-                item_ref=item.video_id,
-                source_ref=f"https://www.youtube.com/watch?v={item.video_id}",
-                trigger=DiscoveryTrigger(
-                    binding_id=binding.binding_id,
-                    collection_kind=binding.collection_kind,
-                    collection_ref=binding.collection_ref,
-                    trigger="poll",
-                    playlist_item_id=item.playlist_item_id,
-                ),
-                priority=binding.priority,
-                policy_snapshot=policy,
-                trace_id=run_id,
-            )
+            with commit_guard() as conn:
+                requests.enqueue(
+                    source_kind="youtube_url",
+                    item_ref=item.video_id,
+                    source_ref=f"https://www.youtube.com/watch?v={item.video_id}",
+                    trigger=DiscoveryTrigger(
+                        binding_id=binding.binding_id,
+                        collection_kind=binding.collection_kind,
+                        collection_ref=binding.collection_ref,
+                        trigger="poll",
+                        playlist_item_id=item.playlist_item_id,
+                    ),
+                    priority=binding.priority,
+                    policy_snapshot=policy,
+                    trace_id=run_id,
+                    **({"transaction_conn": conn} if conn is not None else {}),
+                )
         except SyncLeaseLostError:
             raise
         except Exception:

@@ -590,3 +590,91 @@ def test_priority_sources_receive_the_tick_budget_first() -> None:
     outcome = scheduler.tick()
     assert polled == ["inbox"]
     assert outcome.skipped["normal"] == "tick_budget_exhausted"
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_stale_poll_cannot_publish_after_takeover(production_path, monkeypatch, failure) -> None:
+    """A process paused before effect admission cannot overwrite its replacement."""
+    from app.knowledge_acquisition import playlist_discovery
+    registry, queue, api, clock, _outbox, _account, binding = production_path
+    state = MemorySyncStateStore()
+    first = SyncScheduler(registry=registry, requests=queue, state=state, api_client=api, clock=clock)
+    second = SyncScheduler(registry=registry, requests=queue, state=state, api_client=api, clock=clock)
+    entered, resume = threading.Event(), threading.Event()
+    helper_name = "_degraded_result" if failure else "_successful_result"
+    original = getattr(playlist_discovery, helper_name)
+    original_api = api.list_playlist_items
+    outcomes = []
+
+    def delayed(*args, **kwargs):
+        if threading.current_thread().name == "old-holder":
+            entered.set()
+            assert resume.wait(5)
+        return original(*args, **kwargs)
+
+    def response(*args, **kwargs):
+        if failure and threading.current_thread().name == "old-holder":
+            raise RuntimeError("synthetic offline interval")
+        return original_api(*args, **kwargs)
+
+    monkeypatch.setattr(playlist_discovery, helper_name, delayed)
+    monkeypatch.setattr(api, "list_playlist_items", response)
+    api.videos = ["aaaaaaaaaaa"]
+    worker = threading.Thread(name="old-holder", target=lambda: outcomes.append(first.tick()))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        clock.advance(LEASE_TTL_SECONDS + 1)
+        api.videos = ["bbbbbbbbbbb", "aaaaaaaaaaa"]
+        assert second.tick().reason == "ran"
+        current = registry.get(binding.binding_id)
+        backoff = state.get("backoff:" + binding.binding_id)
+        last_tick = state.get("last_tick")
+    finally:
+        resume.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert outcomes[0].reason == "lease_lost"
+    assert registry.get(binding.binding_id) == current
+    assert current.cursor["known_playlist_item_ids"] == ["pli-bbbbbbbbbbb", "pli-aaaaaaaaaaa"]
+    assert current.last_error is None
+    assert state.get("backoff:" + binding.binding_id) == backoff
+    assert state.get("last_tick") == last_tick
+    assert len(queue.list_all()) == 2
+
+
+def test_admitted_effect_excludes_takeover_until_publication(production_path, monkeypatch) -> None:
+    """Pause inside the atomic write; an expired-lease contender must skip."""
+    registry, queue, api, clock, _outbox, _account, binding = production_path
+    state = MemorySyncStateStore()
+    first = SyncScheduler(registry=registry, requests=queue, state=state, api_client=api, clock=clock)
+    second = SyncScheduler(registry=registry, requests=queue, state=state, api_client=api, clock=clock)
+    entered, resume = threading.Event(), threading.Event()
+    original = registry.record_poll_success
+    outcomes = []
+
+    def delayed(*args, **kwargs):
+        if threading.current_thread().name == "admitted-holder":
+            entered.set()
+            assert resume.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "record_poll_success", delayed)
+    api.videos = ["aaaaaaaaaaa"]
+    worker = threading.Thread(name="admitted-holder", target=lambda: outcomes.append(first.tick()))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        clock.advance(LEASE_TTL_SECONDS + 1)
+        api.videos = ["bbbbbbbbbbb", "aaaaaaaaaaa"]
+        assert second.tick().reason == "lease_held"
+        assert api.calls == 1
+    finally:
+        resume.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert outcomes[0].reason == "ran"
+    assert second.sync_now().reason == "ran"
+    assert registry.get(binding.binding_id).cursor["known_playlist_item_ids"] == [
+        "pli-bbbbbbbbbbb", "pli-aaaaaaaaaaa"]
+    assert len(queue.list_all()) == 2

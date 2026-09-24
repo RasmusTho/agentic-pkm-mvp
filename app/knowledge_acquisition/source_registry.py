@@ -642,6 +642,7 @@ class _MemorySourceRegistryBackend:
         *,
         enabled: bool | None,
         last_error: dict[str, Any] | None,
+        transaction_conn: Any = None,
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
@@ -661,6 +662,7 @@ class _MemorySourceRegistryBackend:
         binding_id: str,
         *,
         cursor: dict[str, Any],
+        transaction_conn: Any = None,
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
@@ -683,6 +685,7 @@ class _MemorySourceRegistryBackend:
         binding_id: str,
         *,
         last_error: dict[str, Any],
+        transaction_conn: Any = None,
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
@@ -1168,8 +1171,9 @@ class _PgSourceRegistryBackend:
         *,
         enabled: bool | None,
         last_error: dict[str, Any] | None,
+        transaction_conn: Any = None,
     ) -> SourceBinding:
-        conn = _pg_connect()
+        conn = transaction_conn if transaction_conn is not None else _pg_connect()
         try:
             _assert_pg_schema(conn)
             now = _now_iso()
@@ -1180,7 +1184,7 @@ class _PgSourceRegistryBackend:
             if enabled is None:
                 cur.execute(
                     f"UPDATE {_TABLE} SET last_error = %s::jsonb, updated_at = %s::timestamptz "
-                    "WHERE binding_id = %s",
+                    f"WHERE binding_id = %s RETURNING {_COLUMNS_SQL}",
                     (last_error_json, now, binding_id),
                 )
             else:
@@ -1189,21 +1193,22 @@ class _PgSourceRegistryBackend:
                     "updated_at = %s::timestamptz WHERE binding_id = %s",
                     (enabled, last_error_json, now, binding_id),
                 )
-            if cur.rowcount == 0:
+            row = cur.fetchone()
+            if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
+            return _row_to_binding(row)
         finally:
-            conn.close()
-        result = self.get(binding_id)
-        assert result is not None  # just wrote it
-        return result
+            if transaction_conn is None:
+                conn.close()
 
     def record_poll_success(
         self,
         binding_id: str,
         *,
         cursor: dict[str, Any],
+        transaction_conn: Any = None,
     ) -> SourceBinding:
-        conn = _pg_connect()
+        conn = transaction_conn if transaction_conn is not None else _pg_connect()
         try:
             _assert_pg_schema(conn)
             now = _now_iso()
@@ -1226,15 +1231,17 @@ class _PgSourceRegistryBackend:
                 raise KeyError(f"no such binding: {binding_id}")
             return _row_to_binding(row)
         finally:
-            conn.close()
+            if transaction_conn is None:
+                conn.close()
 
     def record_poll_failure(
         self,
         binding_id: str,
         *,
         last_error: dict[str, Any],
+        transaction_conn: Any = None,
     ) -> SourceBinding:
-        conn = _pg_connect()
+        conn = transaction_conn if transaction_conn is not None else _pg_connect()
         try:
             _assert_pg_schema(conn)
             now = _now_iso()
@@ -1255,7 +1262,8 @@ class _PgSourceRegistryBackend:
                 raise KeyError(f"no such binding: {binding_id}")
             return _row_to_binding(row)
         finally:
-            conn.close()
+            if transaction_conn is None:
+                conn.close()
 
 
 # --- Service layer -------------------------------------------------------
@@ -1423,6 +1431,7 @@ class SourceRegistry:
         binding_id: str,
         *,
         cursor: dict[str, Any],
+        transaction_conn: Any = None,
     ) -> SourceBinding:
         """Atomically publish a successful poll outcome.
 
@@ -1436,6 +1445,7 @@ class SourceRegistry:
         return self._backend.record_poll_success(
             binding_id,
             cursor=stored_cursor,
+            transaction_conn=transaction_conn,
         )
 
     def record_poll_failure(
@@ -1444,15 +1454,17 @@ class SourceRegistry:
         *,
         reason_code: str,
         detail: Any = None,
+        transaction_conn: Any = None,
     ) -> SourceBinding:
         """Record a degraded poll without touching its cursor/known set."""
         return self._backend.record_poll_failure(
             binding_id,
             last_error=_build_last_error(reason_code, detail),
+            transaction_conn=transaction_conn,
         )
 
     def record_source_degradation(
-        self, binding_id: str, *, reason_code: str, detail: Any = None
+        self, binding_id: str, *, reason_code: str, detail: Any = None, transaction_conn: Any = None
     ) -> SourceBinding:
         """Stamp an auth/degradation reason on a source's ``last_error`` without
         touching its cursor or ``enabled`` flag.
@@ -1463,7 +1475,8 @@ class SourceRegistry:
         account binding's auth is revoked/expired/key-missing.
         """
         return self._backend.update_state(
-            binding_id, enabled=None, last_error=_build_last_error(reason_code, detail)
+            binding_id, enabled=None, last_error=_build_last_error(reason_code, detail),
+            transaction_conn=transaction_conn
         )
 
     def disable_source_for_auth(

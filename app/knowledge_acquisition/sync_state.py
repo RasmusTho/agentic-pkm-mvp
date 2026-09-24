@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import contextmanager, nullcontext
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -80,7 +82,9 @@ class MemorySyncStateStore:
         self, *, key: str, holder: str, ttl_seconds: int, now: datetime
     ) -> bool:
         moment = _utc(now)
-        with self._lock:
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
             current = self._rows.get(key)
             if current is not None:
                 expires_at = datetime.fromisoformat(current["expires_at"])
@@ -92,6 +96,21 @@ class MemorySyncStateStore:
                 "expires_at": (moment + timedelta(seconds=ttl_seconds)).isoformat(),
             }
             return True
+        finally:
+            self._lock.release()
+
+    @contextmanager
+    def owned_effect(self, *, key: str, holder: str, now: datetime) -> Iterator[Any]:
+        if not self._lock.acquire(blocking=False):
+            raise SyncLeaseLostError("YouTube discovery effect is busy")
+        try:
+            current = self._rows.get(key)
+            if (current is None or current["holder"] != holder
+                    or _utc(now) >= datetime.fromisoformat(current["expires_at"])):
+                raise SyncLeaseLostError("YouTube discovery lease ownership was lost")
+            yield None
+        finally:
+            self._lock.release()
 
     def heartbeat_lease(
         self, *, key: str, holder: str, ttl_seconds: int, now: datetime
@@ -117,7 +136,7 @@ class MemorySyncStateStore:
             row = self._rows.get(key)
             return dict(row) if row is not None else None
 
-    def set(self, key: str, value: Mapping[str, Any]) -> None:
+    def set(self, key: str, value: Mapping[str, Any], *, transaction_conn: Any = None) -> None:
         with self._lock:
             self._rows[key] = dict(value)
 
@@ -161,21 +180,55 @@ class PostgresSyncStateStore:
         # One statement decides it: insert when free, or steal only when the
         # current holder is us or the lease has already expired. Two runners
         # racing therefore cannot both observe success.
-        with conn_rw() as conn, conn.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO {TABLE_NAME} (key, value, updated_at)
-                VALUES (%s, %s::jsonb, %s)
-                ON CONFLICT (key) DO UPDATE
-                   SET value = EXCLUDED.value,
-                       updated_at = EXCLUDED.updated_at
-                 WHERE {TABLE_NAME}.value ->> 'holder' = %s
-                    OR ({TABLE_NAME}.value ->> 'expires_at')::timestamptz <= %s
-                RETURNING key
-                """,
-                (key, payload, moment, holder, moment),
-            )
-            return cur.fetchone() is not None
+        import psycopg
+
+        try:
+            with conn_rw() as conn, conn.cursor() as cur:
+                cur.execute("SET LOCAL lock_timeout = '50ms'")
+                cur.execute(
+                    f"""
+                    INSERT INTO {TABLE_NAME} (key, value, updated_at)
+                    VALUES (%s, %s::jsonb, %s)
+                    ON CONFLICT (key) DO UPDATE
+                       SET value = EXCLUDED.value,
+                           updated_at = EXCLUDED.updated_at
+                     WHERE {TABLE_NAME}.value ->> 'holder' = %s
+                        OR ({TABLE_NAME}.value ->> 'expires_at')::timestamptz <= %s
+                    RETURNING key
+                    """,
+                    (key, payload, moment, holder, moment),
+                )
+                return cur.fetchone() is not None
+
+        except psycopg.errors.LockNotAvailable:
+            return False
+
+    @contextmanager
+    def owned_effect(self, *, key: str, holder: str, now: datetime) -> Iterator[Any]:
+        """Lock ownership and the effect on one connection/transaction.
+
+        Losing this session rolls back the effect, so an old process cannot
+        publish through a second live connection after its fence disappears.
+        """
+        import psycopg
+        from psycopg.rows import tuple_row
+        from app.db.db import conn_rw
+
+        try:
+            with conn_rw() as conn:
+                row = conn.execute(
+                    f"SELECT value FROM {TABLE_NAME} WHERE key = %s FOR UPDATE NOWAIT", (key,)
+                ).fetchone()
+                value = _column(row, "value") if row else None
+                if (not value or value["holder"] != holder
+                        or _utc(now) >= datetime.fromisoformat(value["expires_at"])):
+                    raise SyncLeaseLostError("YouTube discovery lease ownership was lost")
+                # Existing source/queue ports use positional rows. Keep that
+                # contract on this shared transaction without a second session.
+                conn.row_factory = tuple_row
+                yield conn
+        except psycopg.errors.LockNotAvailable:
+            raise SyncLeaseLostError("YouTube discovery effect is busy") from None
 
     def heartbeat_lease(
         self, *, key: str, holder: str, ttl_seconds: int, now: datetime
@@ -219,10 +272,11 @@ class PostgresSyncStateStore:
             return None
         return value if isinstance(value, dict) else json.loads(value)
 
-    def set(self, key: str, value: Mapping[str, Any]) -> None:
+    def set(self, key: str, value: Mapping[str, Any], *, transaction_conn: Any = None) -> None:
         from app.db.db import conn_rw
 
-        with conn_rw() as conn, conn.cursor() as cur:
+        context = nullcontext(transaction_conn) if transaction_conn is not None else conn_rw()
+        with context as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
                 INSERT INTO {TABLE_NAME} (key, value, updated_at)

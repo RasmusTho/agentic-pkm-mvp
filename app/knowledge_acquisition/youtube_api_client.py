@@ -14,6 +14,8 @@ volatile memory (INV-YSS-7).
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
+
 import json
 import os
 import re
@@ -63,6 +65,7 @@ class AccessTokenProvider(Protocol):
         self, *, deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> str: ...
 
 
@@ -478,6 +481,7 @@ class YouTubeApiClient:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> PlaylistItemsPage | NotModified:
         playlist_id = validate_playlist_id(playlist_id)
         token = _validate_page_token(page_token)
@@ -505,6 +509,7 @@ class YouTubeApiClient:
                 deadline=deadline,
                 monotonic=monotonic,
                 check_active=check_active,
+                commit_guard=commit_guard,
             )
             if isinstance(payload, NotModified):
                 return payload
@@ -561,6 +566,7 @@ class YouTubeApiClient:
         deadline: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> tuple[dict[str, Any] | NotModified, str | None]:
         def guard() -> float:
             if check_active is not None:
@@ -574,7 +580,8 @@ class YouTubeApiClient:
         url = _validate_absolute_data_url(urljoin(self._base_url, resource), require_path=True)
         if deadline is not None or check_active is not None:
             access_token = self._tokens.get_access_token(
-                deadline=deadline, monotonic=monotonic, check_active=check_active
+                deadline=deadline, monotonic=monotonic, check_active=check_active,
+                **({"commit_guard": commit_guard} if commit_guard is not nullcontext else {}),
             )
         else:
             access_token = self._tokens.get_access_token()
