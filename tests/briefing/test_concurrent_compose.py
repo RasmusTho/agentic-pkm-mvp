@@ -62,12 +62,12 @@ def _conflict_copies(context: VaultContext, for_date: date) -> list[str]:
     )
 
 
-def _ingest_uuid_heal(context: VaultContext, for_date: date) -> None:
+def _ingest_uuid_heal(context: VaultContext, for_date: date) -> str:
     """Replay the worker's ingest uuid heal (``handle_ingest_vault_changed``)."""
 
     note = briefing_note_path(vault_context=context, for_date=for_date)
     assert note.exists()
-    _ensure_uuid_with_backoff(note, vault_root=Path(context.active_vault_path or ""))
+    return _ensure_uuid_with_backoff(note, vault_root=Path(context.active_vault_path or ""))
 
 
 def test_concurrent_first_contact_composes_one_readable_briefing(
@@ -139,15 +139,17 @@ def test_existing_past_briefing_is_not_recomposed(vault: VaultContext) -> None:
     # Service restart: the watcher re-observes every vault note (the old
     # briefing included), the worker ingests it, and the briefing hooks run for
     # the current local day.
-    _ingest_uuid_heal(vault, PAST)
+    identity_before = _ingest_uuid_heal(vault, PAST)
     scheduled = scheduled_briefing_tick(
         vault_context=vault, now=TODAY_SCHEDULED, write_guard=HEALTHY
     )
     first_contact = first_contact_briefing(
         vault_context=vault, now=TODAY_MORNING, write_guard=HEALTHY
     )
-    _ingest_uuid_heal(vault, PAST)
+    identity_after = _ingest_uuid_heal(vault, PAST)
 
+    # Re-ingest keeps one stable identity for the note without persisting it.
+    assert identity_before and identity_before == identity_after
     assert scheduled.briefing_date == TODAY
     assert first_contact.briefing_date == TODAY
     assert past.read_bytes() == original_bytes

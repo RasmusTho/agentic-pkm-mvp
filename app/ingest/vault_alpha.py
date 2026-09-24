@@ -33,7 +33,7 @@ from app.services.companion_note import (
     scan_attachments,
     write_companion,
 )
-from app.services.note_uuid import ensure_note_uuid
+from app.services.note_uuid import VAULT_NOTE_UUID_NAMESPACE, ensure_note_uuid
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
 from app.rebuildability import (
     canonical_product_source_text,
@@ -130,7 +130,7 @@ def _is_unindexed_system_path(rel_path: Path, *, system_root: Path) -> bool:
 _LOCKED_FILES_LOG_ENV = "LOCKED_FILES_LOG_PATH"
 _LOCKED_FILES_LOG_DEFAULT = Path("/app/tmp/locked-files.jsonl")
 
-_VAULT_NOTE_UUID_NAMESPACE = uuid.UUID("b6b2d8b3-8f2a-4a75-9c65-4c4a0d36b3b8")
+_VAULT_NOTE_UUID_NAMESPACE = VAULT_NOTE_UUID_NAMESPACE
 
 
 def _is_permission_denied_error(exc: Exception) -> bool:

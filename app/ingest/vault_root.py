@@ -99,8 +99,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
                 vault_root=root,
                 preferred_uuid=note_identity.note_uuid,
             )
-            # A read-only derived artifact keeps its bytes; use the resolved identity.
-            frontmatter["uuid"] = persisted_uuid or note_identity.note_uuid
+            frontmatter["uuid"] = persisted_uuid
     replay = product_replay_for_vault_note(path, vault_root=root, source_text=text)
     # normalize_run normally persists its freshly allocated UUID. This producer owns a
     # stable retained-source identity on PG, so suppress the normalizer's transient

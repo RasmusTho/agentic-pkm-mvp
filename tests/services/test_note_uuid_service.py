@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -132,4 +133,12 @@ def test_ensure_note_uuid_skips_only_read_only_derived_artifacts(
     monkeypatch.setattr(note_uuid.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _action: None)
     result = note_uuid.ensure_note_uuid(note, vault_root=tmp_path)
     assert bool(calls) is expect_write
-    assert bool(result) is expect_write
+    if not expect_write:
+        # Stable, unpersisted, path-derived identity; a caller's resolved one wins.
+        assert result == str(uuid.uuid5(note_uuid.VAULT_NOTE_UUID_NAMESPACE, "note.md"))
+        assert note_uuid.ensure_note_uuid(note, vault_root=tmp_path) == result
+        assert (
+            note_uuid.ensure_note_uuid(note, vault_root=tmp_path, preferred_uuid="resolved-id")
+            == "resolved-id"
+        )
+        assert calls == []

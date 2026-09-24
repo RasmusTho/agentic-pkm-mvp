@@ -8,6 +8,10 @@ from app.rebuildability.product_total_loss import parse_bounded_frontmatter
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter
 
+# Namespace of the deterministic, path-derived recovery identity shared with
+# ``app.ingest.vault_alpha`` for notes that carry no persisted ``uuid``.
+VAULT_NOTE_UUID_NAMESPACE = uuid.UUID("b6b2d8b3-8f2a-4a75-9c65-4c4a0d36b3b8")
+
 
 def _new_note_uuid() -> str:
     """Allocate a fresh note-identity UUID.
@@ -28,7 +32,8 @@ def is_read_only_derived_artifact(frontmatter: dict[str, object]) -> bool:
     Agent-maintained, read-only, derived artifacts (for example the Daily Briefing) are
     owned end to end by their composer, and their readers verify the exact
     rendered bytes. A uuid heal would reserialize such a note under a second
-    writer and make it unreadable (#5656), so identity healing leaves them alone.
+    writer and make it unreadable (#5656), so identity healing never rewrites
+    them; ``ensure_note_uuid`` returns a stable, unpersisted identity instead.
     """
 
     return (
@@ -53,12 +58,14 @@ def ensure_note_uuid(
     existing = str(frontmatter.get("uuid") or "").strip()
     if existing:
         return existing
-    if is_read_only_derived_artifact(frontmatter):
-        # No persisted identity and no rewrite: callers already treat "" as
-        # "uuid not healed" (the same outcome as a permission-denied heal).
-        return ""
-
     candidate = str(preferred_uuid or "").strip()
+    if is_read_only_derived_artifact(frontmatter):
+        # No rewrite. The caller's resolved identity, else the same path-derived
+        # recovery identity vault-alpha ingest uses, keeps every re-ingest of
+        # the note on one stable object.
+        return candidate or str(
+            uuid.uuid5(VAULT_NOTE_UUID_NAMESPACE, resolved.relative_to(root).as_posix())
+        )
     if not candidate:
         candidate = _new_note_uuid()
     frontmatter["uuid"] = candidate
@@ -73,4 +80,4 @@ def ensure_note_uuid(
     return candidate
 
 
-__all__ = ["ensure_note_uuid", "is_read_only_derived_artifact"]
+__all__ = ["VAULT_NOTE_UUID_NAMESPACE", "ensure_note_uuid", "is_read_only_derived_artifact"]
