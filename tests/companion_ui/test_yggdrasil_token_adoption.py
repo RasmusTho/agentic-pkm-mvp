@@ -132,13 +132,13 @@ def test_components_never_branch_on_theme() -> None:
     assert branching == []
 
 
-def test_orientation_pages_do_not_apply_the_stored_theme() -> None:
-    """Orientation pages have no settings drawer, so they stay on the canonical Dark render."""
+def test_orientation_pages_apply_the_stored_theme() -> None:
+    """The theme preference is per browser, so the orientation door follows it too (#5652 follow-up)."""
     from tests.companion_ui.test_reentry_orientation_treatment import _render_no_vault_orientation
 
     html = _render_no_vault_orientation()
     assert f'<link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">' in html
-    assert "document.documentElement.setAttribute('data-theme'" not in html
+    assert "document.documentElement.setAttribute('data-theme','light')" in html
 
 
 def test_missing_tokens_sheet_fails_startup(tmp_path, monkeypatch) -> None:
@@ -163,7 +163,26 @@ def test_reading_surfaces_use_surface_reading_token() -> None:
     for selector in (".note-body-content {{", ".note-source-editor {{"):
         block = source[source.index(selector) : source.index("}}", source.index(selector))]
         assert "background: var(--surface-reading);" in block
-    # Desktop panels, main column, rail, and the responsive portrait sheet.
-    assert source.count("backdrop-filter: var(--surface-panel-filter);") == 4
+    # Desktop panels, main column, rail, the responsive portrait sheet, and the orientation shell.
+    assert source.count("backdrop-filter: var(--surface-panel-filter);") == 5
     sheet = source.index(".portrait-sheet {{\n        background:")
     assert source[sheet : source.index("}}", sheet)].count("var(--surface-panel)") == 1
+
+
+def test_orientation_page_honours_the_theme_preference() -> None:
+    """The orientation door reads the stored theme and uses the surface tokens (#5652 follow-up)."""
+    from tests.companion_ui.test_capture_modal import _cold_start_orientation
+    from companion_ui.workspace.serve_dev_page import render_index_html
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        orientation=_cold_start_orientation(leave_status="absent"),
+    )
+    assert "Workspace Orientation" in html
+    assert "companion.displayPreferences.v1" in html
+    head = html[: html.index("</head>")]
+    assert head.index(YGGDRASIL_TOKENS_URL) < head.index("companion.displayPreferences.v1")
+    assert "background: var(--surface-page);" in html
+    shell = html[html.index(".orientation-shell {") : html.index("}", html.index(".orientation-shell {"))]
+    assert "background: var(--surface-main);" in shell
+    assert "backdrop-filter: var(--surface-panel-filter);" in shell

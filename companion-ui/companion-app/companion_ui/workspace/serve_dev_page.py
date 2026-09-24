@@ -9291,6 +9291,7 @@ def _render_orientation_index_html(
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
     :root {{
       /* #2562: vault-green identity colour, matching the shell's vault
@@ -9327,7 +9328,8 @@ def _render_orientation_index_html(
     body {{
       margin: 0;
       min-height: 100vh;
-      background: var(--bg-base);
+      background: var(--surface-page);
+      background-size: var(--material-backdrop-size);
       color: var(--fg-1);
       font-family: var(--font-ui);
       line-height: 1.55;
@@ -9398,9 +9400,14 @@ def _render_orientation_index_html(
     .orientation-shell {{
       display: grid;
       gap: 16px;
-      margin: 0 auto;
+      margin: var(--surface-frame-gap) auto;
       max-width: 1180px;
       padding: 24px;
+      /* Shell material (#5652): Dark resolves these to its unchanged look. */
+      background: var(--surface-main);
+      backdrop-filter: var(--surface-panel-filter);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
     }}
     .orientation-header {{
       border-bottom: 1px solid var(--border);
