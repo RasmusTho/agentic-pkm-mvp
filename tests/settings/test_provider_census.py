@@ -165,23 +165,54 @@ def test_product_dispatch_and_health_projections_match_declared_transports() -> 
             assert adapter.transport_id == transport_id
 
 
-def test_active_reasoning_models_are_census_backed() -> None:
+def test_active_openai_chat_models_are_census_backed() -> None:
     census = _census()
     openai = census.provider("openai")
     registry = load_models()
     factory = ModelAccessAdapterFactory.from_declared_sources()
 
-    for model_id in ("openai.chat.gpt_4_1", "openai.chat.gpt_4_1_mini"):
-        descriptor = registry[model_id]
-        assert descriptor.status == "active"
+    descriptors = [
+        descriptor
+        for descriptor in registry.values()
+        if descriptor.status == "active"
+        and descriptor.kind == "chat"
+        and descriptor.provider == openai.id
+    ]
+    assert {descriptor.model for descriptor in descriptors} >= {
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-5.4-mini",
+    }
+
+    for descriptor in descriptors:
         assert descriptor.provider == openai.id
         census_model = next(
-            item for item in openai.models if item.id == descriptor.model
+            (item for item in openai.models if item.id == descriptor.model), None
         )
+        assert census_model is not None, descriptor.model
         assert census_model.effective_identity == f"openai/{descriptor.model}"
-        adapter = factory.describe(
-            "openai_api", provider=descriptor.provider, model=descriptor.model
-        )
+
+        transport_ids = descriptor.allowed_transports or [
+            factory.default_adapter_id(descriptor.provider)
+        ]
+        for transport_id in transport_ids:
+            adapter = factory.describe(
+                transport_id, provider=descriptor.provider, model=descriptor.model
+            )
+            assert adapter.transport_id == transport_id
+            for capability in (
+                "structured_output",
+                "native_tools",
+                "system_prompt_channel",
+            ):
+                if getattr(adapter.supported_capabilities, capability):
+                    assert (
+                        getattr(census_model.capabilities, capability)
+                        or getattr(openai.capabilities, capability)
+                    ), (descriptor.model, transport_id, capability)
+
+    for model_id in ("gpt-4.1", "gpt-4.1-mini", "gpt-5.4-mini"):
+        adapter = factory.describe("openai_api", provider=openai.id, model=model_id)
         assert adapter.supported_capabilities.structured_output is True
         assert adapter.supported_capabilities.native_tools is True
         assert adapter.supported_capabilities.system_prompt_channel is True
