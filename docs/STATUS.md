@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-23 (MARR-08 thin API source boundary; repository evidence only, no live Mac/Tailscale verification)
+Last reviewed: 2026-09-24 (bounded DevUI work/result readback; repository and local-checkout evidence only, no deployment or owner acceptance)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -22,6 +22,12 @@ live test-channel and owner-UAT evidence remain absent.
 Last verified against (MARR-08 repository code): Issue #5635, merged commit
 `824b82760fa00cd289dadaded301838abf845527`, and the focused Model Access Router service/client
 tests on 2026-09-23; repository proof only, with no live host, Serve, or caller-migration evidence.
+Last verified against (DevUI supervised continuity): Issue #5655,
+`app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
+`tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an
+Issue-specific external-agent handoff and explicitly governed PR observations through the existing
+read-only fields. This does not activate browser launch/control or establish a deployed result;
+the current boundary is in [DevUI current state](DEVUI.md#current-state-and-target).
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30; DevUI runtime/receipt boundary: Issue #5476, app/builderops/devui_runtime.py, app/ops/devui_vm102_runtime_receipts.py (2026-09-11, repository-only)
 
 ### Live environment baseline (2026-08-22)
