@@ -31,8 +31,10 @@ owner mapping is demonstrated; a Markdown suffix outside these roots is not docu
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
 - The `pr-index-pg-contracts` job has a finite 30-minute execution budget for its full qualified
-  PostgreSQL acceptance surface (#5587). This ceiling does not change test selection, commands,
-  plugins, assertions, refusal/skip protections, or required-check rules. The existing
+  PostgreSQL acceptance surface (#5587). Each test also has the existing pytest-timeout plugin's
+  120-second thread watchdog; verbose node IDs, unbuffered output, and the slowest 20 durations
+  identify a stalled or slow test before the job ceiling. This preserves test selection,
+  assertions, refusal/skip protections, and required-check rules. The existing
   `tests/ops/test_ci_workflow.py::test_pr_index_pg_contracts_run_exact_acceptance_surface` guards
   the budget; delivery still requires an executed successful Index PG check on the final PR head,
   not a cancelled run or skipped metadata duplicate.
@@ -55,7 +57,14 @@ owner mapping is demonstrated; a Markdown suffix outside these roots is not docu
   `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py` is the executable proof.
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`.
-- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; the `Unit tests (not pg)` job runs each collectible test directory (or root-level test module) as a serial process with bounded parallelism, then runs host/process-global and exact-FD-count compatibility tests after those processes exit. This keeps the shared runtime bounded without asking xdist workers to share process-global or host-wide assumptions. E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
+- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; the `Unit tests (not pg)` job runs each collectible top-level test directory (or root-level test module) as a serial process with bounded parallelism, then runs host/process-global and exact-FD-count compatibility tests after those processes exit. This keeps the shared runtime bounded without asking xdist workers to share process-global or host-wide assumptions. E2E coverage is deferred to post-merge and nightly validation. This document is `scripts/select_pr_tests.py`'s `docs/development/` contract for the `scripts/docs_guard_logic.py :: GOVERNANCE_TEMPORAL_ENFORCEMENT` temporal-owner-doc exemption, and the check enforces that pairing specifically: update this doc, not `docs/STATUS.md`/`docs/ROADMAP.md`/etc., when the selection script's behavior changes.
+- Shared-suite shard discovery collapses nested directories into their top-level owner because
+  pytest already recurses. Eligible test files therefore run once across parallel shards and the
+  serial host-sensitive boundary. Each shard prints its completion status and elapsed seconds;
+  its log contains the slowest 20 tests, as does the scoped unit invocation. Partial shard logs and the status file live under the
+  runner temporary directory and are uploaded even when a later shard fails or the test step is
+  cancelled. The aggregate log remains available on normally completed runs. This removes known
+  duplicate execution; it does not promise a particular wall-clock speedup or suppress failures.
 - A docs-only PR may include a changed `tests/e2e/**` scenario as its executable acceptance companion. That E2E path is scope-neutral for selection and remains deferred; the docs lane still runs its non-E2E contract targets and must not fall through to the unowned/full-suite refusal.
 - The startup-redesign contract owner selects both its static contract suites and the exact docs-index Verify target `tests/architecture/test_docs_index.py::test_all_docs_are_listed_in_docs_index`. Its selector regression must include the mixed shape of startup docs, `docs/DOCS_INDEX.md`, the selector, and governance tests so a docs-index proof cannot disappear behind a green scoped run.
 - Statically declared selector file and node-id targets must be collectable. Before pytest receives a selected node id, the selector checks its file portion exists; its always-selected selector fitness test collect-checks every static file/node-id target so a rename or deletion fails in the changing PR rather than an unrelated downstream selection.
