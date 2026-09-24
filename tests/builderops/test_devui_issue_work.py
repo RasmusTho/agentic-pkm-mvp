@@ -57,6 +57,8 @@ def _event(number=502, repo=REPO):
     ("closed", ["agent:ready"], "active agent label remains"),
     ("open", [], "establish readiness"),
     (None, None, "missing or contradictory"),
+    ({"unexpected": "open"}, [], "missing or contradictory"),
+    (["open"], [], "missing or contradictory"),
     ("open", ["agent:ready", "agent:in-progress"], "missing or contradictory"),
 ])
 def test_issue_state_and_handoff_preserve_authority(monkeypatch, state, labels, expected):
@@ -104,6 +106,22 @@ def test_selected_issue_results_require_exact_governed_relation(monkeypatch):
     assert not any("foreign" in str(call) for call in calls)
     assert sum(call[1].endswith("/pulls/502") for call in calls) == 1
     assert all(call[call.index("--method") + 1] == "GET" for call in calls)
+
+
+@pytest.mark.parametrize("body", [
+    "```text <!-- example -->\nGoverning-Issue: #501\n```",
+    "```text\n<!--\n```\nGoverning-Issue: #999\nGoverning-Issue: #501",
+    "<!--\n```\nGoverning-Issue: #501\n```\n-->",
+    "Governing-Issue: #501\nGoverning-Issue:  #999",
+    "Governing-Issue: #501\n Governing-Issue: #999",
+    "Governing-Issue: #501\nGoverning-Issue: #501",
+    "> Governing-Issue: #501",
+])
+def test_result_relation_ignores_markdown_examples_and_conflicts(monkeypatch, body):
+    monkeypatch.setattr(github, "_run_gh", lambda args: [_event()] if args[1].endswith("/timeline") else _pull(body=body))
+    result = compose_focus_view(**_read())
+    assert result["receipts"] == []
+    assert not any(item["claim_id"].startswith("issue-pr:") for item in result["evidence"])
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "malformed", "capped", "one_pull", "invalid_identity", "pull_cap"])

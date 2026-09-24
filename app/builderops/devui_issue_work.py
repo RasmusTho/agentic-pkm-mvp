@@ -32,7 +32,7 @@ def issue_handoff(issue: Mapping[str, Any], source_ref: Mapping[str, Any]) -> tu
         for label in raw_labels
     )
     labels = sorted({label["name"] for label in raw_labels if label["name"] in _AGENT_STATES}) if isinstance(raw_labels, list) and labels_known else []
-    if state not in {"open", "closed"} or not labels_known or len(labels) > 1:
+    if not isinstance(state, str) or state not in {"open", "closed"} or not labels_known or len(labels) > 1:
         observation = "The Issue's work state is missing or contradictory; readiness is not established."
         request = "Inspect the current Issue and reconcile its work state before proposing implementation."
     elif state == "closed":
@@ -79,24 +79,30 @@ def _governs(body: Any, issue_number: int) -> bool:
     fence: str | None = None
     in_comment = False
     for line in body.splitlines():
-        if "<!--" in line:
-            in_comment = True
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        # Fence contents are literal, including HTML comment delimiters. In
+        # particular, a comment in the opening info string cannot hide a fence.
+        if fence is not None:
+            if match:
+                marker, suffix = match.groups()
+                if marker[0] == fence[0] and len(marker) >= len(fence) and not suffix.strip():
+                    fence = None
+            continue
         if in_comment:
             if "-->" in line:
                 in_comment = False
             continue
-        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
         if match:
-            marker, suffix = match.groups()
-            if fence is None:
-                fence = marker
-            elif marker[0] == fence[0] and len(marker) >= len(fence) and not suffix.strip():
-                fence = None
+            fence = match[1]
             continue
-        if fence is None:
+        if "<!--" in line:
+            in_comment = "-->" not in line.split("<!--", 1)[1]
+            continue
+        if re.match(r"^ {0,3}Governing-Issue\s*:", line, re.IGNORECASE):
             marker_match = re.fullmatch(r"Governing-Issue: #([1-9][0-9]*)", line, re.IGNORECASE)
-            if marker_match:
-                markers.append(int(marker_match[1]))
+            if marker_match is None:
+                return False
+            markers.append(int(marker_match[1]))
     return markers == [issue_number]
 
 
