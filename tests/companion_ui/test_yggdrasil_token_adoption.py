@@ -163,4 +163,7 @@ def test_reading_surfaces_use_surface_reading_token() -> None:
     for selector in (".note-body-content {{", ".note-source-editor {{"):
         block = source[source.index(selector) : source.index("}}", source.index(selector))]
         assert "background: var(--surface-reading);" in block
-    assert source.count("backdrop-filter: var(--surface-panel-filter);") == 3
+    # Desktop panels, main column, rail, and the responsive portrait sheet.
+    assert source.count("backdrop-filter: var(--surface-panel-filter);") == 4
+    sheet = source.index(".portrait-sheet {{\n        background:")
+    assert source[sheet : source.index("}}", sheet)].count("var(--surface-panel)") == 1

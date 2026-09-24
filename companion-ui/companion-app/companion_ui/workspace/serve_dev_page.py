@@ -14153,7 +14153,8 @@ def render_index_html(
         display: none;
       }}
       .portrait-sheet {{
-        background: var(--bg-surface);
+        background: var(--surface-panel);
+        backdrop-filter: var(--surface-panel-filter);
         border-top: 1px solid var(--border);
         bottom: 0;
         display: block;
