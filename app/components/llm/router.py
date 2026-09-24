@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import os
 from functools import lru_cache
 from typing import Any, Iterable
@@ -20,6 +20,8 @@ class LLMTaskIntent:
     budget: str | None = None
     determinism_required: bool = False
     json_schema_required: bool = False
+    native_tools_required: bool = False
+    literal_system_role_required: bool = False
     latency_target_ms: int | None = None
     strict_identity_required: bool = False
 
@@ -34,6 +36,8 @@ class LLMRoute:
     embedding_identity: EmbeddingIdentity | None = None
     timeout_seconds: float | None = None
     temperature: float | None = None
+    transport_id: str | None = field(default=None, compare=False, repr=False)
+    reasoning_effort: str | None = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_model_access_route(
@@ -61,6 +65,8 @@ class LLMRoute:
             embedding_identity=embedding_identity,
             timeout_seconds=timeout_seconds,
             temperature=temperature,
+            transport_id=route.transport_id,
+            reasoning_effort=route.request.intent.reasoning_effort,
         )
 
 
@@ -198,6 +204,8 @@ class LLMRouter:
         return {
             "provider": route.provider,
             "model": route.model,
+            "transport_id": route.transport_id,
+            "reasoning_effort": route.reasoning_effort or "",
             "mode": route.mode,
             "reason": route.reason,
             "degraded": route.degraded,
@@ -212,6 +220,8 @@ class LLMRouter:
             "provider": target.provider or "",
             "model": target.model or "",
             "profile": target.profile or "",
+            "transport_id": target.transport_id or "",
+            "reasoning_effort": target.reasoning_effort or "",
         }
 
     @staticmethod
@@ -224,6 +234,8 @@ class LLMRouter:
             "provider": fallback.provider or "",
             "model": fallback.model or "",
             "profile": fallback.profile or "",
+            "transport_id": fallback.transport_id or "",
+            "reasoning_effort": fallback.reasoning_effort or "",
         }
 
     def _resolve_chat_route(
@@ -255,6 +267,8 @@ class LLMRouter:
             degraded=degraded or provider_degraded,
             timeout_seconds=getattr(routing, "timeout_seconds", None),
             temperature=getattr(routing, "temperature", None),
+            transport_id=target.transport_id if target is not None else None,
+            reasoning_effort=target.reasoning_effort if target is not None else None,
         )
 
     def _resolve_embedding_route(
@@ -356,6 +370,8 @@ class LLMRouter:
                 provider=fallback.provider,
                 model=fallback.model,
                 profile=fallback.profile,
+                transport_id=fallback.transport_id,
+                reasoning_effort=fallback.reasoning_effort,
             )
         if intent.task_kind == "embed":
             return None
@@ -443,6 +459,8 @@ class LLMRouter:
                     degraded=cand.degraded or degraded,
                     timeout_seconds=cand.timeout_seconds,
                     temperature=cand.temperature,
+                    transport_id=cand.transport_id,
+                    reasoning_effort=cand.reasoning_effort,
                 )
         if provider == "mock":
             # mock ignores the model entirely; a self-consistent deterministic route.
@@ -539,6 +557,27 @@ class LLMRouter:
                     enforce=enforce,
                 )
         return candidates[0]
+
+    def candidate_routes(self, intent: LLMTaskIntent) -> list[LLMRoute]:
+        """Return the selected route and owner-configured alternatives in policy order.
+
+        This is a read-only projection for a downstream no-inference preflight.
+        It does not authorize trying an alternative after a model call begins.
+        """
+        selected = self.route(intent)
+        if (
+            os.getenv("LLM_FORCE_PROVIDER")
+            or os.getenv("LLM_FORCE_MODEL")
+            or _provider_enforced()
+        ):
+            return [selected]
+        configured = self._route_candidates(intent)
+        if not configured or (selected.provider, selected.model) != (
+            configured[0].provider,
+            configured[0].model,
+        ):
+            return [selected]
+        return [selected, *configured[1:]]
 
     def default_routes(self, intents: Iterable[LLMTaskIntent]) -> dict[str, LLMRoute]:
         routes: dict[str, LLMRoute] = {}

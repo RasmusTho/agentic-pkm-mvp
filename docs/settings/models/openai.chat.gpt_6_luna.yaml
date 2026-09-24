@@ -1,0 +1,8 @@
+id: openai.chat.gpt_6_luna
+status: active
+kind: chat
+provider: openai
+model: gpt-6-luna
+selection_group: luna
+allowed_transports: [codex_cli_tailscale]
+notes: Current Luna-family candidate; runtime selection still requires an allowed, fresh Codex catalog snapshot.

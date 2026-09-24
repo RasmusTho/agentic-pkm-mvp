@@ -6,11 +6,17 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.api.v6_seams import check_v6_seams
-from app.components.llm.fabric import describe_default_route_policies, describe_default_routes
+from app.components.llm.fabric import (
+    describe_default_route_policies,
+    describe_default_routes,
+    get_chat_client_for_route,
+)
+from app.components.llm.router import LLMRoute, LLMTaskIntent
 from app.services.companion_diagnostics import companion_diagnostics_summary
 from app.events.outbox import default_outbox_path
 from app.config.environment import active_environment
@@ -37,6 +43,30 @@ def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dic
 
 def _exception_kind(exc: Exception) -> str:
     return type(exc).__name__
+
+
+def _safe_endpoint_origin(value: str) -> str:
+    """Keep health output useful without exposing URL credentials or paths."""
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        if parsed.scheme not in {"http", "https"} or not host:
+            return "[configured]"
+        rendered_host = f"[{host}]" if ":" in host else host
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return f"{parsed.scheme}://{rendered_host}{port}"
+    except ValueError:
+        return "[configured]"
+
+
+def _health_probe_timeout() -> float:
+    """Return the short health-only timeout without coupling to generation."""
+    try:
+        return float(os.environ.get("HEALTH_PROBE_TIMEOUT", "2"))
+    except (TypeError, ValueError):
+        return 2.0
 
 
 def _annotate_required(payload: Dict[str, Any], *, required: bool, severity: str | None = None) -> Dict[str, Any]:
@@ -154,7 +184,7 @@ def _check_ollama() -> Dict[str, Any]:
     if provider != "ollama":
         result = _result(True, "Hoppar över Ollama-koll (LLM_PROVIDER != ollama)", data={"skipped": True})
         result["provider"] = provider
-        result["base_url"] = base
+        result["base_url"] = _safe_endpoint_origin(base)
         return result
     if not base:
         return _result(
@@ -168,22 +198,14 @@ def _check_ollama() -> Dict[str, Any]:
         data = resp.json()
         result = _result(
             True,
-            f"Ollama nåddes ({base})",
+            f"Ollama nåddes ({_safe_endpoint_origin(base)})",
             data={"models": [m.get("name") for m in data.get("models", [])] if isinstance(data, dict) else None},
         )
     except Exception as exc:
         result = _result(False, f"Ollama svarade inte ({_exception_kind(exc)})")
     result["provider"] = provider
-    result["base_url"] = base
+    result["base_url"] = _safe_endpoint_origin(base)
     return result
-
-
-def _health_probe_timeout() -> float:
-    """Return the short, health-only timeout without coupling to LLM generation."""
-    try:
-        return float(os.environ.get("HEALTH_PROBE_TIMEOUT", "2"))
-    except (TypeError, ValueError):
-        return 2.0
 
 
 def _check_llm_router() -> Dict[str, Any]:
@@ -205,12 +227,66 @@ def _provider_env_check(
     provider: str,
     model: str,
     *,
+    transport_id: str | None = None,
+    reasoning_effort: str | None = None,
+    structured_output_required: bool = False,
+    native_tools_required: bool = False,
+    literal_system_role_required: bool = False,
+    determinism_required: bool = False,
     ollama_probe: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     normalized = (provider or "").strip().lower()
     resolved_model = (model or "").strip()
     if not resolved_model:
         return {"ok": False, "detail": "route model is missing", "status": "fail"}
+    if transport_id in {"codex_cli_tailscale", "ollama_http_tailscale"}:
+        try:
+            intent = LLMTaskIntent(
+                task_kind="health",
+                json_schema_required=structured_output_required,
+                native_tools_required=native_tools_required,
+                literal_system_role_required=literal_system_role_required,
+                determinism_required=determinism_required,
+            )
+            client = get_chat_client_for_route(
+                intent,
+                selected_route=LLMRoute(
+                    provider=normalized,
+                    model=resolved_model,
+                    mode="chat",
+                    reason="health-preflight",
+                    timeout_seconds=_health_probe_timeout(),
+                    transport_id=transport_id,
+                    reasoning_effort=reasoning_effort,
+                ),
+            )
+            bound_route = client.model_access_route
+            if bound_route is None:
+                return {
+                    "ok": False,
+                    "detail": "shared route facade returned no bound model route",
+                    "status": "fail",
+                }
+            ready = bound_route.preflight_status == "passed"
+            return {
+                "ok": ready,
+                "detail": (
+                    "remote route preflight passed"
+                    if ready
+                    else f"remote route preflight {bound_route.preflight_status}"
+                ),
+                "status": "ok" if ready else "fail",
+                "provider": bound_route.provider,
+                "model": bound_route.model,
+                "transport_id": bound_route.transport_id,
+                "preflight_status": bound_route.preflight_status,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "detail": f"remote route preflight failed ({_exception_kind(exc)})",
+                "status": "fail",
+            }
     if normalized in {"", "mock", "deterministic"}:
         return {"ok": True, "detail": f"deterministic/local route ({resolved_model})", "status": "ok"}
     if normalized == "ollama":
@@ -249,6 +325,9 @@ def _check_llm_task_routes(
         effective = item.get("effective") or {}
         provider = str(effective.get("provider") or "").strip().lower()
         model = str(effective.get("model") or "").strip()
+        transport_id = str(effective.get("transport_id") or "").strip() or None
+        reasoning_effort = str(effective.get("reasoning_effort") or "").strip() or None
+        intent = item.get("intent") or {}
         eval_mode = (os.getenv("EVAL_LLM_MODE") or DEFAULT_EVAL_MODE).strip().lower() or DEFAULT_EVAL_MODE
         if task_kind == "eval" and eval_mode == "skip":
             route_statuses[task_kind] = {
@@ -259,13 +338,27 @@ def _check_llm_task_routes(
                 "model": model,
             }
             continue
-        probe = _provider_env_check(provider, model, ollama_probe=ollama_probe)
+        probe = _provider_env_check(
+            provider,
+            model,
+            transport_id=transport_id,
+            reasoning_effort=reasoning_effort,
+            structured_output_required=bool(intent.get("json_schema_required")),
+            native_tools_required=bool(intent.get("native_tools_required")),
+            literal_system_role_required=bool(
+                intent.get("literal_system_role_required")
+            ),
+            determinism_required=bool(intent.get("determinism_required")),
+            ollama_probe=ollama_probe,
+        )
         route_statuses[task_kind] = {
             "ok": bool(probe.get("ok")),
             "detail": probe.get("detail", ""),
             "status": probe.get("status", "fail"),
-            "provider": provider,
-            "model": model,
+            "provider": probe.get("provider", provider),
+            "model": probe.get("model", model),
+            "transport_id": probe.get("transport_id", transport_id),
+            "preflight_status": probe.get("preflight_status"),
             "base_url": probe.get("base_url"),
         }
         if probe.get("ok") is False:
@@ -327,16 +420,33 @@ def _check_embedding_index() -> Dict[str, Any]:
 
 def _check_llm_providers(ollama_check: Dict[str, Any]) -> Dict[str, Any]:
     provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
-    providers: list[dict[str, Any]] = [{"name": "mock", "ok": True, "detail": "deterministic"}]
-    if provider in {"ollama", "llm", ""}:
-        providers.append(
-            {
-                "name": "ollama",
-                "ok": bool(ollama_check.get("ok")),
-                "detail": ollama_check.get("detail", ""),
-            }
-        )
-    elif provider and provider != "mock":
+    if provider == "llm":
+        provider = "ollama"
+    from app.components.settings.providers_loader import load_provider_census
+
+    census = load_provider_census()
+    declared = sorted(census.projection("app/services/llm.py::_DISPATCH_PROVIDERS"))
+    providers: list[dict[str, Any]] = []
+    for item in declared:
+        if item == "mock":
+            providers.append({"name": item, "ok": True, "detail": "deterministic"})
+        elif item == "ollama":
+            providers.append(
+                {
+                    "name": item,
+                    "ok": bool(ollama_check.get("ok")),
+                    "detail": ollama_check.get("detail", ""),
+                }
+            )
+        else:
+            providers.append(
+                {
+                    "name": item,
+                    "ok": True,
+                    "detail": "effective transport readiness is reported by task routes",
+                }
+            )
+    if provider not in declared:
         providers.append({"name": provider, "ok": False, "detail": "unknown provider"})
 
     overall = all(entry.get("ok") for entry in providers)

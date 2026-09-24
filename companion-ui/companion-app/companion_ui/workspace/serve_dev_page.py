@@ -9283,7 +9283,7 @@ def _render_orientation_index_html(
         else ""
     )
     return f"""<!DOCTYPE html>
-<html lang="en" data-focus="v2">
+<html lang="en" class="fx-city" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11353,7 +11353,7 @@ def render_index_html(
     )
 
     return f"""<!DOCTYPE html>
-<html lang="en" data-focus="v2">
+<html lang="en" class="fx-city" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">

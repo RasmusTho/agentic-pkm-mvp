@@ -11,7 +11,8 @@ from uuid import uuid4
 
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.journaling.day_context import DayContextBundle, DayContextItem
-from app.services.llm import call_llm
+from app.components.llm.fabric import get_chat_client
+from app.components.llm.router import LLMTaskIntent
 from app.vault.manager import VaultContext
 from app.vault.settings_service import SettingsService
 
@@ -276,7 +277,8 @@ _SYSTEM_PROMPT = (
 
 
 def _call_reflection_llm(kind: str, pack: dict[str, object]) -> str:
-    return call_llm(
+    client = get_chat_client(LLMTaskIntent(task_kind="reflection"))
+    return client.chat(
         "journaling-reflection",
         pack,
         agent="journaling-reflection",

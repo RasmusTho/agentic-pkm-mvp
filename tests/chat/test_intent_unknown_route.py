@@ -129,6 +129,39 @@ def test_constrained_completion_validates() -> None:
     assert "_defaulted" not in bound, "the CO_AUTHORING failure default must be gone"
 
 
+def test_default_constrained_completion_uses_shared_model_access_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intents = []
+    calls = []
+
+    class _Client:
+        def chat(self, name, pack, **kwargs):
+            calls.append((name, pack, kwargs))
+            return json.dumps(
+                {"intent_class": "co_authoring", "action_type": "none"}
+            )
+
+    def _get_chat_client(intent):
+        intents.append(intent)
+        return _Client()
+
+    monkeypatch.setattr(
+        "app.components.llm.fabric.get_chat_client", _get_chat_client
+    )
+    complete = constrained_module._default_complete(
+        schema_ref=INTENT_CLASSIFICATION_SCHEMA_REF, task_kind="decide"
+    )
+    result = complete(system="classify", user="hello")
+
+    assert result.startswith("{")
+    assert len(intents) == 1
+    assert intents[0].task_kind == "decide"
+    assert intents[0].json_schema_required is True
+    assert len(calls) == 1
+    assert calls[0][2]["response_format"] is not None
+
+
 # ---------------------------------------------------------------------------
 # AC2: UNKNOWN lands read-only with a re-ask affordance; CO_AUTHORING default
 #      is gone.

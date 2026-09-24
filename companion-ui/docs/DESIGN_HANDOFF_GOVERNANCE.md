@@ -203,10 +203,10 @@ a Crossing-B cleanup task.
 
 - Resolve the live Claude Design system by exact name through `list_design_systems`; the currently
   verified ID is `f2b13410-af14-4875-8029-445352123f57`.
-- Current reconciled state (#5652, after YDS-02 #5628): system version `2.1.0`
+- Current reconciled state (#5662, after YDS-02 #5628 and #5652): system version `2.2.0`
   (`design-system/yggdrasil/VERSION`), token SHA-256
-  `a20474025cc58fda24459d80bf6022bdb5e76631276aeabf91ff920418ce1cf1`, reconciled 2026-09-24 by
-  reading the live `colors_and_type.css` back after a targeted upload of the Shell frosted-glass
+  `207a2a97b30abb919b9280f0123a97699fab39e547488f228bda39c97d71b97b`, reconciled 2026-09-24 by
+  reading the live `colors_and_type.css` back after a targeted upload of the Shell night-city
   change. A live
   or repo sheet with any other hash fails this gate until the next reconciliation records it here.
 - Select it at project creation. For an existing project that cannot express selection, attach its

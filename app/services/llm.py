@@ -55,7 +55,12 @@ def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
     return data
 
 
-def _ollama_base_url() -> str:
+def _ollama_base_url(override: str | None = None) -> str:
+    if override is not None:
+        base_url = override.strip().rstrip("/")
+        if not base_url:
+            raise RuntimeError("Ollama base URL override must not be empty")
+        return base_url
     base_url = (
         os.getenv("OLLAMA_BASE_URL")
         or os.getenv("OLLAMA_HOST")
@@ -83,6 +88,7 @@ def _ollama_chat(
     timeout: float | None = None,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
+    base_url_override: str | None = None,
 ) -> str:
     if timeout is None:
         timeout = env_float("LLM_TIMEOUT")
@@ -101,7 +107,7 @@ def _ollama_chat(
         # object for schema-constrained decoding (KERNEL-07).
         body["format"] = response_format
 
-    base = _ollama_base_url()
+    base = _ollama_base_url(base_url_override)
     parsed = urlparse(base)
     host = parsed.hostname
     if not host:
@@ -325,6 +331,8 @@ def call_llm(
     temperature: float | None = None,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
+    base_url_override: str | None = None,
+    api_key_override: str | None = None,
 ) -> str:
     def _deterministic_response_for_kind() -> str:
         if kind and "ranking" in str(kind):
@@ -416,6 +424,7 @@ def call_llm(
                     timeout=timeout,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    base_url_override=base_url_override,
                 )
             )
         except LLMBackendTimeout:
@@ -437,12 +446,25 @@ def call_llm(
         response_payload = {"content": response_text}
     elif provider == "openai":
         try:
-            api_key = os.environ["OPENAI_API_KEY"]
-            url = (os.getenv("OPENAI_BASE") or "").strip()
-            if not url:
-                _base_url = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
-                if _base_url:
-                    url = _base_url + "/chat/completions"
+            if api_key_override is not None:
+                if not api_key_override.strip():
+                    raise RuntimeError("OpenAI adapter API key override is empty")
+                api_key = api_key_override
+            else:
+                api_key = os.environ["OPENAI_API_KEY"]
+            url = ""
+            if base_url_override is not None:
+                url = base_url_override.strip().rstrip("/")
+                if not url:
+                    raise RuntimeError("OpenAI adapter base URL override is empty")
+                if not url.endswith("/chat/completions"):
+                    url += "/chat/completions"
+            else:
+                url = (os.getenv("OPENAI_BASE") or "").strip()
+                if not url:
+                    _base_url = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
+                    if _base_url:
+                        url = _base_url + "/chat/completions"
             if not url:
                 raise RuntimeError("OPENAI_BASE_URL or OPENAI_BASE is required for openai provider")
             response_text, response_payload = _http_chat(

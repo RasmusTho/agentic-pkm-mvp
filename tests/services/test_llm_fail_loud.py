@@ -115,3 +115,67 @@ def test_deterministic_stub_confined_to_mock(monkeypatch, clean_llm_env) -> None
     real_result = call_llm("ask", {"system": "s", "user": "u"}, kind="ask.answer")
     assert real_result == "a real generated answer"
     assert real_result.strip() != canned.strip()
+
+
+def test_provider_runtime_overrides_stay_out_of_llm_logs(
+    monkeypatch: pytest.MonkeyPatch, clean_llm_env
+) -> None:
+    calls = {}
+    logs = []
+
+    def _ollama_chat(*_args, **kwargs):
+        calls["ollama"] = kwargs
+        return "local response"
+
+    monkeypatch.setattr(llm_service, "_ollama_chat", _ollama_chat)
+    monkeypatch.setattr(llm_service, "log_llm_call", lambda **kwargs: logs.append(kwargs))
+    clean_llm_env.setenv("LLM_PROVIDER", "ollama")
+    local_url = "http://127.0.0.1:11434/v1"
+    secret_key = "eval-private-key"
+
+    result = call_llm(
+        "eval",
+        {"system": "judge", "user": "check this"},
+        provider_override="ollama",
+        model_override="llama3.1:8b",
+        base_url_override=local_url,
+        api_key_override=secret_key,
+    )
+
+    assert result == "local response"
+    assert calls["ollama"]["base_url_override"] == local_url
+    assert "api_key_override" not in calls["ollama"]
+    assert len(logs) == 1
+    assert secret_key not in repr(logs[0])
+    assert local_url not in repr(logs[0])
+
+
+def test_openai_adapter_runtime_overrides_are_private_call_args(
+    monkeypatch: pytest.MonkeyPatch, clean_llm_env
+) -> None:
+    calls = {}
+    logs = []
+
+    def _http_chat(**kwargs):
+        calls.update(kwargs)
+        return "api response", {"content": "api response"}
+
+    monkeypatch.setattr(llm_service, "_http_chat", _http_chat)
+    monkeypatch.setattr(llm_service, "log_llm_call", lambda **kwargs: logs.append(kwargs))
+    endpoint = "https://eval-provider.example/v1"
+    secret = "eval-api-secret"
+
+    result = call_llm(
+        "eval",
+        {"system": "judge", "user": "check this"},
+        provider_override="openai",
+        model_override="gpt-5.4",
+        base_url_override=endpoint,
+        api_key_override=secret,
+    )
+
+    assert result == "api response"
+    assert calls["url"] == "https://eval-provider.example/v1/chat/completions"
+    assert calls["api_key"] == secret
+    assert endpoint not in repr(logs[0])
+    assert secret not in repr(logs[0])

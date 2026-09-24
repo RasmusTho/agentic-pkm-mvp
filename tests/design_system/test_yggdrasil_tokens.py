@@ -17,7 +17,9 @@ DS = REPO_ROOT / "design-system" / "yggdrasil"
 BINDING = REPO_ROOT / "companion-ui" / "companion-app" / "colors_and_type.css"
 V1 = Path(__file__).resolve().parent / "fixtures" / "colors_and_type.v1.css"
 
-OPT_IN_MARKERS = ('[data-theme="light"]', '[data-theme="system"]', '[data-density="compact"]', '[data-focus="v2"]', ".fx-")
+OPT_IN_MARKERS = ('[data-theme="light"]', '[data-theme="system"]', '[data-density="compact"]', '[data-focus="v2"]', ".fx-",
+                  # Inert definitions: only an .fx-* class ever applies them (#5662).
+                  "@keyframes fx-")
 # Always-on accessibility rules are the only non-opt-in additions v2 may make.
 ACCESSIBILITY_MARKERS = ("prefers-reduced-motion: reduce",)
 DTCG_FILES = ("primitives.json", "semantic.json", "themes/dark.json", "themes/shell.json", "density/comfortable.json", "density/compact.json")
@@ -238,7 +240,10 @@ def test_shell_text_holds_aa_over_translucent_sheet() -> None:
     contract = json.loads((DS / "tokens" / "contrast.json").read_text(encoding="utf-8"))
     colors = build.resolve_colors(build.theme_roles(source, "shell"))
     # Every solid colour the city can place behind a sheet, plus white glitch streaks.
-    anchors = {int(h, 16) for h in _HEX.findall(values["material-backdrop"]["$value"])} | {0xFFFFFF}
+    city_colours = " ".join(v["$value"] for k, v in values.items() if k.startswith("city-"))
+    anchors = {
+        int(h, 16) for h in _HEX.findall(values["material-backdrop"]["$value"] + " " + city_colours)
+    } | {0xFFFFFF, 0x000000}
     stops = [
         ((int(r) << 16) | (int(g) << 8) | int(b), float(a))
         for r, g, b, a in _RGBA_STOP.findall(values["material-sheet"]["$value"])
@@ -261,3 +266,27 @@ def test_surface_tokens_keep_dark_unchanged() -> None:
     assert values["root"]["surface-panel-filter"]["$value"] == "none"
     assert values["root"]["surface-reading"]["$value"] == "var(--bg-base)"
     assert "animation" not in values["shell"]["surface-reading"]["$value"]
+
+
+def test_city_night_motion_is_shell_only_and_reduced_motion_safe() -> None:
+    """#5662: the night city moves only in Shell, on the compositor, and never under reduced motion."""
+    values = json.loads((DS / "tokens" / "css-values.json").read_text(encoding="utf-8"))
+    for name in ("city-fade-2-animation", "city-fade-3-animation", "city-glitch-animation", "city-dip-animation"):
+        assert values["root"][name]["$value"] == "none"
+        assert values["shell"][name]["$value"].startswith("fx-city-")
+    assert values["root"]["material-glitch"]["$value"] == "none"
+    css = BINDING.read_text(encoding="utf-8")
+    city = css[css.index("@keyframes fx-city-fade-2") : css.index("/* ====", css.index("@keyframes fx-city-fade-2"))]
+    # Compositor-only: keyframes animate opacity/transform, never custom properties or colours.
+    assert "@property" not in css
+    for frame in re.findall(r"\{([^{}]*)\}", city.split(".fx-city::before,")[0]):
+        props = {decl.split(":")[0].strip() for decl in frame.split(";") if ":" in decl}
+        assert props <= {"opacity", "transform"}, props
+    reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("\n}", 1)[0]
+    assert ".fx-city::before, .fx-city::after, .fx-city > body::before, .fx-city > body::after { animation: none; }" in reduced
+    layers = css[css.index(".fx-city::before,\n") : css.index("}", css.index(".fx-city::before,\n"))]
+    assert "pointer-events: none;" in layers
+    # Flash budget: the tear flashes once, the dip twice; combined never over 3 per second.
+    glitch = css[css.index("@keyframes fx-city-glitch") : css.index("@keyframes fx-city-dip")]
+    dip = css[css.index("@keyframes fx-city-dip") : css.index(".fx-city::before,\n")]
+    assert glitch.count("opacity: 1;") <= 2 and dip.count("opacity: 1;") + dip.count("opacity: 0.7;") <= 2

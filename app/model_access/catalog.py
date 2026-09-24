@@ -250,9 +250,10 @@ class CatalogCache:
         loader: Callable[[datetime], CatalogSnapshot],
         now: datetime | None = None,
     ) -> CatalogSnapshot:
-        current_time = _utc(now or datetime.now(timezone.utc), field="now")
+        fixed_time = _utc(now, field="now") if now is not None else None
         key = (provider, transport_id)
         with self._lock:
+            current_time = fixed_time or datetime.now(timezone.utc)
             cached = self._snapshots.get(key)
             if cached is not None:
                 age = current_time - cached.fetched_at
@@ -263,11 +264,12 @@ class CatalogCache:
 
             try:
                 refreshed = loader(current_time)
+                validation_time = fixed_time or datetime.now(timezone.utc)
                 if (
                     refreshed.provider != provider
                     or refreshed.transport_id != transport_id
                     or refreshed.freshness != "fresh"
-                    or refreshed.fetched_at > current_time
+                    or refreshed.fetched_at > validation_time
                 ):
                     raise CatalogError("catalog_invalid")
                 self._snapshots[key] = refreshed
@@ -277,7 +279,8 @@ class CatalogCache:
                     raise
                 if cached is None:
                     raise
-                age = current_time - cached.fetched_at
+                failure_time = fixed_time or datetime.now(timezone.utc)
+                age = failure_time - cached.fetched_at
                 if age < timedelta(0) or age > self._max_stale_age:
                     raise CatalogError("catalog_stale") from None
                 return cached.with_freshness("stale")
