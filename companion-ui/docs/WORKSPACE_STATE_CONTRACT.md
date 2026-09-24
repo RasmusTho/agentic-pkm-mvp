@@ -98,8 +98,8 @@ Panel state, receipts, or write-guard state.
     "title": "string",
     "body": "string",
     "content_hash": "string",
-    "identity_source": "frontmatter.uuid | frontmatter.id | uuid_healing | companion_path | missing",
-    "identity_state": "resolved | legacy_resolved | healed | unresolved_missing_uuid | companion_of_resolved",
+    "identity_source": "frontmatter.uuid | frontmatter.id | uuid_healing | recovery_candidate | companion_path | missing",
+    "identity_state": "resolved | legacy_resolved | healed | recovered | unresolved_missing_uuid | companion_of_resolved",
     "companion_of": "string | null",
     "owns_identity": true
   },
@@ -158,7 +158,7 @@ workspace.
 
 | Field | Rule |
 |---|---|
-| `artifact_id` | Stable artifact identifier when available. For normal human vault notes this is the frontmatter `uuid` or a UUID written by the approved healing path. `null` means identity is explicitly unresolved. Path strings and content hashes must not be used as fallback artifact IDs. |
+| `artifact_id` | Stable artifact identifier when available. For normal human vault notes this is the frontmatter `uuid` or a UUID written by the approved healing path. A create-once note (for example under `Sources/`) without a `uuid` is never rewritten by a read; it reports the read-only retained-source recovery identity that ingest derives for the same note (`identity_source=recovery_candidate`, `identity_state=recovered`). `null` means identity is explicitly unresolved. Path strings and content hashes must not be used as fallback artifact IDs. |
 | `artifact_kind` | `human_note` for normal vault notes; `companion_note` for system-plane companion continuity artifacts. |
 | `note_path` | Browser-safe runtime-relative path or opaque note reference. It must not be an absolute vault path. |
 | `title` | Display title extracted or supplied by the runtime. |
