@@ -183,29 +183,35 @@ elif args == ["debug", "models", "--bundled"]:
         os.replace(replacement, __file__)
 elif args == ["app-server", "--listen", "stdio://"]:
     pages = json.loads({safe_app_server_pages!r})
-    requests = []
-    for _ in range(3):
-        line = sys.stdin.readline()
-        if not line:
-            break
-        requests.append(json.loads(line))
-    if len(requests) != 3:
+    initialize_line = sys.stdin.readline()
+    if not initialize_line:
         raise SystemExit(2)
-    initialize = next(item for item in requests if item.get("method") == "initialize")
+    initialize = json.loads(initialize_line)
+    if initialize.get("method") != "initialize":
+        raise SystemExit(2)
+    requests = [initialize]
     print(json.dumps({{"id": initialize["id"], "result": {{"userAgent": "fixture"}}}}))
     sys.stdout.flush()
-    # The initialization response is not the end of this JSON-RPC session.
-    # Model-list can respond asynchronously after it.
+    followup_requests = []
+    for _ in range(2):
+        line = sys.stdin.readline()
+        if not line:
+            raise SystemExit(2)
+        followup_requests.append(json.loads(line))
+    if [item.get("method") for item in followup_requests] != ["initialized", "model/list"]:
+        raise SystemExit(2)
+    requests.extend(followup_requests)
+    # The session must remain open after initialize while model/list is pending.
     time.sleep(0.05)
     readable, _, _ = select.select([sys.stdin], [], [], 0)
     if readable and sys.stdin.readline() == "":
         raise SystemExit(0)
-    for request in requests:
+    for request in followup_requests:
         if request.get("method") == "model/list":
             cursor = request.get("params", {{}}).get("cursor")
             page_index = int(cursor) if cursor is not None else 0
             print(json.dumps({{"id": request["id"], "result": pages[page_index]}}))
-        elif request.get("method") not in {{"initialize", "initialized"}}:
+        elif request.get("method") != "initialized":
             raise SystemExit(2)
     sys.stdout.flush()
     request_trace = Path({str(trace_path)!r}).with_suffix(".app-server.json")

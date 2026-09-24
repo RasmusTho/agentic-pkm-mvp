@@ -695,31 +695,37 @@ class CodexCliExecutor:
             }
             if cursor is not None:
                 params["cursor"] = cursor
-            messages = [
-                {
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "clientInfo": {
-                            "name": "model-access-router",
-                            "version": "1",
-                        }
-                    },
+            initialize_request = {
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {
+                        "name": "model-access-router",
+                        "version": "1",
+                    }
                 },
+            }
+            followup_messages = [
                 {"method": "initialized"},
                 {"id": 2, "method": "model/list", "params": params},
             ]
-            request_text = "\n".join(
+            initialize_text = (
+                json.dumps(initialize_request, separators=(",", ":"), allow_nan=False)
+                + "\n"
+            )
+            followup_text = "\n".join(
                 json.dumps(message, separators=(",", ":"), allow_nan=False)
-                for message in messages
+                for message in followup_messages
             ) + "\n"
             result = self._run_bounded(
                 [cli_path, "app-server", "--listen", "stdio://"],
                 cwd=None,
-                input_text=request_text,
+                input_text=initialize_text,
                 timeout_seconds=self._preflight_timeout_seconds,
                 max_output_bytes=_MAX_BUNDLED_CATALOG_BYTES,
                 expected_executable_identity=cli_identity,
+                followup_input_text=followup_text,
+                followup_after_jsonrpc_response_id=1,
                 stdin_close_after_jsonrpc_response_id=2,
             )
             if result.returncode != 0:
@@ -1277,16 +1283,39 @@ class CodexCliExecutor:
         max_output_bytes: int | None = None,
         expected_executable_identity: tuple[int, int, int, int, int] | None = None,
         max_file_bytes: int | None = None,
+        followup_input_text: str | None = None,
+        followup_after_jsonrpc_response_id: int | None = None,
         stdin_close_after_jsonrpc_response_id: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         input_bytes = None if input_text is None else input_text.encode("utf-8")
-        if input_bytes is not None and len(input_bytes) > self._max_input_bytes:
+        followup_input_bytes = (
+            None
+            if followup_input_text is None
+            else followup_input_text.encode("utf-8")
+        )
+        if sum(
+            len(value)
+            for value in (input_bytes, followup_input_bytes)
+            if value is not None
+        ) > self._max_input_bytes:
             raise CodexCliError("input_oversize")
         if stdin_close_after_jsonrpc_response_id is not None and (
             type(stdin_close_after_jsonrpc_response_id) is not int
             or stdin_close_after_jsonrpc_response_id < 0
             or input_bytes is None
+            or not input_bytes
         ):
+            raise CodexCliError("unsupported_profile")
+        if followup_input_bytes is not None and (
+            not followup_input_bytes
+            or type(followup_after_jsonrpc_response_id) is not int
+            or followup_after_jsonrpc_response_id < 0
+            or followup_after_jsonrpc_response_id
+            == stdin_close_after_jsonrpc_response_id
+            or stdin_close_after_jsonrpc_response_id is None
+        ):
+            raise CodexCliError("unsupported_profile")
+        if followup_input_bytes is None and followup_after_jsonrpc_response_id is not None:
             raise CodexCliError("unsupported_profile")
         if (
             os.name != "posix"
@@ -1310,6 +1339,13 @@ class CodexCliExecutor:
         stderr = bytearray()
         protocol_line_buffer = bytearray()
         interactive_input_offset = 0
+        interactive_input_pending = (
+            input_bytes
+            if stdin_close_after_jsonrpc_response_id is not None
+            else None
+        )
+        followup_input_started = False
+        followup_input_sent = False
         output_limit = self._max_output_bytes if max_output_bytes is None else max_output_bytes
         parent_read_fd, parent_write_fd = os.pipe()
         status_read_fd, status_write_fd = os.pipe()
@@ -1405,7 +1441,7 @@ class CodexCliExecutor:
             if (
                 stdin_close_after_jsonrpc_response_id is not None
                 and process.stdin is not None
-                and input_bytes
+                and interactive_input_pending
             ):
                 selector.register(
                     process.stdin,
@@ -1421,13 +1457,13 @@ class CodexCliExecutor:
                         if (
                             process.stdin is None
                             or process.stdin.closed
-                            or input_bytes is None
+                            or interactive_input_pending is None
                         ):
                             continue
                         try:
                             written = os.write(
                                 process.stdin.fileno(),
-                                input_bytes[interactive_input_offset:],
+                                interactive_input_pending[interactive_input_offset:],
                             )
                         except BlockingIOError:
                             continue
@@ -1438,7 +1474,11 @@ class CodexCliExecutor:
                             self._kill_process_group(cli_process_group)
                             raise CodexCliError("command_exit_nonzero")
                         interactive_input_offset += written
-                        if interactive_input_offset == len(input_bytes):
+                        if interactive_input_offset == len(interactive_input_pending):
+                            if followup_input_started:
+                                followup_input_sent = True
+                            interactive_input_pending = None
+                            interactive_input_offset = 0
                             selector.unregister(key.fileobj)
                         continue
                     if key.data == "status":
@@ -1511,16 +1551,51 @@ class CodexCliExecutor:
                             if (
                                 isinstance(message, dict)
                                 and type(message.get("id")) is int
-                                and message["id"]
-                                == stdin_close_after_jsonrpc_response_id
-                                and ("result" in message or "error" in message)
                             ):
-                                try:
-                                    selector.unregister(process.stdin)
-                                except KeyError:
-                                    pass
-                                process.stdin.close()
-                                break
+                                response_id = message["id"]
+                                if (
+                                    response_id
+                                    == followup_after_jsonrpc_response_id
+                                    and followup_input_bytes is not None
+                                    and not followup_input_started
+                                    and ("result" in message or "error" in message)
+                                ):
+                                    followup_input_started = True
+                                    if (
+                                        "error" not in message
+                                        and isinstance(message.get("result"), dict)
+                                    ):
+                                        interactive_input_pending = followup_input_bytes
+                                        interactive_input_offset = 0
+                                        selector.register(
+                                            process.stdin,
+                                            selectors.EVENT_WRITE,
+                                            "stdin",
+                                        )
+                                        continue
+                                    try:
+                                        selector.unregister(process.stdin)
+                                    except KeyError:
+                                        pass
+                                    process.stdin.close()
+                                    break
+                                if (
+                                    response_id
+                                    == stdin_close_after_jsonrpc_response_id
+                                    and ("result" in message or "error" in message)
+                                ):
+                                    if (
+                                        followup_input_bytes is not None
+                                        and not followup_input_sent
+                                    ):
+                                        self._kill_process_group(cli_process_group)
+                                        raise CodexCliError("tool_surface_unknown")
+                                    try:
+                                        selector.unregister(process.stdin)
+                                    except KeyError:
+                                        pass
+                                    process.stdin.close()
+                                    break
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise CodexCliError("command_timeout")
