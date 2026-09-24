@@ -310,6 +310,10 @@ endpoint = args[1]
 if endpoint.endswith('/issues/501'):
     result = {'number': 501, 'title': '<img src=x onerror=alert(1)> Managed work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501', 'updated_at': '2026-09-13T10:00:00Z'}
     result['body'] = chr(10).join(['## Context', '', 'Fixture owner intent.', '', '## Scope', '', 'Fixture source scope.', '', '## Acceptance Criteria', '', '- [ ] Preserve fixture declarations.', '  - Verify: `tests/fixture.py::test_declaration`', '', '## Source Anchors', '', '- `docs/DEVUI.md :: Intent and evidence continuity`', '', '## Source Docs', '', '- `docs/DEVUI.md`', ''])
+    if mode.startswith('work_'):
+        result['labels'] = [{'name': 'agent:ready'}]
+    if mode == 'work_merged':
+        result.update(state='closed', labels=[], updated_at='2026-09-24T12:00:00Z')
     if mode == 'identity_mismatch':
         result['html_url'] = 'https://github.com/foreign/repo/issues/501'
     if mode == 'canonical_case':
@@ -333,6 +337,14 @@ if endpoint.endswith('/issues/501'):
     if mode == 'malformed':
         print('{broken')
         raise SystemExit(0)
+elif endpoint.endswith('/issues/501/timeline'):
+    if mode == 'work_result_unavailable':
+        print('fixture-secret-never-export', file=sys.stderr)
+        raise SystemExit(1)
+    result = [{'event': 'cross-referenced', 'source': {'issue': {'html_url': 'https://github.com/example/fixture/pull/502', 'pull_request': {'url': 'source-marker'}}}}] if mode.startswith('work_') else []
+elif endpoint.endswith('/pulls/502'):
+    merged = mode == 'work_merged'
+    result = {'number': 502, 'html_url': 'https://github.com/example/fixture/pull/502', 'body': 'Governing-Issue: #501', 'base': {'repo': {'full_name': 'example/fixture'}}, 'head': {'sha': 'd' * 40}, 'state': 'closed' if merged else 'open', 'merged': merged, 'merged_at': '2026-09-24T12:00:00Z' if merged else None, 'merge_commit_sha': 'e' * 40, 'updated_at': '2026-09-24T12:00:00Z' if merged else '2026-09-23T12:00:00Z'}
 elif endpoint.endswith('/issues'):
     result = [{'number': 501, 'title': 'Fixture work', 'state': 'open', 'html_url': 'https://github.com/example/fixture/issues/501'}]
     if mode == 'canonical_case':
@@ -1246,7 +1258,7 @@ def test_managed_focus_uses_admitted_repository_source_and_honest_states(managed
         assert source.http_calls == [("GET", "/v1/receipts/owner-facts/current")]
         assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
         calls = source.gh_calls.read_text().splitlines()
-        assert len(calls) == 1
+        assert len(calls) == 2
         assert json.loads(calls[0])[:2] == ["api", "repos/example/fixture/issues/501"]
         for subject in ("github:foreign/repository#501", "capability:fixture"):
             refused = client.get("/api/devui/focus", params={"subject": subject})
@@ -1292,7 +1304,7 @@ def test_managed_focus_projects_issue_declarations_through_existing_fields(manag
     assert source.http_calls == [("GET", "/v1/receipts/owner-facts/current")]
     assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
     calls = [json.loads(line) for line in source.gh_calls.read_text().splitlines()]
-    assert calls == [["api", "repos/example/fixture/issues/501"]]
+    assert calls == [["api", "repos/example/fixture/issues/501"], ["api", "repos/example/fixture/issues/501/timeline", "--method", "GET", "-F", "per_page=100", "-F", "page=1"]]
 
 
 @pytest.mark.parametrize("subject", ["github:example/fixture#501", "github:Example/Fixture#501"])

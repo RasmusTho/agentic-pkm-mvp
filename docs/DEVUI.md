@@ -813,6 +813,20 @@ different product or require a horizontal delivery graph.
 
 ## Current state and target
 
+The managed Issue Focus read also carries source-declared Issue state and agent-label observations,
+an exact-Issue supervised coding-agent handoff, and normal GitHub PR readbacks from that Issue's
+timeline. It reads at most two timeline pages and five recently referenced PRs, including merged
+PRs, and accepts only same-repository PRs with one unfenced canonical `Governing-Issue` marker for
+the selected Issue. Source failures remain explicit while readable Issue context and independent
+PR observations survive. Refresh rebuilds these observations without a cache.
+
+This continuity uses the existing Focus evidence, receipt and next-step fields and unchanged
+packaged presentation. The handoff's legality remains `unavailable`: sending its text to a coding
+agent is an external supervised step that must freshly check the full contract, readiness, claims
+and existing work. DevUI has not launched a worker. PR state, exact head and checks locations do
+not establish passing checks, deployment, trial or acceptance. Authenticated in-UI Start/control
+and the full owner feature loop remain undelivered.
+
 Delivered now:
 
 - the #5405 [second-consumer conformance harness and incomplete pilot procedure](BUILDER_FACTORY_ACCEPTANCE/QUALIFY_SECOND_CONSUMER_REPOSITORY.md#pilot-procedure-and-receipt-validator),
