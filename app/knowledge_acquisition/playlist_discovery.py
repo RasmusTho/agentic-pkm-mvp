@@ -26,6 +26,8 @@ from app.knowledge_acquisition.source_registry import (
     SourceBinding,
     SourceRegistry,
 )
+from app.knowledge_acquisition.sync_scheduler import SyncScheduler, SyncStateStore
+from app.knowledge_acquisition.sync_state import SyncLeaseLostError
 from app.knowledge_acquisition.youtube_api_client import (
     NotModified,
     PlaylistItemsPage,
@@ -281,6 +283,9 @@ def poll_source(
     api_client: Any,
     requests: Any,
     registry: SourceRegistry,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    check_active: Callable[[], None] | None = None,
 ) -> SourcePollResult:
     """Poll the one enabled V1 Inbox and publish only a disposed frontier.
 
@@ -294,6 +299,19 @@ def poll_source(
     run_id = str(uuid.uuid4())
     started = time.monotonic()
 
+    def guard() -> None:
+        if check_active is not None:
+            check_active()
+
+    def degraded(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
+        guard()
+        return _degraded_result(binding, **kwargs)
+
+    def successful(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
+        guard()
+        return _successful_result(binding, **kwargs)
+
+    guard()
     current: SourceBinding | None = None
     persistence_failed = False
     try:
@@ -301,6 +319,7 @@ def poll_source(
     except Exception:
         persistence_failed = True
     if persistence_failed:
+        guard()
         _best_effort_persistence_degradation(binding.binding_id, registry)
         _raise_persistence_error()
     if current is None:
@@ -313,7 +332,7 @@ def poll_source(
             "V1 Inbox must be an ordinary owned playlist; Liked Videos is unavailable"
         )
     if not current.account_binding_id:
-        return _degraded_result(
+        return degraded(
             current,
             registry=registry,
             run_id=run_id,
@@ -323,7 +342,7 @@ def poll_source(
 
     binding = current
     if not binding.enabled:
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
@@ -334,7 +353,7 @@ def poll_source(
     policy = deepcopy(binding.acquisition_policy)
     mode = policy.get("mode")
     if mode != V1_REQUEST_MODE:
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
@@ -352,24 +371,29 @@ def poll_source(
             binding.collection_ref,
             etag=prior_cursor.get("etag") if isinstance(prior_cursor.get("etag"), str) else None,
             page_token=None,
+            **({"deadline": deadline, "monotonic": monotonic, "check_active": check_active}
+               if deadline is not None or check_active is not None else {}),
         )
+    except SyncLeaseLostError:
+        raise
     except YouTubeApiError as exc:
         failure_reason = exc.reason_code
     except Exception as exc:
         reason_code = getattr(exc, "reason_code", "network_error")
         failure_reason = reason_code if isinstance(reason_code, str) else "network_error"
     if failure_reason is not None:
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
             started=started,
             reason_code=failure_reason,
         )
+    guard()
     quota_after = _quota_spent(api_client)
 
     if isinstance(page, NotModified):
-        return _successful_result(
+        return successful(
             binding,
             registry=registry,
             run_id=run_id,
@@ -383,7 +407,7 @@ def poll_source(
             not_modified=True,
         )
     if not isinstance(page, PlaylistItemsPage):
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
@@ -414,6 +438,7 @@ def poll_source(
                     existing = getter(
                         request_identity("youtube_url", item.video_id, policy_version)
                     )
+            guard()
             requests.enqueue(
                 source_kind="youtube_url",
                 item_ref=item.video_id,
@@ -429,6 +454,8 @@ def poll_source(
                 policy_snapshot=policy,
                 trace_id=run_id,
             )
+        except SyncLeaseLostError:
+            raise
         except Exception:
             persistence_failed = True
             break
@@ -445,7 +472,7 @@ def poll_source(
 
     if persistence_failed:
         try:
-            _degraded_result(
+            degraded(
                 binding,
                 registry=registry,
                 run_id=run_id,
@@ -453,6 +480,8 @@ def poll_source(
                 reason_code="network_error",
                 detail="Durable request storage was unavailable; the cursor was not advanced.",
             )
+        except SyncLeaseLostError:
+            raise
         except Exception:
             # The durable-store/outbox boundary may itself be the failed
             # dependency. Never replace the stable public failure with a raw
@@ -461,7 +490,7 @@ def poll_source(
         _raise_persistence_error()
 
     cursor = _next_cursor(prior_cursor, page, outcomes)
-    return _successful_result(
+    return successful(
         binding,
         registry=registry,
         run_id=run_id,
@@ -487,12 +516,14 @@ class YouTubeInboxSyncV1:
         requests: Any,
         api_client: Any,
         oauth_status: Callable[[str], dict[str, Any]],
+        sync_state: SyncStateStore | None = None,
     ) -> None:
         self._account_binding_id = account_binding_id
         self._registry = registry
         self._requests = requests
         self._api_client = api_client
         self._oauth_status = oauth_status
+        self._sync_state = sync_state
 
     def select_inbox(
         self,
@@ -557,12 +588,37 @@ class YouTubeInboxSyncV1:
         """Run one synchronous production poll and return a secret-free receipt."""
 
         binding = self._enabled_inbox()
-        result = poll_source(
-            binding,
-            api_client=self._api_client,
-            requests=self._requests,
+        from app.knowledge_acquisition.sync_state import for_runtime
+
+        results: list[SourcePollResult] = []
+        failures: list[Exception] = []
+
+        def poll(current: SourceBinding, **kwargs: Any) -> SourcePollResult:
+            try:
+                result = poll_source(current, **kwargs)
+            except Exception as exc:
+                failures.append(exc)
+                raise
+            results.append(result)
+            return result
+
+        scheduler = SyncScheduler(
             registry=self._registry,
+            requests=self._requests,
+            state=self._sync_state if self._sync_state is not None else for_runtime(),
+            api_client=self._api_client,
+            poll_fn=poll,
+            reconciled=True,
         )
+        outcome = scheduler.sync_now(binding.binding_id)
+        if failures:
+            raise failures[0]
+        if not results:
+            return {
+                "status": "degraded", "discovered": 0, "enqueued": 0,
+                "deduped": 0, "not_modified": False, "reason_code": outcome.reason,
+            }
+        result = results[0]
         return {
             "status": "degraded" if result.degraded else "connected",
             "discovered": result.discovered,

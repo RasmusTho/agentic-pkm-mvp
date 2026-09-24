@@ -102,3 +102,16 @@ class _Outcome:
 
     def as_dict(self) -> dict[str, Any]:
         return {"reason": self.reason}
+
+
+def test_sub_tick_does_not_reuse_cycle_timestamp_for_lease(tmp_path, monkeypatch) -> None:
+    import app.knowledge_acquisition.sync_runtime as sync_runtime
+    monkeypatch.setattr(registry_module, "VaultManager", _Manager)
+    observed = []
+    def run(**kwargs):
+        observed.append(kwargs)
+        return _Outcome("ran")
+    monkeypatch.setattr(sync_runtime, "run_scheduled_sync_tick", run)
+    _run_youtube_sync_tick(_Cfg(tmp_path), now=1.0, cadence=SyncTickCadence())
+    assert len(observed) == 1
+    assert "now" not in observed[0], "cycle start predates scans; runtime must sample the current clock"

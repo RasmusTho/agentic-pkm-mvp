@@ -13,8 +13,10 @@ Inbox, invoke one manual sync, inspect connected/degraded state plus last succes
 latest error, and receive review-required draft candidates for newly discovered videos. The route
 never promotes external content directly into knowledge.
 
-No automatic cadence is claimed because the shipped runtime has no ordinary reusable cadence hook
-for this adapter. Scheduling, leases, multi-playlist product support, Liked Videos,
+The original V1 acceptance set above claims no automatic cadence. The later owner-authorized
+[YSS-06 continuation](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) (#3921 / PR #5616) adds gated
+discovery scheduling and a shared scheduler lease without expanding that parent acceptance set.
+Acquisition draining remains operator-invoked. Multi-playlist product support, Liked Videos,
 subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, full-media storage, and generalized
 recovery remain deferred.
 
@@ -26,8 +28,9 @@ recovery remain deferred.
 | OAuth safety floor | #3990 / PR #4030 | Delivered: token-first connection authority and transient revoke retry preservation |
 | One-Inbox manual sync | #3920 / PR #4014 | Final V1 slice: request-before-cursor, sanitized status, review-required candidate proof |
 
-The former YSS-06..11 issues and #3993 are deferred traceability records, not active V1 children or
-pickup candidates. They require a fresh owner directive and bounded re-contract before work resumes.
+YSS-06 (#3921) was separately continued by the owner on 2026-09-22. YSS-07..11 (#3922-#3926)
+and #3993 remain deferred traceability records, not active V1 children or pickup candidates.
+Their continuation requires a fresh owner directive and bounded re-contract.
 
 ## Acceptance criteria
 

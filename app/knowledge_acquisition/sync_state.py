@@ -40,6 +40,10 @@ _MIGRATION_HINT = (
 )
 
 
+class SyncLeaseLostError(RuntimeError):
+    """A discovery writer lost its durable lease; no further writes are allowed."""
+
+
 class SyncStateSchemaMissingError(RuntimeError):
     """Raised when the migration-owned table is absent."""
 

@@ -1,4 +1,4 @@
-State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. Liked Videos, multi-playlist product sync, scheduling, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
+State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. The bounded YSS-06 continuation (#3921 / PR #5616) adds gated discovery scheduling for this Inbox; acquisition draining remains operator-invoked. Liked Videos, multi-playlist product sync, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -53,9 +53,11 @@ channel) defined in the pipeline contract.
 
 ## Discovery (Inbox V1 shipped; broader Phase 4 target state)
 
-The shipped V1 uses point 4 only for one ordinary owned playlist selected as Inbox. Points 1–3,
-Liked Videos, other playlists, and scheduled operation remain deferred target state. The broader
-mechanism record below is retained for future re-contracting, not as a shipped claim:
+The shipped V1 uses point 4 only for one ordinary owned playlist selected as Inbox. The later
+[YSS-06 continuation](../YOUTUBE_SOURCE_SYNC/SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) adds
+discovery-only scheduling for that Inbox. Points 1–3, Liked Videos, other playlists, and background
+acquisition remain deferred target state. The broader mechanism record below is retained for
+future re-contracting, not as a shipped claim:
 
 1. **Bootstrap + periodic reconcile: Google Takeout** — `subscriptions.csv` (channel IDs/titles)
    and playlist CSVs (incl. Liked). Takeout is snapshot-grade: bootstrap and drift repair, not the
@@ -66,7 +68,7 @@ mechanism record below is retained for future re-contracting, not as a shipped c
 3. **Gap repair: yt-dlp `--flat-playlist`** logged-out, rare cadence (weekly/monthly), as
    `backfill` — catches anything past the RSS window. Convergent with what Pinchflat /
    TubeArchivist / ytdl-sub all landed on: cheap frequent incremental + rare full reconcile.
-4. **YouTube Data API v3:** shipped for the one manual Inbox route with OAuth 2.0 at exactly
+4. **YouTube Data API v3:** shipped for manual and gated scheduled Inbox discovery with OAuth 2.0 at exactly
    `youtube.readonly`, fully degradable per `auth_degradation`. Its broader use for private,
    multi-playlist, or Liked Videos discovery remains deferred. Subscriptions stay off the API.
 5. **Watch Later / Watch History: unsupported.** The Data API does not expose them, and cookies,

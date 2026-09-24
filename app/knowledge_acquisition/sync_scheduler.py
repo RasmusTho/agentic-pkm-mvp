@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
+from app.knowledge_acquisition.sync_state import SyncLeaseLostError
+
 logger = logging.getLogger(__name__)
 
 # --- Cadence contract --------------------------------------------------------
@@ -52,7 +54,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_CADENCE_SECONDS: Mapping[str, int] = {
     "inbox_playlist": 180,
     "playlist": 3600,
+    "owned_playlist": 3600,
+    "public_playlist": 3600,
+    "liked_videos": 3600,
     "subscriptions": 21600,
+    "subscription_feed": 21600,
 }
 
 #: Fallback for a kind this scheduler does not know yet. Conservative on
@@ -77,9 +83,8 @@ NON_FAILURE_REASON_CODES: frozenset[str] = frozenset(
 #: pass can consume when many sources come due at once.
 DEFAULT_TICK_BUDGET_SECONDS = 30.0
 
-#: Lease identity and lifetime (INV-YSS-6). The TTL outlives a normal tick by a
-#: wide margin: every poll is timeout-bounded, so a live runner never looks
-#: abandoned and no heartbeat is needed to keep it alive.
+#: Lease identity and lifetime (INV-YSS-6). Cooperative polling boundaries
+#: renew ownership; a lost holder must stop before egress or durable writes.
 LEASE_KEY = "lease:youtube_sync"
 LEASE_TTL_SECONDS = 600
 
@@ -96,7 +101,7 @@ def default_holder() -> str:
     """
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
-#: Rows stuck ``in_progress`` longer than this are reset on the first tick.
+#: Rows stuck ``in_progress`` longer than this are rechecked each active tick.
 STALE_IN_PROGRESS_SECONDS = 3600
 
 _BACKOFF_KEY_PREFIX = "backoff:"
@@ -184,7 +189,8 @@ def backoff_delay_seconds(consecutive_failures: int) -> int:
     """Exponential source-level backoff with a hard cap."""
     if consecutive_failures <= 0:
         return 0
-    delay = BACKOFF_BASE_SECONDS * (BACKOFF_FACTOR ** (consecutive_failures - 1))
+    # Saturate before exponentiation: an indefinitely failing source stays cheap.
+    delay = BACKOFF_BASE_SECONDS * (BACKOFF_FACTOR ** min(consecutive_failures - 1, 6))
     return int(min(delay, BACKOFF_CAP_SECONDS))
 
 
@@ -260,6 +266,8 @@ class SyncScheduler:
 
         try:
             return self._run_locked(now=now, due_only=due_only, only_binding_id=only_binding_id)
+        except SyncLeaseLostError:
+            return TickOutcome(reason="lease_lost")
         finally:
             self._state.release_lease(key=LEASE_KEY, holder=self._holder)
 
@@ -269,23 +277,26 @@ class SyncScheduler:
         started = self._monotonic()
         skipped: dict[str, str] = {}
 
+        # A recent crash may leave rows younger than the stale threshold on
+        # startup. Recheck each tick, including after a failed recovery attempt.
+        self._ensure_lease()
+        try:
+            self._requests.reset_stale_in_progress(
+                older_than_seconds=STALE_IN_PROGRESS_SECONDS, now=now
+            )
+        except Exception:
+            logger.exception("stale in-progress reset failed; continuing this tick")
         if not self._reconciled:
-            # First tick after start. Rows left `in_progress` by a killed
-            # process would otherwise stay claimed until their own stale
-            # threshold; resetting here is what makes restart converge.
-            try:
-                self._requests.reset_stale_in_progress(
-                    older_than_seconds=STALE_IN_PROGRESS_SECONDS, now=now
-                )
-            except Exception:
-                logger.exception("stale in-progress reset failed; continuing this tick")
             self._reconciled = True
             due_only = False  # everything enabled is due after an outage
 
         polled: list[str] = []
         discovered = enqueued = deduped = 0
 
-        for binding in self._enabled_sources(only_binding_id):
+        for binding in self._sources(only_binding_id):
+            if not getattr(binding, "enabled", False):
+                skipped[binding.binding_id] = "paused_source"
+                continue
             if self._monotonic() - started >= self._tick_budget_seconds:
                 skipped[binding.binding_id] = "tick_budget_exhausted"
                 continue
@@ -293,7 +304,8 @@ class SyncScheduler:
                 skipped[binding.binding_id] = "not_due"
                 continue
 
-            result = self._poll_one(binding, now=now)
+            self._ensure_lease()
+            result = self._poll_one(binding, now=now, deadline=started + self._tick_budget_seconds)
             polled.append(binding.binding_id)
             if result is None:
                 continue
@@ -301,6 +313,7 @@ class SyncScheduler:
             enqueued += int(getattr(result, "enqueued", 0) or 0)
             deduped += int(getattr(result, "deduped", 0) or 0)
 
+        self._ensure_lease()
         self._state.set(
             LAST_TICK_KEY,
             {
@@ -321,29 +334,27 @@ class SyncScheduler:
             skipped=skipped,
         )
 
-    def _enabled_sources(self, only_binding_id: str | None) -> Iterable[Any]:
-        rows = self._registry.list_all()
+    def _sources(self, only_binding_id: str | None) -> Iterable[Any]:
+        rows = sorted(self._registry.list_all(), key=lambda row: (
+            0 if getattr(row, "priority", "normal") == "high" else 1, row.binding_id
+        ))
         for row in rows:
             if only_binding_id is not None and row.binding_id != only_binding_id:
-                continue
-            if not getattr(row, "enabled", False):
-                # Per-source pause is the registry's `enabled` flag; there is no
-                # second pause concept to keep in sync.
                 continue
             yield row
 
     def _is_due(self, binding: Any, *, now: datetime) -> bool:
         failures = self._consecutive_failures(binding.binding_id)
-        last_attempt = _parse_iso(getattr(binding, "last_attempt_at", None))
-        if last_attempt is None:
-            # `poll_source` writes `last_attempt_at` only on its non-raising
-            # paths, so a source whose poll *raises* leaves it NULL forever.
-            # Reading NULL as unconditionally due therefore re-polls a broken
-            # source every tick and never lets its backoff apply. Fall back to
-            # the attempt this scheduler itself recorded.
-            last_attempt = _parse_iso((self._backoff_row(binding.binding_id)).get("last_attempt_at"))
-            if last_attempt is None:
-                return True
+        attempts = [
+            value for value in (
+                _parse_iso(getattr(binding, "last_attempt_at", None)),
+                _parse_iso(self._backoff_row(binding.binding_id).get("last_attempt_at")),
+            ) if value is not None
+        ]
+        if not attempts:
+            return True
+        # A raising poll can leave an older, non-null registry timestamp.
+        last_attempt = max(attempts)
         interval = resolve_cadence_seconds(binding)
         delay = interval + backoff_delay_seconds(failures)
         return now >= last_attempt + timedelta(seconds=delay)
@@ -372,7 +383,15 @@ class SyncScheduler:
 
         return poll_source
 
-    def _poll_one(self, binding: Any, *, now: datetime) -> Any:
+    def _ensure_lease(self) -> None:
+        now = _utc(self._clock())
+        assert now is not None
+        if not self._state.heartbeat_lease(
+            key=LEASE_KEY, holder=self._holder, ttl_seconds=LEASE_TTL_SECONDS, now=now
+        ):
+            raise SyncLeaseLostError("YouTube discovery lease ownership was lost")
+
+    def _poll_one(self, binding: Any, *, now: datetime, deadline: float) -> Any:
         poll_fn = self._resolve_poll_fn()
         try:
             result = poll_fn(
@@ -380,12 +399,19 @@ class SyncScheduler:
                 api_client=self._api_client,
                 requests=self._requests,
                 registry=self._registry,
+                deadline=deadline,
+                monotonic=self._monotonic,
+                check_active=self._ensure_lease,
             )
+        except SyncLeaseLostError:
+            raise
         except Exception:
             # One unreachable source must never end the tick for the others.
             logger.exception("source poll failed for %s", binding.binding_id)
+            self._ensure_lease()
             self._record_poll_result(binding.binding_id, failed=True, now=now)
             return None
+        self._ensure_lease()
         reason_code = getattr(result, "reason_code", None)
         self._record_poll_result(
             binding.binding_id,

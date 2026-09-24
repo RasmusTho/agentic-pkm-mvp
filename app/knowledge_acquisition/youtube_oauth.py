@@ -37,10 +37,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -124,6 +126,44 @@ class OAuthProviderError(RuntimeError):
         super().__init__(f"OAuth provider error: HTTP {status} ({error_code or 'unknown'})")
 
 
+class OAuthDeadlineExceeded(RuntimeError):
+    """The caller's discovery budget expired; this is not an auth failure."""
+
+    reason_code = "api_unavailable"
+
+    def __init__(self) -> None:
+        super().__init__("OAuth refresh exceeded the discovery deadline")
+
+
+@dataclass(frozen=True)
+class _OperationGuard:
+    deadline: float | None = None
+    monotonic: Callable[[], float] = time.monotonic
+    check_active: Callable[[], None] | None = None
+
+    def __call__(self) -> None:
+        # Lease loss is a control-flow abort, never an auth degradation. Check
+        # it before the deadline so the caller receives its original exception.
+        if self.check_active is not None:
+            try:
+                self.check_active()
+            except Exception as exc:
+                # A fence may run while handling a provider exception. Keep
+                # that potentially secret-bearing context out of tracebacks.
+                raise exc from None
+        if self.deadline is not None and self.monotonic() >= self.deadline:
+            raise OAuthDeadlineExceeded() from None
+
+    def remaining(self) -> float | None:
+        self()
+        if self.deadline is None:
+            return None
+        remaining = self.deadline - self.monotonic()
+        if remaining <= 0:
+            raise OAuthDeadlineExceeded() from None
+        return remaining
+
+
 def _provider_error_is_transient(error: OAuthProviderError) -> bool:
     """Whether a revoke failure leaves the provider outcome retryable."""
 
@@ -198,19 +238,6 @@ def redact(payload: Any) -> Any:
     if isinstance(payload, list):
         return [redact(item) for item in payload]
     return payload
-
-
-def _safe_error_code(response: httpx.Response) -> str | None:
-    """Extract only the provider ``error`` enum; never the body (INV-YSS-5)."""
-    try:
-        body = response.json()
-    except Exception:
-        return None
-    if isinstance(body, dict):
-        error = body.get("error")
-        if isinstance(error, str):
-            return error
-    return None
 
 
 def _now_iso() -> str:
@@ -409,24 +436,60 @@ class OAuthClient:
                 f"(allowed: {sorted(ALLOWED_OAUTH_HOSTS)})"
             )
 
-    def _post(self, url: str, data: dict[str, str]) -> dict[str, Any]:
+    def _post(
+        self,
+        url: str,
+        data: dict[str, str],
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        guard = _OperationGuard(deadline, monotonic, check_active)
+        guard()
         self._guard_host(url)
         try:
-            response = self._http.post(
-                url, data=data, timeout=self._timeout, headers={"Accept": "application/json"}
-            )
+            remaining = guard.remaining()
+            if remaining is None:
+                # Preserve the legacy HTTP surface for unscheduled callers.
+                response = self._http.post(
+                    url, data=data, timeout=self._timeout, headers={"Accept": "application/json"}
+                )
+                guard()
+                raw = response.content
+                status = response.status_code
+            else:
+                # HTTPX timeouts bound each network operation, not an entire
+                # response. Inspect every chunk to stop a slow body before it
+                # can outlive the scheduler's lease. An in-flight read can
+                # still take its configured timeout before control returns.
+                with self._http.stream(
+                    "POST", url, data=data, timeout=min(self._timeout, remaining),
+                    headers={"Accept": "application/json"},
+                ) as response:
+                    guard()
+                    chunks: list[bytes] = []
+                    for chunk in response.iter_bytes():
+                        guard()
+                        chunks.append(chunk)
+                    raw = b"".join(chunks)
+                    status = response.status_code
+                guard()
         except httpx.HTTPError as exc:
+            guard()
             # Sanitized: exception class only -- never a URL (may carry query
             # secrets) or response body (INV-YSS-5).
             raise OAuthProviderError(status=0, error_code=type(exc).__name__) from None
-        if response.status_code // 100 != 2:
-            raise OAuthProviderError(status=response.status_code, error_code=_safe_error_code(response))
-        if not response.content:
-            return {}
         try:
-            body = response.json()
-        except Exception:
-            return {}
+            body = json.loads(raw) if raw else {}
+        except (ValueError, UnicodeError):
+            body = {}
+        guard()
+        if status // 100 != 2:
+            error_code = body.get("error") if isinstance(body, dict) else None
+            raise OAuthProviderError(
+                status=status, error_code=error_code if isinstance(error_code, str) else None
+            )
         return body if isinstance(body, dict) else {}
 
     def start_device_flow(self) -> DeviceFlowHandle:
@@ -494,7 +557,16 @@ class OAuthClient:
         )
         return _bundle_from_response(data)
 
-    def refresh(self, refresh_token: str) -> TokenBundle:
+    def refresh(
+        self,
+        refresh_token: str,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+    ) -> TokenBundle:
+        guard = _OperationGuard(deadline, monotonic, check_active)
+        guard()
         try:
             data = self._post(
                 TOKEN_URL,
@@ -504,11 +576,16 @@ class OAuthClient:
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
+                deadline=deadline,
+                monotonic=monotonic,
+                check_active=check_active,
             )
         except OAuthProviderError as exc:
+            guard()
             if exc.error_code == "invalid_grant":
                 raise AuthDegradedError("auth_revoked", "refresh token rejected (invalid_grant)") from None
             raise
+        guard()
         return _bundle_from_response(data)
 
     def revoke(self, token: str) -> None:
@@ -586,18 +663,41 @@ class TokenProvider:
         self._skew = skew_seconds
         self._lock = threading.Lock()
 
-    def get_access_token(self) -> str:
-        token = self._read_token()
+    def get_access_token(
+        self,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+    ) -> str:
+        guard = _OperationGuard(deadline, monotonic, check_active)
+        guard()
+        token = self._read_token(check_active=guard)
         if self._is_fresh(token):
+            guard()
             return token.access_token  # type: ignore[return-value]
-        with self._lock:
-            token = self._read_token()
+        remaining = guard.remaining()
+        acquired = self._lock.acquire() if remaining is None else self._lock.acquire(timeout=remaining)
+        if not acquired:
+            guard()
+            raise OAuthDeadlineExceeded()
+        try:
+            guard()
+            token = self._read_token(check_active=guard)
             if self._is_fresh(token):
+                guard()
                 return token.access_token  # type: ignore[return-value]
-            return self._refresh(token)
+            return self._refresh(
+                token, deadline=deadline, monotonic=monotonic, check_active=check_active
+            )
+        finally:
+            self._lock.release()
 
-    def _read_token(self) -> StoredToken:
+    def _read_token(self, *, check_active: Callable[[], None] | None = None) -> StoredToken:
+        guard = _OperationGuard(check_active=check_active)
+        guard()
         binding = self._bindings.get(self._binding_id)
+        guard()
         if binding is None:
             raise AuthDegradedError(
                 "auth_missing", "no durable account binding for this credential"
@@ -605,13 +705,14 @@ class TokenProvider:
         try:
             token = self._store.get(self._binding_id)
         except TokenStoreKeyMissingError:
-            self._degrade("auth_key_missing")
+            self._degrade("auth_key_missing", check_active=guard)
             raise AuthDegradedError("auth_key_missing", "token store key is not provisioned") from None
+        guard()
         if token is None:
-            self._degrade("auth_missing")
+            self._degrade("auth_missing", check_active=guard)
             raise AuthDegradedError("auth_missing", "no token stored for this binding")
         if token.provider_channel_id != binding.provider_channel_id:
-            self._degrade("auth_missing")
+            self._degrade("auth_missing", check_active=guard)
             raise AuthDegradedError(
                 "auth_missing", "stored credential identity does not match its binding"
             )
@@ -628,13 +729,29 @@ class TokenProvider:
             expires = expires.replace(tzinfo=timezone.utc)
         return expires > datetime.now(timezone.utc) + timedelta(seconds=self._skew)
 
-    def _refresh(self, token: StoredToken) -> str:
+    def _refresh(
+        self,
+        token: StoredToken,
+        *,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+    ) -> str:
+        guard = _OperationGuard(deadline, monotonic, check_active)
+        guard()
         _log.debug("youtube oauth: refreshing access token for binding %s", self._binding_id)
         try:
-            bundle = self._client.refresh(token.refresh_token)
+            if deadline is None and check_active is None:
+                bundle = self._client.refresh(token.refresh_token)
+            else:
+                bundle = self._client.refresh(
+                    token.refresh_token, deadline=deadline, monotonic=monotonic,
+                    check_active=check_active,
+                )
         except AuthDegradedError as exc:
-            self._degrade(exc.reason_code)
+            self._degrade(exc.reason_code, check_active=guard)
             raise
+        guard()
         refreshed = StoredToken(
             refresh_token=bundle.refresh_token or token.refresh_token,
             access_token=bundle.access_token,
@@ -643,21 +760,33 @@ class TokenProvider:
             obtained_at=_now_iso(),
             provider_channel_id=token.provider_channel_id,
         )
+        guard()
         self._store.put(self._binding_id, refreshed)
-        self._clear_degradation()
+        self._clear_degradation(check_active=guard)
+        guard()
         return bundle.access_token
 
-    def _degrade(self, reason_code: str) -> None:
+    def _degrade(
+        self, reason_code: str, *, check_active: Callable[[], None] | None = None
+    ) -> None:
         """Stamp the reason on the binding + dependent sources; no cursor touched."""
+        guard = _OperationGuard(check_active=check_active)
+        guard()
         binding = self._bindings.get(self._binding_id)
+        guard()
         if binding is not None:
             self._bindings.set_state(self._binding_id, state="degraded", reason_code=reason_code)
+        guard()
         if self._registry is not None:
             for source in self._registry.list_for_account(self._binding_id):
+                guard()
                 self._registry.record_source_degradation(source.binding_id, reason_code=reason_code)
 
-    def _clear_degradation(self) -> None:
+    def _clear_degradation(self, *, check_active: Callable[[], None] | None = None) -> None:
+        guard = _OperationGuard(check_active=check_active)
+        guard()
         binding = self._bindings.get(self._binding_id)
+        guard()
         if binding is not None and binding.state != "connected":
             self._bindings.set_state(self._binding_id, state="connected", reason_code=None)
 
@@ -929,6 +1058,7 @@ __all__ = [
     "LoopbackFlow",
     "OAuthClient",
     "OAuthClientCredentialsMissingError",
+    "OAuthDeadlineExceeded",
     "OAuthProviderError",
     "OAuthStateMismatchError",
     "REVOKE_URL",

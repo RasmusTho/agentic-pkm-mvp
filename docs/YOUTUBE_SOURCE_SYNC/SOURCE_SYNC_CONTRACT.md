@@ -10,13 +10,17 @@ normative; storage column names may differ only where a store port requires it, 
 ## Shipped V1 product boundary (owner directive 2026-07-21)
 
 The current product route is deliberately smaller than this directory's future-facing data
-shapes: one OAuth account, exactly one enabled `inbox_playlist`, one explicit manual sync call,
+shapes: one OAuth account, exactly one enabled `inbox_playlist`, explicit manual sync,
 and minimal connected/degraded status with `last_success_at` and one sanitized latest error.
+The 2026-09-22 owner continuation of YSS-06 (#3921 / PR #5616) adds gated discovery scheduling
+for this Inbox, with a durable lease, pause, source backoff, and restart reconciliation.
 The registry may retain already-delivered generic row vocabulary as internal/future-compatible
 shape, but V1 configuration and polling expose no owned/public/unlisted/Liked multi-playlist,
 subscription, RSS, Takeout, backfill, filter, analytics, broad CLI/UI, or full-media outcome.
-There is no V1 scheduler or lease protocol. Every acquired result remains a review-required draft
-candidate and is never automatically promoted into knowledge.
+The watcher tick performs discovery and durable enqueue only; `youtube-inbox-dev drain` remains
+the separate operator acquisition path. Scheduled acquisition and siblings #3922-#3926 remain
+deferred. Every acquired result remains a review-required draft candidate and is never
+automatically promoted into knowledge.
 V1 uses the existing acquisition lineage events; it does not introduce per-run sync receipt
 events or their cursor/outbox atomicity machinery. The broader event table below remains target
 state for deferred operational work.
@@ -85,7 +89,7 @@ discovery request snapshots, queue validation, and drain execution preserve this
 unchanged. Missing declarations retain the V1 compatibility default: every selected extractor is
 required. A malformed or mismatched declaration is rejected before extractor execution.
 
-## AcquisitionRequest (YSS-04; produced by YSS-05/07/08, drained by YSS-06)
+## AcquisitionRequest (YSS-04; produced by YSS-05/07/08, drained by the operator path)
 
 Source-independent durable work item. **Identity:** `request_id = uuid5(namespace,
 "{source_kind}:{item_ref}:{policy_version}")` — the idempotency rule *one request per
@@ -187,7 +191,9 @@ unknown codes fail closed to the generic degraded message.
 ## Settings model (YSS-01; surfaces in YSS-10/11)
 
 Via the existing `SettingsService` registry — no parallel settings format. Vault-shared file:
-`<vault>/settings/youtube.md`. Everything below is a **product default: visible, overridable**.
+`<vault>/settings/youtube.md`. The table includes future-facing settings vocabulary; it does not
+claim that every key has a shipped consumer or UI. YSS-06 consumes the two accepted runtime gates
+and uses per-source cadence overrides. It adds no acquisition-concurrency setting.
 
 | Key | Scope | Default | Notes |
 | --- | --- | --- | --- |
@@ -196,7 +202,7 @@ Via the existing `SettingsService` registry — no parallel settings format. Vau
 | `youtubeSync.playlistPollSeconds` | vault-shared | `3600` | validated `[300, 86400]` |
 | `youtubeSync.subscriptionsPollSeconds` | vault-shared | `21600` | 6 h; validated `[3600, 86400]` |
 | `youtubeSync.reconcileIntervalDays` | vault-shared | `7` | weekly gap repair |
-| `youtubeSync.maxConcurrentAcquisitions` | vault-shared | `2` | bounded fan-out |
+| `youtubeSync.maxConcurrentAcquisitions` | vault-shared | `2` | future acquisition fan-out; not added or consumed by the discovery-only YSS-06 tick |
 | `youtubeSync.subscriptionDefaultPolicy` | vault-shared | `discover_only` | conservative; shown in setup |
 | `youtubeSync.captionsEnabled` | vault-shared | `true` | transcript acquisition on |
 | `youtubeSync.mediaDownloadEnabled` | vault-shared | `false` | §Media retention policy |
@@ -287,12 +293,17 @@ make misconfiguration visible, not to micro-optimize.
 
 ## Retry and backoff (YSS-04/06)
 
-Exponential backoff with jitter per failing unit (source poll or request attempt): base 60 s,
-factor 4, cap 6 h, reason-coded. `quota_exhausted` backs off to the next quota window. The V1
-`sync_now` route performs one immediate synchronous attempt and resets no counters on
-failure. Lease-guarding against a future scheduled runner remains deferred to YSS-06. Attempts
-exhaust into `dead_lettered` only for per-item terminal outcomes (default max 8 attempts);
-source-level degradation never dead-letters items that were never attempted.
+YSS-06 persists source failures and attempt time separately from the source registry. Its
+reason-coded backoff uses base 60 s, factor 4, and cap 6 h, added to the effective source interval;
+raising polls also record an attempt. Existing manual Inbox sync enters the same scheduler lease
+and backoff path, bypassing the due-time check without resetting failure backoff. It introduces
+no new CLI/UI family.
+
+Jitter and next-quota-window scheduling remain target-state refinements of the broader contract;
+the delivered scheduler uses the deterministic capped source backoff above. Per-item attempts
+remain the acquisition queue/drain concern. Attempts exhaust into `dead_lettered` only for
+per-item terminal outcomes (default max 8 attempts); source-level degradation never dead-letters
+items that were never attempted.
 
 ## Media retention policy (fields YSS-01; enforcement YSS-04/06; engine deferred)
 

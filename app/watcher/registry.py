@@ -2775,10 +2775,9 @@ def _run_youtube_sync_tick(
 
         from app.knowledge_acquisition.sync_runtime import run_scheduled_sync_tick
 
-        outcome = run_scheduled_sync_tick(
-            vault_context=context,
-            now=datetime.fromtimestamp(now, tz=timezone.utc),
-        )
+        # `now` is the cycle's cadence timestamp, possibly old after scans or
+        # briefing. Lease ownership must use the clock at actual tick entry.
+        outcome = run_scheduled_sync_tick(vault_context=context)
         return {"triggered": outcome.reason == "ran", **outcome.as_dict()}
     except Exception as exc:
         logger.exception("youtube source sync tick failed")

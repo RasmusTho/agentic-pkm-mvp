@@ -1,17 +1,18 @@
-State: Pragmatic YouTube Source Sync V1. Delivered foundations provide the registry, OAuth, Data API client, acquisition queue, and one manual Inbox sync route. The owner directive of 2026-07-21 limits the product outcome to one OAuth account, exactly one Inbox playlist, manual sync, minimal sanitized status, and review-required candidates. Scheduling, multi-source expansion, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain deferred.
+State: Pragmatic YouTube Source Sync V1 with the bounded YSS-06 continuation (#3921 / PR #5616). Delivered foundations provide the registry, OAuth, Data API client, acquisition queue, and one manual Inbox sync route. The owner reprioritization of 2026-09-22 adds discovery scheduling, a durable lease, pause, backoff, and restart reconciliation for the supported one-account Inbox path. Acquisition draining remains operator-invoked; multi-source expansion, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain deferred.
 Doc role: Capability specification directory
 Authority: Owns the YouTube source-sync capability design — account binding, source registry, continuous discovery, durable acquisition requests, scheduling, and the setup/status surfaces. Subordinate to `docs/KNOWLEDGE_ACQUISITION/README.md` (platform boundary), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` (stages), `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` (triage), `docs/EVENTS.md` (event envelope/outbox), and `docs/SECURITY.md` (secret baseline). It revises `docs/KNOWLEDGE_ACQUISITION/YOUTUBE_SOURCE_SPEC.md` §Discovery by owner directive (see §Decision record).
 Owner: Architecture / knowledge acquisition
 Temporal class: strategic
 Review cadence: event-driven (task merge, YouTube API surface change)
-Last reviewed: 2026-09-07
+Last reviewed: 2026-09-24
 
 # YouTube Source Sync
 
 ## Outcome
 
 The user connects one YouTube account, selects exactly one owned playlist as the **Inbox**, saves
-videos there using YouTube's ordinary UI, and explicitly runs the manual Inbox sync route. New
+videos there using YouTube's ordinary UI, and discovers new items through manual Inbox sync or
+the gated watcher discovery tick. Acquisition remains a separate operator-invoked drain. New
 items flow idempotently through the existing Knowledge Acquisition pipeline:
 
 ```
@@ -26,10 +27,12 @@ YouTube playlist discovery
 creates a durable request; KAP produces a review-required candidate; only Mimer's governed human
 review/promotion can raise anything to higher knowledge standing.
 
-No automatic cadence is claimed by V1. Owned/public/unlisted/Liked multi-playlist sync,
-subscriptions, RSS, Takeout, backfill, analytics, and full-media acquisition are not V1 outcomes.
+YSS-06 adds automatic discovery cadence for the supported Inbox, gated by both accepted
+`youtubeSync.enabled` and `youtubeSync.runnerEnabled` values. It does not acquire queued items.
+Owned/public/unlisted/Liked multi-playlist sync, subscriptions, RSS, Takeout, backfill, analytics,
+and full-media acquisition are not V1 outcomes.
 
-## Decision record (owner directives 2026-07-16 and 2026-07-21)
+## Decision record (owner directives 2026-07-16, 2026-07-21, and 2026-09-22)
 
 `docs/KNOWLEDGE_ACQUISITION/RESEARCH_2026-07.md` §4 and `YOUTUBE_SOURCE_SPEC.md` §Discovery
 originally decided **"No Data API"** (Takeout + RSS + yt-dlp only, zero OAuth coupling). The owner
@@ -52,11 +55,12 @@ no reshape; plugin authority limits are unchanged.
 The 2026-07-21 directive supersedes the broad delivery plan with the pragmatic V1 boundary above.
 The wider data shapes remain future-facing compatibility vocabulary, not shipped product claims.
 
-The owner decision recorded by #5324 on 2026-09-07 retains YSS-06 through YSS-11 as deferred
-portfolio scope. Reconsideration requires a concrete product need, user demand, or explicit owner
-reprioritization; a future continuation must name the bounded slice, dependency order, and Verify
-targets before lifecycle state changes. This decision authorizes no YouTube egress, credential use,
-scraping, media retention, automatic promotion, or implementation.
+The owner decision recorded by #5324 on 2026-09-07 retained YSS-06 through YSS-11 as deferred
+portfolio scope. The 2026-09-22 `continue-slice` receipt on #3921 lifts that deferral for YSS-06
+only: discovery scheduling on the existing watcher loop, with acquisition kept outside the tick.
+Siblings #3922-#3926 remain deferred. Their continuation still requires a bounded contract,
+dependency order, and Verify targets; this slice changes no credential, cookie/scraping, media
+retention, or automatic-promotion authority.
 
 ## Capability boundary
 
@@ -64,7 +68,8 @@ In scope:
 
 - One minimal-scope OAuth account with encrypted local token authority and fail-closed status.
 - Exactly one enabled Inbox playlist selected through `YouTubeInboxSyncV1.select_inbox`.
-- One explicit `sync_now` call through the production Inbox poll path.
+- Explicit manual Inbox sync and gated discovery scheduling through the production poll path.
+- A durable scheduler lease, global/per-source pause, source backoff, and restart catch-up.
 - Durable request-before-cursor discovery and minimal sanitized status.
 - Existing acquisition drain into review-required draft `youtube_source_note` candidates.
 - Existing versioned acquisition events on the canonical DB outbox.
@@ -73,7 +78,7 @@ Out of scope (owned elsewhere or explicitly deferred):
 
 - Everything downstream of `candidate` (triage, promotion) — `INGESTION_AND_TRIAGE_POLICY.md`.
 - Fetch/refinement mechanics — already shipped (KA-01..07); this capability only *feeds* them.
-- Automatic scheduling/cadence, leases, pause/resume, and restart reconciliation.
+- Automatic acquisition draining and its background-worker shutdown protocol.
 - Owned/public/unlisted/Liked multi-playlist product sync; subscriptions, RSS, Takeout, backfill,
   analytics, broad CLI/UI families, and filter-policy expansion.
 - Full media (video/audio file) archival — policy fields ship OFF by default; the archival engine
@@ -165,9 +170,11 @@ Invariants that hold *across* tasks, with their partial-failure seams:
   candidate notes, events, receipts, logs, or exception text. Settings and receipts may carry only
   non-secret references (binding ids, env-var *names*, file *paths*). Enforced by redaction-aware
   serializers plus tests on every emitting surface.
-- **INV-YSS-6 — single writer per source (target state, deferred to YSS-06).** A future runner
-  excludes overlapping runs with a durable single-run lease. V1 has only an explicit synchronous
-  manual call and does not claim lease or concurrent-run reconciliation.
+- **INV-YSS-6 — single writer per source.** YSS-06 excludes overlapping scheduler attempts
+  with a durable single-run lease shared by scheduled and existing manual Inbox sync. A live
+  lease refuses a different runner; an expired lease may be taken over, and renewal/release
+  remain scoped to the acquiring holder. Polling checks continued lease ownership before
+  publishing durable results. This is discovery coordination, not an acquisition-worker lease.
 - **INV-YSS-7 — channel isolation.** dev/test/prod never share OAuth state, registry rows, cursors,
   or queues: DB-per-channel isolates the tables; token stores are per-channel app-local paths.
   Environment selection never bypasses these boundaries (`docs/ENVIRONMENTS.md`). Before a

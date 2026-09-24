@@ -1,6 +1,6 @@
 ---
 name: Schedule and Operate Continuous Sync
-description: Per-source due-time scheduling inside the existing watcher registry loop (sparse-cadence sub-tick), DB lease with TTL, pause/resume, backoff, offline/restart reconciliation. Draining, and with it the heartbeat and safe-shutdown machinery, is deliberately not in the tick.
+description: Discovery scheduling inside the existing watcher registry loop, durable lease, pause, backoff, restart reconciliation, and tick observations. Acquisition draining remains operator-invoked.
 task_id: YSS-06
 source_anchor: "docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Retry and backoff"
 parent_capability: YouTube Source Sync
@@ -11,9 +11,13 @@ can_parallelize_with: []
 
 # Schedule and Operate Continuous Sync
 
+State: Repository implementation for #3921 / PR #5616, narrowed by the owner continuation on
+2026-09-22 to discovery scheduling for the supported one-account Inbox. Background acquisition
+and siblings #3922-#3926 remain deferred; live capability acceptance is separate.
+
 ## Purpose
 
-Turn one-shot discovery and drain into unattended continuous sync — inbox every 180 s — without
+Turn one-shot Inbox discovery into scheduled discovery — default inbox cadence 180 s — without
 building a new scheduler or a new long-running process. The existing watcher registry loop is the
 tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing precedent.
 
@@ -25,33 +29,39 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
    `SYNC_TICK_INTERVAL_SECONDS` (60 s tick; per-source due-times decide actual polls). The
    sub-tick is exception-isolated like the relevance tick — a sync failure can never break vault
    watching. Gated by `youtubeSync.enabled` (vault-shared) AND `youtubeSync.runnerEnabled`
-   (vault-local, machine binding): both false ⇒ zero work, zero egress.
+   (vault-local, machine binding): either gate false means no scheduler work, egress, or lease churn.
 2. **Scheduler core** `app/knowledge_acquisition/sync_scheduler.py` (pure logic, injectable clock):
-   - computes per-source `next_due` from `last_attempt_at` + effective interval (priority sources
-     first), honoring per-source backoff state after failures (contract §Retry and backoff);
-   - runs due discovery polls (YSS-05 `poll_source`) within a per-tick time budget;
+   - computes per-source due-time from `last_attempt_at` + effective interval, honoring
+     per-source backoff state after failures (contract §Retry and backoff);
+   - admits due discovery polls (YSS-05 `poll_source`) within a per-tick start budget, with
+     cooperative deadline/lease checks through the client and before durable result publication.
+     HTTP timeouts, page caps, and bounded response reads limit I/O; an in-flight synchronous
+     I/O operation can still wait for its transport timeout. This is not a hard real-time deadline;
    - **does not drain.** Narrowed 2026-09-22 (#3921): acquisition egress cannot run inside the
      watcher cycle, which holds a shared ingress flock, so a multi-minute download there stalls
      vault watching and blocks a foreground rebind. Draining stays the operator-invoked
      `youtube-inbox-dev drain` command (#5613); a bounded background drain is its own slice;
    - global pause and per-source pause (registry `enabled=false`) short-circuit with
      `paused_global`/`paused_source` reasons;
-   - **safe shutdown: not delivered, and no longer needed here.** It existed to land in-flight
-     drains durably; with draining out of the tick there is no in-flight work to land. A bounded
-     background drain will have to reintroduce it on its own terms.
-3. **Single-run lease (INV-YSS-6):** a durable lease row (key `lease:youtube_sync`, TTL 10 min;
-   no heartbeat is needed now that the tick holds it only for bounded, timeout-capped polling) in a generic sync-state table (the `episode_engine_state` key/value
-   pattern; forward-only migration). The watcher sub-tick and any CLI-invoked run claim the same
-   lease; a live lease blocks overlap, a stale lease is taken over after expiry. "Sync now"
-   (CLI/UI) performs one lease-guarded immediate attempt regardless of backoff.
-4. **Offline/restart reconciliation:** on first tick after start, reset stale `in_progress`
-   requests, then treat every enabled source as due (cursor + queue are durable; missed time is
-   simply caught up). Saved videos accumulated while the node was off are discovered on the first
-   poll — no separate reconciliation machinery.
-5. **Heartbeat/observability seam:** writes `last_tick_at` + per-tick counters
-   (discovered/enqueued/acquired/deduped/retried/dead_lettered/quota) into the sync-state table
-   for YSS-09 to surface; `runner_offline` is *derived* from `last_tick_at` staleness by
-   consumers, never self-reported.
+   - **acquisition shutdown is outside this slice.** No acquisition request is claimed by the
+     tick. Discovery cooperatively checks the deadline and active lease; a future background
+     drain needs its own stop and durable retry protocol.
+3. **Single-run lease (INV-YSS-6):** a durable lease row (key `lease:youtube_sync`, TTL 10 min)
+   in the migration-owned `youtube_sync_state` table. Scheduler instances derive distinct
+   holder identities; a live lease blocks another holder, a stale lease may be taken over after
+   expiry, and renewal/release check the acquiring holder. Existing manual Inbox sync uses the
+   same scheduler lease and backoff state for one immediate attempt. Polling renews/checks
+   ownership at cooperative boundaries and refuses durable publication after ownership loss.
+   This adds no new CLI/UI surface.
+4. **Offline/restart reconciliation:** active ticks retry stale `in_progress` recovery; failure
+   does not mark recovery complete. The first catch-up pass makes enabled sources due, while
+   later ticks honor cadence/backoff. Durable cursors and requests preserve idempotency; only
+   items still visible in the bounded discovery window can be found without deferred backfill.
+5. **Tick observability seam:** writes the `last_tick` row with `at`, `polled`, `discovered`,
+   `enqueued`, and `deduped` into the sync-state table. These are discovery observations, not
+   acquisition counters. Lease renewal is separate from this observation. YSS-09 status/health
+   projection remains deferred;
+   any later `runner_offline` status must derive from observation staleness.
 
 ## Concretely
 
@@ -68,7 +78,9 @@ In runtime the same `tick()` is called by the watcher sub-tick; tests never need
 
 Overlapping polls double-enqueue and double-spend quota; an unbounded drain inside the watcher
 starves file-watching; a scheduler that self-reports "up to date" while offline lies to the user.
-The lease, the budgeted tick, and derived staleness kill those classes.
+The lease and discovery-only tick bound overlap and avoid media acquisition inside the watcher.
+Cooperative deadline checks do not establish a hard real-time poll deadline; status projection
+remains later work.
 
 ## Acceptance Criteria
 
@@ -117,10 +129,11 @@ weekly reconcile into this scheduler's due-time model).
 
 ## Restart / Durability Posture
 
-Everything the scheduler needs to resume — cursors, queue, backoff, lease, `last_tick_at` — is
-durable in the channel DB. The in-process executor's in-flight work is the only volatile state;
-its loss on crash re-runs items idempotently. The user experience after downtime is "it catches
-up on the next tick", never "it lost my saves" and never "it claims up-to-date while stale".
+Cursors, queue rows, backoff, lease, and the `last_tick` observation are durable in the channel
+DB. The catch-up marker is process-local: the first catch-up pass makes enabled sources due,
+while stale-request recovery is retried on active ticks independently of that marker. Discovery
+remains subject to the client's bounded newest-first window; this is not historical backfill or
+an unlimited offline-recovery guarantee. Acquiring queued items still requires the operator drain.
 
 ## Related Docs
 
