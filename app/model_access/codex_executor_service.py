@@ -1,4 +1,4 @@
-"""Private, single-operation HTTP service for the Mac model executor."""
+"""Private, bounded preflight/completion API for the Mac model executor."""
 
 from __future__ import annotations
 
@@ -21,8 +21,12 @@ from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
 from app.model_access.remote_contract import (
+    CompletionCapabilityIntent,
     CompletionRequest,
     CompletionResponse,
+    CompletionRouteIdentity,
+    PreflightRequest,
+    PreflightResponse,
     validate_inline_schema,
 )
 
@@ -79,7 +83,12 @@ def _require_loopback_peer(request: Request) -> None:
         raise _RequestFailure(403, "loopback_only") from exc
 
 
-def _require_serve_capability(request: Request, capability_name: str) -> None:
+def _require_serve_capability(
+    request: Request,
+    capability_name: str,
+    *,
+    action: str,
+) -> None:
     value = request.headers.get("tailscale-app-capabilities")
     if value is None or len(value.encode("utf-8")) > MAX_CAPABILITY_HEADER_BYTES:
         raise _RequestFailure(403, "serve_capability_required")
@@ -100,11 +109,16 @@ def _require_serve_capability(request: Request, capability_name: str) -> None:
         if not isinstance(grant, dict) or set(grant) != {"channel", "actions"}:
             continue
         actions = grant.get("actions")
+        if not isinstance(actions, list) or any(
+            not isinstance(value, str) or value not in {"complete", "preflight"}
+            for value in actions
+        ):
+            continue
         if (
             grant.get("channel") == "product"
-            and isinstance(actions, list)
-            and len(actions) == 1
-            and actions[0] == "complete"
+            and bool(actions)
+            and len(actions) == len(set(actions))
+            and action in actions
         ):
             return
     raise _RequestFailure(403, "serve_capability_invalid")
@@ -133,26 +147,33 @@ async def _read_bounded_body(request: Request, *, max_bytes: int) -> bytes:
 
 
 def _validate_capability_intent(
-    request: CompletionRequest, adapter_factory: ModelAccessAdapterFactory
+    *,
+    route: CompletionRouteIdentity,
+    intent: CompletionCapabilityIntent,
+    adapter_factory: ModelAccessAdapterFactory,
+    output_schema: dict[str, Any] | None = None,
+    require_output_schema: bool,
 ) -> None:
     try:
         descriptor = adapter_factory.describe(
-            request.route.transport_id,
-            provider=request.route.provider,
-            model=request.route.model,
+            route.transport_id,
+            provider=route.provider,
+            model=route.model,
         )
     except (ValueError, KeyError) as exc:
         raise _RequestFailure(422, "route_not_declared") from exc
 
     capabilities = descriptor.supported_capabilities
-    intent = request.capability_intent
     if intent.native_tools and not capabilities.native_tools:
         raise _RequestFailure(422, "native_tools_unavailable")
     if intent.structured_output:
-        if not capabilities.structured_output or request.output_schema is None:
+        if not capabilities.structured_output or (
+            require_output_schema and output_schema is None
+        ):
             raise _RequestFailure(422, "structured_output_unavailable")
+    if output_schema is not None:
         try:
-            validate_inline_schema(request.output_schema)
+            validate_inline_schema(output_schema)
         except ValueError as exc:
             raise _RequestFailure(422, "output_schema_invalid") from exc
     mapping = descriptor.trusted_instruction_mapping
@@ -181,6 +202,23 @@ def _codex_complete(
         literal_system_role_required=request.capability_intent.literal_system_role_required,
     )
     return result.response_text
+
+
+def _codex_preflight(
+    executor: CodexCliExecutor,
+    request: PreflightRequest,
+) -> None:
+    executor.preflight(
+        model=request.route.model,
+        reasoning_effort=request.reasoning_effort,
+    )
+
+
+def _ollama_preflight(
+    adapter: OllamaHttpAdapter,
+    request: PreflightRequest,
+) -> None:
+    adapter.preflight(model=request.route.model)
 
 
 def _ollama_complete(
@@ -226,7 +264,7 @@ def create_codex_executor_app(
     max_output_bytes: int = MAX_OUTPUT_BYTES,
     max_concurrency: int = DEFAULT_CONCURRENCY,
 ) -> FastAPI:
-    """Build the only remote executor operation; adapters and policy are injected."""
+    """Build bounded preflight/completion operations; route policy stays with callers."""
 
     normalized_capability = serve_capability_name.lower()
     if (
@@ -253,11 +291,61 @@ def create_codex_executor_app(
     )
     slots = threading.BoundedSemaphore(max_concurrency)
 
+    @app.post("/v1/preflight", response_model=PreflightResponse)
+    async def preflight(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            _require_serve_capability(
+                request, serve_capability_name, action="preflight"
+            )
+            body = await _read_bounded_body(request, max_bytes=max_request_bytes)
+            try:
+                preflight_request = PreflightRequest.model_validate(
+                    _decode_json_object(body)
+                )
+            except ValidationError as exc:
+                raise _RequestFailure(422, "invalid_request") from exc
+
+            _validate_capability_intent(
+                route=preflight_request.route,
+                intent=preflight_request.capability_intent,
+                adapter_factory=adapter_factory,
+                require_output_schema=False,
+            )
+            if not slots.acquire(blocking=False):
+                raise _RequestFailure(429, "executor_busy")
+            try:
+                if preflight_request.route.transport_id == "codex_cli":
+                    await run_in_threadpool(
+                        _codex_preflight, codex_executor, preflight_request
+                    )
+                else:
+                    await run_in_threadpool(
+                        _ollama_preflight, ollama_adapter, preflight_request
+                    )
+            except Exception as exc:
+                raise _adapter_failure(exc) from exc
+            finally:
+                slots.release()
+
+            response = PreflightResponse(
+                route=preflight_request.route,
+                preflight_status="passed",
+            )
+            return JSONResponse(content=response.model_dump(mode="json"))
+        except _RequestFailure as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"code": exc.code}},
+            )
+
     @app.post("/v1/complete", response_model=CompletionResponse)
     async def complete(request: Request) -> JSONResponse:
         try:
             _require_loopback_peer(request)
-            _require_serve_capability(request, serve_capability_name)
+            _require_serve_capability(
+                request, serve_capability_name, action="complete"
+            )
             body = await _read_bounded_body(request, max_bytes=max_request_bytes)
             try:
                 completion_request = CompletionRequest.model_validate(
@@ -269,7 +357,13 @@ def create_codex_executor_app(
             if completion_request.capability_intent.native_tools:
                 # The current safe Codex profile and declared Ollama profile expose no tools.
                 raise _RequestFailure(422, "native_tools_unavailable")
-            _validate_capability_intent(completion_request, adapter_factory)
+            _validate_capability_intent(
+                route=completion_request.route,
+                intent=completion_request.capability_intent,
+                adapter_factory=adapter_factory,
+                output_schema=completion_request.output_schema,
+                require_output_schema=True,
+            )
 
             if not slots.acquire(blocking=False):
                 raise _RequestFailure(429, "executor_busy")

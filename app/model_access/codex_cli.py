@@ -616,9 +616,11 @@ class CodexCliExecutor:
         if max_output_bytes > _MAX_CONFIGURED_OUTPUT_BYTES or max_input_bytes > _MAX_CONFIGURED_INPUT_BYTES:
             raise ValueError("Codex CLI byte bounds exceed the hard maximum")
 
-    def preflight(self, *, model: str) -> CodexCliPreflight:
+    def preflight(
+        self, *, model: str, reasoning_effort: str | None = None
+    ) -> CodexCliPreflight:
         preflight, _safe_catalog, _cli_path, _cli_identity, _credential_store = (
-            self._preflight(model=model)
+            self._preflight(model=model, reasoning_effort=reasoning_effort)
         )
         return preflight
 

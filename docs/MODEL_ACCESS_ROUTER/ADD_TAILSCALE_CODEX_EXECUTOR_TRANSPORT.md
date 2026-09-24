@@ -34,8 +34,10 @@ separate `developer_instructions` channel and user content stays in the prompt. 
 native tools or a literal system role are rejected on Codex. Ollama uses one local `/api/chat`
 request with separate `system` and `user` messages. No provider is selected implicitly.
 
-The host service exposes only `/v1/complete`; docs, OpenAPI, health, catalog, and preflight routes
-are disabled. It binds only to loopback and requires the configured Serve-forwarded
+The MARR-08 slice exposes only `/v1/complete`; docs, OpenAPI, health, catalog, and preflight routes
+are disabled in this slice. MARR-03 separately adds an authenticated no-inference `/v1/preflight`
+operation so Product can verify remote readiness before completion without making the executor a
+policy authority. The service binds only to loopback and requires the configured Serve-forwarded
 `Tailscale-App-Capabilities` claim for `channel=product` and `actions=["complete"]`. It does not
 authorize from request-body claims or ordinary identity headers. Tailscale Serve 1.92 or later is
 required to forward app capabilities. The Uvicorn runner disables proxy-header rewriting so the
@@ -45,14 +47,16 @@ allowed. The grant, endpoint, Codex safe-profile path, CLI environment, and Olla
 operator-owned host configuration, not Git policy.
 
 Bound request/response bytes, adapter concurrency, and execution time. Do not log prompts, output,
-capability claims, endpoint identity, or raw adapter output. The Product client uses verified HTTPS,
-performs one POST, validates that the response route matches the request, and never retries or
-switches provider after an ambiguous result. This slice adds no automatic Codex-to-Ollama fallback,
-model discovery, latest-model promotion, catalog endpoint, or live host/Tailscale activation.
+capability claims, endpoint identity, or raw adapter output. The MARR-08 completion client uses
+verified HTTPS, performs one POST, validates that the response route matches the request, and never
+retries or switches provider after an ambiguous result. MARR-03 adds the separate no-inference
+preflight client operation; it does not change this completion retry boundary. This slice adds no
+automatic Codex-to-Ollama fallback, model discovery, latest-model promotion, catalog endpoint, or
+live host/Tailscale activation.
 
 ## Concretely
 
-The Product client calls a configured private Tailscale Serve HTTPS origin. Serve injects the
+The MARR-08 Product completion client calls a configured private Tailscale Serve HTTPS origin. Serve injects the
 authorized app-capability claim into the loopback request; the Product client does not create or
 send that header itself. Tests use fake Codex CLI and Ollama adapters and fake HTTP/Tailscale
 boundaries to prove exact routing, channel separation, loopback/auth enforcement, and no retry after

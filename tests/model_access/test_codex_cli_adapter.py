@@ -647,6 +647,29 @@ def test_preflight_classifies_cli_auth_and_version_failures(tmp_path: Path) -> N
     assert error.value.failure_code == "cli_version_unsupported"
 
 
+def test_preflight_validates_the_requested_reasoning_effort(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "reasoning-trace.json"
+    catalog = _catalog()
+    catalog["models"][0]["supported_reasoning_levels"] = [
+        {"effort": "low", "description": "low"}
+    ]
+    binary = _fake_cli(
+        tmp_path / "codex-reasoning",
+        trace_path=trace,
+        catalog_output=json.dumps(catalog),
+    )
+
+    with pytest.raises(CodexCliError) as error:
+        _executor(binary, home=home).preflight(
+            model="gpt-5.6-luna", reasoning_effort="high"
+        )
+
+    assert error.value.failure_code == "model_unavailable"
+    assert not trace.exists()
+
+
 @pytest.mark.parametrize(
     "config_bytes",
     (b"cli_auth_credentials_store = [\n", b"x" * 1_000_001),
