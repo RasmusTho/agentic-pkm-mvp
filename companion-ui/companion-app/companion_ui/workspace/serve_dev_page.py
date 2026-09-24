@@ -1723,7 +1723,8 @@ def _display_preferences_script() -> str:
       fontSize: '16px',
       lineHeight: '1.65',
       readingWidth: '68ch',
-      focusMode: false
+      focusMode: false,
+      theme: 'dark'
     };
     function readPrefs() {
       try {
@@ -1746,6 +1747,12 @@ def _display_preferences_script() -> str:
       root.style.setProperty('--display-line-height', prefs.lineHeight || defaults.lineHeight);
       root.style.setProperty('--display-reading-width', prefs.readingWidth || defaults.readingWidth);
       document.body.classList.toggle('display-pref-focus', Boolean(prefs.focusMode));
+      // YDS-03 (#5629): Yggdrasil Light "Shell" is a per-user trial; Dark is canonical.
+      if (prefs.theme === 'light') {
+        root.setAttribute('data-theme', 'light');
+      } else {
+        root.removeAttribute('data-theme');
+      }
     }
     function syncControls(prefs) {
       var fontSize = document.querySelector('[data-testid="display-pref-font-size"]');
@@ -1756,17 +1763,21 @@ def _display_preferences_script() -> str:
       if (lineHeight) lineHeight.value = prefs.lineHeight;
       if (readingWidth) readingWidth.value = prefs.readingWidth;
       if (focusMode) focusMode.checked = Boolean(prefs.focusMode);
+      var theme = document.querySelector('[data-testid="display-pref-theme"]');
+      if (theme) theme.value = prefs.theme === 'light' ? 'light' : 'dark';
     }
     function prefsFromControls(current) {
       var fontSize = document.querySelector('[data-testid="display-pref-font-size"]');
       var lineHeight = document.querySelector('[data-testid="display-pref-line-height"]');
       var readingWidth = document.querySelector('[data-testid="display-pref-reading-width"]');
       var focusMode = document.querySelector('[data-testid="display-pref-focus-mode"]');
+      var theme = document.querySelector('[data-testid="display-pref-theme"]');
       return {
         fontSize: fontSize ? fontSize.value : current.fontSize,
         lineHeight: lineHeight ? lineHeight.value : current.lineHeight,
         readingWidth: readingWidth ? readingWidth.value : current.readingWidth,
-        focusMode: focusMode ? Boolean(focusMode.checked) : Boolean(current.focusMode)
+        focusMode: focusMode ? Boolean(focusMode.checked) : Boolean(current.focusMode),
+        theme: theme ? theme.value : (current.theme || 'dark')
       };
     }
     var prefs = readPrefs();
@@ -9272,31 +9283,19 @@ def _render_orientation_index_html(
         else ""
     )
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="pkm-runtime-channel" content="{_e(runtime_channel)}">
   <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
+  <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
   <style>
     :root {{
-      --bg-base: #070b12;
-      --bg-surface: #0c1220;
-      --bg-raised: #111a2e;
-      --fg-1: #dce8f0;
-      --fg-2: #7a9ab8;
-      --fg-3: #3d5570;
-      --border: #152030;
-      --border-strong: #1e3050;
-      --accent: #d4a843;
-      --cyan: #00d4e8;
-      --amber: #f09030;
-      --destructive: #ff3d3d;
       /* #2562: vault-green identity colour, matching the shell's vault
          indicator (--vault in the shell stylesheet). Used for the cold_start
          vault chip dot so vault identity reads as identity, not telemetry. */
-      --vault: #39e87d;
       /* #2562: neutral foreground link colour for user-origin links on the
          door (the recents anchor — the user's own last note). --agent (blue) is
          reserved for agent-origin content only and must not tint this link. */
@@ -9348,7 +9347,7 @@ def _render_orientation_index_html(
       font-size: 12px;
       min-width: 0;
     }}
-    .api-label {{ color: var(--fg-3); letter-spacing: 0.06em; text-transform: uppercase; }}
+    .api-label {{ color: var(--fg-2); letter-spacing: 0.06em; text-transform: uppercase; }}
     .dev-chip {{
       border: 1px solid rgba(212,168,67,0.45);
       border-radius: 4px;
@@ -9364,7 +9363,7 @@ def _render_orientation_index_html(
     body[data-diagnostics="false"] .dev-chip {{ display: none; }}
     .dev-controls-disclosure {{ background: var(--bg-surface); border-bottom: 1px solid var(--border); }}
     .dev-controls-summary {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-mono);
       font-size: 12px;
@@ -9373,7 +9372,7 @@ def _render_orientation_index_html(
     .load-bar {{ display: flex; gap: 8px; padding: 10px 20px; }}
     .load-bar form {{ align-items: center; display: flex; gap: 8px; width: 100%; }}
     .load-bar label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 12px;
       letter-spacing: 0.06em;
@@ -9451,7 +9450,7 @@ def _render_orientation_index_html(
       gap: 12px;
     }}
     .orientation-section-kicker {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 12px;
       letter-spacing: 0.08em;
@@ -9547,7 +9546,7 @@ def _render_orientation_index_html(
     .orientation-item p {{ color: var(--fg-2); margin: 0; }}
     .orientation-artifact-link {{ color: var(--cyan); font-size: 14px; text-decoration: none; }}
     .orientation-artifact-link:hover {{ text-decoration: underline; }}
-    .orientation-artifact-link--empty {{ color: var(--fg-3); }}
+    .orientation-artifact-link--empty {{ color: var(--fg-2); }}
     .orientation-badges, .orientation-signals, .orientation-meta-row {{
       color: var(--fg-2);
       display: flex;
@@ -9563,11 +9562,11 @@ def _render_orientation_index_html(
       padding: 2px 6px;
     }}
     .orientation-provenance {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 12px;
     }}
-    .orientation-empty {{ color: var(--fg-3); margin: 0; }}
+    .orientation-empty {{ color: var(--fg-2); margin: 0; }}
     /* CUIDR-06 (#2450): the .orientation-governance-grid rules were removed
        with the governance tile — the orientation surface carries no governance
        telemetry at any rung (it lives behind the System Map). */
@@ -9631,7 +9630,7 @@ def _render_orientation_index_html(
     .reentry-questions {{ display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }}
     .reentry-q {{ display: grid; gap: 2px; }}
     .reentry-q-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 11px;
       letter-spacing: 0.08em;
@@ -9697,9 +9696,9 @@ def _render_orientation_index_html(
     }}
     .reentry-delta-item {{ align-items: center; color: var(--fg-2); display: flex; font-size: 14px; gap: 8px; }}
     .reentry-delta-dot {{ background: var(--cyan); border-radius: 50%; flex: none; height: 6px; width: 6px; }}
-    .reentry-delta-more {{ color: var(--fg-3); font-family: var(--font-mono); font-size: 12px; }}
+    .reentry-delta-more {{ color: var(--fg-2); font-family: var(--font-mono); font-size: 12px; }}
     .reentry-delta-more a {{ color: var(--cyan); text-decoration: none; }}
-    .reentry-peripheral-line {{ color: var(--fg-3); font-size: 13px; margin: 0; text-align: right; }}
+    .reentry-peripheral-line {{ color: var(--fg-2); font-size: 13px; margin: 0; text-align: right; }}
     .reentry-info-glyph {{ display: inline-flex; align-items: center; width: var(--card-info-glyph-width); }}
     .reentry-whisper-col {{
       display: grid;
@@ -9723,7 +9722,7 @@ def _render_orientation_index_html(
     }}
     .reentry-whisper {{ display: grid; gap: 2px; }}
     .reentry-whisper-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 11px;
       letter-spacing: 0.08em;
@@ -9854,10 +9853,10 @@ def _render_orientation_index_html(
        entry-screen action row is ranked, on-palette affordances (one primary,
        the rest secondary), not inline browser-blue links. ---- */
     .btn {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       cursor: pointer;
       font-family: var(--font-ui, system-ui, sans-serif);
       font-size: var(--text-sm, 0.8125rem);
@@ -9867,19 +9866,19 @@ def _render_orientation_index_html(
       text-align: center;
       text-decoration: none;
     }}
-    .btn:hover {{ border-color: var(--accent, #d4a843); }}
-    .btn:focus-visible {{ outline: 1px solid var(--border-focus, #00d4e8); }}
+    .btn:hover {{ border-color: var(--accent); }}
+    .btn:focus-visible {{ outline: 1px solid var(--border-focus); }}
     .btn--primary {{
-      background: var(--accent, #d4a843);
-      border-color: var(--accent, #d4a843);
-      color: var(--bg-base, #070b12);
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--bg-base);
       font-weight: 600;
     }}
-    .btn--primary:hover {{ border-color: var(--fg-1, #dce8f0); }}
+    .btn--primary:hover {{ border-color: var(--fg-1); }}
     .btn--secondary {{
-      background: var(--bg-raised, #111a2e);
-      border-color: var(--border-strong, #1e3050);
-      color: var(--fg-1, #dce8f0);
+      background: var(--bg-raised);
+      border-color: var(--border-strong);
+      color: var(--fg-1);
     }}
     .cold-start-verbs {{
       align-items: center;
@@ -10353,49 +10352,49 @@ def render_operator_overlay_html(
 
     return f"""<style>
   .op-panels{{display:flex;flex-direction:column;gap:16px;padding:0}}
-  .op-panel{{background:var(--bg-raised,#111a2e);border:1px solid var(--border,#152030);
+  .op-panel{{background:var(--bg-raised);border:1px solid var(--border);
     border-radius:6px;padding:16px}}
   .op-panel-header{{display:flex;justify-content:space-between;align-items:center;
     margin-bottom:10px}}
-  .op-panel-title{{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1,#dce8f0)}}
+  .op-panel-title{{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}}
   .op-badge{{font:500 11px/1 'JetBrains Mono',monospace;
-    color:var(--amber,#f09030);background:var(--amber-muted,#1a0e02);
-    border:1px solid var(--amber-dim,#805010);border-radius:999px;
+    color:var(--amber);background:var(--amber-muted);
+    border:1px solid var(--amber-dim);border-radius:999px;
     padding:2px 8px;letter-spacing:.06em;text-transform:uppercase}}
   .op-stat-row{{display:flex;justify-content:space-between;gap:10px;
-    margin:6px 0;font-size:13px;color:var(--fg-1,#dce8f0)}}
-  .op-stat-row span:first-child{{color:var(--fg-2,#7a9ab8)}}
+    margin:6px 0;font-size:13px;color:var(--fg-1)}}
+  .op-stat-row span:first-child{{color:var(--fg-2)}}
   .op-table{{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}}
   .op-table th,.op-table td{{text-align:left;padding:6px 8px;
-    border-bottom:1px solid var(--border,#152030)}}
-  .op-table th{{color:var(--fg-3,#3d5570);font-weight:600}}
-  .op-muted{{color:var(--fg-3,#3d5570);font-size:13px}}
+    border-bottom:1px solid var(--border)}}
+  .op-table th{{color:var(--fg-2);font-weight:600}}
+  .op-muted{{color:var(--fg-2);font-size:13px}}
   .op-suggested-actions{{margin:4px 0 6px 8px;padding:0 0 0 16px;
-    font-size:13px;color:var(--fg-1,#dce8f0)}}
+    font-size:13px;color:var(--fg-1)}}
   .op-suggested-actions li{{margin:2px 0}}
-  .op-pre{{font:400 12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2,#7a9ab8);
-    background:var(--bg-base,#070b12);border-radius:4px;padding:8px;
+  .op-pre{{font:400 12px/1.5 'JetBrains Mono',monospace;color:var(--fg-2);
+    background:var(--bg-base);border-radius:4px;padding:8px;
     margin:6px 0 0;overflow-x:auto;white-space:pre-wrap}}
   .op-pill{{display:inline-flex;align-items:center;padding:2px 8px;
     border-radius:999px;font-size:11px;font-weight:600}}
-  .op-pill-ok{{background:var(--vault,#39e87d);color:#041a10}}
-  .op-pill-warn{{background:var(--amber,#f09030);color:#1a0e02}}
-  .op-banner-degraded{{background:var(--amber-muted,#1a0e02);
-    border:1px solid var(--amber-dim,#805010);border-radius:4px;
-    color:var(--amber,#f09030);font-size:13px;padding:8px 12px;margin:4px 0}}
-  .op-ask-input{{width:100%;background:var(--bg-base,#070b12);
-    border:1px solid var(--border-strong,#1e3050);color:var(--fg-1,#dce8f0);
+  .op-pill-ok{{background:var(--vault);color:var(--vault-muted)}}
+  .op-pill-warn{{background:var(--amber);color:var(--amber-muted)}}
+  .op-banner-degraded{{background:var(--amber-muted);
+    border:1px solid var(--amber-dim);border-radius:4px;
+    color:var(--amber);font-size:13px;padding:8px 12px;margin:4px 0}}
+  .op-ask-input{{width:100%;background:var(--bg-base);
+    border:1px solid var(--border-strong);color:var(--fg-1);
     border-radius:6px;padding:8px 12px;font-size:13px;resize:vertical;
     min-height:72px;box-sizing:border-box}}
-  .op-ask-input:focus{{outline:1px solid var(--border-focus,#00d4e8)}}
-  .op-ask-btn{{margin-top:8px;background:var(--cyan,#00d4e8);color:#001e28;
+  .op-ask-input:focus{{outline:1px solid var(--border-focus)}}
+  .op-ask-btn{{margin-top:8px;background:var(--cyan);color:var(--cyan-muted);
     border:none;border-radius:6px;padding:8px 14px;font-size:13px;
     font-weight:600;cursor:pointer}}
   .op-ask-btn:disabled{{opacity:.6;cursor:not-allowed}}
-  .op-ask-answer{{background:var(--bg-base,#070b12);
-    border:1px solid var(--border,#152030);border-radius:6px;
+  .op-ask-answer{{background:var(--bg-base);
+    border:1px solid var(--border);border-radius:6px;
     padding:10px 12px;min-height:48px;white-space:pre-wrap;font-size:13px;
-    color:var(--fg-1,#dce8f0);margin-top:10px}}
+    color:var(--fg-1);margin-top:10px}}
 </style>
 <div class="op-panels" data-testid="operator-overlay-panels">
   <div class="op-panel" data-testid="operator-panel-status">
@@ -10523,7 +10522,7 @@ def _render_operator_drawer(operator_telemetry_html: str = "") -> str:
       width:30px;height:30px;cursor:pointer;font-size:18px;line-height:1}
     .operator-drawer-close:hover{color:var(--fg-1);border-color:var(--border-strong)}
     .operator-drawer-body{flex:1;overflow-y:auto;padding:16px;background:var(--bg-surface)}
-    .operator-drawer-loading{color:var(--fg-3);font-size:13px;padding:12px 0}
+    .operator-drawer-loading{color:var(--fg-2);font-size:13px;padding:12px 0}
   </style>
   """ + _render_operator_toggle() + """
   <div class="operator-drawer-host" id="workspace-operator-host"
@@ -10745,6 +10744,21 @@ _VENDOR_ASSETS: dict[str, tuple[str, str]] = {
     ),
 }
 
+# YDS-03 (#5629): the generated Yggdrasil tokens-only sheet (tokens, the Shell
+# theme, density, opt-in rules, reduced motion; no element defaults), served
+# same-origin in every profile. Generated by design-system/yggdrasil/build.py.
+YGGDRASIL_TOKENS_URL = "/static/yggdrasil-tokens.css"
+_YGGDRASIL_TOKENS_PATH = (
+    Path(__file__).resolve().parents[2] / "yggdrasil-tokens.css"
+)
+
+# Applies the stored theme before first paint so a Light (Shell) choice does not
+# flash Dark. The display-preferences script owns the value; this only reads it.
+_THEME_BOOTSTRAP_SCRIPT = (
+    "try{var p=JSON.parse(window.localStorage.getItem('companion.displayPreferences.v1')||'{}');"
+    "if(p.theme==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}"
+)
+
 # Import path the page uses for the editor bundle (single source of truth so the
 # served <script> and the no-CDN test assert against the same constant).
 CODEMIRROR_MODULE_URL = "/static/vendor/codemirror-6.0.1.mjs"
@@ -10771,6 +10785,16 @@ def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
                     cache[route] = (content_type, fh.read())
             except OSError:
                 continue
+        # Required: the pages carry no inline token copies, so a missing sheet
+        # must stop startup instead of serving unstyled pages.
+        try:
+            with open(_YGGDRASIL_TOKENS_PATH, "rb") as fh:
+                cache[YGGDRASIL_TOKENS_URL] = ("text/css; charset=utf-8", fh.read())
+        except OSError as exc:
+            raise RuntimeError(
+                f"Yggdrasil tokens sheet missing at {_YGGDRASIL_TOKENS_PATH}; "
+                "run python3 design-system/yggdrasil/build.py"
+            ) from exc
         _VENDOR_STATIC_CACHE = cache
     return _VENDOR_STATIC_CACHE
 
@@ -10936,7 +10960,7 @@ def _render_help_drawer() -> str:
     .workspace-status-slot{position:fixed;bottom:calc(18px + 44px);right:18px;
       z-index:999;display:inline-flex;align-items:center;gap:6px;
       max-width:280px;padding:4px 2px;font:400 12px/1.3 'JetBrains Mono',monospace;
-      color:var(--fg-3);text-align:right}
+      color:var(--fg-2);text-align:right}
     .workspace-status-slot[data-tone="error"]{color:var(--destructive)}
     .workspace-status-slot-glyph{flex:0 0 auto}
     /* Lift the composed bottom bar (and the status slot above it) above the
@@ -10996,7 +11020,7 @@ def _render_help_drawer() -> str:
     .help-drawer-head{display:flex;align-items:center;gap:10px;padding:12px 16px;
       border-bottom:1px solid var(--border);background:var(--bg-raised)}
     .help-drawer-title{font:500 14px/1 'Space Grotesk',sans-serif;color:var(--fg-1)}
-    .help-drawer-sub{font:400 12px/1 'JetBrains Mono',monospace;color:var(--fg-3)}
+    .help-drawer-sub{font:400 12px/1 'JetBrains Mono',monospace;color:var(--fg-2)}
     .help-drawer-close{margin-left:auto;background:none;border:1px solid var(--border);
       color:var(--fg-2);border-radius:6px;width:30px;height:30px;cursor:pointer;
       font-size:18px;line-height:1}
@@ -11311,7 +11335,7 @@ def render_index_html(
     )
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11322,37 +11346,11 @@ def render_index_html(
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
   {production_static_link}
+  <link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">
+  <script>{_THEME_BOOTSTRAP_SCRIPT}</script>
   <style>
-    /* Yggdrasil design tokens (subset inlined for offline resilience) */
+    /* Page-local tokens. Yggdrasil tokens come from YGGDRASIL_TOKENS_URL (YDS-03, #5629). */
     :root {{
-      --bg-base:       #070b12;
-      --bg-surface:    #0c1220;
-      --bg-raised:     #111a2e;
-      --bg-overlay:    #162038;
-      --fg-1:          #dce8f0;
-      --fg-2:          #7a9ab8;
-      --fg-3:          #3d5570;
-      --border:        #152030;
-      --border-strong: #1e3050;
-      --border-focus:  #00d4e8;
-      --accent:        #d4a843;
-      --accent-dim:    #80621a;
-      --accent-muted:  #2a1e06;
-      --cyan:          #00d4e8;
-      --cyan-dim:      #007a8a;
-      --cyan-muted:    #001e28;
-      --vault:         #39e87d;
-      --vault-dim:     #1a7840;
-      --vault-muted:   #041a10;
-      --agent:         #4a9eff;
-      --agent-dim:     #1e5a9a;
-      --agent-muted:   #051228;
-      --amber:         #f09030;
-      --amber-dim:     #805010;
-      --amber-muted:   #1a0e02;
-      --destructive:      #ff3d3d;
-      --destructive-dim:  #8a1a1a;
-      --destructive-muted:#160404;
       --au-canonical:  var(--vault);
       --au-projection: var(--cyan);
       --au-proposal:   var(--agent);
@@ -11360,16 +11358,7 @@ def render_index_html(
       --au-receipt:    #b98be0;
       --au-local:      #6b7a90;
       --au-blocked:    var(--destructive);
-      --font-display:  'EB Garamond', Georgia, serif;
-      --font-ui:       'Space Grotesk', system-ui, sans-serif;
       --font-mono:     'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-      --text-xs:   0.6875rem;
-      --text-sm:   0.8125rem;
-      --text-base: 0.9375rem;
-      --text-xl:   1.5rem;
-      --text-2xl:  2rem;
-      --radius-sm: 2px;
-      --radius-md: 4px;
     }}
     *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     /* Global reset: the `hidden` attribute must always win. Several elements
@@ -11384,7 +11373,7 @@ def render_index_html(
     [hidden] {{ display: none !important; }}
     html {{ font-size: 16px; -webkit-font-smoothing: antialiased; }}
     body {{
-      background: var(--bg-base);
+      background: var(--surface-page);
       color: var(--fg-1);
       font-family: var(--font-ui);
       font-size: var(--text-base);
@@ -11401,10 +11390,10 @@ def render_index_html(
        affordances: one primary, the rest secondary. Used by the vault picker
        (E11) and the entry-screen action row. ---- */
     .btn {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       cursor: pointer;
       font-family: var(--font-ui, system-ui, sans-serif);
       font-size: var(--text-sm, 0.8125rem);
@@ -11414,19 +11403,19 @@ def render_index_html(
       text-align: center;
       text-decoration: none;
     }}
-    .btn:hover {{ border-color: var(--accent, #d4a843); }}
-    .btn:focus-visible {{ outline: 1px solid var(--border-focus, #00d4e8); }}
+    .btn:hover {{ border-color: var(--accent); }}
+    .btn:focus-visible {{ outline: 1px solid var(--border-focus); }}
     .btn--primary {{
-      background: var(--accent, #d4a843);
-      border-color: var(--accent, #d4a843);
-      color: var(--bg-base, #070b12);
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--bg-base);
       font-weight: 600;
     }}
-    .btn--primary:hover {{ border-color: var(--fg-1, #dce8f0); }}
+    .btn--primary:hover {{ border-color: var(--fg-1); }}
     .btn--secondary {{
-      background: var(--bg-raised, #111a2e);
-      border-color: var(--border-strong, #1e3050);
-      color: var(--fg-1, #dce8f0);
+      background: var(--bg-raised);
+      border-color: var(--border-strong);
+      color: var(--fg-1);
     }}
 
     /* ---- Top bar ---- */
@@ -11445,12 +11434,12 @@ def render_index_html(
       gap: 6px;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      color: var(--fg-3);
+      color: var(--fg-2);
       flex: 1;
       min-width: 0;
     }}
     .topbar-api .api-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       letter-spacing: 0.06em;
       text-transform: uppercase;
       flex-shrink: 0;
@@ -11480,7 +11469,7 @@ def render_index_html(
       border-radius: var(--radius-sm);
       background: rgba(240,144,48,0.08);
       border: 1px solid rgba(240,144,48,0.35);
-      color: #f09030;
+      color: var(--amber);
       flex-shrink: 0;
     }}
 
@@ -11497,7 +11486,7 @@ def render_index_html(
     .load-bar label {{
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      color: var(--fg-3);
+      color: var(--fg-2);
       letter-spacing: 0.06em;
       text-transform: uppercase;
       flex-shrink: 0;
@@ -11538,7 +11527,7 @@ def render_index_html(
     .dev-controls-disclosure > summary.dev-controls-summary {{
       display: inline-block;
       cursor: pointer;
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs);
       font-family: var(--font-mono);
       padding: 2px 8px;
@@ -11550,8 +11539,8 @@ def render_index_html(
       display: inline-block;
       font-size: var(--text-xs);
       font-family: var(--font-mono);
-      color: var(--fg-3);
-      background: var(--surface-2);
+      color: var(--fg-2);
+      background: var(--bg-raised);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 1px 6px;
@@ -11569,7 +11558,7 @@ def render_index_html(
     .frontmatter-disclosure > summary.frontmatter-summary {{
       cursor: pointer;
       font-size: var(--text-xs);
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       user-select: none;
       list-style: none;
@@ -11585,13 +11574,13 @@ def render_index_html(
     /* ---- Vault browser calm provenance (#1361) ---- */
     .vault-browser-provenance-calm {{
       font-size: var(--text-xs);
-      color: var(--fg-3);
+      color: var(--fg-2);
       display: block;
       padding: 4px 10px 6px;
     }}
     .vault-browser-hidden-count {{
       font-size: var(--text-xs);
-      color: var(--fg-3);
+      color: var(--fg-2);
       padding: 2px 10px 4px;
       display: block;
     }}
@@ -11689,8 +11678,11 @@ def render_index_html(
       background: var(--agent-muted);
     }}
     .vault-browser-left-pane {{
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
+      background: var(--surface-panel);
+      border-right: 1px solid var(--surface-panel-border);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
       display: flex;
       flex-direction: column;
       min-height: 0;
@@ -11711,7 +11703,7 @@ def render_index_html(
       background: none;
       border: none;
       border-radius: var(--radius-sm);
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-xs);
@@ -11724,7 +11716,7 @@ def render_index_html(
     .left-panel-collapse {{
       background: none;
       border: none;
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       margin-left: auto;
       padding: 3px 6px;
@@ -11743,7 +11735,7 @@ def render_index_html(
       padding: 4px 2px;
     }}
     .left-panel-context .lpc-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
@@ -11755,7 +11747,7 @@ def render_index_html(
       white-space: nowrap;
     }}
     .left-panel-context-empty {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-sm);
       margin-top: 8px;
     }}
@@ -11794,10 +11786,25 @@ def render_index_html(
       flex-direction: column;
       overflow: hidden;
     }}
+    /* YDS-03 (#5629): layout material comes from the theme's surface-*
+       tokens (Dark: unchanged; Shell: porcelain sheets on the city backdrop). */
+    .workspace-layout {{
+      gap: var(--surface-frame-gap);
+      padding: var(--surface-frame-gap);
+    }}
+    .workspace-main {{
+      background: var(--surface-main);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
+    }}
+    .active-note-header h1 {{
+      text-shadow: var(--surface-title-shadow);
+    }}
     .workspace-header-strip {{
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
-      color: var(--fg-3);
+      color: var(--fg-2);
       flex-shrink: 0;
       height: 32px;
       min-height: 32px;
@@ -11815,7 +11822,7 @@ def render_index_html(
       width: 100%;
     }}
     .workspace-wordmark {{
-      color: color-mix(in srgb, var(--accent) 72%, var(--fg-3));
+      color: color-mix(in srgb, var(--accent) 72%, var(--fg-2));
       flex-shrink: 0;
       font-family: var(--font-display);
       font-size: 16px;
@@ -11892,7 +11899,7 @@ def render_index_html(
     }}
     .workspace-posture-pill {{
       align-items: center;
-      color: var(--fg-3);
+      color: var(--fg-2);
       display: inline-flex;
       flex-shrink: 0;
       font-family: var(--font-mono);
@@ -11954,7 +11961,7 @@ def render_index_html(
       padding: 0 8px;
     }}
     .workspace-runtime-human-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .workspace-runtime-status-popover {{
       background: var(--bg-raised);
@@ -11979,7 +11986,7 @@ def render_index_html(
       grid-template-columns: minmax(130px, 0.8fr) minmax(120px, 1fr);
     }}
     .workspace-runtime-popover-key {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.06em;
@@ -11996,7 +12003,7 @@ def render_index_html(
       white-space: nowrap;
     }}
     .workspace-freshness {{
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .workspace-header-spacer {{
       flex: 1 1 auto;
@@ -12026,7 +12033,7 @@ def render_index_html(
       background: rgba(240,144,48,0.08);
       border: 1px solid rgba(240,144,48,0.35);
       border-radius: var(--radius-sm);
-      color: #f09030;
+      color: var(--amber);
       height: 28px;
       letter-spacing: 0.07em;
       padding: 0 8px;
@@ -12051,7 +12058,7 @@ def render_index_html(
       font-size: var(--text-xs);
     }}
     .safety-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }}
@@ -12203,7 +12210,7 @@ def render_index_html(
       background: transparent;
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       display: inline-flex;
       font-family: var(--font-ui);
@@ -12235,7 +12242,7 @@ def render_index_html(
       background: transparent;
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       display: none;
       font-size: 18px;
@@ -12288,13 +12295,13 @@ def render_index_html(
       gap: 4px 6px;
       font-family: var(--font-mono);
       font-size: 12px;
-      color: var(--fg-3);
+      color: var(--fg-2);
       margin-top: 4px;
       margin-bottom: 6px;
     }}
-    .breadcrumb-path {{ color: var(--fg-3); }}
+    .breadcrumb-path {{ color: var(--fg-2); }}
     .breadcrumb-sep {{ color: var(--border-strong); }}
-    .breadcrumb-meta-item {{ color: var(--fg-3); }}
+    .breadcrumb-meta-item {{ color: var(--fg-2); }}
     /* #2563 — the properties detail body now renders inside the Tier-2 anchored
        popover (.note-properties-popover) reached from the utility line, not an
        inline breadcrumb <details>. The body card styling is retained. */
@@ -12322,7 +12329,7 @@ def render_index_html(
       gap: 4px 8px;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .prov-item {{ display: inline-flex; align-items: baseline; gap: 4px; }}
     .artifact-identity-pill, .content-hash-pill {{
@@ -12335,7 +12342,7 @@ def render_index_html(
       border-color: rgba(212,168,67,0.35);
     }}
     .identity-meta {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs);
     }}
     .identity-caution {{
@@ -12352,13 +12359,13 @@ def render_index_html(
       padding: 4px 7px;
     }}
     .identity-caution small {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs);
     }}
     .prov-label {{
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .prov-item code {{
       background: none;
@@ -12388,12 +12395,12 @@ def render_index_html(
       margin-bottom: 8px;
     }}
     .vault-properties-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
     .vault-properties-mode {{
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .vault-properties-list {{
       display: flex;
@@ -12408,7 +12415,7 @@ def render_index_html(
       min-width: min(180px, 100%);
     }}
     .vault-property dt {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       margin: 0;
     }}
     .vault-property dd {{
@@ -12421,7 +12428,7 @@ def render_index_html(
       border: 1px solid var(--border);
       border-radius: 999px;
       padding: 1px 7px;
-      background: var(--bg);
+      background: var(--bg-base);
       color: var(--fg-1);
     }}
     .vault-properties-invalid {{
@@ -12541,7 +12548,7 @@ def render_index_html(
       padding: 2px 6px;
     }}
     .tts-readback-status {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs);
     }}
     .tts-plan-inspection {{
@@ -12651,7 +12658,7 @@ def render_index_html(
       font-weight: 600;
     }}
     .note-edit-actions {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
-    .note-edit-status {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
+    .note-edit-status {{ color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }}
     .note-edit-status.ok {{ color: var(--cyan); }}
     .note-edit-status.error {{ color: var(--destructive); }}
     /* #2563 — Read-aloud active = a minimal transport docked to the utility line
@@ -12677,12 +12684,12 @@ def render_index_html(
     }}
     .tts-transport-btn:hover {{ border-color: var(--accent); }}
     .tts-transport-position {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
     .note-source-editor {{
-      background: var(--bg-base);
+      background: var(--surface-reading);
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-md);
       box-sizing: border-box;
@@ -12704,11 +12711,11 @@ def render_index_html(
        sits inside the dark agent rail; bring it onto the design-system palette
        so it never renders default white textarea chrome. */
     .rail-textarea {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
       box-sizing: border-box;
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       font-family: var(--font-ui, system-ui, sans-serif);
       font-size: var(--text-sm, 0.8125rem);
       line-height: 1.5;
@@ -12716,14 +12723,14 @@ def render_index_html(
       resize: vertical;
       width: 100%;
     }}
-    .rail-textarea::placeholder {{ color: var(--fg-3, #3d5570); }}
-    .rail-textarea:focus {{ outline: 1px solid var(--border-focus, #00d4e8); }}
+    .rail-textarea::placeholder {{ color: var(--fg-3); }}
+    .rail-textarea:focus {{ outline: 1px solid var(--border-focus); }}
     /* Design review §6.1 — body column is a reading surface, not a card.
        Background matches the page; no inset border; line-length capped at 68ch.
        §3.3/§7 — the reading column does not own a second nested scroll and is
        not height-clamped; it grows naturally inside the .note-body scroll. */
     .note-body-content {{
-      background: var(--bg-base);
+      background: var(--surface-reading);
       border: none;
       border-radius: 0;
       margin: 0 auto;
@@ -12801,7 +12808,7 @@ def render_index_html(
       font-weight: 500;
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: var(--fg-3);
+      color: var(--fg-2);
       margin: 16px 0 4px;
     }}
     /* §6.3 — block rhythm */
@@ -12856,7 +12863,7 @@ def render_index_html(
     }}
     .vault-markdown-rendered th {{
       background: var(--bg-base);
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 11px;
       font-weight: 500;
@@ -12987,7 +12994,7 @@ def render_index_html(
     }}
     .vault-markdown-rendered .panel-decision-identity {{
       margin: 8px 0 0;
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: 0.78rem;
       line-height: 1.3;
     }}
@@ -13017,7 +13024,7 @@ def render_index_html(
        checked state is unambiguous beyond the checkbox alone. */
     .vault-markdown-rendered li.task-list-item[data-task-state="x"],
     .vault-markdown-rendered li.task-list-item[data-task-state="X"] {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       text-decoration: line-through;
     }}
     {note_outline_css()}
@@ -13281,7 +13288,7 @@ def render_index_html(
       font-size: var(--text-xs);
       letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: var(--fg-3);
+      color: var(--fg-2);
       padding: 8px 0 10px;
       border-bottom: 1px solid var(--border);
       margin-bottom: 4px;
@@ -13301,21 +13308,24 @@ def render_index_html(
       font-size: var(--text-sm);
     }}
     .rail-resting-state {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
     .rail-resting-note {{
       margin-top: 12px;
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs);
       line-height: 1.5;
     }}
     .agent-rail {{
       width: 280px;
       flex-shrink: 0;
-      background: var(--bg-surface);
-      border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+      background: var(--surface-panel);
+      border-radius: var(--surface-panel-radius);
+      box-shadow: var(--surface-panel-shadow);
+      backdrop-filter: var(--surface-panel-filter);
+      border-left: 1px solid color-mix(in srgb, var(--surface-panel-border) 72%, transparent);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -13338,14 +13348,14 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.04em;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .rail-label {{
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .rail-badge {{
       font-family: var(--font-mono);
@@ -13367,7 +13377,7 @@ def render_index_html(
       overflow-y: auto;
       padding: 16px;
       font-size: var(--text-sm);
-      color: var(--fg-3);
+      color: var(--fg-2);
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -13382,7 +13392,7 @@ def render_index_html(
       font-style: normal;
     }}
     .rail-state-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }}
@@ -13401,11 +13411,11 @@ def render_index_html(
     .commitment-group.g-next .commitment-group-label {{ color: var(--accent); }}
     .commitment-group.g-review .commitment-group-label {{ color: var(--fg-2); }}
     .commitment-group-sub {{
-      color: var(--fg-3); white-space: nowrap; overflow: hidden;
+      color: var(--fg-2); white-space: nowrap; overflow: hidden;
       text-overflow: ellipsis; min-width: 0;
     }}
     .commitment-group-count {{
-      margin-left: auto; color: var(--fg-3);
+      margin-left: auto; color: var(--fg-2);
       border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
       padding: 0 6px;
     }}
@@ -13416,7 +13426,7 @@ def render_index_html(
       padding: 8px; margin: 0 -2px;
     }}
     .commitment-group-empty {{
-      font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+      font-family: var(--font-mono); font-size: 10px; color: var(--fg-2);
       letter-spacing: 0.06em; padding: 2px 0 2px 10px;
       border-left: 2px solid var(--border);
     }}
@@ -13432,13 +13442,13 @@ def render_index_html(
       flex: none; margin-top: 1px;
       font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.06em;
       text-transform: uppercase; padding: 1px 5px; border-radius: var(--radius-sm);
-      border: 1px solid var(--border-strong); color: var(--fg-3); white-space: nowrap;
+      border: 1px solid var(--border-strong); color: var(--fg-2); white-space: nowrap;
     }}
     .commitment-target {{
-      font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+      font-family: var(--font-mono); font-size: 10px; color: var(--fg-2);
       letter-spacing: 0.06em; margin-top: 4px; display: flex; align-items: center; gap: 5px;
     }}
-    .commitment-arrow, .commitment-cycle {{ color: var(--fg-3); }}
+    .commitment-arrow, .commitment-cycle {{ color: var(--fg-2); }}
     .commitment-cycle {{ font-family: var(--font-mono); font-size: 11px; margin-right: 5px; }}
     .commitment-prov {{ font-size: 11px; margin-top: 3px; line-height: 1.4; font-style: italic; }}
     /* next_action — warm, clearest (still calm) */
@@ -13458,7 +13468,7 @@ def render_index_html(
     .commitment-item.k-review {{ border-left-color: var(--fg-3); }}
     .commitment-item.k-review .commitment-summary {{ color: var(--fg-1); font-weight: 400; }}
     .commitment-item.k-review .commitment-kind-tag {{ color: var(--fg-2); border-color: var(--border-strong); }}
-    .commitment-item.k-review .commitment-prov {{ color: var(--fg-3); }}
+    .commitment-item.k-review .commitment-prov {{ color: var(--fg-2); }}
     /* empty-but-healthy — affirmative vault-green zero */
     .commitments-empty {{ display: flex; align-items: center; gap: 8px; padding: 8px 0; }}
     .commitments-empty-dot {{
@@ -13467,7 +13477,7 @@ def render_index_html(
     .commitments-empty-msg {{ font-size: var(--text-sm); color: var(--fg-2); }}
     /* freshness / provenance footer */
     .commitments-foot {{
-      font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
+      font-family: var(--font-mono); font-size: 10px; color: var(--fg-2);
       letter-spacing: 0.06em; margin-top: 4px; padding-top: 8px;
       border-top: 1px solid var(--border);
     }}
@@ -13508,7 +13518,7 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.03em;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
 
     .resurface-candidate {{
@@ -13556,7 +13566,7 @@ def render_index_html(
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       line-height: 1.45;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
 
     .resurface-source {{
@@ -13576,7 +13586,7 @@ def render_index_html(
     }}
     .resurface-source::before {{
       content: "→"; 
-      color: var(--fg-3);
+      color: var(--fg-2);
       transition: color 150ms ease;
     }}
     .resurface-source:hover,
@@ -13600,7 +13610,7 @@ def render_index_html(
       font-size: 10px;
       line-height: 1;
       letter-spacing: 0.02em;
-      color: var(--fg-3);
+      color: var(--fg-2);
       padding: 3px 7px;
       background: color-mix(in srgb, var(--bg-raised) 55%, transparent);
       border: 1px solid var(--border);
@@ -13625,7 +13635,7 @@ def render_index_html(
       line-height: 1.2;
       letter-spacing: 0.02em;
       text-align: left;
-      color: var(--fg-3);
+      color: var(--fg-2);
       background: transparent;
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
@@ -13678,12 +13688,12 @@ def render_index_html(
       line-height: 1.5;
       letter-spacing: 0.02em;
       font-style: italic;
-      color: var(--fg-3);
+      color: var(--fg-2);
       padding: 2px 1px;
     }}
     .resurface-withheld-glyph {{
       font-style: normal;
-      color: var(--fg-3);
+      color: var(--fg-2);
       opacity: 0.7;
       margin-right: 2px;
     }}
@@ -13718,7 +13728,7 @@ def render_index_html(
     .resurface-empty-sub {{
       font-size: var(--text-xs);
       line-height: 1.5;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
 
     .resurface-mode[data-affordance-status="unavailable"] .rail-state-value {{
@@ -13801,7 +13811,7 @@ def render_index_html(
       opacity: 0.55;
     }}
     .canvas-presence {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       grid-column: 1 / -1;
@@ -13817,7 +13827,7 @@ def render_index_html(
       padding: 10px;
     }}
     .canvas-body-edit-composer label, .canvas-undo-state {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.06em;
@@ -13869,7 +13879,7 @@ def render_index_html(
       width: 100%;
     }}
     .canvas-provenance {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       display: flex;
       flex-direction: column;
       font-family: var(--font-mono);
@@ -13883,7 +13893,7 @@ def render_index_html(
       overflow-wrap: anywhere;
     }}
     .canvas-provenance-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }}
@@ -14143,7 +14153,8 @@ def render_index_html(
         display: none;
       }}
       .portrait-sheet {{
-        background: var(--bg-surface);
+        background: var(--surface-panel);
+        backdrop-filter: var(--surface-panel-filter);
         border-top: 1px solid var(--border);
         bottom: 0;
         display: block;
@@ -14199,7 +14210,7 @@ def render_index_html(
       letter-spacing: 0.08em;
       text-transform: uppercase;
       font-size: 11px;
-      color: var(--fg-3);
+      color: var(--fg-2);
     }}
     .panel-section[data-section-state="active"] .panel-section-title {{
       color: var(--au-proposal);
@@ -14215,7 +14226,7 @@ def render_index_html(
       margin-bottom: 6px;
     }}
     .panel-proposal-defer-consequence {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: 12px;
       margin-top: 4px;
     }}
@@ -14228,12 +14239,12 @@ def render_index_html(
     }}
     .panel-proposal-blocked .panel-blocked-reason-label,
     .panel-proposal-blocked .panel-blocked-recourse-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       display: block;
       margin-top: 4px;
     }}
     .panel-section-provenance {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: 12px;
       margin-bottom: 4px;
@@ -14269,7 +14280,7 @@ def render_index_html(
     .panel-action-defer {{
       background: transparent;
       border: none;
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: 12px;
@@ -14281,7 +14292,7 @@ def render_index_html(
     .reorient-recall-trigger {{
       display: inline;
       cursor: pointer;
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       list-style: none;
@@ -14386,12 +14397,12 @@ def render_index_html(
       white-space: nowrap;
     }}
     .body-edit-disabled .absent-reason {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs);
     }}
     .body-edit-header {{ display: flex; flex-direction: column; gap: 2px; }}
     .body-edit-label {{ color: var(--fg-1); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600; }}
-    .body-edit-note {{ color: var(--fg-3); font-family: var(--font-mono); font-size: var(--text-xs); }}
+    .body-edit-note {{ color: var(--fg-2); font-family: var(--font-mono); font-size: var(--text-xs); }}
     .body-edit-codemirror {{
       background: var(--bg-raised);
       border: 1px solid var(--border-strong);
@@ -14511,7 +14522,7 @@ def render_index_html(
       font-weight: 600;
     }}
     .vault-browser-identity {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
@@ -14549,7 +14560,7 @@ def render_index_html(
       padding-bottom: 6px;
     }}
     .vault-browser-filters-summary {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
@@ -14632,7 +14643,7 @@ def render_index_html(
       white-space: nowrap;
     }}
     .vault-tree-folder-summary::before {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       content: "\\203A";
       display: inline-block;
       flex-shrink: 0;
@@ -14670,7 +14681,7 @@ def render_index_html(
       padding: 6px 2px 2px;
     }}
     .vault-browser-pagination-summary {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
@@ -14718,7 +14729,7 @@ def render_index_html(
       padding-top: 6px;
     }}
     .vault-browser-inspector-summary {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
@@ -14739,7 +14750,7 @@ def render_index_html(
       padding: 2px 0;
     }}
     .inspector-field > .inspector-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       flex-shrink: 0;
     }}
     .receipt-row {{
@@ -14769,7 +14780,7 @@ def render_index_html(
     }}
     .receipt-detail[hidden] {{ display: none; }}
     .receipt-detail-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
@@ -14796,7 +14807,7 @@ def render_index_html(
     .vault-related-path,
     .vault-related-score,
     .vault-related-signal {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       overflow-wrap: anywhere;
@@ -14811,7 +14822,7 @@ def render_index_html(
     .vault-browser-meta,
     .vault-browser-state {{ display: none; }}
     .vault-browser > summary[data-testid="workspace-vault-browser-toggle"] {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
@@ -14832,7 +14843,7 @@ def render_index_html(
       z-index: 1;
     }}
     .vault-browser-group-label {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       display: block;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
@@ -14848,7 +14859,7 @@ def render_index_html(
       white-space: nowrap;
     }}
     .vault-browser-row-path {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       direction: rtl;
       display: block;
       font-size: var(--text-xs);
@@ -14872,12 +14883,12 @@ def render_index_html(
       font-size: var(--text-sm);
     }}
     .vault-browser-item-path {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
     }}
     .vault-browser-status {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       text-align: center;
@@ -14930,10 +14941,10 @@ def render_index_html(
     }}
     .vault-picker-filter-row {{ display: block; }}
     .vault-picker-filter {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       padding: 7px 10px;
@@ -14952,10 +14963,10 @@ def render_index_html(
     .vault-picker-row[hidden] {{ display: none; }}
     .vault-picker-row-button {{
       align-items: flex-start;
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border, #152030);
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
       border-radius: var(--radius-md, 6px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       cursor: pointer;
       display: grid;
       font-family: var(--font-ui);
@@ -14964,9 +14975,9 @@ def render_index_html(
       text-align: left;
       width: 100%;
     }}
-    .vault-picker-row-button:hover {{ border-color: var(--border-strong, #1e3050); }}
+    .vault-picker-row-button:hover {{ border-color: var(--border-strong); }}
     .vault-picker-row--pinned .vault-picker-row-button {{
-      border-color: var(--accent, #5b8cff);
+      border-color: var(--accent);
     }}
     .vault-picker-row-head {{
       align-items: baseline;
@@ -14980,25 +14991,25 @@ def render_index_html(
       font-weight: 500;
     }}
     .vault-picker-row-badge {{
-      background: var(--accent, #5b8cff);
+      background: var(--accent);
       border-radius: 999px;
-      color: var(--bg-base, #060b14);
+      color: var(--bg-base);
       font-size: var(--text-xs, 11px);
       letter-spacing: 0.02em;
       padding: 1px 8px;
     }}
     .vault-picker-row-badge--soon {{
       background: transparent;
-      border: 1px solid var(--border-strong, #1e3050);
-      color: var(--fg-3);
+      border: 1px solid var(--border-strong);
+      color: var(--fg-2);
     }}
     .vault-picker-row-time {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-xs, 11px);
       margin-left: auto;
     }}
     .vault-picker-row-path {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs, 11px);
       overflow-wrap: anywhere;
@@ -15007,18 +15018,18 @@ def render_index_html(
       border-style: dashed;
       cursor: default;
     }}
-    .vault-picker-browse-hint {{ color: var(--fg-3); }}
+    .vault-picker-browse-hint {{ color: var(--fg-2); }}
     .vault-picker-footer {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-ui);
       font-size: var(--text-sm);
     }}
     .vault-picker-operator {{
-      border-top: 1px solid var(--border, #152030);
+      border-top: 1px solid var(--border);
       padding-top: 8px;
     }}
     .vault-picker-operator-summary {{
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-size: var(--text-sm);
     }}
@@ -15029,10 +15040,10 @@ def render_index_html(
       padding-top: 8px;
     }}
     .vault-picker-operator-action {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
@@ -15042,29 +15053,29 @@ def render_index_html(
       display: flex;
       flex-direction: column;
       gap: 8px;
-      border: 1px solid var(--border-strong, #1e3050);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
       padding: 12px;
     }}
     .vault-picker-initialize-copy {{
-      color: var(--fg-2, #aebfce);
+      color: var(--fg-2);
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       margin: 0;
     }}
     .vault-picker-initialize-button {{
       align-self: flex-start;
-      background: var(--accent, #5b8cff);
-      border: 1px solid var(--accent, #5b8cff);
+      background: var(--accent);
+      border: 1px solid var(--accent);
       border-radius: var(--radius-md, 4px);
-      color: var(--bg-base, #060b14);
+      color: var(--bg-base);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       padding: 6px 12px;
     }}
     .vault-picker-initialize-error {{
-      color: var(--fg-2, #aebfce);
+      color: var(--fg-2);
       font-family: var(--font-ui);
       font-size: var(--text-xs, 11px);
       margin: 0;
@@ -15076,7 +15087,7 @@ def render_index_html(
     .vault-picker-fs-back {{
       background: transparent;
       border: none;
-      color: var(--fg-3);
+      color: var(--fg-2);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
@@ -15095,14 +15106,14 @@ def render_index_html(
     .vault-picker-fs-crumb {{
       background: transparent;
       border: none;
-      color: var(--accent, #5b8cff);
+      color: var(--accent);
       cursor: pointer;
       font-family: var(--font-mono);
       font-size: var(--text-sm);
       padding: 0;
     }}
     .vault-picker-fs-crumb:hover {{ text-decoration: underline; }}
-    .vault-picker-fs-crumb-sep {{ color: var(--fg-3); }}
+    .vault-picker-fs-crumb-sep {{ color: var(--fg-2); }}
     .vault-picker-fs-row {{ margin: 0; }}
     .vault-picker-fs-row[hidden] {{ display: none; }}
     .vault-picker-fs-row-main {{
@@ -15111,54 +15122,54 @@ def render_index_html(
       gap: 8px;
     }}
     .vault-picker-fs-enter {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border, #152030);
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
       border-radius: var(--radius-md, 6px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       cursor: pointer;
       flex: 1 1 auto;
       font-family: var(--font-ui);
       padding: 9px 12px;
       text-align: left;
     }}
-    .vault-picker-fs-enter:hover {{ border-color: var(--border-strong, #1e3050); }}
+    .vault-picker-fs-enter:hover {{ border-color: var(--border-strong); }}
     .vault-picker-fs-row--vault .vault-picker-fs-enter {{
-      border-color: var(--vault, #39e87d);
+      border-color: var(--vault);
     }}
     .vault-picker-row-badge--vault {{
-      background: var(--vault, #39e87d);
-      color: var(--vault-muted, #041a10);
+      background: var(--vault);
+      color: var(--vault-muted);
     }}
     .vault-picker-fs-row-action {{ flex: 0 0 auto; }}
     .vault-picker-fs-open {{
-      background: var(--vault, #39e87d);
-      border: 1px solid var(--vault, #39e87d);
+      background: var(--vault);
+      border: 1px solid var(--vault);
       border-radius: var(--radius-md, 4px);
-      color: var(--vault-muted, #041a10);
+      color: var(--vault-muted);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       padding: 6px 12px;
     }}
     .vault-picker-fs-init {{
-      background: var(--bg-raised, #111a2e);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-raised);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-md, 4px);
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       cursor: pointer;
       font-family: var(--font-ui);
       font-size: var(--text-sm);
       padding: 6px 10px;
     }}
     .vault-picker-fs-row-error, .vault-picker-fs-error, .vault-picker-select-error {{
-      color: var(--fg-2, #aebfce);
+      color: var(--fg-2);
       font-family: var(--font-ui);
       font-size: var(--text-xs, 11px);
       margin: 2px 0 0;
     }}
-    .vault-picker-select-error {{ color: var(--danger, #e06c75); margin-top: 6px; }}
-    .vault-picker-fs-empty {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); margin: 0; }}
-    .vault-picker-fs-footer {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); }}
+    .vault-picker-select-error {{ color: var(--destructive); margin-top: 6px; }}
+    .vault-picker-fs-empty {{ color: var(--fg-2); font-family: var(--font-ui); font-size: var(--text-sm); margin: 0; }}
+    .vault-picker-fs-footer {{ color: var(--fg-2); font-family: var(--font-ui); font-size: var(--text-sm); }}
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>

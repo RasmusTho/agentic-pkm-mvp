@@ -21,12 +21,27 @@ README (a Claude Design project artifact, not a repo file) should be corrected t
 the next design-system maintenance pass. No repo slice; recorded so the next design run does not
 re-litigate it.
 
+**Reconciled 2026-09-23 (YDS-02, #5628):** closed. The live `README.md` and `SKILL.md` were
+rewritten from the v2 token sheet and uploaded through `/design-sync`. They now describe the cool
+blue Dark backgrounds, the 2/4/6/10px radii, the opt-in 2px `--border-focus` ring, Space Grotesk as
+the UI face, and glow as an opt-in, state-only `.fx-*` effect, plus the Shell theme, density, and
+ink/mark tones. The "UI type scale — DM Sans" and "warm parchment" preview labels were corrected
+too. The rewritten prose is kept in `design-system/yggdrasil/claude-design/`.
+
 ### DS-2 — `_ds_bundle.js` exports zero components — ACCEPT as known limitation; promotion of previews to exports is design-project follow-up
 
 There are no exported primitives to reuse, only tokens and previews, so all cockpit CSS is built
 against tokens. Decision: accepted for v1 (the shipped `app/web/static/cockpit.css` follows the
 same rule). Promoting `components-badges` / `components-buttons` / `components-cards` previews to
 real bundle exports is design-system work outside this capability.
+
+**Reconciled 2026-09-23 (YDS-02, #5628):** limitation kept, with a reason. Shipped Yggdrasil
+surfaces are server-rendered HTML and CSS; the only JSX in the repo is archived
+`companion-ui/design_handoff/*` exploration. Promoting the badge, button, and card previews to
+bundle exports would create a second component source that no shipped surface consumes, and design
+agents would treat it as canonical. The live README now states that the system exports tokens and
+preview cards, not a component library, and gives a component grammar table for both themes.
+Revisit only when a shipped surface adopts a component library.
 
 ### DS-3 — Signboard CSS is not Yggdrasil-bound — REJECT tokenization for v1
 

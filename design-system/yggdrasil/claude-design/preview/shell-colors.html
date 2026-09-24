@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Theme — Shell (trial)" name="Shell roles — ink and mark" subtitle="Text in the role ink · markers in the neon mark · fg scale on porcelain" viewport="700x220" -->
+<html lang="en" data-theme="light">
+<head><meta charset="UTF-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+body { background: var(--surface-main); padding: 20px 24px; min-height: 100vh; }
+.meta { font-family: var(--font-mono); font-size: 10px; color: var(--fg-2); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 18px; margin-bottom: 18px; }
+.role { display: flex; align-items: center; gap: 10px; }
+.mark { width: 10px; height: 10px; flex-shrink: 0; }
+.ink { font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
+.hex { font-family: var(--font-mono); font-size: 10px; color: var(--fg-2); }
+.fg { display: flex; gap: 22px; align-items: baseline; border-top: 1px solid var(--border); padding-top: 12px; }
+.fg span { font-size: 14px; }
+.fg small { font-family: var(--font-mono); font-size: 10px; color: var(--fg-2); margin-left: 6px; }
+</style>
+</head>
+<body>
+  <div class="meta">Roles · ink (text) and mark (marker)</div>
+  <div class="grid">
+    <div class="role"><span class="mark" style="background:var(--accent-mark)"></span><div><div class="ink" style="color:var(--accent)">Accent</div><div class="hex">ink #573e00 · mark #e8b440</div></div></div>
+    <div class="role"><span class="mark" style="background:var(--cyan-mark)"></span><div><div class="ink" style="color:var(--cyan)">Cyan · signal</div><div class="hex">ink #004a53 · mark #00d4e8</div></div></div>
+    <div class="role"><span class="mark" style="background:var(--vault-mark)"></span><div><div class="ink" style="color:var(--vault)">Vault</div><div class="hex">ink #094d29 · mark #16c95e</div></div></div>
+    <div class="role"><span class="mark" style="background:var(--agent-mark)"></span><div><div class="ink" style="color:var(--agent)">Agent</div><div class="hex">ink #1a3999 · mark #2f6bff</div></div></div>
+    <div class="role"><span class="mark" style="background:var(--amber-mark)"></span><div><div class="ink" style="color:var(--amber)">Amber · staged</div><div class="hex">ink #6a3400 · mark #ff8a1a</div></div></div>
+    <div class="role"><span class="mark" style="background:var(--destructive-mark)"></span><div><div class="ink" style="color:var(--destructive)">Destructive</div><div class="hex">ink #841021 · mark #ff1f4b</div></div></div>
+  </div>
+  <div class="meta">Foreground on porcelain</div>
+  <div class="fg">
+    <span style="color:var(--fg-1)">Primary<small>fg-1 #0f1014</small></span>
+    <span style="color:var(--fg-2)">Secondary<small>fg-2 #3f424a</small></span>
+    <span style="color:var(--fg-3)">Disabled only<small>fg-3 #a0a4ad</small></span>
+  </div>
+</body>
+</html>

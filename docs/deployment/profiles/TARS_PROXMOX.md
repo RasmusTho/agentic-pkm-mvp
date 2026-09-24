@@ -14,8 +14,8 @@ Owner: Platform and Operations System, with the BuilderOps deployment owner
 Temporal class: operational
 Review cadence: before a TARS BuilderOps deployment and whenever host, VM, network, or disk posture changes
 Source of truth: a fresh qualification input and deployment receipts
-Last reviewed: 2026-09-11
-Last verified against: repository deployment contract, `product_tars_channel_topology.v1`, Builder Vault dated TARS access/runtime receipts from 2026-09-07, and no fresh TARS/Proxmox readback from this workstation; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`
+Last reviewed: 2026-09-20
+Last verified against: repository deployment contract at `8312fc757c5390d9c98da10ce7f6d29df84b77fb`, `product_tars_channel_topology.v1`, Builder Vault dated TARS access/runtime receipts from 2026-09-07, and the read-only Proxmox/QGA Bob-1 snapshot `BUILDER_SYSTEM_BOB1_DEPLOYMENT_READBACK_2026-09-20.md`; that snapshot is not a qualification or deployment receipt. Owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`
 
 # TARS / Proxmox Deployment Profile
 

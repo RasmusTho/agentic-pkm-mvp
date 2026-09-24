@@ -1405,6 +1405,23 @@ def _design_hub_footer_digest(design_hub: DesignHubProjection | None) -> str:
     )
 
 
+# YDS-04 (#5630): the overview is written as a standalone file, so it embeds the
+# generated tokens-only sheet instead of linking /static. The @import line is dropped:
+# the page uses system fonts and a local file makes no web-font request.
+_YGGDRASIL_TOKENS_PATH = Path(__file__).resolve().parents[3] / "app" / "web" / "static" / "yggdrasil-tokens.css"
+
+
+def _yggdrasil_tokens_css() -> str:
+    try:
+        text = _YGGDRASIL_TOKENS_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            f"Yggdrasil tokens sheet missing at {_YGGDRASIL_TOKENS_PATH}; "
+            "run python3 design-system/yggdrasil/build.py"
+        ) from exc
+    return "\n".join(line for line in text.splitlines() if not line.startswith("@import"))
+
+
 def _cockpit_print_styles() -> str:
     """Return the cockpit-only print contract without changing screen-state semantics."""
 
@@ -1545,14 +1562,16 @@ def render_overview_html(
         if cockpit
         else ""
     )
+    yggdrasil_tokens = _yggdrasil_tokens_css()
     return f"""<!doctype html>
-<html lang="en">
+<html lang="en" data-density="compact" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CKM Development Overview</title>
   <style>
-    :root {{ --bg-base:#070b12; --bg-surface:#0c1220; --bg-raised:#111a2e; --bg-overlay:#162038; --fg-1:#dce8f0; --fg-2:#7a9ab8; --fg-3:#527190; --border:#152030; --border-strong:#1e3050; --accent:#d4a843; --agent:#4a9eff; --amber:#f09030; --destructive:#ff3d3d; --healthy:#39e87d; --unknown:#527190; }}
+    {yggdrasil_tokens}
+    :root {{ --healthy:var(--vault); --unknown:var(--fg-2); }}
     * {{ box-sizing:border-box; }} html {{ font-size:1rem; }} body {{ margin:0; background:var(--bg-base); color:var(--fg-1); font:0.875rem/1.5 ui-sans-serif,system-ui,sans-serif; }}
     main,footer {{ width:min(74rem,calc(100% - 2rem)); margin:0 auto; }} a {{ color:inherit; }} summary:focus-visible,a:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
     .projection-banner {{ border-left:0.25rem solid var(--amber); background:var(--bg-raised); padding:0.75rem 1rem; color:var(--fg-2); }} header {{ padding:1.75rem 0 0.75rem; }} h1 {{ font:400 1.75rem/1.2 ui-serif,Georgia,serif; }} h2 {{ margin-top:1.5rem; }} .subtitle,.empty,small,.meta {{ color:var(--fg-2); }}
@@ -1560,12 +1579,12 @@ def render_overview_html(
     .cockpit-header {{ padding-bottom:0.25rem; }} .cockpit-header h1 {{ margin-bottom:0.25rem; }} .cockpit-trust-summary {{ display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; margin:0.5rem 0 1rem; padding:0.875rem 1rem; border:1px solid var(--border-strong); border-left:0.25rem solid var(--agent); background:var(--bg-surface); }} .cockpit-trust-summary h2,.cockpit-trust-summary p {{ margin:0.15rem 0; }} .eyebrow {{ color:var(--fg-2); font-size:0.75rem; letter-spacing:0.06em; text-transform:uppercase; }} .technical-identity {{ max-width:27rem; color:var(--fg-2); }} .technical-identity summary {{ color:var(--fg-1); }}
     .owner-cards {{ display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:0.75rem; margin:0.75rem 0; }} .owner-card {{ min-width:0; padding:0.875rem 1rem; border:1px solid var(--border); border-radius:0.375rem; background:var(--bg-surface); }} .owner-card h2 {{ margin:0 0 0.35rem; font-size:1rem; }} .owner-card p {{ margin:0.25rem 0; color:var(--fg-2); }} .owner-card ul {{ list-style:none; margin:0.65rem 0 0; padding:0; }} .owner-card li {{ padding:0.35rem 0; border-top:1px solid var(--border); }} .owner-card-attention {{ border-left:0.2rem solid var(--amber); }} .owner-attention-fact {{ display:flex; justify-content:space-between; gap:0.75rem; }} .owner-attention-fact span {{ color:var(--fg-2); text-align:right; }}
     .linkage-masthead {{ padding:0.75rem; border-left:0.25rem solid var(--agent); background:var(--bg-raised); }} .subsystem-counts-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(22rem,1fr)); gap:0.75rem; }} .subsystem-counts-card {{ border:1px solid var(--border); background:var(--bg-surface); padding:0.75rem; }} .subsystem-counts-card h3 {{ margin:0; }} .subsystem-counts-card ul {{ list-style:none; margin:0.75rem 0 0; padding:0; }} .capability-count {{ display:grid; grid-template-columns:minmax(10rem,1fr) repeat(3,auto); gap:0.5rem 1rem; margin-left:calc(var(--count-depth) * 0.75rem); padding:0.45rem 0; border-top:1px solid var(--border); }} .count-name {{ font-weight:600; }} .secondary {{ color:var(--fg-2); }}
-    .legend {{ display:grid; grid-template-columns:2fr 1fr; gap:1rem; margin:1rem 0; padding:0.75rem; border:1px solid var(--border); background:var(--bg-surface); }} .legend ul {{ display:flex; gap:0.5rem 1rem; flex-wrap:wrap; list-style:none; padding:0; margin:0.35rem 0 0; }} .legend-cell {{ display:inline-block; width:1.5rem; height:0.5rem; margin-right:0.3rem; background:var(--agent); }} .legend-cell.starved {{ border:1px dotted var(--amber); background:transparent; }} .legend-cell.unassessed {{ height:auto; background:none; color:var(--fg-3); }}
+    .legend {{ display:grid; grid-template-columns:2fr 1fr; gap:1rem; margin:1rem 0; padding:0.75rem; border:1px solid var(--border); background:var(--bg-surface); }} .legend ul {{ display:flex; gap:0.5rem 1rem; flex-wrap:wrap; list-style:none; padding:0; margin:0.35rem 0 0; }} .legend-cell {{ display:inline-block; width:1.5rem; height:0.5rem; margin-right:0.3rem; background:var(--agent); }} .legend-cell.starved {{ border:1px dotted var(--amber); background:transparent; }} .legend-cell.unassessed {{ height:auto; background:none; color:var(--fg-2); }}
     .dimension-rail {{ position:sticky; top:0; z-index:2; display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin-left:auto; width:13rem; padding:0.25rem; background:var(--bg-base); color:var(--fg-2); font:0.7rem ui-monospace,monospace; text-align:center; }}
     .capability {{ margin:0.5rem 0 0.5rem calc(var(--depth) * 1.375rem); border:1px solid var(--border); border-left:0.25rem solid var(--unknown); border-radius:0.25rem; background:var(--bg-surface); }}
     summary {{ cursor:pointer; list-style:none; }} summary::-webkit-details-marker {{ display:none; }} summary::before {{ content:"+"; color:var(--fg-2); font-family:ui-monospace,monospace; }} details[open] > summary::before {{ content:"−"; }} .capability-summary {{ min-height:2.75rem; display:flex; gap:0.5rem; align-items:center; padding:0.625rem 0.75rem; }} .capability-summary:hover {{ background:var(--bg-overlay); }} .tree-name {{ flex:1; font-weight:600; }}
     .capability-status {{ color:var(--fg-2); font-size:0.8rem; }} .summary-flags {{ display:flex; gap:0.25rem; }} .flag,.badge,.lifecycle {{ border:1px solid var(--border-strong); border-radius:0.1875rem; padding:0.125rem 0.375rem; font:0.7rem ui-monospace,monospace; white-space:nowrap; }} .flag-stale {{ background:var(--amber); color:var(--bg-base); }} .flag-low {{ border-color:var(--amber); color:var(--amber); }} .flag-candidate {{ border-color:var(--agent); color:var(--agent); }} .gap-link {{ color:var(--accent); text-decoration:none; }}
-    .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
+    .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-2); text-align:center; line-height:0.55rem; }}
     .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .capability-technical-summary {{ display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
     .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
     .design-hub {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .design-hub-caption {{ color:var(--fg-2); }} .design-hub-adapters,.design-hub-runs {{ list-style:none; margin:0.5rem 0; padding:0; }} .design-hub-adapter,.design-hub-run {{ margin:0.5rem 0; padding:0.625rem 0.75rem; border:1px solid var(--border-strong); border-left-width:0.2rem; border-left-style:solid; border-left-color:var(--unknown); background:var(--bg-raised); }} .design-hub-available {{ border-left-color:var(--healthy); }} .design-hub-unavailable {{ border-left-color:var(--amber); }} .design-hub-limitation,.design-hub-refusal,.design-hub-excluded {{ color:var(--fg-2); border-left:0.2rem solid var(--amber); padding-left:0.5rem; }} .design-hub-receipts {{ padding-left:1.25rem; }} .design-hub-receipts li {{ margin:0.3rem 0; }} .design-hub-handoff {{ margin-top:0.5rem; padding:0.5rem 0.625rem; border:1px dashed var(--border-strong); }}

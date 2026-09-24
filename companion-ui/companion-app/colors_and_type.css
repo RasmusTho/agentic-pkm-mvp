@@ -1,5 +1,5 @@
 /* ============================================================
-   Yggdrasil Design System v2.0.0 — Colors & Type
+   Yggdrasil Design System v2.1.0 — Colors & Type
    ============================================================
    GENERATED from design-system/yggdrasil/ by build.py. Do not edit;
    change the token source and run: python3 design-system/yggdrasil/build.py
@@ -125,6 +125,16 @@
   --material-on-glass-2: #7a9ab8;
   --material-rim-light: none;
   --material-chroma-split: none;
+  --surface-page: var(--bg-base);   /* app frame behind the panels */
+  --surface-panel: var(--bg-surface);   /* side panels and rails */
+  --surface-main: transparent;   /* main reading column */
+  --surface-panel-border: var(--border);
+  --surface-panel-shadow: none;
+  --surface-panel-radius: 0px;
+  --surface-frame-gap: 0px;   /* gap between panels; the page shows through */
+  --surface-title-shadow: none;
+  --surface-panel-filter: none;   /* backdrop filter on panels; frost when the sheet is translucent */
+  --surface-reading: var(--bg-base);   /* note body and source editor reading surface */
   --control-height: 36px;
   --row-height: 40px;
 }
@@ -316,34 +326,35 @@ hr {
    THEME — Yggdrasil Light "Shell" (trial, opt-in)
    ============================================================ */
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg-base: #e4e6eb;
   --bg-surface: #f1f2f5;
   --bg-raised: #ffffff;
   --bg-overlay: #e9ebef;
   --bg-modal: #ffffff;
   --fg-1: #0f1014;
-  --fg-2: #50545e;
+  --fg-2: #3f424a;
   --fg-3: #a0a4ad;
   --fg-inverse: #ffffff;
   --border: #d3d6dc;
   --border-strong: #0f1014;
   --border-focus: #007f8c;
-  --accent: #6b4d00;
+  --accent: #573e00;
   --accent-dim: #e8b440;
   --accent-muted: #fbf3df;
-  --cyan: #006470;
+  --cyan: #004a53;
   --cyan-dim: #00d4e8;
   --cyan-muted: #dff8fb;
-  --vault: #0b6334;
+  --vault: #094d29;
   --vault-dim: #16c95e;
   --vault-muted: #e0f7e9;
-  --agent: #1f45b8;
+  --agent: #1a3999;
   --agent-dim: #2f6bff;
   --agent-muted: #e3ebff;
-  --amber: #8a4300;
+  --amber: #6a3400;
   --amber-dim: #ff8a1a;
   --amber-muted: #fff0e0;
-  --destructive: #b3162c;
+  --destructive: #841021;
   --destructive-dim: #ff1f4b;
   --destructive-muted: #ffe3e8;
   --accent-mark: #e8b440;
@@ -360,41 +371,52 @@ hr {
   --material-glass: rgba(10,8,24,0.74);
   --material-on-glass: #ffffff;
   --material-on-glass-2: rgba(255,255,255,0.8);
-  --material-sheet: linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
+  --material-sheet: linear-gradient(160deg, rgba(255,255,255,0.81) 0%, rgba(241,242,245,0.75) 45%, rgba(228,230,235,0.75) 100%);
   --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
   --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
+  --surface-page: var(--material-backdrop);
+  --surface-panel: var(--material-sheet);
+  --surface-main: var(--material-sheet);
+  --surface-panel-border: transparent;
+  --surface-panel-shadow: var(--material-rim-light);
+  --surface-panel-radius: 2px;
+  --surface-frame-gap: 10px;
+  --surface-title-shadow: var(--material-chroma-split);
+  --surface-panel-filter: blur(4px) saturate(1.3);
+  --surface-reading: repeating-linear-gradient(0deg, rgba(15,16,20,0.035) 0 1px, transparent 1px 4px), linear-gradient(90deg, transparent 0 11%, rgba(0,229,255,0.16) 11% calc(11% + 1px), transparent calc(11% + 1px) 73%, rgba(255,31,75,0.14) 73% calc(73% + 2px), transparent calc(73% + 2px)), linear-gradient(rgba(228,230,235,0.86), rgba(228,230,235,0.86));
 }
 
 @media (prefers-color-scheme: light) {
   :root[data-theme="system"] {
+    color-scheme: light;
     --bg-base: #e4e6eb;
     --bg-surface: #f1f2f5;
     --bg-raised: #ffffff;
     --bg-overlay: #e9ebef;
     --bg-modal: #ffffff;
     --fg-1: #0f1014;
-    --fg-2: #50545e;
+    --fg-2: #3f424a;
     --fg-3: #a0a4ad;
     --fg-inverse: #ffffff;
     --border: #d3d6dc;
     --border-strong: #0f1014;
     --border-focus: #007f8c;
-    --accent: #6b4d00;
+    --accent: #573e00;
     --accent-dim: #e8b440;
     --accent-muted: #fbf3df;
-    --cyan: #006470;
+    --cyan: #004a53;
     --cyan-dim: #00d4e8;
     --cyan-muted: #dff8fb;
-    --vault: #0b6334;
+    --vault: #094d29;
     --vault-dim: #16c95e;
     --vault-muted: #e0f7e9;
-    --agent: #1f45b8;
+    --agent: #1a3999;
     --agent-dim: #2f6bff;
     --agent-muted: #e3ebff;
-    --amber: #8a4300;
+    --amber: #6a3400;
     --amber-dim: #ff8a1a;
     --amber-muted: #fff0e0;
-    --destructive: #b3162c;
+    --destructive: #841021;
     --destructive-dim: #ff1f4b;
     --destructive-muted: #ffe3e8;
     --accent-mark: #e8b440;
@@ -411,9 +433,19 @@ hr {
     --material-glass: rgba(10,8,24,0.74);
     --material-on-glass: #ffffff;
     --material-on-glass-2: rgba(255,255,255,0.8);
-    --material-sheet: linear-gradient(160deg, #ffffff 0%, #f1f2f5 45%, #e4e6eb 100%);
+    --material-sheet: linear-gradient(160deg, rgba(255,255,255,0.81) 0%, rgba(241,242,245,0.75) 45%, rgba(228,230,235,0.75) 100%);
     --material-rim-light: -14px 0 40px -14px rgba(0,229,255,0.9), 14px 0 40px -14px rgba(255,31,75,0.95);
     --material-chroma-split: -1.5px 0 0 rgba(0,229,255,0.55), 1.5px 0 0 rgba(255,31,75,0.55);
+    --surface-page: var(--material-backdrop);
+    --surface-panel: var(--material-sheet);
+    --surface-main: var(--material-sheet);
+    --surface-panel-border: transparent;
+    --surface-panel-shadow: var(--material-rim-light);
+    --surface-panel-radius: 2px;
+    --surface-frame-gap: 10px;
+    --surface-title-shadow: var(--material-chroma-split);
+    --surface-panel-filter: blur(4px) saturate(1.3);
+    --surface-reading: repeating-linear-gradient(0deg, rgba(15,16,20,0.035) 0 1px, transparent 1px 4px), linear-gradient(90deg, transparent 0 11%, rgba(0,229,255,0.16) 11% calc(11% + 1px), transparent calc(11% + 1px) 73%, rgba(255,31,75,0.14) 73% calc(73% + 2px), transparent calc(73% + 2px)), linear-gradient(rgba(228,230,235,0.86), rgba(228,230,235,0.86));
   }
 }
 

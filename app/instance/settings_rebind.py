@@ -614,12 +614,30 @@ class SettingsRebindActivation:
                 or current.candidate_binding_id != expected_candidate_binding_id
             ):
                 return
+            # A restored no-target posture keeps the cleared binding as prior,
+            # so ``cancelled`` with neither binding means only "never bound"
+            # to the watcher (#5644).
+            restored_prior = (
+                prior.candidate_binding_id
+                if prior.candidate_binding_id is not None
+                else prior.prior_binding_id
+            )
+            if (
+                prior.candidate_binding_id is None
+                and restored_prior is not None
+                and restored_prior not in snapshot.registrations
+                and restored_prior not in snapshot.removal_tombstones
+            ):
+                # The cleared binding was removed during the wait. Falling
+                # back to "never bound" is safer than failing the cancel and
+                # stranding the prepared revision.
+                restored_prior = None
             cancelled = replace(
                 current,
                 applied_revision=current.desired_revision,
                 phase="cancelled",
                 lifecycle_posture="watcher",
-                prior_binding_id=prior.candidate_binding_id,
+                prior_binding_id=restored_prior,
                 candidate_binding_id=prior.candidate_binding_id,
                 reload_revision=current.desired_revision,
                 scalar_drain_revision=current.desired_revision,
@@ -642,6 +660,9 @@ class SettingsRebindActivation:
         if current.candidate_binding_id == candidate_binding_id:
             if current.phase in {"dormant", "no_lifecycle", "cancelled"}:
                 if current.phase == "no_lifecycle":
+                    current = self._commit_uncommitted_selection(
+                        current, selection, default_change=default_change
+                    )
                     return self._reload_if_needed(current, candidate_root)
                 return current
             if current.phase == "committed":
@@ -715,6 +736,46 @@ class SettingsRebindActivation:
         self._wait_for_completed_if_enabled(committed)
         committed = self._reload_if_needed(committed, candidate_root)
         return committed
+
+    def _commit_uncommitted_selection(
+        self,
+        record: SettingsRebindRecord,
+        selection: KnownVaultRef | None,
+        *,
+        default_change: tuple[str | None, str | None] | None,
+    ) -> SettingsRebindRecord:
+        """Commit a no_lifecycle candidate whose selection never became durable.
+
+        A revision can reach ``no_lifecycle`` without its foreground selection
+        commit when the requesting call timed out before a late acknowledgement
+        (#5644). Re-selecting that candidate must finish the commit rather than
+        report success while the picker history still names no vault.
+        """
+
+        if selection is None or record.candidate_binding_id is None:
+            return record
+        with compatibility_ingress_window(self.store._registry, transition=True):
+            current = self.store.read()
+            if (
+                current.phase != "no_lifecycle"
+                or current.desired_revision != record.desired_revision
+                or current.candidate_binding_id != record.candidate_binding_id
+            ):
+                return current
+            snapshot = self.store._registry.load()
+            if default_change is None:
+                if snapshot.last_active_vault_ref == selection.ref:
+                    return current
+            elif (
+                snapshot.default_vault_binding_id,
+                snapshot.default_vault_provenance,
+            ) == default_change:
+                return current
+            return self.store.commit_selection(
+                desired_revision=current.desired_revision,
+                selection=selection,
+                default_change=default_change,
+            )
 
     def _wait_for_completed_if_enabled(self, record: SettingsRebindRecord) -> None:
         if self.watcher_enabled:

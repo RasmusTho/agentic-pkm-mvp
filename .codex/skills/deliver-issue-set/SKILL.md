@@ -126,6 +126,30 @@ Use this mode when the user asks to deliver the epic, finish all ready issues, w
 
 Delivery mode may claim, implement, publish, verify, merge, and close issues only through the repo's existing skills and only when each step's prerequisites are satisfied.
 
+#### Full-set completion invariant
+
+When the user requests delivery, the outcome is the entire explicitly resolved in-scope set—not
+one issue, one worker wave, or only the issues that were ready at the start. Efficiency and
+proportionality rules may change context size, batch size, scheduling, and verification depth; they
+must not silently narrow the requested scope or turn delivery into best-effort execution.
+
+Keep coordinating until every in-scope issue has completed the repo delivery chain through
+`verification-and-closure`. After each issue, worker return, PR, or wave, reconcile the complete set
+against live authority and resume the Delivery Procedure:
+
+- finish published or pending work through its required review, verification, merge, and closure;
+- for every blocker, run the no-progress final gate and carry out any source-authorized repair or
+  remediation before returning to delivery; and
+- while a genuine human decision is pending for one issue, continue every independent authorized
+  issue and any other work that can safely proceed.
+
+A blocked issue is not a reason to stop the whole set while another authorized next action exists.
+Do not end delivery after planning, dispatch, one merged child, a queued verifier, a blocker report,
+or a stop-loss on one issue. Stop the run early only when the canonical workflow verifies that no
+authorized work can proceed without a genuine human/external action, or the user explicitly stops
+the run. In either case, report the set as incomplete, identify every remaining issue and its next
+action/owner, and never describe the partial set as delivered.
+
 Delivery rules:
 
 - Use epic run-state v0 as coordination evidence for any delivery-mode epic or parent-feature run
@@ -255,12 +279,14 @@ claim, stop and report the collision instead of implementing. If the dispatcher 
 collision checks against the live issue/project state and explicit lease signal; when live evidence
 conflicts, the coordinator must reconcile, release, or choose a different issue before work continues.
 
-Delivery mode is complete only when every in-scope issue is either:
+Delivery is complete only when every in-scope issue is delivered and verified through
+`verification-and-closure`.
 
-- delivered and verified through `verification-and-closure`, or
-- explicitly classified as non-executable only after the no-progress final gate establishes that no small, source-authorized remediation can be created, repaired, claimed, or continued; the maintenance receipt must name the blocker, next action, and verified human-authority need when one remains
-
-Do not report the whole epic or Kanban scope as delivered while blocked or non-executable issues are silently left behind.
+If the no-progress final gate proves that an issue is non-executable, the run may pause or stop under
+the canonical workflow, but the requested delivery remains incomplete. The maintenance receipt must
+name the blocker, next action, and verified human-authority need when one remains. Continue all other
+authorized work before pausing the run. Never report the whole epic or Kanban scope as delivered while
+any in-scope issue remains blocked or non-executable.
 
 ### No-progress final gate
 
@@ -450,7 +476,8 @@ When delivery mode is active:
 8. Run `pr-integration` only if readiness/repair triggers apply.
 9. Run `verification-and-closure` to verify every `Verify:` target, merge when prerequisites are met, close/update lifecycle state, and invoke post-merge owner-doc routing.
 10. Record the delivery receipt on the issue and parent validation hub when relevant.
-11. Recompute remaining scope and repeat until the epic/Kanban scope is delivered or blocked.
+11. Recompute the complete remaining scope and repeat. A blocker routes through the full-set
+    completion invariant above; it is not itself a delivery stopping point.
 
 If the work spans multiple sub-agents:
 
@@ -523,6 +550,8 @@ Apply `.codex/skills/README.md :: Workflow continuation`.
 In delivery mode, require each issue owner to execute publication, conditional integration, and
 `verification-and-closure`. Resume a worker that returns only a published PR, pending checks, or a
 verification queue entry; do not treat its handoff as delivery. Follow any required executor to
-reconciled delivery or documented stop-loss before relinquishing ownership. Continue other
-independent authorized work when one slice is blocked; plan-only mode ends at its requested verified
-plan.
+reconciled delivery or documented stop-loss before relinquishing ownership. After every worker return,
+reconcile the full issue set and resume the Delivery Procedure until it is delivered or the verified
+early-stop conditions in the full-set completion invariant apply. A per-issue stop-loss never closes
+the set. Continue other independent authorized work when one slice is blocked; plan-only mode ends at
+its requested verified plan.

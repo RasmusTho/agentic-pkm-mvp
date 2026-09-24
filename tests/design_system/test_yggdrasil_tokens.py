@@ -145,7 +145,7 @@ def test_swift_and_json_outputs_match_token_source() -> None:
     assert flattened["themes"]["dark"]["status-success"] == "#39e87d"
     assert flattened["themes"]["shell"]["color-bg"] == "#e4e6eb"
     assert flattened["themes"]["dark"]["accent"] == "#d4a843"
-    assert flattened["themes"]["shell"]["accent"] == "#6b4d00"
+    assert flattened["themes"]["shell"]["accent"] == "#573e00"
 
 
 def test_font_imports_use_google_fonts_only() -> None:
@@ -187,3 +187,77 @@ def test_reduced_motion_zeroes_durations() -> None:
     block = css.split("@media (prefers-reduced-motion: reduce)", 1)[1].split("\n}", 1)[0]
     for name in ("duration-fast", "duration-base", "duration-slow"):
         assert f"--{name}: 0ms;" in block
+
+
+def test_tokens_only_sheet_has_no_element_defaults() -> None:
+    """dist/yggdrasil-tokens.css carries the same tokens but no v1 element defaults or utilities."""
+    build = _build()
+    tokens_only = (REPO_ROOT / build.TOKENS_CSS_OUTPUT).read_text(encoding="utf-8")
+    assert _root_tokens(tokens_only) == _root_tokens(BINDING.read_text(encoding="utf-8"))
+    rules = _rules(tokens_only)
+    assert rules
+    not_opt_in = [
+        selector
+        for selector, body in rules
+        if not any(marker in selector or marker in body for marker in OPT_IN_MARKERS + ACCESSIBILITY_MARKERS)
+    ]
+    assert not_opt_in == []
+
+
+def test_shell_sets_light_color_scheme() -> None:
+    """Native controls follow Shell; a production :root{color-scheme:dark} is overridden by specificity."""
+    css = BINDING.read_text(encoding="utf-8")
+    light = css.split(':root[data-theme="light"] {', 1)[1].split("\n}", 1)[0]
+    system = css.split(':root[data-theme="system"] {', 1)[1].split("\n  }", 1)[0]
+    assert "color-scheme: light;" in light
+    assert "color-scheme: light;" in system
+
+
+_HEX = re.compile(r"#([0-9a-fA-F]{6})\b")
+_RGBA_STOP = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)")
+
+
+def _composite(fg: int, alpha: float, bg: int) -> int:
+    out = 0
+    for shift in (16, 8, 0):
+        channel = alpha * ((fg >> shift) & 0xFF) + (1 - alpha) * ((bg >> shift) & 0xFF)
+        out |= round(channel) << shift
+    return out
+
+
+def _ratio(a: int, b: int) -> float:
+    light, dark = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def test_shell_text_holds_aa_over_translucent_sheet() -> None:
+    """#5652: Shell text stays AA where the city shows through the porcelain."""
+    build = _build()
+    source = build.load()
+    values = json.loads((DS / "tokens" / "css-values.json").read_text(encoding="utf-8"))["shell"]
+    contract = json.loads((DS / "tokens" / "contrast.json").read_text(encoding="utf-8"))
+    colors = build.resolve_colors(build.theme_roles(source, "shell"))
+    # Every solid colour the city can place behind a sheet, plus white glitch streaks.
+    anchors = {int(h, 16) for h in _HEX.findall(values["material-backdrop"]["$value"])} | {0xFFFFFF}
+    stops = [
+        ((int(r) << 16) | (int(g) << 8) | int(b), float(a))
+        for r, g, b, a in _RGBA_STOP.findall(values["material-sheet"]["$value"])
+    ]
+    assert stops and min(alpha for _, alpha in stops) < 1.0
+    failures = []
+    for text in contract["themes"]["shell"]["text"]:
+        ink, _ = colors[text]
+        for sheet, alpha in stops:
+            for anchor in anchors:
+                ratio = _ratio(ink, _composite(sheet, alpha, anchor))
+                if ratio < contract["minimum"]:
+                    failures.append((text, f"{sheet:06x}@{alpha}", f"{anchor:06x}", round(ratio, 2)))
+    assert failures == []
+
+
+def test_surface_tokens_keep_dark_unchanged() -> None:
+    """#5652: the new surface tokens resolve to Dark's existing look."""
+    values = json.loads((DS / "tokens" / "css-values.json").read_text(encoding="utf-8"))
+    assert values["root"]["surface-panel-filter"]["$value"] == "none"
+    assert values["root"]["surface-reading"]["$value"] == "var(--bg-base)"
+    assert "animation" not in values["shell"]["surface-reading"]["$value"]

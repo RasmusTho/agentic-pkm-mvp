@@ -64,6 +64,12 @@ def _neutral_llm_contract_section() -> configparser.SectionProxy:
     return parser["importlinter:contract:neutral-llm-contract-kernel"]
 
 
+def _model_access_router_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:model-access-router-policy-neutral"]
+
+
 def _module_list(raw: str) -> Set[str]:
     # configparser drops full-line "#" comments inside multiline values, so the
     # surviving lines are real module names.
@@ -224,6 +230,16 @@ def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
     section = _neutral_llm_contract_section()
     assert _module_list(section["source_modules"]) == {"llm_contract"}
     assert _module_list(section["forbidden_modules"]) == {"app"}
+
+
+def test_shared_model_access_router_stays_policy_neutral() -> None:
+    section = _model_access_router_contract_section()
+    assert section["type"] == "forbidden"
+    assert _module_list(section["source_modules"]) == {"app.model_access"}
+    assert _module_list(section["forbidden_modules"]) == {
+        "app.components.llm",
+        "app.builderops",
+    }
 
 
 # ---------------------------------------------------------------------------

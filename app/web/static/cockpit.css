@@ -14,7 +14,7 @@ body{background:var(--bg-base);min-height:100vh}
 .sw-row label:hover{background:var(--bg-overlay);color:var(--fg-1)}
 .sw-row input[type=radio]{accent-color:var(--cyan);margin:0 -2px 0 0;cursor:pointer}
 .sw-row input:checked+label{background:var(--bg-overlay);color:var(--fg-1);border-color:var(--cyan);box-shadow:var(--cyan-glow)}
-.radios input:focus-visible+label,.sw-row label:focus-visible,.sw-row input:focus-visible{outline:1px solid var(--cyan);outline-offset:2px;box-shadow:var(--cyan-glow)}
+.radios input:focus-visible+label,.sw-row label:focus-visible,.sw-row input:focus-visible{outline:2px solid var(--border-focus);outline-offset:2px;box-shadow:none}
 .doc-note{font-family:var(--font-ui);font-size:var(--text-sm);color:var(--fg-2);max-width:56ch;margin-left:auto}
 .pane{display:none}
 
@@ -49,7 +49,7 @@ body:has(#fq4:checked) #f4{display:flex}
    colour, no amber, no raised background: the pill still names itself and its
    reason, it just stops competing for attention it does not deserve. */
 .src.off{border-left-color:var(--border);background:transparent}
-.src.off b,.src.off span{color:var(--fg-3)}
+.src.off b,.src.off span{color:var(--fg-2)}
 
 /* ---------- legend, always visible ---------- */
 .legend{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:var(--space-6);border:1px solid var(--border);background:var(--bg-surface);padding:var(--space-4) var(--space-5);margin-bottom:var(--space-8)}
@@ -104,7 +104,7 @@ body:has(#fq4:checked) #f4{display:flex}
 .card>summary{list-style:none;cursor:pointer;padding:var(--space-3) var(--space-4);display:flex;flex-direction:column;gap:var(--space-2)}
 .card>summary::-webkit-details-marker{display:none}
 .card>summary:hover{background:var(--bg-overlay)}
-.card>summary:focus-visible{outline:1px solid var(--cyan);outline-offset:-1px;box-shadow:var(--cyan-glow)}
+.card>summary:focus-visible{outline:2px solid var(--border-focus);outline-offset:-2px;box-shadow:none}
 .card .meta{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2)}
 .card h3{font-size:var(--text-base);font-weight:var(--weight-medium);line-height:var(--leading-snug);color:var(--fg-1)}
 .card .why{font-size:var(--text-sm);color:var(--fg-2);line-height:var(--leading-snug)}
@@ -120,7 +120,7 @@ body:has(#fq4:checked) #f4{display:flex}
 .chip-partial{border-color:var(--amber);color:var(--amber);border-style:dotted}
 .chip-receipt{border-color:var(--vault-dim);color:var(--vault)}
 .chip-agent{border-color:var(--agent-dim);color:var(--agent)}
-.chip-empty{color:var(--fg-3);border-style:dashed}
+.chip-empty{color:var(--fg-2);border-style:dashed}
 
 /* ---------- receipt line: dated claim, never a dot ---------- */
 .receipt{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;font-family:var(--font-mono);font-size:var(--text-xs);color:var(--vault);border-top:1px solid var(--border);padding:var(--space-2) var(--space-4);background:var(--vault-muted)}
@@ -139,7 +139,7 @@ body:has(#fq4:checked) #f4{display:flex}
 .rungs .r-val{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);overflow-wrap:break-word}
 @media (max-width:1300px){.rungs li{grid-template-columns:15px minmax(0,1fr) auto;row-gap:2px}.rungs .r-val{grid-column:2 / 4;grid-row:2}}
 .rungs .r-cls{font-family:var(--font-mono);font-size:var(--text-xs);white-space:nowrap}
-.r-p .r-cls{color:var(--cyan)}.r-d .r-cls{color:var(--fg-3)}.r-a .r-cls{color:var(--amber)}.r-n .r-cls{color:var(--fg-3)}
+.r-p .r-cls{color:var(--cyan)}.r-d .r-cls{color:var(--fg-2)}.r-a .r-cls{color:var(--amber)}.r-n .r-cls{color:var(--fg-2)}
 .rungs li.r-a{background:var(--amber-muted)}
 .dot{width:7px;height:7px;border-radius:var(--radius-full);justify-self:center}
 .dot.p{background:var(--cyan)}.dot.d{background:var(--fg-3)}.dot.a{background:transparent;border:1px dotted var(--amber)}.dot.n{background:transparent;border:1px solid var(--border-strong)}
@@ -199,7 +199,7 @@ body:has(#fq4:checked) #f4{display:flex}
 .node{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-raised);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-2);font-size:var(--text-sm);color:var(--fg-1)}
 .node .n-id{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);display:block}
 .node-ghost{border-style:dotted;border-color:var(--amber);background:transparent;color:var(--amber)}
-.node-abs{border-style:dashed;border-color:var(--fg-3);background:transparent;color:var(--fg-3)}
+.node-abs{border-style:dashed;border-color:var(--fg-3);background:transparent;color:var(--fg-2)}
 .node-p{border-left:2px solid var(--cyan)}
 .node-d{border-left:2px dashed var(--fg-3)}
 .graf-group{margin-bottom:var(--space-5)}

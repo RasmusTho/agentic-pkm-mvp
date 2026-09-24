@@ -426,6 +426,11 @@ Companion docs:
   Markdown read-back, mixed-language segments may route to different voices, and production
   deployment depends on an explicitly configured, Tailscale-reachable external Ollama endpoint; the
   Mac mini is model-serving infrastructure only.
+- Repository-side Model Access Router work may add a bounded Codex CLI adapter, but that adapter is
+  not a host activation or Product route. Until the separate designated-host and Tailscale
+  acceptance is complete, the Mac mini remains Ollama/model-serving only; no Product inference is
+  routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
+  a merged code change.
 - Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
   runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
   fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,

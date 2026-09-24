@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Theme — Shell (trial)" name="Shell component grammar" subtitle="Square status markers · graphite primary with chroma split · underline input · agent band · staged · selection" viewport="700x300" -->
+<html lang="en" data-theme="light">
+<head><meta charset="UTF-8"><link rel="stylesheet" href="../colors_and_type.css">
+<style>
+body { background: var(--surface-main); padding: 20px 24px; min-height: 100vh; }
+.meta { font-family: var(--font-mono); font-size: 10px; color: var(--fg-2); letter-spacing: 0.14em; text-transform: uppercase; margin: 16px 0 8px; }
+.meta:first-child { margin-top: 0; }
+.row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.status { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; }
+.status i { width: 7px; height: 7px; display: inline-block; }
+.btn { font-family: var(--font-ui); font-size: 13px; font-weight: 500; height: var(--control-height); padding: 0 16px; border-radius: var(--radius-sm); cursor: pointer; }
+.primary { background: var(--fg-1); color: var(--fg-inverse); border: 0; box-shadow: var(--material-chroma-split); }
+.secondary { background: transparent; color: var(--fg-1); border: 1px solid var(--border-strong); }
+.field { display: grid; gap: 4px; width: 150px; }
+.field label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-2); }
+.field input { font: inherit; font-size: 14px; background: transparent; border: 0; border-bottom: 1px solid var(--border-strong); padding: 4px 0; color: var(--fg-1); outline: none; }
+.field.focus input { border-bottom: 2px solid var(--border-focus); box-shadow: 0 2px 0 0 var(--destructive-mark); }
+.agent { background: repeating-linear-gradient(0deg, rgba(47,107,255,0.05) 0 1px, transparent 1px 3px), linear-gradient(90deg, var(--agent-muted), rgba(106,43,255,0.06)); border-left: 2px solid var(--agent-mark); padding: 10px 14px; font-size: 13px; color: var(--fg-1); flex: 1; min-width: 260px; }
+.agent b { display: block; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--agent); font-weight: 500; margin-bottom: 4px; }
+.staged { background: linear-gradient(90deg, var(--amber-muted), transparent 70%); border-left: 2px solid var(--amber-mark); padding: 10px 14px; font-family: var(--font-mono); font-size: 11px; color: var(--amber); flex: 1; min-width: 200px; }
+.selected { background: var(--bg-raised); padding: 10px 14px; font-size: 13px; color: var(--fg-1); box-shadow: -2px 0 0 0 var(--destructive-mark), -4px 0 0 0 var(--cyan-mark); margin-left: 4px; }
+</style>
+</head>
+<body>
+  <div class="meta">Status · square mark, ink label</div>
+  <div class="row">
+    <span class="status" style="color:var(--vault)"><i style="background:var(--vault-mark)"></i>Indexed</span>
+    <span class="status" style="color:var(--agent)"><i style="background:var(--agent-mark)"></i>Suggested</span>
+    <span class="status" style="color:var(--amber)"><i style="background:var(--amber-mark)"></i>Staged</span>
+    <span class="status" style="color:var(--cyan)"><i style="background:var(--cyan-mark)"></i>Active</span>
+    <span class="status" style="color:var(--destructive)"><i style="background:var(--destructive-mark)"></i>Error</span>
+  </div>
+  <div class="meta">Actions and input</div>
+  <div class="row">
+    <button class="btn primary">Apply to note</button>
+    <button class="btn secondary">Discard</button>
+    <div class="field"><label>Note path</label><input value="Projects/Q3-plan.md"></div>
+    <div class="field focus"><label>Focused</label><input value="Inbox/"></div>
+  </div>
+  <div class="meta">Agent voice · staged · selection</div>
+  <div class="row">
+    <div class="agent"><b>Hugin</b>Suggested: split this section into three sub-claims.</div>
+    <div class="staged">Staged · Projects/Q3-plan.md</div>
+    <div class="selected">Vault restructure</div>
+  </div>
+</body>
+</html>

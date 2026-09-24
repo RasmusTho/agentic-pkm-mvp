@@ -63,7 +63,9 @@ def _display_preferences_script(html: str) -> str:
     # key to the end of its own <script> block. (The previous end marker,
     # `window.noteEditor`, leaked the unrelated read-back script into the
     # slice once it gained network calls.)
-    start = html.index("companion.displayPreferences.v1")
+    # The pre-paint theme bootstrap (YDS-03 #5629) only reads the key; the
+    # owning script is the one that declares it.
+    start = html.index("var storageKey = 'companion.displayPreferences.v1'")
     end = html.index("</script>", start)
     return html[start:end]
 

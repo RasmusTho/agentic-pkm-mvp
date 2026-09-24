@@ -1,6 +1,6 @@
 ---
 name: Migrate the Builder Surfaces
-description: Move every Builder System UI, including the served managed DevUI, onto the generated tokens with compact density.
+description: Move the web Builder System UIs onto the generated tokens with compact density; the managed DevUI is split to #5637.
 task_id: YDS-04
 github_issue: 5630
 source_anchor: "docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Consumers"
@@ -19,29 +19,29 @@ palettes.
 
 ## What This Task Does
 
-- Moves `app/web/static/signboard.*`, `app/web/static/index.html`,
-  `app/builderops/ckm/overview_html.py`, `companion_ui/workspace/devui_candidate/devui.css`, and
-  the served managed stylesheet `app/builderops/devui_managed.css` onto tokens from the served
-  binding sheet.
-- Gives the served DevUI a token source. Today `overview.html` and `focus.html` load only
-  `/devui/assets/devui.css`, and `ROUTES` in `app/builderops/devui_assets.py` exposes no token
-  sheet. This task adds a `/devui/assets/colors_and_type.css` route that serves the generated
-  sheet, references it from both served HTML pages before `devui.css`, and removes the inline
-  `:root` declarations from `devui_managed.css` only after that.
-- Updates `ASSET_SHA256` in `app/builderops/devui_assets.py` for every changed asset (the new token
-  sheet, `devui.css`, `overview.html`, `focus.html`) and its provenance tests, in the same change.
-- Moves readable `var(--fg-3)` uses to `fg-2` (including `cockpit.*`), opts in to the new focus
-  ring, and sets compact density on every Builder surface.
+- Moves `app/web/static/signboard.*` and `app/web/static/index.html` onto the generated
+  tokens-only sheet (`app/web/static/yggdrasil-tokens.css`), replacing their local palettes.
+- Moves `app/builderops/ckm/overview_html.py` onto the same tokens. The overview is written as a
+  standalone file, so it embeds the generated sheet at render time (without the web-font
+  `@import`) instead of linking `/static`.
+- Moves readable `var(--fg-3)` uses to `fg-2` in those surfaces and in `cockpit.*`, opts in to the
+  v2 focus ring, and sets compact density on every page. Print styles stay a deliberate
+  black-on-white exception.
+- **Scope correction (2026-09-23):** the managed DevUI (`app/builderops/devui_managed.css`,
+  `devui_candidate/*`, `devui_assets.py`) moved to #5637. It already renders Yggdrasil Dark (41 of
+  44 inline tokens identical; the three font stacks differ deliberately under its
+  `font-src 'none'` CSP), and changing it needs a new `yggdrasil-constrained-reuse.v1` manifest
+  revision, browser proof, and VM102 receipts.
 
 ## Concretely
 
-The Cockpit, Signboard, legacy dashboard, CKM overview, and DevUI all render from one sheet with
-`data-density="compact"`. The DevUI asset inventory hash matches the new stylesheet.
+Signboard, the legacy dashboard, the Cockpit, and the CKM overview all render from generated
+tokens with `data-density="compact"`.
 
 ## Why This Matters
 
-The shipped DevUI serves `devui_managed.css`, not the candidate file. Migrating only the candidate
-would leave the real DevUI on its old inlined tokens.
+Signboard and the legacy dashboard kept their own green and Tailwind-style palettes, so the
+Builder tools did not share the system.
 
 ## Acceptance Criteria
 
@@ -50,11 +50,8 @@ would leave the real DevUI on its old inlined tokens.
 - [ ] Every `var(--fg-3)` in a Builder consumer sits on an allowlisted disabled, placeholder, or
   decorative selector.
   - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_fg3_only_on_allowlisted_selectors`
-- [ ] Every changed DevUI asset (token sheet, stylesheet, both HTML pages) matches its pinned hash.
-  - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_managed_devui_asset_hash_matches_migrated_stylesheet`
-- [ ] Both served DevUI pages load the token sheet, and every `var(--…)` they use resolves to a
-  declared token.
-  - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_served_devui_pages_resolve_every_token_variable`
+- [ ] Every `var(--…)` used by the migrated Builder surfaces resolves to a declared token.
+  - Verify: `tests/builderops/test_yggdrasil_token_adoption.py::test_builder_token_references_resolve`
 - [ ] The spec records S4 as delivered.
   - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Rollout`
 

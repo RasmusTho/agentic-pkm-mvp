@@ -536,8 +536,8 @@ def receipts_history_modal_markup() -> str:
     }
     .receipts-history-modal[hidden] { display: none; }
     .receipts-history-panel {
-      background: var(--bg-surface, #0c1220);
-      border: 1px solid var(--border-strong, #1e3050);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-lg, 10px);
       box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
       display: flex;
@@ -556,7 +556,7 @@ def receipts_history_modal_markup() -> str:
       justify-content: space-between;
     }
     .receipts-history-title {
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       font-family: var(--font-ui, sans-serif);
       font-size: var(--text-sm, 13px);
       font-weight: 600;
@@ -564,14 +564,14 @@ def receipts_history_modal_markup() -> str:
     .receipts-history-close {
       background: transparent;
       border: none;
-      color: var(--fg-2, #7a9ab8);
+      color: var(--fg-2);
       cursor: pointer;
       font-size: 1.2rem;
       line-height: 1;
       padding: 0 4px;
     }
     .receipts-history-readonly {
-      color: var(--fg-3, #3d5570);
+      color: var(--fg-2);
       font-family: var(--font-mono, monospace);
       font-size: var(--text-xs, 11px);
     }
@@ -590,7 +590,7 @@ def receipts_history_modal_markup() -> str:
       gap: 4px;
     }
     .receipts-history-run-header {
-      color: var(--fg-3, #3d5570);
+      color: var(--fg-2);
       font-family: var(--font-mono, monospace);
       font-size: var(--text-xs, 11px);
     }
@@ -604,7 +604,7 @@ def receipts_history_modal_markup() -> str:
     }
     .receipts-history-row {
       align-items: baseline;
-      border: 1px solid var(--border, #152030);
+      border: 1px solid var(--border);
       border-radius: 8px;
       display: flex;
       flex-wrap: wrap;
@@ -612,19 +612,19 @@ def receipts_history_modal_markup() -> str:
       padding: 8px 10px;
     }
     .receipts-history-verb {
-      color: var(--fg-1, #dce8f0);
+      color: var(--fg-1);
       font-family: var(--font-ui, sans-serif);
       font-size: var(--text-sm, 13px);
       font-weight: 600;
     }
     .receipts-history-target {
-      color: var(--fg-2, #7a9ab8);
+      color: var(--fg-2);
       font-family: var(--font-ui, sans-serif);
       font-size: var(--text-sm, 13px);
       word-break: break-all;
     }
     .receipts-history-integrity {
-      color: var(--fg-3, #3d5570);
+      color: var(--fg-2);
       flex-basis: 100%;
       font-family: var(--font-mono, monospace);
       font-size: var(--text-xs, 11px);
@@ -637,7 +637,7 @@ def receipts_history_modal_markup() -> str:
     .receipts-history-integrity summary::before { content: "\2304 "; }
     .receipts-history-timestamp,
     .receipts-history-id {
-      color: var(--fg-3, #3d5570);
+      color: var(--fg-2);
       font-family: var(--font-mono, monospace);
       font-size: var(--text-xs, 11px);
       word-break: break-all;
@@ -645,21 +645,21 @@ def receipts_history_modal_markup() -> str:
     /* Guard posture: held boundary in the amber/staged family — calm,
        named, and visually distinct from any failure treatment. */
     .receipts-history-row[data-guard-held="true"] {
-      border-color: var(--amber-dim, #805010);
-      border-left: 3px solid var(--amber, #f09030);
+      border-color: var(--amber-dim);
+      border-left: 3px solid var(--amber);
     }
     .receipts-history-row[data-guard-held="true"] .receipts-history-verb {
-      color: var(--amber, #f09030);
+      color: var(--amber);
     }
     .receipts-history-guard-note {
-      color: var(--amber, #f09030);
+      color: var(--amber);
       font-family: var(--font-ui, sans-serif);
       font-size: var(--text-xs, 11px);
     }
     .receipts-history-empty,
     .receipts-history-unavailable,
     .receipts-history-loading {
-      color: var(--fg-2, #7a9ab8);
+      color: var(--fg-2);
       font-size: 13px;
     }
   </style>

@@ -1250,8 +1250,12 @@ def test_cold_start_vault_identity_renders_as_vault_chip() -> None:
     assert ".cold-start-vault-dot {" in html
     dot_rule = html.split(".cold-start-vault-dot {", 1)[1].split("}", 1)[0]
     assert "var(--vault)" in dot_rule, "vault chip dot must use the vault-green token"
-    # --vault is defined in the orientation stylesheet so the dot resolves.
-    assert "--vault: #39e87d" in html
+    # --vault comes from the linked Yggdrasil tokens sheet (YDS-03 #5629), so
+    # the dot resolves to the same vault green as the shell indicator.
+    from companion_ui.workspace.serve_dev_page import YGGDRASIL_TOKENS_URL, vendor_static_assets
+
+    assert f'<link rel="stylesheet" href="{YGGDRASIL_TOKENS_URL}">' in html
+    assert b"--vault: #39e87d;" in vendor_static_assets()[YGGDRASIL_TOKENS_URL][1]
 
 
 def test_cold_start_threshold_is_optically_centred() -> None:

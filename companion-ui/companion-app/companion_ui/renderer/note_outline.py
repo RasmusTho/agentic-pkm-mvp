@@ -59,7 +59,7 @@ def note_outline_css() -> str:
       padding: 18px 14px;
     }
     .note-outline-heading {
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-family: var(--font-mono);
       font-size: var(--text-xs);
       letter-spacing: 0.08em;
@@ -123,7 +123,7 @@ def note_outline_css() -> str:
       color: var(--accent);
     }
     .note-outline-empty-copy {
-      color: var(--fg-3);
+      color: var(--fg-2);
       font-size: var(--text-sm);
     }
     .note-reading-layout > .note-body {
