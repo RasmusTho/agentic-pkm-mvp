@@ -9403,11 +9403,22 @@ def _render_orientation_index_html(
       margin: var(--surface-frame-gap) auto;
       max-width: 1180px;
       padding: 24px;
-      /* Shell material (#5652): Dark resolves these to its unchanged look. */
+      /* Shell material (#5652) sits on a pseudo-element: a backdrop-filter on
+         the shell itself would make it the containing block for the fixed
+         re-entry cues inside it. Dark resolves these tokens to its unchanged look. */
+      isolation: isolate;
+      position: relative;
+    }}
+    .orientation-shell::before {{
       background: var(--surface-main);
       backdrop-filter: var(--surface-panel-filter);
       border-radius: var(--surface-panel-radius);
       box-shadow: var(--surface-panel-shadow);
+      content: "";
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+      z-index: -1;
     }}
     .orientation-header {{
       border-bottom: 1px solid var(--border);

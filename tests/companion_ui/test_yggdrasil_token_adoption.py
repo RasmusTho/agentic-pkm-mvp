@@ -184,5 +184,9 @@ def test_orientation_page_honours_the_theme_preference() -> None:
     assert head.index(YGGDRASIL_TOKENS_URL) < head.index("companion.displayPreferences.v1")
     assert "background: var(--surface-page);" in html
     shell = html[html.index(".orientation-shell {") : html.index("}", html.index(".orientation-shell {"))]
-    assert "background: var(--surface-main);" in shell
-    assert "backdrop-filter: var(--surface-panel-filter);" in shell
+    # The shell must not carry the filter itself: it would capture fixed re-entry cues.
+    assert "backdrop-filter" not in shell
+    layer_start = html.index(".orientation-shell::before {")
+    layer = html[layer_start : html.index("}", layer_start)]
+    assert "background: var(--surface-main);" in layer
+    assert "backdrop-filter: var(--surface-panel-filter);" in layer
