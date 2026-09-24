@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.model_access.remote_contract import (
+    CatalogRequest,
+    CatalogResponse,
     CompletionRequest,
     CompletionResponse,
     PreflightRequest,
@@ -20,6 +22,8 @@ from app.model_access.remote_contract import (
 MAX_REMOTE_RESPONSE_BYTES = 600_000
 MAX_REMOTE_REQUEST_BYTES = 256_000
 MAX_PREFLIGHT_RESPONSE_BYTES = 16_000
+MAX_CATALOG_REQUEST_BYTES = 4_096
+MAX_CATALOG_RESPONSE_BYTES = 2_100_000
 _PREFLIGHT_ERROR_CODES = frozenset(
     {
         "serve_capability_required",
@@ -54,6 +58,11 @@ _PREFLIGHT_ERROR_CODES = frozenset(
         "ollama_completion_unavailable",
         "ollama_response_invalid",
         "ollama_response_too_large",
+        "catalog_unavailable",
+        "catalog_stale",
+        "catalog_invalid",
+        "catalog_auth_failed",
+        "catalog_response_too_large",
     }
 )
 
@@ -69,6 +78,14 @@ class RemoteCompletionError(RuntimeError):
 
 class RemotePreflightError(RuntimeError):
     """Sanitized failure from the dedicated endpoint that never runs inference."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class RemoteCatalogError(RuntimeError):
+    """Sanitized failure from the read-only, authenticated catalog operation."""
 
     def __init__(self, code: str) -> None:
         self.code = code
@@ -132,6 +149,7 @@ class CodexRemoteTransport:
             raise ValueError("remote transport bounds must be positive")
         self._url = _validate_private_https_endpoint(endpoint)
         self._preflight_url = self._url.removesuffix("/v1/complete") + "/v1/preflight"
+        self._catalog_url = self._url.removesuffix("/v1/complete") + "/v1/catalog"
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
         # HTTPX verifies TLS certificates by default; spell this out for the production
@@ -143,6 +161,49 @@ class CodexRemoteTransport:
             follow_redirects=False,
             trust_env=False,
         )
+
+    def catalog(self, request: CatalogRequest) -> CatalogResponse:
+        """Fetch a transport catalog without invoking a model."""
+        try:
+            request_body = json.dumps(
+                request.model_dump(mode="json"),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            raise RemoteCatalogError("catalog_request_invalid") from None
+        if len(request_body) > MAX_CATALOG_REQUEST_BYTES:
+            raise RemoteCatalogError("catalog_request_too_large")
+
+        body = bytearray()
+        try:
+            with self._client.stream(
+                "POST",
+                self._catalog_url,
+                content=request_body,
+                headers={"Content-Type": "application/json"},
+            ) as response:
+                for chunk in response.iter_bytes():
+                    if len(body) + len(chunk) > MAX_CATALOG_RESPONSE_BYTES:
+                        raise RemoteCatalogError("catalog_response_too_large")
+                    body.extend(chunk)
+                if response.status_code != 200:
+                    raise RemoteCatalogError(_catalog_error_code(response.status_code, bytes(body)))
+        except RemoteCatalogError:
+            raise
+        except (httpx.TimeoutException, httpx.TransportError):
+            raise RemoteCatalogError("catalog_unavailable") from None
+        except Exception:
+            raise RemoteCatalogError("catalog_unavailable") from None
+
+        try:
+            result = CatalogResponse.model_validate_json(bytes(body))
+        except Exception:
+            raise RemoteCatalogError("catalog_response_invalid") from None
+        if result.snapshot.transport_id != request.transport_id:
+            raise RemoteCatalogError("catalog_transport_mismatch")
+        return result
 
     def preflight(self, request: PreflightRequest) -> PreflightResponse:
         """Check one exact remote route through the no-inference operation."""
@@ -277,11 +338,29 @@ def _preflight_error_code(status_code: int, body: bytes) -> str:
     return f"preflight_http_{status_code}"
 
 
+def _catalog_error_code(status_code: int, body: bytes) -> str:
+    try:
+        value = json.loads(
+            body.decode("utf-8", errors="strict"),
+            object_pairs_hook=_strict_object_pairs,
+            parse_constant=_reject_json_constant,
+        )
+        code = value.get("error", {}).get("code") if isinstance(value, dict) else None
+    except Exception:
+        code = None
+    if isinstance(code, str) and code in _PREFLIGHT_ERROR_CODES:
+        return code
+    return f"catalog_http_{status_code}"
+
+
 __all__ = [
     "CodexRemoteTransport",
     "MAX_REMOTE_REQUEST_BYTES",
     "MAX_REMOTE_RESPONSE_BYTES",
     "MAX_PREFLIGHT_RESPONSE_BYTES",
+    "MAX_CATALOG_REQUEST_BYTES",
+    "MAX_CATALOG_RESPONSE_BYTES",
     "RemoteCompletionError",
+    "RemoteCatalogError",
     "RemotePreflightError",
 ]

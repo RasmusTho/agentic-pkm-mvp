@@ -30,6 +30,9 @@ SAFE_PROFILE_REF = "profile.codex_cli_no_tools_v2"
 TOOL_SURFACE_CATALOG_VERSION = "codex_cli_tool_surfaces.v2"
 MODEL_CATALOG_SCHEMA_VERSION = "codex_cli_model_catalog.v1"
 _MAX_BUNDLED_CATALOG_BYTES = 2_000_000
+_MAX_ACCOUNT_CATALOG_MODELS = 1_024
+_MAX_ACCOUNT_CATALOG_PAGES = 16
+_ACCOUNT_CATALOG_PAGE_SIZE = 100
 _MAX_SCHEMA_BYTES = 128_000
 _MAX_SCHEMA_NODES = 2_048
 _MAX_SCHEMA_DEPTH = 32
@@ -624,6 +627,237 @@ class CodexCliExecutor:
         )
         return preflight
 
+    def list_catalog_models(self) -> list[dict[str, Any]]:
+        """Read account-visible models using app-server `model/list`; never infer.
+
+        Only an allowlisted subset of the app-server response is returned. In
+        particular, display text, instructions, paths, account metadata, and raw
+        protocol errors never leave this method.
+        """
+        profile = self._require_profile()
+        credential_store = self._credential_store()
+        cli_path = shutil.which(
+            self._executable_name,
+            path=self._environment.get("PATH", ""),
+        )
+        if cli_path is None:
+            raise CodexCliError("cli_missing")
+        try:
+            cli_path = str(Path(cli_path).resolve(strict=True))
+            cli_identity = _executable_identity(Path(cli_path))
+        except OSError as exc:
+            raise CodexCliError("cli_missing") from exc
+
+        version_result = self._run_bounded(
+            [cli_path, "--version"],
+            cwd=None,
+            input_text=None,
+            timeout_seconds=self._preflight_timeout_seconds,
+            expected_executable_identity=cli_identity,
+        )
+        version_text = version_result.stdout.decode("utf-8", errors="replace").strip()
+        if version_result.returncode != 0 or version_text != profile.cli_version:
+            raise CodexCliError("cli_version_unsupported")
+
+        auth_result = self._run_bounded(
+            [
+                cli_path,
+                "-c",
+                f"cli_auth_credentials_store={json.dumps(credential_store)}",
+                "login",
+                "status",
+            ],
+            cwd=None,
+            input_text=None,
+            timeout_seconds=self._preflight_timeout_seconds,
+            expected_executable_identity=cli_identity,
+        )
+        auth_text = (auth_result.stdout + b"\n" + auth_result.stderr).decode(
+            "utf-8", errors="replace"
+        )
+        if any(marker in auth_text.lower() for marker in _SESSION_EXPIRED_MARKERS):
+            raise CodexCliError("session_expired")
+        auth_streams = [
+            stream.decode("utf-8", errors="replace").strip()
+            for stream in (auth_result.stdout, auth_result.stderr)
+            if stream.strip()
+        ]
+        if auth_result.returncode != 0 or auth_streams != ["Logged in using ChatGPT"]:
+            raise CodexCliError("authentication_unavailable")
+
+        models: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _ in range(_MAX_ACCOUNT_CATALOG_PAGES):
+            params: dict[str, Any] = {
+                "limit": _ACCOUNT_CATALOG_PAGE_SIZE,
+                "includeHidden": False,
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
+            initialize_request = {
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {
+                        "name": "model-access-router",
+                        "version": "1",
+                    }
+                },
+            }
+            followup_messages = [
+                {"method": "initialized"},
+                {"id": 2, "method": "model/list", "params": params},
+            ]
+            initialize_text = (
+                json.dumps(initialize_request, separators=(",", ":"), allow_nan=False)
+                + "\n"
+            )
+            followup_text = "\n".join(
+                json.dumps(message, separators=(",", ":"), allow_nan=False)
+                for message in followup_messages
+            ) + "\n"
+            result = self._run_bounded(
+                [cli_path, "app-server", "--listen", "stdio://"],
+                cwd=None,
+                input_text=initialize_text,
+                timeout_seconds=self._preflight_timeout_seconds,
+                max_output_bytes=_MAX_BUNDLED_CATALOG_BYTES,
+                expected_executable_identity=cli_identity,
+                followup_input_text=followup_text,
+                followup_after_jsonrpc_response_id=1,
+                stdin_close_after_jsonrpc_response_id=2,
+            )
+            if result.returncode != 0:
+                raise CodexCliError("tool_surface_unknown")
+            model_page = self._parse_app_server_model_page(result.stdout)
+            models.extend(
+                {
+                    **self._sanitize_app_server_model(item),
+                    "structuredOutputSupported": profile.output_schema_supported,
+                }
+                for item in model_page[0]
+            )
+            if len(models) > _MAX_ACCOUNT_CATALOG_MODELS:
+                raise CodexCliError("stdout_oversize")
+            next_cursor = model_page[1]
+            if next_cursor is None:
+                break
+            if next_cursor in seen_cursors or next_cursor == cursor:
+                raise CodexCliError("tool_surface_unknown")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise CodexCliError("stdout_oversize")
+
+        if not models:
+            raise CodexCliError("model_unavailable")
+        if len({item["model"] for item in models}) != len(models):
+            raise CodexCliError("tool_surface_unknown")
+        return models
+
+    @staticmethod
+    def _parse_app_server_model_page(
+        stdout: bytes,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        responses: dict[int, dict[str, Any]] = {}
+        try:
+            lines = stdout.decode("utf-8", errors="strict").splitlines()
+            for line in lines:
+                if not line:
+                    continue
+                message = json.loads(
+                    line,
+                    object_pairs_hook=_unique_json_object,
+                    parse_constant=_reject_json_constant,
+                )
+                if not isinstance(message, dict):
+                    raise ValueError("app-server message is not an object")
+                if "id" not in message:
+                    if not isinstance(message.get("method"), str):
+                        raise ValueError("app-server notification is malformed")
+                    continue
+                request_id = message["id"]
+                if type(request_id) is not int or request_id not in {1, 2}:
+                    raise ValueError("app-server response id is invalid")
+                if request_id in responses or "error" in message:
+                    raise ValueError("app-server request failed")
+                result = message.get("result")
+                if not isinstance(result, dict):
+                    raise ValueError("app-server result is malformed")
+                responses[request_id] = result
+        except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError):
+            raise CodexCliError("tool_surface_unknown") from None
+        if set(responses) != {1, 2}:
+            raise CodexCliError("tool_surface_unknown")
+
+        page = responses[2]
+        raw_models = page.get("data")
+        next_cursor = page.get("nextCursor")
+        if (
+            not isinstance(raw_models, list)
+            or len(raw_models) > _ACCOUNT_CATALOG_PAGE_SIZE
+            or (next_cursor is not None and (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 512))
+        ):
+            raise CodexCliError("tool_surface_unknown")
+        if any(not isinstance(item, dict) for item in raw_models):
+            raise CodexCliError("tool_surface_unknown")
+        return raw_models, next_cursor
+
+    @staticmethod
+    def _sanitize_app_server_model(raw: Mapping[str, Any]) -> dict[str, Any]:
+        model = raw.get("model", raw.get("id"))
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model):
+            raise CodexCliError("tool_surface_unknown")
+        hidden = raw.get("hidden", False)
+        if type(hidden) is not bool:
+            raise CodexCliError("tool_surface_unknown")
+        raw_efforts = raw.get("supportedReasoningEfforts", [])
+        if not isinstance(raw_efforts, list) or len(raw_efforts) > 32:
+            raise CodexCliError("tool_surface_unknown")
+        efforts: list[dict[str, str]] = []
+        for item in raw_efforts:
+            if not isinstance(item, dict):
+                raise CodexCliError("tool_surface_unknown")
+            effort = item.get("reasoningEffort")
+            if not isinstance(effort, str) or not re.fullmatch(
+                r"[a-z][a-z0-9_-]{0,31}", effort
+            ):
+                raise CodexCliError("tool_surface_unknown")
+            efforts.append({"reasoningEffort": effort})
+        if len({item["reasoningEffort"] for item in efforts}) != len(efforts):
+            raise CodexCliError("tool_surface_unknown")
+
+        safe: dict[str, Any] = {
+            "model": model,
+            "hidden": hidden,
+            "supportedReasoningEfforts": efforts,
+        }
+        replacement = raw.get("upgrade")
+        if replacement is not None:
+            if not isinstance(replacement, str) or not _MODEL_ID.fullmatch(replacement):
+                raise CodexCliError("tool_surface_unknown")
+            safe["upgrade"] = replacement
+        upgrade_info = raw.get("upgradeInfo")
+        if upgrade_info is not None:
+            if not isinstance(upgrade_info, dict):
+                raise CodexCliError("tool_surface_unknown")
+            retirement = upgrade_info.get("retirementAt")
+            if retirement is not None:
+                if type(retirement) is not int or retirement < 0:
+                    raise CodexCliError("tool_surface_unknown")
+                safe["upgradeInfo"] = {"retirementAt": retirement}
+        for source, destination in (
+            ("contextWindow", "contextWindow"),
+            ("maxContextWindow", "maxContextWindow"),
+        ):
+            value = raw.get(source)
+            if value is not None:
+                if type(value) is not int or value < 1:
+                    raise CodexCliError("tool_surface_unknown")
+                safe[destination] = value
+        return safe
+
     def _preflight(
         self, *, model: str, reasoning_effort: str | None = None
     ) -> tuple[CodexCliPreflight, bytes, str, tuple[int, int, int, int, int], str]:
@@ -1049,10 +1283,40 @@ class CodexCliExecutor:
         max_output_bytes: int | None = None,
         expected_executable_identity: tuple[int, int, int, int, int] | None = None,
         max_file_bytes: int | None = None,
+        followup_input_text: str | None = None,
+        followup_after_jsonrpc_response_id: int | None = None,
+        stdin_close_after_jsonrpc_response_id: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         input_bytes = None if input_text is None else input_text.encode("utf-8")
-        if input_bytes is not None and len(input_bytes) > self._max_input_bytes:
+        followup_input_bytes = (
+            None
+            if followup_input_text is None
+            else followup_input_text.encode("utf-8")
+        )
+        if sum(
+            len(value)
+            for value in (input_bytes, followup_input_bytes)
+            if value is not None
+        ) > self._max_input_bytes:
             raise CodexCliError("input_oversize")
+        if stdin_close_after_jsonrpc_response_id is not None and (
+            type(stdin_close_after_jsonrpc_response_id) is not int
+            or stdin_close_after_jsonrpc_response_id < 0
+            or input_bytes is None
+            or not input_bytes
+        ):
+            raise CodexCliError("unsupported_profile")
+        if followup_input_bytes is not None and (
+            not followup_input_bytes
+            or type(followup_after_jsonrpc_response_id) is not int
+            or followup_after_jsonrpc_response_id < 0
+            or followup_after_jsonrpc_response_id
+            == stdin_close_after_jsonrpc_response_id
+            or stdin_close_after_jsonrpc_response_id is None
+        ):
+            raise CodexCliError("unsupported_profile")
+        if followup_input_bytes is None and followup_after_jsonrpc_response_id is not None:
+            raise CodexCliError("unsupported_profile")
         if (
             os.name != "posix"
             or not hasattr(os, "fork")
@@ -1073,6 +1337,15 @@ class CodexCliExecutor:
         started = time.monotonic()
         stdout = bytearray()
         stderr = bytearray()
+        protocol_line_buffer = bytearray()
+        interactive_input_offset = 0
+        interactive_input_pending = (
+            input_bytes
+            if stdin_close_after_jsonrpc_response_id is not None
+            else None
+        )
+        followup_input_started = False
+        followup_input_sent = False
         output_limit = self._max_output_bytes if max_output_bytes is None else max_output_bytes
         parent_read_fd, parent_write_fd = os.pipe()
         status_read_fd, status_write_fd = os.pipe()
@@ -1083,7 +1356,9 @@ class CodexCliExecutor:
         cli_process_group: int | None = None
         try:
             stdin_source: int | IO[bytes]
-            if input_bytes is not None:
+            if stdin_close_after_jsonrpc_response_id is not None:
+                stdin_source = subprocess.PIPE
+            elif input_bytes is not None:
                 stdin_context.write(input_bytes)
                 stdin_context.seek(0)
                 stdin_source = stdin_context
@@ -1154,17 +1429,58 @@ class CodexCliExecutor:
             os.close(status_write_fd)
             status_write_fd = -1
             assert process.stdout is not None and process.stderr is not None
+            if stdin_close_after_jsonrpc_response_id is not None:
+                assert process.stdin is not None
+                os.set_blocking(process.stdin.fileno(), False)
             os.set_blocking(process.stdout.fileno(), False)
             os.set_blocking(process.stderr.fileno(), False)
             os.set_blocking(status_read_fd, False)
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stderr, selectors.EVENT_READ, "stderr")
             selector.register(status_read_fd, selectors.EVENT_READ, "status")
+            if (
+                stdin_close_after_jsonrpc_response_id is not None
+                and process.stdin is not None
+                and interactive_input_pending
+            ):
+                selector.register(
+                    process.stdin,
+                    selectors.EVENT_WRITE,
+                    "stdin",
+                )
             while selector.get_map():
                 remaining = timeout_seconds - (time.monotonic() - started)
                 if remaining <= 0:
                     raise CodexCliError("command_timeout")
                 for key, _ in selector.select(min(remaining, 0.1)):
+                    if key.data == "stdin":
+                        if (
+                            process.stdin is None
+                            or process.stdin.closed
+                            or interactive_input_pending is None
+                        ):
+                            continue
+                        try:
+                            written = os.write(
+                                process.stdin.fileno(),
+                                interactive_input_pending[interactive_input_offset:],
+                            )
+                        except BlockingIOError:
+                            continue
+                        except OSError as exc:
+                            self._kill_process_group(cli_process_group)
+                            raise CodexCliError("command_exit_nonzero") from exc
+                        if written <= 0:
+                            self._kill_process_group(cli_process_group)
+                            raise CodexCliError("command_exit_nonzero")
+                        interactive_input_offset += written
+                        if interactive_input_offset == len(interactive_input_pending):
+                            if followup_input_started:
+                                followup_input_sent = True
+                            interactive_input_pending = None
+                            interactive_input_offset = 0
+                            selector.unregister(key.fileobj)
+                        continue
                     if key.data == "status":
                         chunk = os.read(status_read_fd, 4096)
                         if not chunk:
@@ -1209,6 +1525,90 @@ class CodexCliExecutor:
                     target.extend(chunk)
                     if len(stdout) + len(stderr) > output_limit:
                         raise CodexCliError("stdout_oversize")
+                    if (
+                        key.data == "stdout"
+                        and stdin_close_after_jsonrpc_response_id is not None
+                        and process.stdin is not None
+                        and not process.stdin.closed
+                    ):
+                        protocol_line_buffer.extend(chunk)
+                        while b"\n" in protocol_line_buffer:
+                            line, _, remainder = protocol_line_buffer.partition(b"\n")
+                            protocol_line_buffer = bytearray(remainder)
+                            try:
+                                message = json.loads(
+                                    line.decode("utf-8", errors="strict"),
+                                    object_pairs_hook=_unique_json_object,
+                                    parse_constant=_reject_json_constant,
+                                )
+                            except (
+                                UnicodeDecodeError,
+                                ValueError,
+                                json.JSONDecodeError,
+                                RecursionError,
+                            ):
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("tool_surface_unknown")
+                            if not isinstance(message, dict):
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("tool_surface_unknown")
+                            if "id" not in message:
+                                if not isinstance(message.get("method"), str):
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
+                                continue
+                            response_id = message.get("id")
+                            if type(response_id) is not int or response_id not in {
+                                followup_after_jsonrpc_response_id,
+                                stdin_close_after_jsonrpc_response_id,
+                            }:
+                                self._kill_process_group(cli_process_group)
+                                raise CodexCliError("tool_surface_unknown")
+                            if response_id == followup_after_jsonrpc_response_id:
+                                if (
+                                    followup_input_bytes is None
+                                    or followup_input_started
+                                    or ("result" not in message and "error" not in message)
+                                ):
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
+                                followup_input_started = True
+                                if (
+                                    "error" not in message
+                                    and isinstance(message.get("result"), dict)
+                                ):
+                                    interactive_input_pending = followup_input_bytes
+                                    interactive_input_offset = 0
+                                    selector.register(
+                                        process.stdin,
+                                        selectors.EVENT_WRITE,
+                                        "stdin",
+                                    )
+                                    continue
+                                try:
+                                    selector.unregister(process.stdin)
+                                except KeyError:
+                                    pass
+                                process.stdin.close()
+                                break
+                            if (
+                                response_id == stdin_close_after_jsonrpc_response_id
+                            ):
+                                if "result" not in message and "error" not in message:
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
+                                if (
+                                    followup_input_bytes is not None
+                                    and not followup_input_sent
+                                ):
+                                    self._kill_process_group(cli_process_group)
+                                    raise CodexCliError("tool_surface_unknown")
+                                try:
+                                    selector.unregister(process.stdin)
+                                except KeyError:
+                                    pass
+                                process.stdin.close()
+                                break
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise CodexCliError("command_timeout")
@@ -1252,7 +1652,7 @@ class CodexCliExecutor:
                     process.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
                     self._terminate(process)
-                for stream in (process.stdout, process.stderr):
+                for stream in (process.stdin, process.stdout, process.stderr):
                     if stream is not None:
                         try:
                             stream.close()

@@ -28,6 +28,15 @@ Implement separate read-only discovery adapters:
 
 Refresh on request when the five-minute TTL expires. Reject auto-promotion from stale data older than 24 hours, unordered sources, unknown timestamps, or invalid descriptors. Catalog fetch performs no model generation and never records secret values.
 
+Only an explicitly classified transient provider-unavailable/timeout/rate-limit result may reuse a
+previously validated snapshot, and then only as stale data with the policy-pinned compatible model.
+Authentication/authorization failures and invalid, oversized, or schema-drifted catalog responses
+are terminal and cannot be converted into a stale fallback. A non-pinned candidate is not promoted
+from an unordered singleton. For replacement
+metadata, every eligible candidate must reach the same finite, acyclic replacement target; a cycle,
+disconnected candidate, missing target, or conflict with release timestamps retains the pin or
+fails closed.
+
 ## Concretely
 
 A request reads or refreshes one snapshot, filters it by owner policy, channel, permitted transport, required capabilities, and reasoning constraints, chooses only a verifier-ranked compatible target, then binds the model ID and snapshot hash to the resolved route. A changed catalog between two requests may change the selected model only when the newer snapshot proves the promotion order.
