@@ -381,3 +381,44 @@ def test_pg_owned_effect_session_abort_rolls_back_all_protected_writes(
         key=LEASE_KEY, holder="replacement", ttl_seconds=LEASE_TTL_SECONDS,
         now=NOW + timedelta(seconds=LEASE_TTL_SECONDS + 1),
     )
+
+
+@pytest.mark.pg
+def test_pg_auth_disable_returns_updated_source_without_rewinding_cursor(
+    scratch_database: Config,
+) -> None:
+    command.upgrade(scratch_database, YSS06_HEAD)
+    registry, source = _source_registry()
+    cursor = {"known_playlist_item_ids": ["synthetic-item"]}
+    registry.record_poll_success(source.binding_id, cursor=cursor)
+    # The existing disconnect route uses the enabled=False branch, without a
+    # caller transaction. It must return its row after the autocommit UPDATE.
+    disabled = registry.disable_source_for_auth(source.binding_id, reason_code="auth_disconnected")
+    assert disabled.enabled is False
+    assert disabled.cursor == cursor
+    assert disabled.last_error["reason_code"] == "auth_disconnected"
+    assert registry.get(source.binding_id) == disabled
+
+
+@pytest.mark.pg
+def test_pg_auth_status_effects_use_ownership_transaction(scratch_database: Config) -> None:
+    from app.knowledge_acquisition.youtube_account_binding import AccountBindingStore
+    command.upgrade(scratch_database, YSS06_HEAD)
+    store = for_runtime()
+    registry, source = _source_registry()
+    bindings = AccountBindingStore.for_runtime()
+    account = bindings.create(provider_channel_id="synthetic-channel", display_label="Fixture",
+        scopes=["https://www.googleapis.com/auth/youtube.readonly"],
+        account_binding_id=source.account_binding_id)
+    assert store.acquire_lease(key=LEASE_KEY, holder="auth", ttl_seconds=LEASE_TTL_SECONDS, now=NOW)
+    with store.owned_effect(key=LEASE_KEY, holder="auth", now=NOW) as conn:
+        updated = bindings.set_state(account.account_binding_id, state="degraded",
+            reason_code="auth_expired", transaction_conn=conn)
+        degraded = registry.record_source_degradation(source.binding_id,
+            reason_code="auth_expired", transaction_conn=conn)
+        assert updated.state == "degraded"
+        assert degraded.last_error["reason_code"] == "auth_expired"
+        assert bindings.get(account.account_binding_id) == account
+        assert registry.get(source.binding_id) == source
+    assert bindings.get(account.account_binding_id) == updated
+    assert registry.get(source.binding_id) == degraded

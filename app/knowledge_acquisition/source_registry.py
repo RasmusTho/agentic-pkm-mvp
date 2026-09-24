@@ -1190,7 +1190,7 @@ class _PgSourceRegistryBackend:
             else:
                 cur.execute(
                     f"UPDATE {_TABLE} SET enabled = %s, last_error = %s::jsonb, "
-                    "updated_at = %s::timestamptz WHERE binding_id = %s",
+                    f"updated_at = %s::timestamptz WHERE binding_id = %s RETURNING {_COLUMNS_SQL}",
                     (enabled, last_error_json, now, binding_id),
                 )
             row = cur.fetchone()
