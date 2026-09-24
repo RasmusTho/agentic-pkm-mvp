@@ -60,13 +60,10 @@ def issue_handoff(issue: Mapping[str, Any], source_ref: Mapping[str, Any]) -> tu
         f"{observation}\n\n"
         "This DevUI page cannot launch or control work. For supervised work, send this request to your coding agent:\n\n"
         f"Work from the exact Issue {source_ref['locator']}. {request} "
-        "Read the full current Issue and repository instructions, including source anchors, constraints and acceptance criteria. "
-        "Check current readiness, claims and linked PRs; use the existing pickup workflow before edits. "
-        "Keep the Issue context through implementation, validation, PR and result. Return the exact PR, checks, how to try the result, "
-        "and remaining limitations. This snapshot is context, not approval or a current readiness guarantee.\n\n"
-        f"Observed Issue version: {str(source_ref['version'])[:80]}. "
-        f"Body SHA-256: {source_ref.get('content_hash', 'unavailable')}. "
-        "Return to this Issue's Focus page and refresh to read current results."
+        "Read the full current Issue and repository instructions. Verify readiness and ownership, "
+        "and use the existing pickup workflow before edits. Return the PR, checks, how to try the result, "
+        "and remaining limitations. This snapshot is context, not approval.\n\n"
+        "Refresh this Issue's Focus page to read current results."
     )
     return observation, handoff
 

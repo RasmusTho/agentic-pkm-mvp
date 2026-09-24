@@ -72,8 +72,8 @@ def test_issue_state_and_handoff_preserve_authority(monkeypatch, state, labels, 
     assert step["actor_class"] == "owner"
     assert expected in step["reason"]
     assert issue["html_url"] in step["reason"]
-    assert STAMP in step["reason"]
-    assert result["subject"]["authority_ref"]["content_hash"] in step["reason"]
+    assert result["subject"]["authority_ref"]["version"] == STAMP
+    assert result["subject"]["authority_ref"]["content_hash"] not in step["reason"]
     assert issue["title"] not in step["reason"]
     assert "not approval" in step["reason"]
     assert result["conversation_port"]["availability"] == "unsupported"
