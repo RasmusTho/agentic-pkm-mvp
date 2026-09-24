@@ -44,6 +44,43 @@ def test_health_llm_router_includes_configured_task_routes(monkeypatch) -> None:
     assert result["route_policies"]["qa"]["effective"]["provider"] == "openai"
 
 
+def test_health_route_projection_preserves_reasoning_effort(monkeypatch) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "qa": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai",
+                        model="gpt-6-luna",
+                        transport_id="codex_cli_tailscale",
+                        reasoning_effort="high",
+                    )
+                )
+            }
+        )
+    )
+    seen: dict[str, str | None] = {}
+
+    def _provider_env_check(provider, model, **kwargs):
+        if model == "gpt-6-luna":
+            seen["provider"] = provider
+            seen["reasoning_effort"] = kwargs.get("reasoning_effort")
+        return {"ok": True, "detail": "preflight passed", "status": "ok"}
+
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+    monkeypatch.setattr(health_module, "_provider_env_check", _provider_env_check)
+
+    route_check = health_module._check_llm_router()
+    qa_route = route_check["route_policies"]["qa"]["effective"]
+    assert qa_route["reasoning_effort"] == "high"
+
+    result = health_module._check_llm_task_routes(route_check)
+
+    assert result["routes"]["qa"]["status"] == "ok"
+    assert seen == {"provider": "openai", "reasoning_effort": "high"}
+
+
 def test_provider_env_check_accepts_openai_base_url(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.example.invalid/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")

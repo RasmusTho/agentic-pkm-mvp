@@ -205,6 +205,7 @@ class LLMRouter:
             "provider": route.provider,
             "model": route.model,
             "transport_id": route.transport_id,
+            "reasoning_effort": route.reasoning_effort or "",
             "mode": route.mode,
             "reason": route.reason,
             "degraded": route.degraded,
