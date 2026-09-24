@@ -125,10 +125,12 @@ def _payload(transport_id: str = "codex_cli") -> dict[str, Any]:
             "structured_output": False,
             "native_tools": False,
             "literal_system_role_required": False,
+            "max_output_tokens_required": False,
         },
         "trusted_instructions": "Keep the response concise.",
         "user_input": "Return the configured route result.",
         "output_schema": None,
+        "max_output_tokens": None,
     }
 
 
@@ -388,6 +390,36 @@ def test_codex_complete_preserves_channels_and_rejects_tools() -> None:
     assert len(codex.calls) == 1
 
 
+def test_codex_refuses_per_call_output_limit_before_preflight_or_completion() -> None:
+    app, codex, ollama = _app()
+    complete_payload = _payload()
+    complete_payload["capability_intent"]["max_output_tokens_required"] = True
+    complete_payload["max_output_tokens"] = 160
+    preflight_payload = _preflight_payload()
+    preflight_payload["capability_intent"]["max_output_tokens_required"] = True
+
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        preflight = client.post(
+            "/v1/preflight",
+            json=preflight_payload,
+            headers=PREFLIGHT_CAPABILITY_HEADER,
+        )
+        completion = client.post(
+            "/v1/complete",
+            json=complete_payload,
+            headers=CAPABILITY_HEADER,
+        )
+
+    expected = {"error": {"code": "output_token_limit_unavailable"}}
+    assert preflight.status_code == 422
+    assert preflight.json() == expected
+    assert completion.status_code == 422
+    assert completion.json() == expected
+    assert codex.preflight_calls == []
+    assert codex.calls == []
+    assert ollama.calls == []
+
+
 def test_complete_rejects_missing_instruction_mapping_before_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -566,6 +598,8 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
         serve_capability_name=CAPABILITY_NAME,
     )
     payload = _payload("ollama_http")
+    payload["capability_intent"]["max_output_tokens_required"] = True
+    payload["max_output_tokens"] = 128
     payload["trusted_instructions"] = "TRUSTED instructions"
     payload["user_input"] = "UNTRUSTED request"
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
@@ -582,6 +616,7 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
         {"role": "user", "content": "UNTRUSTED request"},
     ]
     assert sent["stream"] is False
+    assert sent["options"] == {"num_predict": 128}
 
 
 def test_ollama_endpoint_rejects_an_explicit_zero_port() -> None:

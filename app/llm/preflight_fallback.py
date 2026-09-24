@@ -39,6 +39,7 @@ _FALLBACKABLE_PREFLIGHT_FAILURES = {
     "authentication_unavailable": "authentication_unavailable",
     "session_expired": "session_expired",
     "model_unavailable": "model_unavailable",
+    "output_token_limit_unavailable": "adapter_unavailable",
 }
 _FALLBACK_REQUIREMENTS = frozenset(
     {"fallback_compatible_identity", "fallback_policy_selected"}
@@ -77,6 +78,7 @@ def _request_for_route(
         trusted_instructions=request.trusted_instructions,
         user_input=request.user_input,
         output_schema=request.output_schema,
+        max_output_tokens=request.max_output_tokens,
     )
 
 

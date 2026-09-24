@@ -42,9 +42,13 @@ SIMPLE_MESSAGES: list[dict[str, str]] = [
 
 
 class TestChat:
-    @patch("app.components.reasoning.facade.ChatClient")
-    def test_routes_through_router(self, mock_client_cls: MagicMock) -> None:
-        instance = mock_client_cls.return_value
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
+    def test_routes_through_router(self, mock_get_client: MagicMock) -> None:
+        instance = MagicMock()
+        instance.route = LLMRoute(
+            provider="mock", model="test-model", mode="chat", reason="test"
+        )
+        mock_get_client.return_value = instance
         instance.chat.return_value = "Hi there"
 
         facade = _facade()
@@ -52,9 +56,11 @@ class TestChat:
 
         assert result == "Hi there"
         facade.router.route.assert_called_once()
+        mock_get_client.assert_called_once()
+        assert mock_get_client.call_args.args[0].task_kind == "chat"
         instance.chat.assert_called_once()
 
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_captures_telemetry(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = "response"
@@ -72,7 +78,7 @@ class TestChat:
         assert rec.char_count_out > 0
         assert rec.error is None
 
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_records_error_on_failure(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.side_effect = RuntimeError("boom")
@@ -84,7 +90,7 @@ class TestChat:
         assert len(facade.telemetry) == 1
         assert facade.telemetry[0].error == "boom"
 
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_auto_generates_trace_id(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = "ok"
@@ -102,7 +108,7 @@ class TestChat:
 
 
 class TestStructured:
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_returns_parsed_dict(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = json.dumps({"answer": 42})
@@ -117,7 +123,7 @@ class TestStructured:
         assert result == {"answer": 42}
         assert facade.telemetry[0].method == "structured"
 
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_raises_on_bad_json(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = "not json"
@@ -136,7 +142,7 @@ class TestStructured:
 
 
 class TestToolUse:
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_returns_tool_result(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = json.dumps(
@@ -155,7 +161,7 @@ class TestToolUse:
         assert result.arguments == {"query": "langgraph"}
         assert facade.telemetry[0].method == "tool_use"
 
-    @patch("app.components.reasoning.facade.ChatClient")
+    @patch("app.components.reasoning.facade.get_chat_client_for_route")
     def test_raises_on_bad_json(self, mock_client_cls: MagicMock) -> None:
         instance = mock_client_cls.return_value
         instance.chat.return_value = "I don't know how to use tools"

@@ -31,6 +31,7 @@ def _request(
     *,
     native_tools: bool = False,
     literal_system_role_required: bool = False,
+    max_output_tokens: int | None = None,
 ) -> CompletionRequest:
     return CompletionRequest(
         route=PRIMARY,
@@ -38,10 +39,12 @@ def _request(
         capability_intent=CompletionCapabilityIntent(
             native_tools=native_tools,
             literal_system_role_required=literal_system_role_required,
+            max_output_tokens_required=max_output_tokens is not None,
         ),
         trusted_instructions="Keep the answer concise.",
         user_input="Summarize the sample.",
         output_schema=None,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -64,6 +67,11 @@ class FakeRemote:
             raise RemotePreflightError(self.primary_preflight_error)
         if route == "ollama_http" and request.capability_intent.native_tools:
             raise RemotePreflightError("native_tools_unavailable")
+        if (
+            route == "codex_cli"
+            and request.capability_intent.max_output_tokens_required
+        ):
+            raise RemotePreflightError("output_token_limit_unavailable")
         return PreflightResponse(route=request.route, preflight_status="passed")
 
     def complete(self, request: CompletionRequest) -> CompletionResponse:
@@ -95,6 +103,50 @@ def test_compatible_fallback_occurs_before_first_model_call() -> None:
     assert remote.completion_requests[0].route == OLLAMA
     assert response.route == OLLAMA
     assert selection.fallback_provenance.used is True
+
+
+def test_output_token_limit_uses_declared_ollama_after_codex_capability_preflight() -> None:
+    remote = FakeRemote()
+    request = _request(max_output_tokens=160)
+
+    selection = select_preflight_route(
+        request,
+        fallback_route=OLLAMA,
+        fallback_requirement="fallback_compatible_identity",
+        policy_authority="profile.product_llm",
+        transport=remote,
+    )
+
+    assert remote.events == [
+        ("preflight", "codex_cli"),
+        ("preflight", "ollama_http"),
+    ]
+    assert selection.request.route == OLLAMA
+    assert selection.request.capability_intent.max_output_tokens_required is True
+    assert selection.request.max_output_tokens == 160
+    remote.complete(selection.request)
+    assert remote.events[-1] == ("complete", "ollama_http")
+    assert len(remote.completion_requests) == 1
+
+
+def test_output_token_limit_does_not_weaken_strong_reasoning_route() -> None:
+    remote = FakeRemote()
+    request = _request(max_output_tokens=160).model_copy(
+        update={"reasoning_effort": "high"}
+    )
+
+    with pytest.raises(RemotePreflightError) as error:
+        select_preflight_route(
+            request,
+            fallback_route=OLLAMA,
+            fallback_requirement="fallback_compatible_identity",
+            policy_authority="profile.product_llm",
+            transport=remote,
+        )
+
+    assert error.value.code == "output_token_limit_unavailable"
+    assert remote.events == [("preflight", "codex_cli")]
+    assert remote.completion_requests == []
 
 
 def test_ollama_is_rejected_when_native_tools_are_required() -> None:

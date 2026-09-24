@@ -1,0 +1,8 @@
+id: openai.chat.gpt_5_6_luna
+status: active
+kind: chat
+provider: openai
+model: gpt-5.6-luna
+selection_group: luna
+allowed_transports: [codex_cli_tailscale]
+notes: Pinned-compatible Luna route for subscription-backed Codex CLI execution.

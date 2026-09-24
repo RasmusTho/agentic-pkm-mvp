@@ -80,6 +80,31 @@ def test_llm_planner_parses_valid_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "profile_selection" not in plan.context
 
 
+def test_llm_planner_uses_shared_model_access_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    intents = []
+    chat_calls = []
+
+    class _Client:
+        def chat(self, name, pack, **kwargs):
+            chat_calls.append((name, pack, kwargs))
+            return json.dumps(_fake_plan_payload())
+
+    def _get_chat_client(intent):
+        intents.append(intent)
+        return _Client()
+
+    monkeypatch.setattr("app.planner.provider.get_chat_client", _get_chat_client)
+    plan = LLMPlanner().plan(
+        PlannerInput(object_uuid="obj-router", goal="Route through facade", text="body")
+    )
+
+    assert plan.id == "plan-llm"
+    assert len(intents) == 1
+    assert intents[0].task_kind == "plan"
+    assert intents[0].complexity_hint == "high"
+    assert len(chat_calls) == 1 and chat_calls[0][0] == "planner"
+
+
 def test_llm_planner_includes_flow_profile_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
     planner = LLMPlanner()
     captured: Dict[str, str] = {}

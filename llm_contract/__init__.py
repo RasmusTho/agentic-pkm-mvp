@@ -83,7 +83,9 @@ CredentialIdentityRef = Annotated[
     ),
 ]
 CapabilityTier = Literal["economy", "standard", "frontier"]
-ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
+ReasoningEffort = Literal[
+    "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+]
 ExecutionBoundary = Literal[
     "in_process",
     "local_subprocess",

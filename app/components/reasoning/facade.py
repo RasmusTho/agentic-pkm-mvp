@@ -26,7 +26,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.components.llm.fabric import ChatClient
+from app.components.llm.fabric import ChatClient, get_chat_client_for_route
 from app.components.llm.router import LLMRouter, LLMTaskIntent
 
 logger = logging.getLogger(__name__)
@@ -541,7 +541,7 @@ class ReasoningFacade:
 
     def _resolve_client(self, intent: LLMTaskIntent) -> ChatClient:
         route = self.router.route(intent)
-        return ChatClient(route=route)
+        return get_chat_client_for_route(intent, selected_route=route)
 
     @staticmethod
     def _messages_to_pack(

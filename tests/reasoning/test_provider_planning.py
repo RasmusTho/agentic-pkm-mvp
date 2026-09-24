@@ -102,6 +102,81 @@ def test_planning_mode_sends_object_context_to_backend(
     assert "migration landing first" in user_prompt
 
 
+def test_planning_mode_uses_shared_model_access_router(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _llm_env(monkeypatch)
+    reset_store_backends()
+    routes = []
+    calls = []
+
+    class _Client:
+        route = type(
+            "Route",
+            (),
+            {
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "mode": "chat",
+                "reason": "test",
+                "degraded": False,
+            },
+        )()
+
+        def chat(self, name, pack, **kwargs):
+            calls.append((name, pack, kwargs))
+            return json.dumps({"plan": "Bound plan", "steps": ["one step"]})
+
+    def _get_chat_client_for_route(intent, *, selected_route=None):
+        routes.append((intent, selected_route))
+        return _Client()
+
+    monkeypatch.setattr(
+        provider_module, "get_chat_client_for_route", _get_chat_client_for_route
+    )
+    run = run_reasoning(
+        ReasoningMode.PLANNING, [], question="Plan via the shared router"
+    )
+
+    assert run.status == "ok"
+    assert run.result == {"plan": "Bound plan", "steps": ["one step"]}
+    assert len(routes) == 1 and routes[0][0].task_kind == "plan"
+    assert len(calls) == 1 and calls[0][0] == "plan"
+
+
+def test_reasoning_failure_reports_bound_route_after_model_promotion(monkeypatch) -> None:
+    initial_route = type("Route", (), {"provider": "openai", "model": "gpt-5.6-luna"})()
+    bound_route = type("Route", (), {"provider": "openai", "model": "gpt-6-luna"})()
+
+    class _Client:
+        route = bound_route
+
+        def chat(self, *_args, **_kwargs):
+            raise RuntimeError("completion failed")
+
+    monkeypatch.setattr(
+        provider_module,
+        "resolve_effective_reasoning_route",
+        lambda **_kwargs: initial_route,
+    )
+    monkeypatch.setattr(
+        provider_module,
+        "get_chat_client_for_route",
+        lambda *_args, **_kwargs: _Client(),
+    )
+
+    with pytest.raises(provider_module.ReasoningRouteExecutionError) as error:
+        provider_module._call_chat_with_route(
+            task_kind="plan",
+            pack={"system": "", "user": "test"},
+            agent=None,
+            kind=None,
+            trace_id=None,
+        )
+
+    assert error.value.route is bound_route
+
+
 def test_planning_mode_rejects_non_object_json_without_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

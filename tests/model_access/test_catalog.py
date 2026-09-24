@@ -137,6 +137,25 @@ def test_refresh_ttl_and_max_stale_fail_closed() -> None:
         )
 
 
+def test_cold_refresh_accepts_snapshot_timestamped_during_discovery() -> None:
+    cache = CatalogCache()
+
+    def loader(refresh_started_at: datetime) -> CatalogSnapshot:
+        snapshot = _snapshot(
+            _descriptor("gpt-luna"),
+            fetched_at=datetime.now(timezone.utc),
+        )
+        assert snapshot.fetched_at >= refresh_started_at
+        return snapshot
+
+    refreshed = cache.get(
+        provider="openai", transport_id="codex_cli", loader=loader
+    )
+
+    assert refreshed.freshness == "fresh"
+    assert refreshed.fetched_at <= datetime.now(timezone.utc)
+
+
 def test_invalid_refresh_is_not_downgraded_to_a_stale_route() -> None:
     cache = CatalogCache()
     cache.get(
@@ -156,6 +175,27 @@ def test_invalid_refresh_is_not_downgraded_to_a_stale_route() -> None:
             loader=invalid_loader,
             now=NOW + CATALOG_REFRESH_TTL + timedelta(seconds=1),
         )
+
+
+def test_catalog_cache_is_process_local_and_empty_after_reconstruction() -> None:
+    snapshots = []
+
+    def loader(now: datetime) -> CatalogSnapshot:
+        snapshot = _snapshot(_descriptor("gpt-luna"), fetched_at=now)
+        snapshots.append(snapshot)
+        return snapshot
+
+    first_process_cache = CatalogCache()
+    first = first_process_cache.get(
+        provider="openai", transport_id="codex_cli", loader=loader, now=NOW
+    )
+    reconstructed_process_cache = CatalogCache()
+    second = reconstructed_process_cache.get(
+        provider="openai", transport_id="codex_cli", loader=loader, now=NOW
+    )
+
+    assert len(snapshots) == 2
+    assert first.snapshot_hash == second.snapshot_hash
 
 
 def test_concurrent_cache_miss_publishes_one_immutable_snapshot() -> None:

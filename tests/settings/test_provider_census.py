@@ -20,7 +20,12 @@ from app.builderops.model_access_resolver import (
 )
 from app.llm.adapter import _DISPATCH_PROVIDERS as ADAPTER_DISPATCH_PROVIDERS
 from app.llm.embeddings import PROVIDER_REGISTRY
+from app.model_access.adapter_factory import (
+    ModelAccessAdapterFactory,
+    SUPPORTED_ADAPTER_IDS,
+)
 from app.services.llm import _DISPATCH_PROVIDERS as SERVICE_DISPATCH_PROVIDERS
+from app.cli.health import _check_llm_providers
 
 
 def _census():
@@ -46,7 +51,10 @@ def test_census_loads_and_rejects_unknown_fields(tmp_path: Path) -> None:
         ("app/llm/embeddings.py::PROVIDER_REGISTRY", lambda: PROVIDER_REGISTRY),
         ("app/services/llm.py::_DISPATCH_PROVIDERS", lambda: SERVICE_DISPATCH_PROVIDERS),
         ("app/llm/adapter.py::_DISPATCH_PROVIDERS", lambda: ADAPTER_DISPATCH_PROVIDERS),
-        ("app/cli/health.py::_check_llm_providers", lambda: {"mock", "ollama"}),
+        (
+            "app/cli/health.py::_check_llm_providers",
+            lambda: SERVICE_DISPATCH_PROVIDERS,
+        ),
         ("docs/settings/models/registry.yaml::provider", lambda: {item.provider for item in load_models().values()}),
         (
             "docs/LLM.md::Providers (Current)",
@@ -126,6 +134,35 @@ def test_census_ships_no_stale_known_divergences() -> None:
 def test_ladder_sites_dispatch_through_the_named_constant() -> None:
     assert SERVICE_DISPATCH_PROVIDERS == _census().projection("app/services/llm.py::_DISPATCH_PROVIDERS")
     assert ADAPTER_DISPATCH_PROVIDERS == _census().projection("app/llm/adapter.py::_DISPATCH_PROVIDERS")
+
+
+def test_product_dispatch_and_health_projections_match_declared_transports() -> None:
+    census = _census()
+    factory = ModelAccessAdapterFactory.from_declared_sources()
+    provider_ids = census.projection("app/services/llm.py::_DISPATCH_PROVIDERS")
+
+    health = _check_llm_providers({"ok": True, "detail": "ready"})
+    assert {item["name"] for item in health["providers"]} == provider_ids
+    assert SERVICE_DISPATCH_PROVIDERS == provider_ids
+    assert ADAPTER_DISPATCH_PROVIDERS == provider_ids
+    assert {
+        factory.default_adapter_id(provider) for provider in provider_ids
+    } <= SUPPORTED_ADAPTER_IDS
+
+    model_registry = load_models()
+    luna_candidates = [
+        descriptor
+        for descriptor in model_registry.values()
+        if descriptor.selection_group == "luna"
+    ]
+    assert {item.model for item in luna_candidates} == {"gpt-5.6-luna", "gpt-6-luna"}
+    for descriptor in luna_candidates:
+        assert descriptor.allowed_transports
+        for transport_id in descriptor.allowed_transports:
+            adapter = factory.describe(
+                transport_id, provider=descriptor.provider, model=descriptor.model
+            )
+            assert adapter.transport_id == transport_id
 
 
 def test_hot_paths_do_not_load_the_census_at_runtime() -> None:

@@ -1,7 +1,12 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-23 for the selected Tailscale-only macOS executor. MARR-01, MARR-02, MARR-03, and the base MARR-08 completion API are merged. MARR-04 catalog discovery is implemented in open PR #5651 and remains unshipped until merge; Product/Builder caller migration, designated-host profile, and rollout remain unshipped. Parent validation Issue #5618 is open and blocked.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-23 for the selected Tailscale-only macOS executor. MARR-01 through MARR-04, the base MARR-08 completion API, and the MARR-05 Product caller migration are delivered. The designated-host profile/acceptance and staged rollout remain unshipped. Parent validation Issue #5618 is open and blocked.
 Doc role: Capability specification
 Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
+Temporal class: strategic
+Review cadence: event-driven
+Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
+Last reviewed: 2026-09-24
+Last verified against: Issues #5618, #5623, #5624 and PR #5651
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -15,11 +20,13 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - Product routes chat/completion calls through app/components/llm/router.py, app/components/llm/fabric.py, and app/services/llm.py.
 - Builder model access resolves independently through app/builderops/model_access_resolver.py and app/builderops/model_inquiry_adapters.py.
 - llm_contract is the neutral, side-effect-free kernel. Builder may not import the Product router or fabric.
-- MARR-01 adds neutral route/receipt provenance contracts and `app.model_access.router.ModelAccessRouter`, which composes a caller-supplied owner resolver/profile with a read-only adapter descriptor lookup. MARR-02 adds `app.model_access.adapter_factory.ModelAccessAdapterFactory`, driven by `docs/settings/models/adapters.yaml` and the provider census, plus the bounded `app.model_access.codex_cli.CodexCliExecutor`. Product and Builder runtime callers are not migrated by this seam.
-- MARR-08 (#5635) adds the base `POST /v1/complete` executor API and Product-side client. Product supplies an already resolved provider/model/transport; the host validates that route against declared adapters and executes it exactly once. MARR-03 adds authenticated, no-inference `POST /v1/preflight` for safe remote fallback. MARR-04 adds authenticated, read-only `POST /v1/catalog`; it returns sanitized Codex account or local Ollama descriptors and a content hash, never a model response. None of these slices activates the Mac service or migrates Product callers.
+- MARR-01 adds neutral route/receipt provenance contracts and `app.model_access.router.ModelAccessRouter`, which composes a caller-supplied owner resolver/profile with a read-only adapter descriptor lookup. MARR-02 adds `app.model_access.adapter_factory.ModelAccessAdapterFactory`, driven by `docs/settings/models/adapters.yaml` and the provider census, plus the bounded `app.model_access.codex_cli.CodexCliExecutor`.
+- MARR-08 (#5635) adds the bounded `POST /v1/complete` executor API and Product-side client. MARR-03 adds authenticated, no-inference `POST /v1/preflight` for safe remote fallback. MARR-04 adds authenticated, read-only `POST /v1/catalog`; it returns sanitized Codex account or local Ollama descriptors and a content hash, never a model response.
+- MARR-05 moves Product chat, reasoning, reflection, constrained completion, evaluation, and health route inspection through the shared facade while retaining `LLMRoute` compatibility. The facade keeps settings as Product route authority, resolves latest-compatible Luna IDs only within an explicitly registered family, and binds the concrete model and snapshot hash. Builder and Model Inquiry continue to resolve independently.
+- MARR-05 preserves caller output-token limits explicitly. The current Codex CLI executor rejects a per-call output-token-limit requirement during no-inference preflight; a policy-approved low-reasoning Ollama fallback may run only if its own preflight passes. Ollama receives the limit as `options.num_predict`. If fallback is not allowed or capable, the call fails before inference; after completion starts there is no retry or provider switch.
 - Model Inquiry's `codex_subscription` remains a compatibility alias for the shared local Codex executor; its current single-target and no-fallback semantics do not change. Host activation still requires an exact-version no-tools profile outside Git.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
-- Product currently runs on Linux/Tailscale hosts. The current-state environment and host owner docs still describe the macOS host as Ollama/model-serving only; the selected remote Codex executor is a future, unshipped exception that requires separate host and tailnet acceptance.
+- Product runtime remains on Linux. Product code now supports the explicitly selected Tailscale Codex executor route, but this slice does not provision or verify the macOS profile, Serve app-capability grant, or subscription session; live host acceptance and route activation remain separate gates.
 - Product acceptance requires a single-purpose Codex executor reachable only over Tailscale Serve HTTPS, an app-capability grant for authorized Product workloads, a loopback-only backend, a verified Codex safe profile in the authenticated interactive macOS login session, and a sanitized cross-host runtime receipt. The concrete machine identity and endpoint remain host-local and are not committed.
 - No API credentials, Tailscale policy values, bearer secrets, host credentials, Ollama model downloads, or release-channel changes are part of the repository implementation slices. Live host/tailnet activation requires its explicit operational gate.
 
@@ -43,8 +50,9 @@ The shared facade remains policy-agnostic: Product resolves the route, and the e
 
 The service exposes only three bounded operations: `POST /v1/complete`, `POST /v1/preflight`, and
 `POST /v1/catalog`. Completion supplies one declared provider/model/transport, optional reasoning
-effort and output schema, a capability intent, trusted instructions, and user content as distinct
-fields. Preflight supplies only one declared provider/model/transport and capability intent. Catalog
+effort, output schema, and output-token limit, a capability intent, trusted instructions, and user
+content as distinct fields. Preflight supplies only one declared provider/model/transport and
+capability intent. Catalog
 supplies only a declared `codex_cli` or `ollama_http` transport and returns a sanitized snapshot.
 None accepts commands, argv, paths, arbitrary environment, tools, MCP servers, provider endpoints,
 or credentials. Completion returns the exact route and result; preflight returns the exact route and
@@ -69,7 +77,7 @@ explicit `system` message. A literal-system-role request fails on Codex.
 
 ## Catalog Discovery and Freshness Contract
 
-MARR-04 supplies the catalog and selection primitives; Product caller adoption remains in MARR-05.
+MARR-04 supplies the catalog and selection primitives; MARR-05 adopts them in Product callers through the shared facade.
 The executor does not choose a model, and Product cannot promote a descriptor merely because it
 appears in a provider response. The caller's policy allowlist must accept the exact descriptor and
 transport before the pure latest-compatible selector can use it.
@@ -86,7 +94,7 @@ transport before the pure latest-compatible selector can use it.
 4. Codex host isolation: Product Codex execution uses a dedicated empty cwd, read-only sandbox, ignored ambient user/project config, and an exact version-reviewed no-tools profile. It disables shell/execution and every other model-callable file, browser/computer, app, MCP, plugin, and agent capability. A new or unknown CLI tool/profile fails closed. Host authentication uses the existing interactive login session, never fresh non-interactive SSH.
 5. Prompt-channel preservation: trusted Product system-instruction content and untrusted user content remain separate end-to-end; the CLI maps them only to its distinct developer-instructions and user-prompt channels. No flattening or concatenation. The route does not assert literal system-role equivalence.
 6. Retry boundary: each completion sends one HTTP request. Any ambiguous completion result is terminal and does not retry or trigger a second provider call. Preflight is a distinct no-inference operation and may precede the single completion.
-7. Capability preservation: the named adapter must satisfy the request. The current API rejects native-tool intent rather than claiming support or silently weakening it.
+7. Capability preservation: the named adapter must satisfy the request. The current API rejects native-tool intent rather than claiming support or silently weakening it. A requested output-token limit is checked during preflight; only a compatible declared Ollama route can enforce it, and unsupported routes fail before completion.
 8. Catalog boundary: catalog responses are read-only, sanitized, and content-hash-bound. Only caller policy may accept a new descriptor; unordered, stale, deprecated, or capability-incomplete candidates cannot replace the pinned target. Model Inquiry never consumes the Product catalog.
 9. Provider compatibility: existing declared DeepSeek Product routing remains supported through an explicit `deepseek_api` adapter and pinned registry descriptor unless a separate reviewed change retires it. This migration cannot silently remove an existing provider.
 10. Partial Product migration: unmigrated Product callers continue through the legacy facade. Migrated callers go through one shared route and one adapter; no dual execution/shadow inference is permitted.
@@ -108,7 +116,7 @@ transport before the pure latest-compatible selector can use it.
 This parent-level acceptance remains separate from merging the MARR-08 thin API slice.
 
 - [ ] MARR-08 is verified by its slice tests and merged; this proves code exists, not live host activation.
-- [ ] Product caller migration, if desired, is delivered as a separate bounded slice after the thin client is merged.
+- [ ] Product caller migration is delivered by MARR-05 through the shared facade; this does not activate the designated host or change the checked-in default route.
 - [ ] MARR-04 delivers read-only catalog discovery and latest-compatible selection primitives; MARR-05 separately adopts them in Product callers. Catalog refresh never changes MARR-08's one-shot completion behavior.
 - [ ] A separate operator-owned host acceptance is required before claiming the Mac service or Tailscale Serve is live.
 - [ ] The parent validation issue remains open until its chosen broader acceptance scope is explicitly satisfied.
