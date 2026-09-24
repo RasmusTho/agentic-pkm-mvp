@@ -142,6 +142,7 @@ def _fake_cli(
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -182,7 +183,20 @@ elif args == ["debug", "models", "--bundled"]:
         os.replace(replacement, __file__)
 elif args == ["app-server", "--listen", "stdio://"]:
     pages = json.loads({safe_app_server_pages!r})
-    requests = [json.loads(line) for line in sys.stdin.read().splitlines() if line]
+    requests = []
+    for _ in range(3):
+        line = sys.stdin.readline()
+        if not line:
+            break
+        requests.append(json.loads(line))
+    if len(requests) != 3:
+        raise SystemExit(2)
+    # Model-list can respond asynchronously. EOF before its response means the
+    # client closed the app-server session too early.
+    time.sleep(0.05)
+    readable, _, _ = select.select([sys.stdin], [], [], 0)
+    if readable and sys.stdin.readline() == "":
+        raise SystemExit(0)
     for request in requests:
         if request.get("method") == "initialize":
             print(json.dumps({{"id": request["id"], "result": {{"userAgent": "fixture"}}}}))
@@ -192,9 +206,12 @@ elif args == ["app-server", "--listen", "stdio://"]:
             print(json.dumps({{"id": request["id"], "result": pages[page_index]}}))
         elif request.get("method") != "initialized":
             raise SystemExit(2)
+    sys.stdout.flush()
     request_trace = Path({str(trace_path)!r}).with_suffix(".app-server.json")
     prior_requests = json.loads(request_trace.read_text(encoding="utf-8")) if request_trace.exists() else []
     request_trace.write_text(json.dumps(prior_requests + requests), encoding="utf-8")
+    while sys.stdin.readline():
+        pass
 else:
     trace = Path({str(trace_path)!r})
     if {minimal_trace!r}:

@@ -720,6 +720,7 @@ class CodexCliExecutor:
                 timeout_seconds=self._preflight_timeout_seconds,
                 max_output_bytes=_MAX_BUNDLED_CATALOG_BYTES,
                 expected_executable_identity=cli_identity,
+                stdin_close_after_jsonrpc_response_id=2,
             )
             if result.returncode != 0:
                 raise CodexCliError("tool_surface_unknown")
@@ -1276,10 +1277,17 @@ class CodexCliExecutor:
         max_output_bytes: int | None = None,
         expected_executable_identity: tuple[int, int, int, int, int] | None = None,
         max_file_bytes: int | None = None,
+        stdin_close_after_jsonrpc_response_id: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         input_bytes = None if input_text is None else input_text.encode("utf-8")
         if input_bytes is not None and len(input_bytes) > self._max_input_bytes:
             raise CodexCliError("input_oversize")
+        if stdin_close_after_jsonrpc_response_id is not None and (
+            type(stdin_close_after_jsonrpc_response_id) is not int
+            or stdin_close_after_jsonrpc_response_id < 0
+            or input_bytes is None
+        ):
+            raise CodexCliError("unsupported_profile")
         if (
             os.name != "posix"
             or not hasattr(os, "fork")
@@ -1300,6 +1308,8 @@ class CodexCliExecutor:
         started = time.monotonic()
         stdout = bytearray()
         stderr = bytearray()
+        protocol_line_buffer = bytearray()
+        interactive_input_offset = 0
         output_limit = self._max_output_bytes if max_output_bytes is None else max_output_bytes
         parent_read_fd, parent_write_fd = os.pipe()
         status_read_fd, status_write_fd = os.pipe()
@@ -1310,7 +1320,9 @@ class CodexCliExecutor:
         cli_process_group: int | None = None
         try:
             stdin_source: int | IO[bytes]
-            if input_bytes is not None:
+            if stdin_close_after_jsonrpc_response_id is not None:
+                stdin_source = subprocess.PIPE
+            elif input_bytes is not None:
                 stdin_context.write(input_bytes)
                 stdin_context.seek(0)
                 stdin_source = stdin_context
@@ -1381,17 +1393,54 @@ class CodexCliExecutor:
             os.close(status_write_fd)
             status_write_fd = -1
             assert process.stdout is not None and process.stderr is not None
+            if stdin_close_after_jsonrpc_response_id is not None:
+                assert process.stdin is not None
+                os.set_blocking(process.stdin.fileno(), False)
             os.set_blocking(process.stdout.fileno(), False)
             os.set_blocking(process.stderr.fileno(), False)
             os.set_blocking(status_read_fd, False)
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stderr, selectors.EVENT_READ, "stderr")
             selector.register(status_read_fd, selectors.EVENT_READ, "status")
+            if (
+                stdin_close_after_jsonrpc_response_id is not None
+                and process.stdin is not None
+                and input_bytes
+            ):
+                selector.register(
+                    process.stdin,
+                    selectors.EVENT_WRITE,
+                    "stdin",
+                )
             while selector.get_map():
                 remaining = timeout_seconds - (time.monotonic() - started)
                 if remaining <= 0:
                     raise CodexCliError("command_timeout")
                 for key, _ in selector.select(min(remaining, 0.1)):
+                    if key.data == "stdin":
+                        if (
+                            process.stdin is None
+                            or process.stdin.closed
+                            or input_bytes is None
+                        ):
+                            continue
+                        try:
+                            written = os.write(
+                                process.stdin.fileno(),
+                                input_bytes[interactive_input_offset:],
+                            )
+                        except BlockingIOError:
+                            continue
+                        except OSError as exc:
+                            self._kill_process_group(cli_process_group)
+                            raise CodexCliError("command_exit_nonzero") from exc
+                        if written <= 0:
+                            self._kill_process_group(cli_process_group)
+                            raise CodexCliError("command_exit_nonzero")
+                        interactive_input_offset += written
+                        if interactive_input_offset == len(input_bytes):
+                            selector.unregister(key.fileobj)
+                        continue
                     if key.data == "status":
                         chunk = os.read(status_read_fd, 4096)
                         if not chunk:
@@ -1436,6 +1485,42 @@ class CodexCliExecutor:
                     target.extend(chunk)
                     if len(stdout) + len(stderr) > output_limit:
                         raise CodexCliError("stdout_oversize")
+                    if (
+                        key.data == "stdout"
+                        and stdin_close_after_jsonrpc_response_id is not None
+                        and process.stdin is not None
+                        and not process.stdin.closed
+                    ):
+                        protocol_line_buffer.extend(chunk)
+                        while b"\n" in protocol_line_buffer:
+                            line, _, remainder = protocol_line_buffer.partition(b"\n")
+                            protocol_line_buffer = bytearray(remainder)
+                            try:
+                                message = json.loads(
+                                    line.decode("utf-8", errors="strict"),
+                                    object_pairs_hook=_unique_json_object,
+                                    parse_constant=_reject_json_constant,
+                                )
+                            except (
+                                UnicodeDecodeError,
+                                ValueError,
+                                json.JSONDecodeError,
+                                RecursionError,
+                            ):
+                                continue
+                            if (
+                                isinstance(message, dict)
+                                and type(message.get("id")) is int
+                                and message["id"]
+                                == stdin_close_after_jsonrpc_response_id
+                                and ("result" in message or "error" in message)
+                            ):
+                                try:
+                                    selector.unregister(process.stdin)
+                                except KeyError:
+                                    pass
+                                process.stdin.close()
+                                break
             remaining = timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
                 raise CodexCliError("command_timeout")
@@ -1479,7 +1564,7 @@ class CodexCliExecutor:
                     process.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
                     self._terminate(process)
-                for stream in (process.stdout, process.stderr):
+                for stream in (process.stdin, process.stdout, process.stderr):
                     if stream is not None:
                         try:
                             stream.close()
