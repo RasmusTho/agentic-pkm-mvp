@@ -41,7 +41,12 @@ ingress transport only; it is never a secret store or raw-audio archive.
    BuilderOps artifacts, Mimer/vault notes, command output, CI logs, or receipts.
 2. **Least privilege by consumer and channel.** A dev capture watcher receives its raw-store key and
    watched path only; it does not receive unrelated provider or deployment credentials. `dev`,
-   `test`, and `prod` secrets remain distinct.
+   `test`, and `prod` secret values remain distinct except for the narrow BWS exception approved in
+   #5667: `openai.api-key`, `anthropic.api-key`, `github.token`, and `discord.webhook` use one
+   externally issued `shared/` value mirrored in the prod and non-prod BWS projects. This records
+   the accepted tradeoff that a non-prod project reader can retrieve those same provider values used
+   by prod. No other identity is shared across channels, and this exception does not widen consumer
+   grants or change the dev capture watcher's least-privilege grant.
 3. **Fail closed.** A missing, malformed, or inaccessible required secret prevents the named process
    from starting; it does not select a default, print the value, or silently weaken encryption. Since
    #4489 "required" is a property the schema states rather than assumes: every declaration carries an

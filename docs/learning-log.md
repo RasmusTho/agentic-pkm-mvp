@@ -302,3 +302,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** capture-learning after independent convergence review
 **Diverged:** The route contract rejected an owner-authorized selection of a different model over the same transport, although ADR-0066 assigns fallback selection to owner resolvers and does not require a transport switch.
 **Upstream artifact:** `docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D1` and `docs/MODEL_ACCESS_ROUTER/ESTABLISH_SHARED_ROUTE_AND_PROVENANCE_CONTRACTS.md :: What This Task Does`
+
+## 2026-09-25 — #5667 (BWS shared-provider exception and database DSN boundary)
+**Source:** deliver-issue-set after independent PR review
+**Diverged:** The cloud specification mirrored provider credentials across prod and non-prod while the local owner document still said all dev, test, and prod secrets remain distinct, and it allowed password-bearing direct DSN overrides into application environments.
+**Upstream artifact:** `docs/LOCAL_SECRET_PROVISIONING/README.md :: Fixed constraints`; `docs/CLOUD_SECRET_PROVISIONING/README.md :: Fixed constraints`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: the configured local SQLite store rejected the write as read-only. No store write succeeded; convert this entry to a `LearningSignal` when the BuilderOps store is writable.
