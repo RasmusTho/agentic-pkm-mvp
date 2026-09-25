@@ -81,5 +81,5 @@ No automated database rollback is part of this plan. A failed health check must 
 
 - Changing required PR correctness checks or weakening branch protection by inference.
 - Automatically rolling back databases or promoting to production.
-- Claiming TARS/Mac mini executor qualification, live `dev`/`test` residency, or deployment success without fresh receipts.
+- Claiming private executor qualification, live `dev`/`test` residency, or deployment success without fresh receipts.
 - Deciding #5676 or bypassing unrelated MARR, BuilderOps, or human-authorization gates.
